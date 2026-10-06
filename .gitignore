@@ -1,0 +1,12 @@
+node_modules/
+dist/
+target/
+.local/
+.worktrees/
+test-results/
+playwright-report/
+*.log
+.DS_Store
+src-tauri/resources/neovim/
+src-tauri/binaries/
+
