@@ -15,6 +15,8 @@
     "test:bundling": "node --test scripts/*.test.mjs",
     "contracts:generate": "cargo run --manifest-path src-tauri/Cargo.toml --no-default-features --bin export-contracts --",
     "contracts:check": "npm run contracts:generate -- --check",
+    "ai-contracts:generate": "cargo run --manifest-path src-tauri/Cargo.toml --no-default-features --bin export-ai-contracts --",
+    "ai-contracts:check": "npm run ai-contracts:generate -- --check",
     "bundle:neovim": "node scripts/bundle-neovim.mjs",
     "verify:neovim": "node scripts/verify-neovim.mjs",
     "tauri": "tauri",
