@@ -2,7 +2,7 @@
 // entry references it, so `vite build` and Tauri packages exclude it).
 import { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { CodeMirrorEditor, type EditorSelection } from "../../../src/components/editor/CodeMirrorEditor";
+import { CodeMirrorEditor, type EditorSelection, type ExternalCursor } from "../../../src/components/editor/CodeMirrorEditor";
 import type { TextEdit } from "../../../src/shared/contracts";
 import "../../../src/styles.css";
 
@@ -52,6 +52,8 @@ interface HarnessApi {
   getEdits: () => TextEdit[][];
   clearEdits: () => void;
   getSelection: () => EditorSelection | null;
+  /** Shell cursor echo with its own sequence (ExternalCursor seq seam). */
+  echoCursor: (anchor: number, head: number) => void;
 }
 
 declare global {
@@ -64,12 +66,14 @@ function Harness() {
   const [value, setValue] = useState(SAMPLE);
   const [edits, setEdits] = useState<TextEdit[][]>([]);
   const [selection, setSelection] = useState<EditorSelection | null>(null);
+  const [cursor, setCursor] = useState<ExternalCursor | null>(null);
   const valueRef = useRef(value);
   valueRef.current = value;
   const editsRef = useRef(edits);
   editsRef.current = edits;
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
+  const seqRef = useRef(0);
 
   window.__harness = {
     setValue: (text: string) => setValue(text),
@@ -77,6 +81,10 @@ function Harness() {
     getEdits: () => editsRef.current,
     clearEdits: () => setEdits([]),
     getSelection: () => selectionRef.current,
+    echoCursor: (anchor: number, head: number) => {
+      seqRef.current += 1;
+      setCursor({ anchor, head, seq: seqRef.current });
+    },
   };
 
   return (
@@ -86,6 +94,7 @@ function Harness() {
         ariaLabel="ライブハーネス"
         testId="harness-editor"
         livePreview
+        externalCursor={cursor}
         onGuiEdits={(list) => {
           setEdits((prev) => [...prev, list]);
           // Simulate the backend round-trip synchronously for tests.

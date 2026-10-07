@@ -10,7 +10,7 @@ async function harnessValue(page: Page): Promise<string> {
 
 test("widgets render inside one editor, active block stays raw", async ({ page }) => {
   test.setTimeout(120_000);
-  await page.goto("/tests/e2e/harness/live.html");
+  await page.goto("/tests/live/harness/live.html");
   const content = page.locator(".cm-content");
 
   await expect(page.locator(".cm-editor")).toHaveCount(1);
@@ -32,7 +32,7 @@ test("widgets render inside one editor, active block stays raw", async ({ page }
 
 test("task checkbox emits a minimal range edit preserving unrelated bytes", async ({ page }) => {
   test.setTimeout(120_000);
-  await page.goto("/tests/e2e/harness/live.html");
+  await page.goto("/tests/live/harness/live.html");
   const content = page.locator(".cm-content");
   await expect(content.locator(".marxen-live-widget table").first()).toBeVisible();
 
@@ -59,7 +59,7 @@ test("task checkbox emits a minimal range edit preserving unrelated bytes", asyn
 
 test("table cell click selects the source span; typing preserves neighbours", async ({ page }) => {
   test.setTimeout(120_000);
-  await page.goto("/tests/e2e/harness/live.html");
+  await page.goto("/tests/live/harness/live.html");
   const content = page.locator(".cm-content");
   await expect(content.locator(".marxen-live-widget table").first()).toBeVisible();
 
@@ -99,7 +99,7 @@ test("table cell click selects the source span; typing preserves neighbours", as
 
 test("rapid edits discard stale widget results without leaks", async ({ page }) => {
   test.setTimeout(120_000);
-  await page.goto("/tests/e2e/harness/live.html");
+  await page.goto("/tests/live/harness/live.html");
   await expect(page.locator(".cm-content .marxen-live-widget table").first()).toBeVisible();
 
   await page.evaluate(() => {
@@ -119,7 +119,7 @@ test("rapid edits discard stale widget results without leaks", async ({ page }) 
 
 test("malformed blocks stay contained with raw source and errors", async ({ page }) => {
   test.setTimeout(120_000);
-  await page.goto("/tests/e2e/harness/live.html");
+  await page.goto("/tests/live/harness/live.html");
   const content = page.locator(".cm-content");
   await expect(content.locator(".marxen-live-widget table").first()).toBeVisible();
 
@@ -131,9 +131,25 @@ test("malformed blocks stay contained with raw source and errors", async ({ page
   await expect(content.locator(".marxen-live-widget").getByText("末尾の段落。")).toBeVisible();
 });
 
+test("shell cursor echoes apply per sequence, never swallowed", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto("/tests/live/harness/live.html");
+  const content = page.locator(".cm-content");
+  await expect(content.locator(".marxen-live-widget table").first()).toBeVisible();
+
+  // Two navigation echoes with no edit between them: the old rev-dedup
+  // swallowed the second one whenever the revision was unchanged. Echoes are
+  // echo-suppressed (no selection callback), so application is observed
+  // through widget activation: the echoed block turns raw.
+  await page.evaluate(() => window.__harness.echoCursor(5, 5));
+  await expect(content.getByText("# ライブ見出し")).toBeVisible();
+  await page.evaluate(() => window.__harness.echoCursor(20, 20));
+  await expect(content.getByText("**太字**")).toBeVisible();
+});
+
 test("footnote links jump to definitions and user ids cannot clobber", async ({ page }) => {
   test.setTimeout(120_000);
-  await page.goto("/tests/e2e/harness/live.html");
+  await page.goto("/tests/live/harness/live.html");
   const content = page.locator(".cm-content");
   await expect(content.locator(".marxen-live-widget table").first()).toBeVisible();
 

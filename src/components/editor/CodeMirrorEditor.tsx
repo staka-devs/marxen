@@ -248,14 +248,5 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
     }
   }, [externalCursor]);
 
-  return (
-    <div className="flex h-full min-h-50 flex-col gap-3">
-      <div ref={host} data-testid={testId ?? "editor"} aria-label={ariaLabel} className="min-h-50 flex-1 overflow-hidden rounded-lg border border-border bg-card" />
-      {livePreview && (
-        <div className="min-h-50 flex-1">
-          <MarkdownPreview text={value} label="ライブプレビュー" />
-        </div>
-      )}
-    </div>
-  );
+  return <div ref={host} data-testid={testId ?? "editor"} aria-label={ariaLabel} className="h-full min-h-0 flex-1 overflow-hidden" />;
 }

@@ -154,6 +154,12 @@ class LiveBlockWidget extends WidgetType {
   }
 
   private fill(host: HTMLElement, view: EditorView, html: string): void {
+    // Idempotent per key: rebuilds may hand a fresh widget instance the same
+    // reused DOM (eq match), and every pending fill races to populate it.
+    // The first fill wins; the rest (same key, same content) stand down so
+    // listeners and hydration passes are never attached twice.
+    if (host.dataset.liveFilled === this.key) return;
+    host.dataset.liveFilled = this.key;
     host.innerHTML = `<div class="marxen-md marxen-live-body">${html}</div>`;
     const body = host.firstElementChild as HTMLElement | null;
     if (!body) return;
