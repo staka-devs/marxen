@@ -49,3 +49,60 @@
 
 body { margin: 0; min-width: 320px; }
 button, a { -webkit-tap-highlight-color: transparent; }
+
+/* Shared Markdown view (Issue #6, local-only rendering). */
+.marxen-md { overflow-wrap: anywhere; }
+.marxen-md h1, .marxen-md h2, .marxen-md h3 { line-height: 1.6; margin: 0.8em 0 0.4em; }
+.marxen-md h1 { font-size: 1.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.25em; }
+.marxen-md h2 { font-size: 1.25rem; border-bottom: 1px solid var(--border); padding-bottom: 0.2em; }
+.marxen-md h3 { font-size: 1.1rem; }
+.marxen-md p { margin: 0.5em 0; }
+.marxen-md table { border-collapse: collapse; margin: 0.75em 0; width: 100%; }
+.marxen-md th, .marxen-md td { border: 1px solid var(--border); padding: 0.35em 0.6em; text-align: left; }
+.marxen-md th { background: var(--muted); }
+.marxen-md blockquote { border-left: 3px solid var(--border); margin: 0.75em 0; padding: 0.25em 0.9em; color: var(--muted-foreground); }
+.marxen-md ul.contains-task-list { list-style: none; padding-left: 0.25em; }
+.marxen-md hr { border: none; border-top: 1px solid var(--border); margin: 1em 0; }
+.marxen-md img { max-width: 100%; }
+.marxen-md a { color: var(--primary); }
+
+/* Five GitHub alert kinds. */
+.marxen-md .markdown-alert { border: 1px solid var(--border); border-left-width: 4px; border-radius: 0.5rem; padding: 0.5em 0.9em; margin: 0.75em 0; }
+.marxen-md .markdown-alert-title { display: flex; align-items: center; gap: 0.4em; font-weight: 700; margin: 0 0 0.25em; }
+.marxen-md .markdown-alert-note { border-left-color: #0969da; }
+.marxen-md .markdown-alert-note .markdown-alert-title { color: #0969da; }
+.marxen-md .markdown-alert-tip { border-left-color: #1a7f37; }
+.marxen-md .markdown-alert-tip .markdown-alert-title { color: #1a7f37; }
+.marxen-md .markdown-alert-important { border-left-color: #8250df; }
+.marxen-md .markdown-alert-important .markdown-alert-title { color: #8250df; }
+.marxen-md .markdown-alert-warning { border-left-color: #9a6700; }
+.marxen-md .markdown-alert-warning .markdown-alert-title { color: #9a6700; }
+.marxen-md .markdown-alert-caution { border-left-color: #cf222e; }
+.marxen-md .markdown-alert-caution .markdown-alert-title { color: #cf222e; }
+
+/* Footnotes and math. */
+.marxen-md section.footnotes { border-top: 1px solid var(--border); margin-top: 1em; font-size: 0.85em; color: var(--muted-foreground); }
+.marxen-md mjx-container[jax="SVG"] { max-width: 100%; overflow-x: auto; }
+
+/* Code: Shiki dual theme follows the app theme (local, no CDN). */
+.marxen-md .marxen-codeblock { margin: 0.75em 0; }
+.marxen-md .shiki, .marxen-md .shiki span { color: var(--shiki-light); background-color: var(--shiki-light-bg); }
+.marxen-md .marxen-codeblock-note { font-size: 0.8em; color: var(--muted-foreground); margin: 0 0 0.25em; }
+.marxen-md pre { background: var(--muted); border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.7em 0.9em; overflow-x: auto; margin: 0.5em 0; }
+.marxen-md pre.shiki { border: none; }
+.marxen-md .marxen-codeblock pre { margin: 0; }
+[data-theme="dark"] .marxen-md .shiki, [data-theme="dark"] .marxen-md .shiki span { color: var(--shiki-dark); background-color: var(--shiki-dark-bg); }
+[data-theme="dark"] .marxen-md pre.shiki { background-color: var(--shiki-dark-bg); }
+[data-theme="contrast"] .marxen-md .shiki, [data-theme="contrast"] .marxen-md .shiki span { color: #000; background-color: #fff; }
+
+/* Special blocks and visible errors (raw source is always preserved). */
+.marxen-md .marxen-special { border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.7em 0.9em; margin: 0.75em 0; background: color-mix(in srgb, var(--card) 70%, var(--muted)); }
+.marxen-md .marxen-special-title { font-weight: 700; font-size: 0.85em; margin: 0 0 0.5em; }
+.marxen-md .marxen-error { border: 1px solid #cf222e; border-radius: 0.5rem; background: color-mix(in srgb, #cf222e 8%, transparent); color: inherit; padding: 0.5em 0.8em; margin: 0.5em 0; }
+.marxen-md details.marxen-source { margin-top: 0.5em; font-size: 0.85em; }
+.marxen-md details.marxen-source > summary { cursor: pointer; color: var(--muted-foreground); }
+.marxen-md .marxen-mermaid-output svg { max-width: 100%; height: auto; }
+.marxen-md .marxen-map { height: 260px; border: 1px solid var(--border); border-radius: 0.4rem; z-index: 0; }
+.marxen-md .marxen-stl { min-height: 280px; border: 1px solid var(--border); border-radius: 0.4rem; }
+.marxen-md .marxen-stl canvas { width: 100%; display: block; }
+.marxen-md kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 0.3rem; padding: 0 0.35em; font-size: 0.85em; background: var(--muted); }
