@@ -307,6 +307,57 @@ impl NeovimSession {
             .ok_or_else(|| RpcError::Invalid("state() returned non-string".into()))
     }
 
+    /// Native character/line selection as half-open byte coordinates.
+    /// getregion supplies complete composing characters and follows 'selection'.
+    /// Rectangular selections cannot be expressed as one contiguous range.
+    pub fn visual_selection(&self) -> Result<(u32, u32, u32, u32, bool, bool), RpcError> {
+        let value = self.exec_lua(
+            r#"
+                local anchor, head = vim.fn.getpos('v'), vim.fn.getpos('.')
+                local kind = vim.fn.mode(1):sub(1, 1)
+                if kind == 's' then kind = 'v' elseif kind == 'S' then kind = 'V' end
+                local opts = { type = kind, eol = true }
+                local regions = vim.fn.getregionpos(anchor, head, opts)
+                local text = vim.fn.getregion(anchor, head, { type = kind })
+                if #regions == 0 or #text == 0 then error('empty visual region') end
+                local first, last = regions[1][1], regions[#regions][2]
+                local last_start = regions[#regions][1]
+                local first_line = vim.fn.getline(first[2])
+                local last_line = vim.fn.getline(last[2])
+                local start_col = math.min(math.max(first[3] - 1, 0), #first_line)
+                local end_col = math.min(math.max(last_start[3] - 1, 0) + #text[#text], #last_line)
+                local newline = (kind == 'V' or last[3] > #last_line)
+                    and last[2] < vim.api.nvim_buf_line_count(0)
+                local forward = anchor[2] < head[2]
+                    or (anchor[2] == head[2] and anchor[3] <= head[3])
+                return { first[2] - 1, start_col, last[2] - 1, end_col, newline, forward }
+            "#,
+        )?;
+        let values = value
+            .as_array()
+            .filter(|items| items.len() == 6)
+            .ok_or_else(|| RpcError::Invalid("invalid visual coordinates".into()))?;
+        let coordinate = |index: usize| {
+            values[index]
+                .as_u64()
+                .and_then(|number| u32::try_from(number).ok())
+                .ok_or_else(|| RpcError::Invalid("invalid visual byte coordinate".into()))
+        };
+        let flag = |index: usize| {
+            values[index]
+                .as_bool()
+                .ok_or_else(|| RpcError::Invalid("invalid visual direction".into()))
+        };
+        Ok((
+            coordinate(0)?,
+            coordinate(1)?,
+            coordinate(2)?,
+            coordinate(3)?,
+            flag(4)?,
+            flag(5)?,
+        ))
+    }
+
     /// Name the owned buffer (enables `:w` with a filename so `BufWriteCmd`
     /// intercepts instead of E32 on unnamed buffers).
     pub fn set_buf_name(&self, name: &str) -> Result<(), RpcError> {

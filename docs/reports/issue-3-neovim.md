@@ -5,7 +5,7 @@ Windows x64 / MSVC と同梱した実 Neovim 0.11.5 で確認した。
 | 検証 | 結果 |
 | --- | --- |
 | `npm run verify:neovim` | 版、Markdown runtime、日本語・絵文字のバッファ操作が成功 |
-| `cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --locked --test neovim --test neovim_runtime --test vim_input` | 18 件成功。日本語・絵文字の座標、mapping、モード、grid、Undo、stale revision、保存要求、設定エラー、設定パス、終了検出。キーを個別に送る `gg` / `diw` / macro / plugin 入力待ち / コマンドライン保存、global・buffer-local mapping の先頭キーと進行中の操作も確認 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --locked --test neovim --test neovim_runtime --test vim_input` | 21 件成功。日本語・絵文字の座標、mapping、モード、grid、Undo、stale revision、保存要求、設定エラー、設定パス、終了検出。キーを個別に送る `gg` / `diw` / macro / plugin 入力待ち / コマンドライン保存、global・buffer-local mapping の先頭キー、文字・行選択の半開区間と方向、排他的選択、矩形操作のUndo、入力待ちのサロゲート境界も確認 |
 | `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | desktop と全テスト対象が成功 |
 
 Windows WebView2 / TSF、macOS WKWebView / NSTextInput、Linux WebKitGTK / IBus・Fcitx の実 IME は未確認。上記は headless Neovim の検証であり、各 OS の GUI・IME の確認を代替しない。
