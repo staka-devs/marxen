@@ -915,7 +915,14 @@ fn real_opencode_handshake_when_binary_configured() {
         },
     };
     validate_argv(&argv).unwrap();
-    let staging = fresh_dir("marxen-ai-test-real-agent");
+    // Real-probe staging lives in this workspace (.local is gitignored),
+    // never in the shared system temp dir.
+    let probe_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join(".local")
+        .join("acp-probe");
+    std::fs::create_dir_all(&probe_root).expect("probe dir");
+    let staging = std::fs::canonicalize(&probe_root).expect("absolute probe dir");
     // initialize + session/new only. No prompt is ever sent: no cost, no auth.
     let info = agent_handshake(&argv, &staging, Duration::from_secs(60)).expect("real handshake");
     assert_eq!(info.protocol_version, 1);

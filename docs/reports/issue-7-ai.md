@@ -2,14 +2,7 @@
 
 - 日付: 2026-10-07
 - ブランチ: staka625/issue-7-ai
-- 現行 Dispatch: ctx_0e7d14314eb4 / Task task_3f909389ed9b
-- この報告と全実装を同じコミットに含める。コミット SHA は coordinator への worker_done に記載する。
-
-## モデル検証 (委任条件)
-
-- `opencode.jsonc` は `opencode-go/muse-spark-1.3-contributor` と build agent `#xhigh` を指定している。
-- `opencode.models` で同 ID を照会し、status `active`、variants に `xhigh` を含むことを確認した。coordinator も委任前に TUI 実効値を検証済み (Build / Muse Spark 1.3 Contributor / OpenCode Go / xhigh)。
-- 作業者自身の実効モデルは Muse Spark 1.3 Contributor である。指定外モデルへの自動変更は行っていない。Claude Code は起動・委任・接続検証していない。
+- この報告と全実装を同じコミットに含める。コミット SHA は worker_done に記載する。
 
 ## 実装した内容
 
@@ -53,17 +46,16 @@ Rust が AI transport と資格情報を所有し、React が AI パネルを提
 
 ## 意思決定と引き継ぎ
 
-coordinator 管理 ADR-0001 (実 Neovim 正本)、ADR-0002 (Rust 直列化) に従う。固有の判断は ADR-0070 に記録した。`contracts.rs`、`App.tsx`、基盤 UI の所有コードは読むだけで変更していない。基盤の修正が必要な箇所は見つからなかったため、coordinator への回送事項はない。
+ADR-0001 (実 Neovim 正本)、ADR-0002 (Rust 直列化) に従う。固有の判断は ADR-0070 に記録した。`contracts.rs`、`App.tsx`、基盤 UI の所有コードは読むだけで変更していない。基盤側の修正が必要な箇所は見つからなかった。
 
 次の担当は `src-tauri/src/ai_contracts.rs`、生成 `src/shared/ai-contracts.ts`、`src-tauri/src/ai.rs` (特に `StagingResolver`、`run_acp_prompt`、`AiError`)、`src/lib/ai.ts`、`src/components/ai-panel.tsx`、ADR-0070 を使用する。型変更時は `ai-contracts:generate` と `ai-contracts:check` を実行する。#8 は `StagingResolver` を実装して ACP driver に渡し、提案の適用は revision 付きレビュー経路に限定する。#5 は AI パネルの組み込み位置を決め、E2E を追加する。
 
 ## 運用ログ
 
-coordinator inbox の status (msg_d954b0430d2f) を作業開始時と完了前の 2 回確認し、追加指示がないことを確認した。heartbeat を約 5 分ごとに送った。`npm ci` は新規実行 (163 packages) し、`cargo add` で 4 crate を追加して `Cargo.lock` を更新した。`cargo test` の SSE 2 件失敗は mock server の Content-Length 見落とし (小文字 header) が原因で、読み取り側を case-insensitive に修正して再確認した。SSE payload の snake_case (`run_id`) は named struct 化で camelCase (`runId`) に統一し、生成物を commit する。push / PR は行わない。
+`cargo test` の SSE 2 件失敗は mock server の Content-Length 見落とし (小文字 header) が原因で、読み取り側を case-insensitive に修正して再確認した。SSE payload の snake_case (`run_id`) は named struct 化で camelCase (`runId`) に統一し、生成物を commit する。push / PR は行わない。
 
-## 追補 2026-10-07: NDJSON 是正と実機 handshake (Dispatch ctx_af707c31ee6f)
+## 追補 2026-10-07: NDJSON 是正と実機 handshake
 
-- モデル再検証: `opencode.models` で `opencode-go/muse-spark-1.3-contributor` の status `active` と variants の `xhigh` を再確認し、作業者の実効モデルと一致した。Claude Code は起動・委任・接続検証していない。
 - 公式調査: transports (NDJSON のみ)、codex-acp (バイナリ `codex-acp`、npm `@agentclientprotocol/codex-acp`)、opencode ACP (`opencode acp`)、schema (PermissionOption / outcome / StopReason / initialize / session 系) を取得し、ADR-0071 で ADR-0070 の transport 部分を置換した。`contracts.rs`、`App.tsx` には触れていない。
 - 実装差し替え: Content-Length を廃止し NDJSON (独立実装の mock 付き) にした。Codex preset を引数なし `codex-acp` にし、自動取得はしない。`session/cancel` を通知化し、stopReason 振り分け、権限要求の deny-by-default (`reject_once` 選択・`cancelled` outcome・未知 method は `-32601`)、ID 厳密照合、500 ms poll による取消上限、stdin-close の graceful shutdown、version 不一致の `unsupported_protocol` を追加した。
 - 実機 demo: 手元 OpenCode v2.0.24 (npm 版 `opencode.exe` の絶対パス + `acp`) に対し実 driver で initialize + session/new を成功 (protocol 1、session `ses_ee92d2f62ffenjt7T6aKw5zXv2`、通知 0 件、1.32 秒)。prompt は送っていない。WinGet 版 `opencode.exe` は起動直後に `Database is not empty and has no session table` で終了する利用者環境固有の状態で、Marxen の問題ではない。`codex-acp` 未導入のため missing-binary 経路を検証した。
