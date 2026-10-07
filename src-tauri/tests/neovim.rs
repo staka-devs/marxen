@@ -4,12 +4,12 @@
 //! (`npm run bundle:neovim` first; CI bundles before `cargo test`) and cover
 //! the acceptance surface: Japanese composition contract, emoji offsets,
 //! user-mapping priority, modes, display coordinates + raw grid, native undo
-//! sharing GUI range edits, `:w` delegation to Rust, config errors, and
-//! revision serialization.
+//! sharing GUI range edits, `:w` delegation to Rust, config errors,
+//! revision serialization, and cursor reporting.
 
 use marxen_lib::contracts::{
-    ContractError, DocumentId, EditRequest, EditSource, Revision, SaveRequest, TextEdit,
-    Utf16Offset, Utf16Range, VimMode,
+    ContractError, CursorUpdate, DocumentId, EditRequest, EditSource, Revision, SaveRequest,
+    TextEdit, Utf16Offset, Utf16Range, VimMode,
 };
 use marxen_lib::document::{ActorError, DocumentActor};
 use marxen_lib::neovim::config::ConfigSource;
@@ -359,4 +359,33 @@ fn config_errors_surface_instead_of_silent_fallback() {
     // Isolated default stays clean.
     let clean = NeovimSession::spawn_isolated().unwrap();
     assert!(!clean.config_report().has_errors());
+}
+
+#[test]
+fn cursor_reports_validate_without_bumping_revision() {
+    require_bundle();
+    let actor = DocumentActor::open(doc_id("cursor"), "a😀日本語".into(), None).unwrap();
+    let base = actor.snapshot();
+
+    // Reversed (anchor > head) selections are valid cursor reports.
+    let update = CursorUpdate {
+        document_id: base.document_id.clone(),
+        revision: base.revision,
+        anchor: Utf16Offset(3),
+        head: Utf16Offset(0),
+    };
+    assert_eq!(actor.check_cursor(update.clone()).unwrap(), update);
+    assert_eq!(actor.snapshot().revision, base.revision);
+
+    // Splitting the emoji surrogate pair is rejected.
+    let split = actor.check_cursor(CursorUpdate {
+        document_id: base.document_id.clone(),
+        revision: base.revision,
+        anchor: Utf16Offset(2),
+        head: Utf16Offset(2),
+    });
+    assert!(matches!(
+        split.unwrap_err(),
+        ActorError::Contract(ContractError::SplitSurrogatePair)
+    ));
 }

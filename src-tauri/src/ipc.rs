@@ -11,8 +11,8 @@ use std::sync::Mutex;
 
 #[cfg(feature = "desktop")]
 use crate::contracts::{
-    ContractError, DocumentId, DocumentSnapshot, EditRequest, EditSource, ModeUpdate, Revision,
-    SaveRequest, SaveResult, TextEdit,
+    ContractError, CursorUpdate, DocumentId, DocumentSnapshot, EditRequest, EditSource, ModeUpdate,
+    Revision, SaveRequest, SaveResult, TextEdit, Utf16Offset,
 };
 
 pub struct ActorState {
@@ -146,4 +146,33 @@ pub fn undo_document(state: tauri::State<'_, ActorState>) -> Result<DocumentSnap
         .as_ref()
         .ok_or_else(|| "no open document".to_owned())?;
     actor.undo().map_err(actor_error)
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub fn report_cursor(
+    state: tauri::State<'_, ActorState>,
+    document_id: String,
+    revision: u32,
+    anchor: u32,
+    head: u32,
+) -> Result<CursorUpdate, String> {
+    let guard = state
+        .actor
+        .lock()
+        .map_err(|_| "document lock poisoned".to_owned())?;
+    let actor = guard
+        .as_ref()
+        .ok_or_else(|| "no open document".to_owned())?;
+    actor
+        .check_cursor(CursorUpdate {
+            document_id: DocumentId(document_id),
+            revision: Revision(revision),
+            anchor: Utf16Offset(anchor),
+            head: Utf16Offset(head),
+        })
+        .map_err(|cause| match cause {
+            crate::document::ActorError::Contract(contract) => contract_error(contract),
+            other => actor_error(other),
+        })
 }

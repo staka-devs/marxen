@@ -32,11 +32,11 @@
 
 ## 未実施・制約
 
-- Windows WebView2 + TSF、macOS WKWebView + NSTextInput、Linux WebKitGTK + IBus/Fcitx における実 IME の composition・確定・表示は未実施。本機は headless embed のみで、ブラウザやコンテナの成功から推定しない。GUI は確定だけを正本へ送る契約とし、詳細は ADR-0014 に記録した。
+- Windows WebView2 + TSF、macOS WKWebView + NSTextInput、Linux WebKitGTK + IBus/Fcitx における実 IME の composition・確定・表示は未実施。本機は headless embed のみで、ブラウザやコンテナの成功から推定しない。GUI は確定だけを正本へ送る契約とし、詳細は ADR-0020 に記録した。
 - macOS arm64 / x64 と Linux x64 の native compile・Neovim smoke・package 操作、署名 / 公証は未実施。4 native CI は Issue #2 の workflow を用いる。
 - Playwright E2E は今回の対象外（フロントエンド未変更）。実 WebView の代替にしない。
 - `nvim_get_mode` が headless embed に応答しない件は回避策（`mode()` 取得）で成立させ、将来の版更新時に再確認する。
 
 ## 意思決定と引き継ぎ
 
-判断は `docs/adr/ADR-0014-実NeovimのembedRPCと文書アクターの技術検証.md` に記録した。Issue #5（GUI 範囲編集）は本アクターの `apply_edits` / `sync_from_nvim` / `save` と `Utf16Range` 契約を用い、Issue #4（保存競合・復元）は `StaleRevision` と `dirty` を用いる。Tauri の `resource_dir` 配下の解決は現行の manifest-dir 優先に加え、配布時の実配置確認が残っている。
+判断は `docs/adr/ADR-0020-実NeovimのembedRPCと文書アクターの技術検証.md` に記録した。Issue #5（GUI 範囲編集）は本アクターの `apply_edits` / `sync_from_nvim` / `save` と `Utf16Range` 契約を用い、Issue #4（保存競合・復元）は `StaleRevision` と `dirty` を用いる。Tauri の `resource_dir` 配下の解決は現行の manifest-dir 優先に加え、配布時の実配置確認が残っている。

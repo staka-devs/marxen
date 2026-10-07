@@ -45,7 +45,8 @@ pub fn run() {
             ipc::apply_gui_edits,
             ipc::save_document,
             ipc::fetch_mode,
-            ipc::undo_document
+            ipc::undo_document,
+            ipc::report_cursor
         ])
         .run(tauri::generate_context!())
         .expect("Marxen desktop runtime failed");

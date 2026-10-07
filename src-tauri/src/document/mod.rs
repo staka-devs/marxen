@@ -16,13 +16,15 @@
 //! normal buffer change that `u` reverts.
 
 use crate::contracts::{
-    ContractError, DocumentEvent, DocumentId, DocumentSnapshot, EditRequest, ModeUpdate, Revision,
-    SaveRequest, SaveResult, VimMode,
+    ContractError, CursorUpdate, DocumentEvent, DocumentId, DocumentSnapshot, EditRequest,
+    ModeUpdate, Revision, SaveRequest, SaveResult, VimMode,
 };
 use crate::neovim::config::ConfigSource;
 use crate::neovim::coordinates::global_utf16_to_line_byte;
 use crate::neovim::{rpc::RpcError, NeovimSession};
-use crate::validation::{next_revision, validate_document_id, validate_edit, validate_save};
+use crate::validation::{
+    next_revision, validate_cursor, validate_document_id, validate_edit, validate_save,
+};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -262,6 +264,17 @@ impl DocumentActor {
             revision: state.snapshot.revision,
             mode,
         })
+    }
+
+    /// Validate a GUI-reported cursor against the current snapshot.
+    /// Accepts reversed (anchor > head) selections; never bumps the revision.
+    pub fn check_cursor(&self, update: CursorUpdate) -> Result<CursorUpdate, ActorError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        validate_cursor(&state.snapshot, &update)?;
+        Ok(update)
     }
 
     /// Install the `:w` -> Rust interception (`BufWriteCmd` notifies, never writes).
