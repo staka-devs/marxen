@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { renderMarkdownDocument, type RenderResult } from "../../lib/render/pipeline";
-import { hydrateMarkdownView } from "./hydrate";
+import { disposeMarkdownView, hydrateMarkdownView } from "./hydrate";
 import "leaflet/dist/leaflet.css";
 
 interface Props {
@@ -20,16 +20,20 @@ interface Props {
 export function MarkdownPreview({ text, label = "プレビュー", testId = "preview" }: Props) {
   const [result, setResult] = useState<RenderResult | null>(null);
   const hostRef = useRef<HTMLElement | null>(null);
+  const latestPipeline = useRef<Promise<RenderResult> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setResult(null);
-    renderMarkdownDocument(text)
+    // Superseded renders are discarded: only the latest text wins, so a
+    // slow pass can never overwrite newer HTML (stale-result guard).
+    const pipeline = renderMarkdownDocument(text);
+    pipeline
       .then((next) => {
-        if (!cancelled) setResult(next);
+        if (!cancelled && pipeline === latestPipeline.current) setResult(next);
       })
       .catch(() => {
-        if (!cancelled) {
+        if (!cancelled && pipeline === latestPipeline.current) {
           setResult({
             html: "<div class=\"marxen-error\" role=\"alert\">描画できませんでした。原文は保持されています。</div>",
             diagnostics: [],
@@ -37,6 +41,7 @@ export function MarkdownPreview({ text, label = "プレビュー", testId = "pre
           });
         }
       });
+    latestPipeline.current = pipeline;
     return () => {
       cancelled = true;
     };
@@ -44,7 +49,15 @@ export function MarkdownPreview({ text, label = "プレビュー", testId = "pre
 
   useEffect(() => {
     if (!result || !hostRef.current) return;
-    void hydrateMarkdownView(hostRef.current);
+    const host = hostRef.current;
+    // A new result aborts the previous hydrate pass and disposes its maps
+    // and GL resources before fresh placeholders are enhanced.
+    const controller = new AbortController();
+    void hydrateMarkdownView(host, controller.signal);
+    return () => {
+      controller.abort();
+      disposeMarkdownView(host);
+    };
   }, [result]);
 
   if (!result) {

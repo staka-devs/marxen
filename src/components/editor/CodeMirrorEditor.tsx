@@ -1,9 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, lineNumbers } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 import type { TextEdit } from "../../shared/contracts";
-import { MarkdownPreview } from "../preview/MarkdownPreview";
+import { createLivePreview, type LivePreviewCallbacks } from "./livePreview";
 
 export interface EditorSelection {
   anchor: number;
@@ -31,9 +31,10 @@ interface Props {
   initialSelection?: EditorSelection | null;
   externalCursor?: ExternalCursor | null;
   /**
-   * Inline live preview switch (shell-owned layout only). When true the
-   * shared Issue #6 preview renders under the editor from the same `value`;
-   * decorations, hydration, and the editing pipeline stay untouched.
+   * Real inline live preview (ADR-0061): inactive blocks render as widgets
+   * inside the editor; the selected block stays raw source. Root wires
+   * only live mode to true (source/split stay false). Defaults to false so
+   * panes that never opt in keep exact source behavior.
    */
   livePreview?: boolean;
 }
@@ -61,6 +62,26 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
     endBefore -= 1;
     endAfter -= 1;
   }
+  // Avoid splitting a surrogate pair at the suffix edge: when the last
+  // replaced unit is a high surrogate whose low half was counted as common
+  // suffix, pull the whole pair back into the edit on both sides.
+  while (
+    endBefore > start &&
+    endAfter > start &&
+    endBefore < before.length &&
+    endAfter < after.length &&
+    before.charCodeAt(endBefore - 1) >= 0xd800 &&
+    before.charCodeAt(endBefore - 1) <= 0xdbff &&
+    before.charCodeAt(endBefore) >= 0xdc00 &&
+    before.charCodeAt(endBefore) <= 0xdfff &&
+    after.charCodeAt(endAfter - 1) >= 0xd800 &&
+    after.charCodeAt(endAfter - 1) <= 0xdbff &&
+    after.charCodeAt(endAfter) >= 0xdc00 &&
+    after.charCodeAt(endAfter) <= 0xdfff
+  ) {
+    endBefore += 1;
+    endAfter += 1;
+  }
   return [{ range: { start, end: endBefore }, text: after.slice(start, endAfter) }];
 }
 
@@ -68,6 +89,7 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const editableRef = useRef(new Compartment());
+  const liveRef = useRef(new Compartment());
   const syncing = useRef(false);
   const composing = useRef(false);
   const preComposition = useRef<string | null>(null);
@@ -77,6 +99,23 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
   valueRef.current = value;
   const editableRefValue = useRef(editable);
   editableRefValue.current = editable;
+
+  // Widget callbacks stay fresh without rebuilding the editor: checkbox and
+  // cell commits always read the latest props through this getter.
+  const getLiveCallbacks = useCallback((): LivePreviewCallbacks => {
+    return {
+      onGuiEdits: (edits) => callbacks.current.onGuiEdits?.(edits),
+      focusSource: (from, to) => {
+        const view = viewRef.current;
+        if (!view) return;
+        const len = view.state.doc.length;
+        const anchor = Math.min(Math.max(0, from), len);
+        const head = Math.min(Math.max(0, to), len);
+        view.dispatch({ selection: { anchor, head }, scrollIntoView: true });
+        view.focus();
+      },
+    };
+  }, []);
 
   useEffect(() => {
     if (!host.current) return;
@@ -90,6 +129,7 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
           lineNumbers(),
           EditorView.lineWrapping,
           editableRef.current.of(EditorView.editable.of(editableRefValue.current)),
+          liveRef.current.of([]),
           EditorView.contentAttributes.of({ "aria-label": ariaLabel, role: "textbox", tabindex: "0" }),
           EditorView.theme({
             "&": { backgroundColor: "transparent", fontSize: "14px", height: "100%" },
@@ -174,6 +214,16 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
     if (!view) return;
     view.dispatch({ effects: editableRef.current.reconfigure(EditorView.editable.of(editable)) });
   }, [editable]);
+
+  // Live widgets toggle without remounting the editor: reconfiguring the
+  // compartment destroys removed widgets (abort + dispose run there).
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: liveRef.current.reconfigure(livePreview ? createLivePreview(getLiveCallbacks) : []),
+    });
+  }, [livePreview, getLiveCallbacks]);
 
   // Vim cursor echo: apply once per sequence token without disturbing
   // composition or the user's active selection gestures. The programmatic

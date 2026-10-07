@@ -12,7 +12,7 @@
 - 不正入力: mermaid / math / geojson / topojson / stl を原文検証し、不正時は日本語エラーと原文 pre を残し diagnostics に記録する。正しい場合も原文は details に残す。未知言語は強調なし原文表示。描画器は入力文字列を変更しない（全体再シリアライズなし）。
 - 水和 `src/components/preview/hydrate.ts`: Mermaid / Leaflet / Three.js を動的 import で拡張する。失敗は当該ブロックに留める。STL は ASCII のみ、3D は静止画の一回描画。
 - 見本: `検証/GitHub記法.md` に `tests/fixtures/github-markdown.md` 全文を `?raw` 同梱した。不正・ unsafe の短い抜粋は Issue #5 の文言のまま残した。
-- 判断は `docs/adr/ADR-0051-共通ASTでGFMと数式と地図と3Dをローカル描画する.md` に記録した。
+- 判断は `docs/adr/ADR-0060-共通ASTでGFMと数式と地図と3Dをローカル描画する.md` に記録した。
 
 ## ローカル結果
 
