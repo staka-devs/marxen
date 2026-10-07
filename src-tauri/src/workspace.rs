@@ -16,6 +16,12 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    pub fn has_live_documents(&self) -> bool {
+        self.actors
+            .values()
+            .any(|actor| actor.is_alive().unwrap_or(false))
+    }
+
     pub fn open(root: &Path, recovery_home: &Path) -> Result<Self, WorkspaceError> {
         let root = fs::canonicalize(root)?;
         if !root.is_dir() {

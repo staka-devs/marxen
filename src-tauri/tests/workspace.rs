@@ -313,11 +313,18 @@ fn abrupt_process_exit_restores_checkpoint_and_keeps_disk_conflict() {
 #[test]
 fn neovim_exit_preserves_recoverable_last_acknowledged_revision() {
     let (_root, _recovery, mut w) = setup();
+    assert!(!w.has_live_documents());
     let doc = w.create("a.md", "base").unwrap();
+    assert!(w.has_live_documents());
     let actor = w.actor(&doc.snapshot.document_id.0).unwrap();
     let s = edit(actor, 0, 4, "pending");
     let _ = actor.nvim_command("qa!");
     assert!(actor.sync_from_nvim().is_err());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while actor.is_alive().unwrap() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!w.has_live_documents());
     assert_eq!(actor.snapshot(), s);
     assert_eq!(w.recovery_entries().unwrap()[0].revision, s.revision);
     assert!(w

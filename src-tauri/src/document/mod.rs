@@ -91,6 +91,14 @@ pub struct DocumentActor {
 }
 
 impl DocumentActor {
+    pub fn is_alive(&self) -> Result<bool, ActorError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Ok(state.nvim.is_alive()?)
+    }
+
     /// Open a new authoritative buffer with `initial_text` at revision 0.
     pub fn open(
         document_id: DocumentId,

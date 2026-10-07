@@ -20,10 +20,9 @@ fn get_runtime_status(state: tauri::State<ipc::ActorState>) -> contracts::Runtim
     let has_document = state.workspace.lock().ok().is_some_and(|guard| {
         guard
             .as_ref()
-            .is_some_and(|workspace| !workspace.is_empty())
+            .is_some_and(|workspace| workspace.has_live_documents())
     });
-    // Truthful until a persistent connection manager lands: report connected
-    // only when an actor holds a live embedded session in this process.
+    // A retained document is not evidence that its process is still running.
     if has_document {
         contracts::RuntimeStatus {
             contract_version: 1,
