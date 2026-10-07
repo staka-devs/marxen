@@ -1383,7 +1383,9 @@ export function WorkspaceShell() {
           )}
         </div>
 
-        <main className="grid min-h-0 flex-1 gap-3 px-4 pb-4 md:grid-cols-2" aria-label="編集領域">
+        {/* Live stacks editor over its rendered preview (inline live
+            renderer); only split lays two panes side by side. */}
+        <main className={`grid min-h-0 flex-1 gap-3 px-4 pb-4 ${viewMode === "split" ? "md:grid-cols-2" : ""}`} aria-label="編集領域">
           {/* Primary editor stays mounted per document to retain scroll/cursor. */}
           {active ? (
             <div
@@ -1415,7 +1417,7 @@ export function WorkspaceShell() {
             </div>
           )}
           {viewMode === "read" && active && (
-            <div className="min-h-80 md:col-span-2" ref={previewWrap}>
+            <div className="min-h-80" ref={previewWrap}>
               <MarkdownPreview text={active.text} />
             </div>
           )}
