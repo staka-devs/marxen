@@ -59,11 +59,31 @@ pub fn list_keymaps(client: &EmbedClient, mode: &str) -> Result<Vec<KeymapEntry>
     Ok(out)
 }
 
-/// True when a user mapping for `lhs` exists in `mode`.
+/// Global and buffer mappings whose lhs starts with the typed Vim key.
+/// Neovim termcodes normalize special keys without changing Unicode text.
 pub fn has_mapping(client: &EmbedClient, mode: &str, lhs: &str) -> Result<bool, RpcError> {
-    Ok(list_keymaps(client, mode)?
-        .iter()
-        .any(|entry| entry.lhs == lhs))
+    let value = client.call(
+        "nvim_exec_lua",
+        vec![
+            Value::from(
+                r#"
+                local mode, lhs = ...
+                local typed = vim.api.nvim_replace_termcodes(lhs, true, true, true)
+                for _, mappings in ipairs({vim.api.nvim_get_keymap(mode), vim.api.nvim_buf_get_keymap(0, mode)}) do
+                  for _, mapping in ipairs(mappings) do
+                    local mapped = vim.api.nvim_replace_termcodes(mapping.lhs, true, true, true)
+                    if mapped:sub(1, #typed) == typed then return true end
+                  end
+                end
+                return false
+                "#,
+            ),
+            Value::Array(vec![Value::from(mode), Value::from(lhs)]),
+        ],
+    )?;
+    value
+        .as_bool()
+        .ok_or_else(|| RpcError::Invalid("mapping query returned non-boolean".into()))
 }
 
 /// Apply user Lua that registers mappings. Used by tests and the future

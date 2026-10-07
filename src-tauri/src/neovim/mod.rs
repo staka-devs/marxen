@@ -283,16 +283,28 @@ impl NeovimSession {
     // -- modes, input, commands --------------------------------------------
 
     pub fn mode(&self) -> Result<crate::contracts::VimMode, RpcError> {
-        // NOTE: `nvim_get_mode` never answers on this headless embed channel
-        // (see mode::parse_mode docs); `mode()` via eval is authoritative.
-        let value = self.call_function("mode", vec![])?;
-        match value {
-            rmpv::Value::String(text) => {
-                let short = text.as_str().unwrap_or_default().to_owned();
-                mode::from_short(&short)
-            }
-            other => Err(RpcError::Invalid(format!("mode(): {other:?}"))),
+        Ok(self.mode_state()?.0)
+    }
+
+    /// Fast API: answers while an operator, mapping, or prompt awaits input.
+    /// An embedded UI must be attached before querying the live mode.
+    pub fn mode_state(&self) -> Result<(crate::contracts::VimMode, bool), RpcError> {
+        let value = self.client.call("nvim_get_mode", vec![])?;
+        Ok((mode::parse_mode(&value)?, mode::parse_blocking(&value)?))
+    }
+
+    pub fn input_pending(&self) -> Result<bool, RpcError> {
+        let (mode, blocking) = self.mode_state()?;
+        if blocking || mode == crate::contracts::VimMode::CommandLine {
+            return Ok(true);
         }
+        // Operators permit API reads, but a GUI edit must not interrupt them.
+        // A fast blocking check must precede this deferred state() query.
+        let value = self.call_function("state", vec![rmpv::Value::from("moS")])?;
+        value
+            .as_str()
+            .map(|flags| !flags.is_empty())
+            .ok_or_else(|| RpcError::Invalid("state() returned non-string".into()))
     }
 
     /// Name the owned buffer (enables `:w` with a filename so `BufWriteCmd`

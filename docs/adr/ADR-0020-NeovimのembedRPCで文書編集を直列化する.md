@@ -11,7 +11,7 @@
 ## 決定と理由
 
 - `nvim --embed` の stdio に対して `rmpv` による msgpack-RPC クライアントを使う。専用 reader が要求 ID ごとの応答と通知を分離する。Tauri コマンドは文書アクター経由で編集する。
-- UI を attach して Vim 入力と raw grid を扱う。モードは `mode()` の戻り値を共通の `VimMode` に写像する。
+- UI を attach して Vim 入力と raw grid を扱う。モードは fast API の `nvim_get_mode()` の戻り値を共通の `VimMode` に写像する。次のキーを待つ状態の扱いは ADR-0023 に従う。
 - ユーザー設定は隔離起動後に `:luafile` / `:source` で明示的に読み込み、評価エラーを `ConfigReport.errors` に返す。設定パスの扱いと配布資源の解決は ADR-0021 に定める。
 - `redraw` の可変長の `grid_line` 更新を解析し、文字・強調・繰り返し数を保持する。
 - 初期本文を Undo の開始点とする。GUI の範囲編集は末尾から適用し、一操作の複数範囲を一つの native Undo にまとめる。Vim の変更は正本から読み戻し、本文が変わった時だけ新しい revision を発行する。

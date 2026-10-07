@@ -82,6 +82,7 @@ pub fn run() {
             ipc::apply_gui_edits,
             ipc::save_document,
             ipc::fetch_mode,
+            ipc::has_nvim_mapping,
             ipc::undo_document,
             ipc::report_cursor,
             ipc::open_workspace,

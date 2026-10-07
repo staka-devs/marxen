@@ -17,7 +17,8 @@
 
 use crate::contracts::{
     ContractError, CursorUpdate, DocumentEvent, DocumentId, DocumentSnapshot, EditRequest,
-    GridUpdate, ModeUpdate, NvimConfig, Revision, SaveRequest, SaveResult, VimMode, WorkspaceError,
+    GridUpdate, ModeUpdate, NvimConfig, Revision, SaveRequest, SaveResult, Utf16Offset, VimMode,
+    WorkspaceError,
 };
 use crate::neovim::config::ConfigSource;
 use crate::neovim::coordinates::global_utf16_to_line_byte;
@@ -83,6 +84,8 @@ struct ActorState {
     recovery: Option<PathBuf>,
     grid: Vec<serde_json::Value>,
     saved: Vec<SaveResult>,
+    save_requested: bool,
+    last_cursor: (Utf16Offset, Utf16Offset),
 }
 
 /// Serialized owner of one document's Neovim buffer, snapshot, and file path.
@@ -167,6 +170,8 @@ impl DocumentActor {
                 recovery: None,
                 grid: Vec::new(),
                 saved: Vec::new(),
+                save_requested: false,
+                last_cursor: (Utf16Offset(0), Utf16Offset(0)),
             }),
         })
     }
@@ -199,6 +204,7 @@ impl DocumentActor {
             .state
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
         // Pick up any Vim-side drift first so a stale base is reported
         // truthfully instead of applied on the wrong text.
         Self::sync_locked(&mut state)?;
@@ -277,8 +283,6 @@ impl DocumentActor {
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         state.nvim.input(keys)?;
-        // `nvim_input` queues keys; flush with a no-op request before reading.
-        let _ = state.nvim.mode();
         Self::sync_locked(&mut state)?;
         Self::service_notifications(&mut state)?;
         Ok(state.snapshot.clone())
@@ -296,7 +300,6 @@ impl DocumentActor {
         Self::sync_locked(&mut state)?;
         validate_save(&state.snapshot, &request)?;
         state.nvim.input(keys)?;
-        let _ = state.nvim.mode();
         Self::sync_locked(&mut state)?;
         Self::service_notifications(&mut state)?;
         Ok(state.snapshot.clone())
@@ -308,6 +311,7 @@ impl DocumentActor {
             .state
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
         state.nvim.undo()?;
         let _ = state.nvim.mode();
         Self::sync_locked(&mut state)?;
@@ -319,6 +323,7 @@ impl DocumentActor {
             .state
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
         state.nvim.redo()?;
         let _ = state.nvim.mode();
         Self::sync_locked(&mut state)?;
@@ -332,6 +337,7 @@ impl DocumentActor {
             .state
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
         Self::sync_locked(&mut state)?;
         validate_save(&state.snapshot, &request)?;
         Self::save_locked(&mut state)
@@ -351,6 +357,29 @@ impl DocumentActor {
         })
     }
 
+    /// Display navigation must yield to user mappings and pending Vim input.
+    pub fn has_user_mapping(&self, mode: &str, lhs: &str) -> Result<bool, ActorError> {
+        if !matches!(mode, "n" | "i" | "v" | "x" | "s" | "o" | "c" | "t")
+            || lhs.is_empty()
+            || lhs.len() > 512
+            || lhs.contains('\0')
+        {
+            return Err(ActorError::Nvim("invalid mapping query".into()));
+        }
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        if state.nvim.input_pending()? {
+            return Ok(true);
+        }
+        Ok(crate::neovim::mapping::has_mapping(
+            state.nvim.client(),
+            mode,
+            lhs,
+        )?)
+    }
+
     /// Validate a GUI-reported cursor against the current snapshot.
     /// Accepts reversed (anchor > head) selections; never bumps the revision.
     pub fn check_cursor(&self, update: CursorUpdate) -> Result<CursorUpdate, ActorError> {
@@ -368,6 +397,7 @@ impl DocumentActor {
             .state
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
         state.nvim.install_save_intercept()?;
         state.nvim.command("setlocal buftype=acwrite")?;
         Ok(())
@@ -379,6 +409,7 @@ impl DocumentActor {
             .state
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
         state.nvim.command(cmd)?;
         Ok(())
     }
@@ -389,6 +420,7 @@ impl DocumentActor {
             .state
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
         Ok(state.nvim.get_text()?)
     }
 
@@ -479,6 +511,7 @@ impl DocumentActor {
             .state
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
         Self::sync_locked(&mut state)?;
         validate_save(&state.snapshot, &request)?;
         if state.snapshot.dirty {
@@ -506,6 +539,7 @@ impl DocumentActor {
             .state
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
         Self::sync_locked(&mut state)?;
         validate_save(&state.snapshot, &request)?;
         let source = state.path.clone().ok_or(WorkspaceError::InvalidPath)?;
@@ -548,18 +582,17 @@ impl DocumentActor {
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         Self::sync_locked(&mut state)?;
+        if state.nvim.mode_state()?.1 {
+            return Ok(Self::cached_cursor(&state));
+        }
         let (row, col) = state.nvim.win_cursor()?;
         let offset = crate::neovim::coordinates::line_byte_to_global_utf16(
             &state.snapshot.text,
             (row - 1) as u32,
             col as u32,
         )?;
-        Ok(CursorUpdate {
-            document_id: state.snapshot.document_id.clone(),
-            revision: state.snapshot.revision,
-            anchor: offset,
-            head: offset,
-        })
+        state.last_cursor = (offset, offset);
+        Ok(Self::cached_cursor(&state))
     }
 
     pub fn set_cursor(&self, update: CursorUpdate) -> Result<CursorUpdate, ActorError> {
@@ -567,6 +600,7 @@ impl DocumentActor {
             .state
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
         Self::sync_locked(&mut state)?;
         validate_cursor(&state.snapshot, &update)?;
         let (row, col) = global_utf16_to_line_byte(&state.snapshot.text, update.head)?;
@@ -577,6 +611,7 @@ impl DocumentActor {
                 rmpv::Value::Array(vec![rmpv::Value::from(row + 1), rmpv::Value::from(col)]),
             ],
         )?;
+        state.last_cursor = (update.anchor, update.head);
         Ok(update)
     }
 
@@ -589,11 +624,13 @@ impl DocumentActor {
             .state
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
-        state.nvim.client().call(
-            "nvim_ui_try_resize",
-            vec![rmpv::Value::from(width), rmpv::Value::from(height)],
-        )?;
-        state.nvim.command("redraw!")?;
+        if !state.nvim.mode_state()?.1 {
+            state.nvim.client().call(
+                "nvim_ui_try_resize",
+                vec![rmpv::Value::from(width), rmpv::Value::from(height)],
+            )?;
+            state.nvim.command("redraw!")?;
+        }
         Self::sync_locked(&mut state)?;
         Self::service_notifications(&mut state)?;
         Ok(GridUpdate {
@@ -612,6 +649,7 @@ impl DocumentActor {
             .state
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
         Self::sync_locked(&mut state)?;
         validate_save(&state.snapshot, &request)?;
         let config = path
@@ -656,10 +694,9 @@ impl DocumentActor {
     }
 
     fn service_notifications(state: &mut ActorState) -> Result<(), ActorError> {
-        let mut save = false;
         for note in state.nvim.drain_notifications() {
             if note.method == "marxen:save-requested" {
-                save = true;
+                state.save_requested = true;
             }
             if note.method == "redraw" {
                 if let Ok(value) = serde_json::to_value(&note.params) {
@@ -671,8 +708,9 @@ impl DocumentActor {
         if state.grid.len() > 256 {
             state.grid.drain(..state.grid.len() - 256);
         }
-        if save {
+        if state.save_requested && !state.nvim.mode_state()?.1 {
             let result = Self::save_locked(state)?;
+            state.save_requested = false;
             state.saved.push(result);
         }
         Ok(())
@@ -727,6 +765,11 @@ impl DocumentActor {
     }
 
     fn sync_locked(state: &mut ActorState) -> Result<bool, ActorError> {
+        // Deferred API reads cannot answer while Vim waits for the next key.
+        // Keep the acknowledged snapshot and leave input available to finish it.
+        if state.nvim.mode_state()?.1 {
+            return Ok(false);
+        }
         let text = state.nvim.get_text()?;
         if text == state.snapshot.text {
             Self::checkpoint_locked(state)?;
@@ -742,5 +785,23 @@ impl DocumentActor {
         };
         Self::checkpoint_locked(state)?;
         Ok(true)
+    }
+
+    fn cached_cursor(state: &ActorState) -> CursorUpdate {
+        CursorUpdate {
+            document_id: state.snapshot.document_id.clone(),
+            revision: state.snapshot.revision,
+            anchor: state.last_cursor.0,
+            head: state.last_cursor.1,
+        }
+    }
+
+    fn require_ready(state: &ActorState) -> Result<(), ActorError> {
+        if state.nvim.input_pending()? {
+            return Err(ActorError::Nvim(
+                "次のキーを待っています。Vim 操作を完了するか Esc で取り消してください。".into(),
+            ));
+        }
+        Ok(())
     }
 }
