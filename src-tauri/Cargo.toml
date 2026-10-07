@@ -39,7 +39,7 @@ rmpv = { version = "1.3", features = ["with-serde"] }
 unicode-width = "0.2"
 tempfile = "3"
 sha2 = "0.10"
-keyring = "3"
+keyring = { version = "=3.6.3", default-features = false }
 futures = "0.3"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls-native-roots"] }
@@ -49,3 +49,10 @@ tauri-build = { version = "=2.7.1", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Security"] }
+keyring = { version = "=3.6.3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "=3.6.3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "=3.6.3", features = ["sync-secret-service", "crypto-rust"] }
