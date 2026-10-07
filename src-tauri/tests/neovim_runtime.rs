@@ -66,3 +66,56 @@ fn bundle_metadata_identifies_target_instead_of_version() {
     };
     assert_eq!(bundle.manifest_target, target);
 }
+
+#[test]
+fn process_health_detects_the_owned_child_exit() {
+    let session = NeovimSession::spawn_isolated().unwrap();
+    assert!(session.is_alive().unwrap());
+    session.client().shutdown().unwrap();
+    assert!(!session.is_alive().unwrap());
+}
+
+#[test]
+fn vim_writes_delegate_only_complete_owned_document_saves() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("文書 original.md");
+    let other = directory.path().join("alternate.md");
+    std::fs::write(&path, "original\n").unwrap();
+    let session = NeovimSession::spawn_isolated().unwrap();
+    session.set_buf_name(path.to_str().unwrap()).unwrap();
+    session.set_text("first\nsecond\nthird").unwrap();
+    session.command("setlocal buftype=acwrite").unwrap();
+    session.install_save_intercept().unwrap();
+    session.install_save_intercept().unwrap();
+    for command in ["write", "write!"] {
+        session.drain_notifications();
+        session.command(command).unwrap();
+        assert!(session
+            .client()
+            .wait_notification(Duration::from_secs(2), |event| event.method
+                == "marxen:save-requested")
+            .is_some());
+        assert!(
+            session.drain_save_requests().is_empty(),
+            "duplicate save callbacks"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original\n");
+    }
+    let escaped = session
+        .call_function("fnameescape", vec![other.to_str().unwrap().into()])
+        .unwrap();
+    for command in [
+        format!("write {}", escaped.as_str().unwrap()),
+        "1write".into(),
+        format!("write >> {}", escaped.as_str().unwrap()),
+    ] {
+        session.drain_notifications();
+        assert!(session.command(&command).is_err(), "accepted {command}");
+        assert!(
+            session.drain_save_requests().is_empty(),
+            "delegated rejected {command}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original\n");
+        assert!(!other.exists(), "write bypassed Rust: {command}");
+    }
+}

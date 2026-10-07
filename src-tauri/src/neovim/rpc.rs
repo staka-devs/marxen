@@ -78,7 +78,13 @@ impl EmbedClient {
         vimruntime: &std::path::Path,
         extra_argv: &[String],
     ) -> Result<Self, RpcError> {
-        let mut child = Command::new(nvim_exe)
+        let mut command = Command::new(nvim_exe);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        let mut child = command
             .arg("--embed")
             .args(extra_argv)
             .env("VIMRUNTIME", vimruntime)
@@ -273,6 +279,16 @@ impl EmbedClient {
             let _ = self.notifications_tx.send(item);
         }
         found
+    }
+
+    /// Check the owned process without issuing an RPC to a possibly dead peer.
+    pub fn is_alive(&self) -> Result<bool, RpcError> {
+        self.child
+            .lock()
+            .map_err(|_| RpcError::Disconnected("child lock poisoned".into()))?
+            .try_wait()
+            .map(|status| status.is_none())
+            .map_err(|cause| RpcError::Io(format!("poll nvim: {cause}")))
     }
 
     /// Kill the embedded child. Best-effort; errors are returned as strings.

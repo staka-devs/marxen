@@ -404,20 +404,46 @@ impl NeovimSession {
     /// Rust owns the file; the autocmd deliberately performs no write.
     pub fn install_save_intercept(&self) -> Result<(), RpcError> {
         let lua = r#"
+            local owned = ...
             local chans = vim.api.nvim_list_chans()
             local target = 1
             for _, c in ipairs(chans) do
               if c.stream == 'stdio' then target = c.id break end
             end
+            local group = vim.api.nvim_create_augroup('marxen_save_' .. owned, {clear = true})
+            local function canonical(path)
+              local result = vim.fn.resolve(vim.fn.fnamemodify(path, ':p'))
+              if vim.fn.has('win32') == 1 then result = result:lower() end
+              return result
+            end
             vim.api.nvim_create_autocmd('BufWriteCmd', {
-              pattern = '*',
+              group = group,
+              buffer = owned,
               callback = function(args)
-                vim.fn.rpcnotify(target, 'marxen:save-requested', vim.api.nvim_get_current_buf())
+                local name = vim.api.nvim_buf_get_name(owned)
+                if args.buf ~= owned or (args.file ~= '' and canonical(args.file) ~= canonical(name)) then
+                  error('Marxen: 別名での保存はアプリの名前を付けて保存を使ってください')
+                end
+                vim.fn.rpcnotify(target, 'marxen:save-requested', owned)
+              end,
+            })
+            vim.api.nvim_create_autocmd({'FileWriteCmd', 'FileAppendCmd'}, {
+              group = group,
+              buffer = owned,
+              callback = function()
+                error('Marxen: 範囲保存と追記は文書の保存操作に対応していません')
               end,
             })
         "#;
-        self.exec_lua(lua)?;
+        self.client.call(
+            "nvim_exec_lua",
+            vec![lua.into(), rmpv::Value::Array(vec![self.buf.clone()])],
+        )?;
         Ok(())
+    }
+
+    pub fn is_alive(&self) -> Result<bool, RpcError> {
+        self.client.is_alive()
     }
 
     /// Drain `marxen:save-requested` notifications queued since the last call.
