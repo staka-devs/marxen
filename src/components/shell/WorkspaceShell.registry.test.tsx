@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 vi.mock("../../lib/runtime", () => ({ readRuntimeStatus: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), isTauri: () => true }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 const mockedInvoke = vi.mocked(invoke);
 
@@ -269,4 +270,59 @@ it("keeps text and shows the conflict UI when save loses", async () => {
   await screen.findByTestId("conflict-banner");
   expect(screen.getByTestId("conflict-banner")).toHaveTextContent("本文は保持");
   expect(screen.getByTestId("dirty")).toHaveTextContent("未保存");
+});
+
+it("opens the natively picked folder instead of a typed prompt", async () => {
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  vi.mocked(open).mockResolvedValueOnce("/picked/ws");
+  render(<App />);
+  fireEvent.click(screen.getByRole("button", { name: "フォルダーを参照する" }));
+  await screen.findByRole("button", { name: "メモ/a.md" });
+  expect(mockedInvoke).toHaveBeenCalledWith("open_workspace", { path: "/picked/ws" });
+  expect(screen.getByLabelText("開くフォルダーの絶対パス")).toHaveValue("/picked/ws");
+});
+
+it("picks the config file natively and applies it with restart", async () => {
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  vi.mocked(open).mockResolvedValueOnce("/cfg/init.lua");
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await screen.findByText("# A");
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.click(screen.getByRole("button", { name: "設定ファイルを参照する" }));
+  await waitFor(() => expect(screen.getByLabelText("Neovim 設定ファイルのパス")).toHaveValue("/cfg/init.lua"));
+  fireEvent.click(screen.getByRole("button", { name: "設定を適用して再起動する" }));
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith("configure_document", {
+      documentId: "doc_a",
+      baseRevision: 0,
+      path: "/cfg/init.lua",
+    }),
+  );
+  await screen.findByText(/再起動しました/);
+});
+
+it("mounts the AI panel with the exact document scope", async () => {
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await screen.findByText("# A");
+  fireEvent.click(screen.getByRole("button", { name: "AI 支援" }));
+  const sidebar = await screen.findByTestId("ai-sidebar");
+  expect(within(sidebar).getByText(/doc_a rev 0/)).toBeVisible();
+  expect(within(sidebar).getByText(/未解決/)).toBeVisible();
+});
+
+it("keeps display-basis arrows in the editor and routes Vim keys natively", async () => {
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await screen.findByText("# A");
+  fireEvent.click(screen.getByRole("button", { name: "表示基準" }));
+  const editor = screen.getByTestId("editor-primary");
+  fireEvent.keyDown(editor, { key: "ArrowDown" });
+  fireEvent.keyDown(editor, { key: "Process" });
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input")).toHaveLength(0);
+  fireEvent.keyDown(editor, { key: "j" });
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 0, keys: "j" }),
+  );
 });

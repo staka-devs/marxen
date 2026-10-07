@@ -3,6 +3,7 @@ import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, lineNumbers } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 import type { TextEdit } from "../../shared/contracts";
+import { MarkdownPreview } from "../preview/MarkdownPreview";
 
 export interface EditorSelection {
   anchor: number;
@@ -29,6 +30,12 @@ interface Props {
   onSelectionChange?: (selection: EditorSelection) => void;
   initialSelection?: EditorSelection | null;
   externalCursor?: ExternalCursor | null;
+  /**
+   * Inline live preview switch (shell-owned layout only). When true the
+   * shared Issue #6 preview renders under the editor from the same `value`;
+   * decorations, hydration, and the editing pipeline stay untouched.
+   */
+  livePreview?: boolean;
 }
 
 /** Common prefix/suffix diff as a single wire range edit. */
@@ -57,7 +64,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   return [{ range: { start, end: endBefore }, text: after.slice(start, endAfter) }];
 }
 
-export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor }: Props) {
+export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const editableRef = useRef(new Compartment());
@@ -190,5 +197,14 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
     }
   }, [externalCursor]);
 
-  return <div ref={host} data-testid={testId ?? "editor"} aria-label={ariaLabel} className="h-full min-h-50 overflow-hidden rounded-lg border border-border bg-card" />;
+  return (
+    <div className="flex h-full min-h-50 flex-col gap-3">
+      <div ref={host} data-testid={testId ?? "editor"} aria-label={ariaLabel} className="min-h-50 flex-1 overflow-hidden rounded-lg border border-border bg-card" />
+      {livePreview && (
+        <div className="min-h-50 flex-1">
+          <MarkdownPreview text={value} label="ライブプレビュー" />
+        </div>
+      )}
+    </div>
+  );
 }

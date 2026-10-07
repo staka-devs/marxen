@@ -40,6 +40,7 @@ fn get_runtime_status(state: tauri::State<ipc::ActorState>) -> contracts::Runtim
 pub fn run() {
     use tauri::{Emitter, Manager};
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(ipc::ActorState::default())
         .setup(|app| {
             neovim::configure_resource_dir(app.path().resource_dir()?);

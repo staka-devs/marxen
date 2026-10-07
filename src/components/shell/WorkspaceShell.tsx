@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Bot, Files, Settings as SettingsIcon } from "lucide-react";
 import { CodeMirrorEditor, type EditorSelection, type ExternalCursor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
+import AiPanel from "../ai-panel";
+import type { ContextSummary, ProposalText, PromptContext } from "../../shared/ai-contracts";
 import { FileTree, buildTree } from "../workspace/FileTree";
 import { Tabs, type TabItem } from "../workspace/Tabs";
 import { QuickOpen } from "../workspace/QuickOpen";
@@ -40,6 +43,7 @@ import {
   workspaceApi,
   type ThemeId,
 } from "../../lib/workspace";
+import { pickConfigFile, pickFolder } from "../../lib/native-dialog";
 import {
   READONLY_MESSAGE,
   RegistryClient,
@@ -141,6 +145,10 @@ export function WorkspaceShell() {
   const [viewMode, setViewMode] = useState<ViewMode>("live");
   const [navBasis, setNavBasis] = useState<NavBasis>("source");
   const [showRaw, setShowRaw] = useState(false);
+  const [showSidebar, setShowSidebar] = useState(true);
+  const [showAi, setShowAi] = useState(false);
+  const [aiDismissed, setAiDismissed] = useState(false);
+  const [aiProposal, setAiProposal] = useState<{ proposal: ProposalText; sent: ContextSummary[] } | null>(null);
   const [theme, setTheme] = useState<ThemeId>("light");
   const [quickOpen, setQuickOpen] = useState(false);
   const [palette, setPalette] = useState(false);
@@ -563,13 +571,18 @@ export function WorkspaceShell() {
       if (!desktop || !registry || !activeRef.current) return;
       if (event.defaultPrevented || event.isPropagationStopped()) return;
       const native = event.nativeEvent;
-      if (native.isComposing || event.key === "Process") return;
+      // IME preedit (including keyCode 229) is never a Vim motion and never a
+      // GUI change here; composition commits flow through the editor once.
+      if (native.isComposing || event.key === "Process" || native.keyCode === 229) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest("input,textarea,select,[role=\"dialog\"]")) return;
       const mod = event.ctrlKey || event.metaKey;
       const lower = event.key.toLowerCase();
       if (mod && (lower === "p" || lower === "s")) return;
       if (navRef.current === "display" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        // Display-basis vertical motion, line start/end, and keyboard
+        // selection stay in the editor; word/textobject/macro keys below
+        // still route natively in non-insert modes.
         if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
         if ((vimModeRef.current === "insert" || vimModeRef.current === "replace") && event.key.length === 1) return;
       }
@@ -934,6 +947,7 @@ export function WorkspaceShell() {
       { id: "palette-raw", label: "表示: Neovim 原文ビューを切り替える" },
       { id: "palette-raw-refresh", label: "表示: 原文ビューを更新する" },
       { id: "palette-recovery", label: "復旧: 復旧一覧を更新する" },
+      { id: "palette-ai", label: "AI: AI 支援を開く" },
       { id: "palette-settings", label: "設定: 設定を開く" },
     ],
     [],
@@ -963,9 +977,12 @@ export function WorkspaceShell() {
       else if (id === "palette-raw") setShowRaw((value) => !value);
       else if (id === "palette-raw-refresh") setGridLines(null);
       else if (id === "palette-recovery") void refreshRecovery();
-      else if (id === "palette-settings") setSettings(true);
+      else if (id === "palette-ai") {
+        if (!desktop) setNotice(READONLY_MESSAGE);
+        else setShowAi(true);
+      } else if (id === "palette-settings") setSettings(true);
     },
-    [handleSave, handleReload, handleUndo, handleRedo, closeTab, refreshRecovery],
+    [desktop, handleSave, handleReload, handleUndo, handleRedo, closeTab, refreshRecovery],
   );
 
   useEffect(() => {
@@ -1025,6 +1042,26 @@ export function WorkspaceShell() {
 
   const activeExternal = active ? externalByDoc[active.documentId] : undefined;
   const isConflicted = active ? conflictDoc === active.documentId : false;
+
+  // Exact AI scope: the active document at its live revision with the GUI
+  // selection as the single range. Dismissed per document; questions never
+  // edit, and proposals only flow out through onProposal for #8 review.
+  const aiContexts: PromptContext[] = useMemo(() => {
+    if (!desktop || !active || aiDismissed) return [];
+    const sel = selections[active.documentId] ?? { anchor: 0, head: 0 };
+    const start = Math.min(sel.anchor, sel.head, active.text.length);
+    const end = Math.min(Math.max(sel.anchor, sel.head), active.text.length);
+    return [{ documentId: active.documentId, revision: active.revision, ranges: [{ start, end }], text: active.text }];
+  }, [desktop, active, selections, aiDismissed]);
+
+  const handleProposal = useCallback((proposal: ProposalText, sent: ContextSummary[]) => {
+    setAiProposal({ proposal, sent });
+    setNotice("AI の提案を受け取りました。適用は差分レビュー (#8) で行います。");
+  }, []);
+
+  useEffect(() => {
+    setAiDismissed(false);
+  }, [activeId]);
 
   const createFile = useCallback(async () => {
     if (!registry) {
@@ -1093,27 +1130,62 @@ export function WorkspaceShell() {
 
   return (
     <div data-theme={theme} data-testid="workspace-shell" className="flex min-h-screen bg-background text-foreground">
-      <aside className="hidden w-64 shrink-0 flex-col gap-4 border-r border-border bg-card/50 py-4 md:flex" aria-label="サイドバー">
-        <FileTree nodes={treeNodes} activePath={active?.path ?? null} onOpenFile={(path) => void openFile(path)} />
-        <SearchPanel
-          query={searchQuery}
-          onQuery={setSearchQuery}
-          hits={desktop ? registryHits : localHits}
-          searching={searching}
-          canReplace={desktop}
-          replaceText={replaceText}
-          onReplaceText={setReplaceText}
-          onJump={(hit) => void jumpToHit(hit)}
-          onReplaceOne={(hit) => void replaceOne(hit)}
-          onReplaceAll={() => void replaceAllMatches()}
-        />
-        <Outline
-          text={active?.text ?? ""}
-          onJump={(offset) => {
-            if (active) void jumpToOffset(active.documentId, offset, offset);
-          }}
-        />
-      </aside>
+      <nav aria-label="アクティビティ" className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-border bg-card/50 py-3">
+        <button
+          type="button"
+          onClick={() => setShowSidebar((value) => !value)}
+          aria-pressed={showSidebar}
+          aria-label="エクスプローラー表示切替"
+          title="エクスプローラー"
+          className={`rounded-md p-2 hover:bg-muted ${showSidebar ? "text-primary" : "text-muted-foreground"}`}
+        >
+          <Files size={18} aria-hidden="true" />
+        </button>
+        {desktop && (
+          <button
+            type="button"
+            onClick={() => setShowAi((value) => !value)}
+            aria-pressed={showAi}
+            aria-label="AI表示切替"
+            title="AI 支援"
+            className={`rounded-md p-2 hover:bg-muted ${showAi ? "text-primary" : "text-muted-foreground"}`}
+          >
+            <Bot size={18} aria-hidden="true" />
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => setSettings(true)}
+          aria-label="設定表示切替"
+          title="設定"
+          className="rounded-md p-2 text-muted-foreground hover:bg-muted"
+        >
+          <SettingsIcon size={18} aria-hidden="true" />
+        </button>
+      </nav>
+      {showSidebar && (
+        <aside className="hidden w-64 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border bg-card/50 py-4 md:flex" aria-label="サイドバー">
+          <FileTree nodes={treeNodes} activePath={active?.path ?? null} onOpenFile={(path) => void openFile(path)} />
+          <SearchPanel
+            query={searchQuery}
+            onQuery={setSearchQuery}
+            hits={desktop ? registryHits : localHits}
+            searching={searching}
+            canReplace={desktop}
+            replaceText={replaceText}
+            onReplaceText={setReplaceText}
+            onJump={(hit) => void jumpToHit(hit)}
+            onReplaceOne={(hit) => void replaceOne(hit)}
+            onReplaceAll={() => void replaceAllMatches()}
+          />
+          <Outline
+            text={active?.text ?? ""}
+            onJump={(offset) => {
+              if (active) void jumpToOffset(active.documentId, offset, offset);
+            }}
+          />
+        </aside>
+      )}
 
       <div className="relative flex min-w-0 flex-1 flex-col">
         <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
@@ -1142,6 +1214,17 @@ export function WorkspaceShell() {
           <button type="button" onClick={() => setSettings(true)} className="rounded-md border border-border px-3 py-1.5 text-sm">
             設定
           </button>
+          {desktop && (
+            <button
+              type="button"
+              onClick={() => setShowAi((value) => !value)}
+              aria-pressed={showAi}
+              aria-label="AI 支援"
+              className={`rounded-md border border-border px-3 py-1.5 text-sm ${showAi ? "bg-primary text-primary-foreground" : ""}`}
+            >
+              AI
+            </button>
+          )}
           <div role="group" aria-label="移動基準" className="flex gap-1">
             {(["display", "source"] as NavBasis[]).map((basis) => (
               <button
@@ -1172,6 +1255,22 @@ export function WorkspaceShell() {
             />
             <button type="button" onClick={() => void openWorkspaceFolder(folderInput)} className="rounded-md border border-border px-3 py-1.5 text-sm">
               フォルダーを開く
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                void (async () => {
+                  const picked = await pickFolder();
+                  if (picked) {
+                    setFolderInput(picked);
+                    await openWorkspaceFolder(picked);
+                  }
+                })()
+              }
+              aria-label="フォルダーを参照する"
+              className="rounded-md border border-border px-3 py-1.5 text-sm"
+            >
+              参照…
             </button>
             {wsRoot && <span className="max-w-full truncate text-xs text-muted-foreground">{wsRoot}</span>}
           </div>
@@ -1385,35 +1484,49 @@ export function WorkspaceShell() {
 
         {/* Live stacks editor over its rendered preview (inline live
             renderer); only split lays two panes side by side. */}
-        <main className={`grid min-h-0 flex-1 gap-3 px-4 pb-4 ${viewMode === "split" ? "md:grid-cols-2" : ""}`} aria-label="編集領域">
-          {/* Primary editor stays mounted per document to retain scroll/cursor. */}
+        <main className={`mx-auto grid min-h-0 w-full max-w-5xl flex-1 gap-3 px-4 pb-4 ${viewMode === "split" ? "md:grid-cols-2" : ""}`} aria-label="編集領域">
+          {/* One editor-primary at a time: live owns the inline preview
+              pane, source/split own the raw pane. Selections live in shell
+              state so scroll/cursor survive mode switches. */}
           {active ? (
-            <div
-              onKeyDownCapture={onEditorKeyDown}
-              onPaste={onEditorPaste}
-              className={viewMode === "read" ? "hidden" : "min-h-80"}
-              aria-hidden={viewMode === "read"}
-            >
-              <CodeMirrorEditor
-                key={`primary-${active.documentId}`}
-                value={active.text}
-                editable={desktop}
-                ariaLabel={`${active.path ?? active.documentId}の原文エディタ`}
-                testId="editor-primary"
-                initialSelection={selections[active.documentId] ?? null}
-                externalCursor={cursorEcho[active.documentId] ?? null}
-                onGuiEdits={(edits) => void applyEdits(active.documentId, edits)}
-                onSelectionChange={(selection) => handleSelection(active.documentId, selection)}
-              />
-            </div>
+            viewMode === "live" ? (
+              <div ref={previewWrap} onKeyDownCapture={onEditorKeyDown} onPaste={onEditorPaste} className="min-h-80">
+                <CodeMirrorEditor
+                  key={`live-${active.documentId}`}
+                  value={active.text}
+                  editable={desktop}
+                  ariaLabel={`${active.path ?? active.documentId}の原文エディタ`}
+                  testId="editor-primary"
+                  initialSelection={selections[active.documentId] ?? null}
+                  externalCursor={cursorEcho[active.documentId] ?? null}
+                  livePreview
+                  onGuiEdits={(edits) => void applyEdits(active.documentId, edits)}
+                  onSelectionChange={(selection) => handleSelection(active.documentId, selection)}
+                />
+              </div>
+            ) : (
+              <div
+                onKeyDownCapture={onEditorKeyDown}
+                onPaste={onEditorPaste}
+                className={viewMode === "read" ? "hidden" : "min-h-80"}
+                aria-hidden={viewMode === "read"}
+              >
+                <CodeMirrorEditor
+                  key={`primary-${active.documentId}`}
+                  value={active.text}
+                  editable={desktop}
+                  ariaLabel={`${active.path ?? active.documentId}の原文エディタ`}
+                  testId="editor-primary"
+                  initialSelection={selections[active.documentId] ?? null}
+                  externalCursor={cursorEcho[active.documentId] ?? null}
+                  onGuiEdits={(edits) => void applyEdits(active.documentId, edits)}
+                  onSelectionChange={(selection) => handleSelection(active.documentId, selection)}
+                />
+              </div>
+            )
           ) : (
             <div className="min-h-80 rounded-lg border border-dashed border-border p-4 text-xs text-muted-foreground">
               フォルダーを開き、ツリーから Markdown ファイルを開いてください。
-            </div>
-          )}
-          {viewMode === "live" && active && (
-            <div className="min-h-80" ref={previewWrap}>
-              <MarkdownPreview text={active.text} />
             </div>
           )}
           {viewMode === "read" && active && (
@@ -1477,6 +1590,15 @@ export function WorkspaceShell() {
             configPath={configPath}
             configError={configError}
             onConfigPath={setConfigPath}
+            onBrowseConfig={
+              desktop
+                ? () =>
+                    void (async () => {
+                      const picked = await pickConfigFile();
+                      if (picked) setConfigPath(picked);
+                    })()
+                : undefined
+            }
             onApplyConfig={() => void applyConfig()}
             applyingConfig={applyingConfig}
             currentConfig={currentConfig}
@@ -1484,6 +1606,30 @@ export function WorkspaceShell() {
           />
         )}
       </div>
+
+      {showAi && desktop && (
+        <aside data-testid="ai-sidebar" aria-label="AI サイドバー" className="hidden w-80 shrink-0 overflow-y-auto border-l border-border bg-card/50 p-3 md:block">
+          <AiPanel contexts={aiContexts} staging={null} onRemoveContext={() => setAiDismissed(true)} onProposal={handleProposal} />
+          {aiDismissed && active && (
+            <button type="button" onClick={() => setAiDismissed(false)} className="mt-2 w-full rounded-md border border-border px-3 py-1.5 text-xs">
+              現在の選択を送る
+            </button>
+          )}
+          {aiProposal && (
+            <div data-testid="ai-proposal" className="mt-3 rounded-lg border border-border bg-card p-3 text-xs">
+              <p className="font-medium">AI の提案（原文は変更しません）</p>
+              <p className="mt-1 whitespace-pre-wrap">{aiProposal.proposal.text}</p>
+              <p className="mt-1 text-muted-foreground">
+                基準: {aiProposal.proposal.baseContexts.map((ref) => `${ref.documentId} rev ${ref.revision}`).join(", ")}
+              </p>
+              <p className="mt-1 text-muted-foreground">適用は差分レビュー (#8) で行います。</p>
+              <button type="button" onClick={() => setAiProposal(null)} className="mt-2 w-full rounded-md border border-border px-3 py-1.5">
+                却下する
+              </button>
+            </div>
+          )}
+        </aside>
+      )}
     </div>
   );
 }
