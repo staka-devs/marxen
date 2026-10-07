@@ -36,7 +36,7 @@ export function SettingsPanel({ theme, onTheme, configPath, configError, onConfi
       </section>
       <section aria-label="Neovim 設定" className="mt-5">
         <p className="mb-2 text-sm font-medium">Neovim 設定ファイル</p>
-        <p className="mb-2 text-xs text-muted-foreground">既定は専用設定（隔離）。vimrc / _vimrc / init.vim / init.lua を選択できます。適用すると明示的に再起動し、本文・改訂・未保存状態は維持、Undo とモードは初期化されます。</p>
+        <p className="mb-2 text-xs text-muted-foreground">既定は専用設定（隔離）。vimrc / _vimrc / .vimrc / init.vim / init.lua を選択できます。適用すると明示的に再起動し、本文・改訂・未保存状態は維持、Undo とモードは初期化されます。</p>
         {currentConfig !== null && (
           <p data-testid="current-config" className="mb-2 text-xs text-muted-foreground">現在: {currentConfig === "" ? "専用設定（隔離）" : currentConfig}</p>
         )}
@@ -56,7 +56,7 @@ export function SettingsPanel({ theme, onTheme, configPath, configError, onConfi
         </div>
         {nameInvalid && (
           <p role="alert" className="mt-2 text-xs text-red-700">
-            対応する名前は vimrc / _vimrc / init.vim / init.lua です。
+            対応する名前は vimrc / _vimrc / .vimrc / init.vim / init.lua です。
           </p>
         )}
         {configError && (
@@ -73,6 +73,14 @@ export function SettingsPanel({ theme, onTheme, configPath, configError, onConfi
         >
           {applyingConfig ? "再起動中…" : "設定を適用して再起動する"}
         </button>
+      </section>
+      <section aria-label="操作の説明" className="mt-5">
+        <p className="mb-2 text-sm font-medium">操作の説明</p>
+        <ul className="list-disc space-y-1 pl-5 text-xs leading-6 text-muted-foreground">
+          <li>IME は確定のみ送信します。編集中の未確定文は送りません。</li>
+          <li>GUI 編集は範囲パッチで実 Neovim へ送り、改訂で直列化します。</li>
+          <li>表示基準では折り返し行の上下・行頭末が表示通りに動き、原文基準では実 Neovim が動かします。</li>
+        </ul>
       </section>
       <button type="button" onClick={onClose} className="mt-5 w-full rounded-md border border-border px-3 py-2 text-sm">
         閉じる

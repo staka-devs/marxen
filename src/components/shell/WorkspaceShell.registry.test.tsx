@@ -302,6 +302,23 @@ it("picks the config file natively and applies it with restart", async () => {
   await screen.findByText(/再起動しました/);
 });
 
+it("refreshes the runtime status when documents open", async () => {
+  vi.mocked(readRuntimeStatus).mockReset();
+  let releaseFirst!: (status: { contractVersion: number; connection: "disconnected"; detail: string }) => void;
+  vi.mocked(readRuntimeStatus).mockImplementationOnce(
+    () => new Promise((resolve) => { releaseFirst = resolve; }),
+  );
+  vi.mocked(readRuntimeStatus).mockResolvedValue({ contractVersion: 1, connection: "connected", detail: "live" });
+  render(<App />);
+  releaseFirst({ contractVersion: 1, connection: "disconnected", detail: "empty" });
+  expect(await screen.findByText("Neovim 未接続")).toBeVisible();
+  fireEvent.change(screen.getByLabelText("開くフォルダーの絶対パス"), { target: { value: "/ws" } });
+  fireEvent.click(screen.getByRole("button", { name: "フォルダーを開く" }));
+  await screen.findByRole("button", { name: "メモ/a.md" });
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Neovim 接続済み"));
+});
+
 it("mounts the AI panel with the exact document scope", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));

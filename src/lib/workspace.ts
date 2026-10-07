@@ -211,7 +211,7 @@ export const SAMPLE_WORKSPACE: WorkspaceFile[] = [
   },
 ];
 
-export const SUPPORTED_CONFIG_NAMES = ["vimrc", "_vimrc", "init.vim", "init.lua"] as const;
+export const SUPPORTED_CONFIG_NAMES = ["vimrc", "_vimrc", ".vimrc", "init.vim", "init.lua"] as const;
 
 export function isSupportedConfigName(name: string): boolean {
   const base = name.split(/[\\/]/).pop() ?? name;

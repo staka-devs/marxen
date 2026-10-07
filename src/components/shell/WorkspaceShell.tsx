@@ -149,7 +149,7 @@ export function WorkspaceShell() {
   const [showAi, setShowAi] = useState(false);
   const [aiDismissed, setAiDismissed] = useState(false);
   const [aiProposal, setAiProposal] = useState<{ proposal: ProposalText; sent: ContextSummary[] } | null>(null);
-  const [theme, setTheme] = useState<ThemeId>("light");
+  const [theme, setTheme] = useState<ThemeId>("dark");
   const [quickOpen, setQuickOpen] = useState(false);
   const [palette, setPalette] = useState(false);
   const [settings, setSettings] = useState(false);
@@ -184,6 +184,14 @@ export function WorkspaceShell() {
   docsRef.current = docs;
   const activeRef = useRef(activeId);
   activeRef.current = activeId;
+  // Dedicated cursor sequence: every echo gets a fresh token so navigation
+  // without text change is never suppressed by revision equality.
+  const cursorSeq = useRef(0);
+  const echoCursor = useCallback((id: string, anchor: number, head: number) => {
+    cursorSeq.current += 1;
+    const seq = cursorSeq.current;
+    setCursorEcho((prev) => ({ ...prev, [id]: { anchor, head, seq } }));
+  }, []);
   const navRef = useRef(navBasis);
   navRef.current = navBasis;
   const vimModeRef = useRef(vimMode);
@@ -221,12 +229,12 @@ export function WorkspaceShell() {
       try {
         const cursor = await registry.fetchCursor(id);
         setSelections((prev) => ({ ...prev, [id]: { anchor: cursor.anchor, head: cursor.head } }));
-        setCursorEcho((prev) => ({ ...prev, [id]: { anchor: cursor.anchor, head: cursor.head, rev: cursor.revision } }));
+        echoCursor(id, cursor.anchor, cursor.head);
       } catch {
         // Best-effort display only.
       }
     },
-    [registry],
+    [registry, echoCursor],
   );
 
   // -- workspace lifecycle -------------------------------------------------
@@ -527,21 +535,19 @@ export function WorkspaceShell() {
 
   const jumpToOffset = useCallback(
     async (id: string, anchor: number, head: number) => {
-      setCursorEcho((prev) => {
-        const current = docsRef.current[id];
-        return { ...prev, [id]: { anchor, head, rev: (current?.revision ?? 0) + 0.5 } };
-      });
+      echoCursor(id, anchor, head);
       if (!registry) return;
       const current = docsRef.current[id];
       if (!current) return;
       try {
         const cursor = await registry.reportCursor({ documentId: id, revision: current.revision, anchor, head });
-        setCursorEcho((prev) => ({ ...prev, [id]: { anchor: cursor.anchor, head: cursor.head, rev: cursor.revision } }));
+        setSelections((prev) => ({ ...prev, [id]: { anchor: cursor.anchor, head: cursor.head } }));
+        echoCursor(id, cursor.anchor, cursor.head);
       } catch {
         // Best-effort navigation; the editor keeps its own selection.
       }
     },
-    [registry],
+    [registry, echoCursor],
   );
 
   // -- GUI range actions -----------------------------------------------------
@@ -772,8 +778,18 @@ export function WorkspaceShell() {
 
   // -- events / recovery -----------------------------------------------------
 
+  // Native status must follow documents, not mount time: an empty workspace
+  // reads disconnected while an open document reads connected, and a process
+  // crash flips back through the event path below.
+  const refreshRuntime = useCallback(() => {
+    readRuntimeStatus()
+      .then(setRuntime)
+      .catch(() => setRuntime({ contractVersion: 1, connection: "error", detail: "接続状態を取得できません。" }));
+  }, []);
+
   const handleEvents = useCallback(
     (events: WorkspaceEvent[]) => {
+      if (events.length > 0) refreshRuntime();
       for (const event of events) {
         if (event.type === "external_change") {
           const { documentId, path, deleted } = event.payload;
@@ -792,7 +808,7 @@ export function WorkspaceShell() {
         }
       }
     },
-    [mergeSnapshot],
+    [mergeSnapshot, refreshRuntime],
   );
 
   useEffect(() => {
@@ -823,6 +839,12 @@ export function WorkspaceShell() {
       active = false;
     };
   }, []);
+
+  // Native status refreshes with documents and workspace root; the mount
+  // read above only seeds the first paint.
+  useEffect(() => {
+    if (desktop) refreshRuntime();
+  }, [desktop, activeId, active?.revision, wsRoot, refreshRuntime]);
 
   useEffect(() => {
     if (!desktop || !activeId) return;
@@ -892,7 +914,7 @@ export function WorkspaceShell() {
     }
     const trimmed = configPath.trim();
     if (trimmed !== "" && !isSupportedConfigName(trimmed)) {
-      setConfigError("対応する名前は vimrc / _vimrc / init.vim / init.lua です。");
+      setConfigError("対応する名前は vimrc / _vimrc / .vimrc / init.vim / init.lua です。");
       return;
     }
     const id = activeRef.current;
@@ -1569,9 +1591,10 @@ export function WorkspaceShell() {
 
         <footer className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border px-4 py-2 text-xs text-muted-foreground">
           <span>{active?.path ?? "（未開封）"}</span>
-          <span>IME は確定のみ送信（編集中の未確定文は送らない）</span>
-          <span>{desktop ? "GUI 編集は範囲パッチで Neovim へ" : "ブラウザ表示は読み取り専用です"}</span>
-          {desktop && <span>移動基準: {navBasis === "display" ? "表示" : "原文"}</span>}
+          {cursorPos && <span>カーソル {cursorPos}</span>}
+          {desktop && active && <span>モード {MODE_JA[vimMode] ?? vimMode}</span>}
+          <span>リビジョン {active?.revision ?? "—"}</span>
+          {active && <span>{active.dirty ? "未保存" : "保存済み"}</span>}
         </footer>
 
         <QuickOpen

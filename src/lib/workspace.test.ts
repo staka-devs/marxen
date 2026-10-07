@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterPaths, fuzzyMatch, outlineFromMarkdown, replaceAll, replaceEdits, searchWorkspace } from "./workspace";
+import { filterPaths, fuzzyMatch, isSupportedConfigName, outlineFromMarkdown, replaceAll, replaceEdits, searchWorkspace } from "./workspace";
 import { applyTextEdits } from "./utf16";
 
 describe("workspace helpers", () => {
@@ -30,5 +30,12 @@ describe("workspace helpers", () => {
     expect(edits.map((edit) => edit.range.start)).toEqual([0, 3]);
     expect(applyTextEdits(text, edits)).toBe("大阪\n大阪タワー\n");
     expect(replaceEdits(text, "", "x")).toEqual({ edits: [], count: 0 });
+  });
+
+  it("accepts dotted and underscore vimrc names", () => {
+    for (const name of ["vimrc", "_vimrc", ".vimrc", "init.vim", "init.lua"]) {
+      expect(isSupportedConfigName(`/cfg/${name}`)).toBe(true);
+    }
+    expect(isSupportedConfigName("/cfg/init.toml")).toBe(false);
   });
 });
