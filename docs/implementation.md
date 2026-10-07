@@ -17,8 +17,6 @@
 
 Orca で Issue ごとの子ワークスペースとブランチを管理し、依存順に統合する。OpenCode は **MuseSpark1.3 Contributor / Xhigh** の実効設定を確認してから起動する。指定モデルが利用できなければ OpenCode の担当は停止して報告し、別モデルへ自動変更しない。Claude Code を起動・委任・接続検証しない。Anthropic Messages API は独立した接続先として利用者の認証設定後に有効化する。
 
-Issue #3 の実装担当変更は [ADR-0016](adr/ADR-0016-Neovimの実装担当を同じIssue内でOpenCodeへ引き継ぐ.md) に記録する。Issue #7 は初回実装の完了後、ACP の公式通信仕様に沿った相互運用修正を追加タスクとして同じ子ワークスペースで行う。
-
 ## 文書契約
 
 Rust が Neovim RPC、保存、AI プロセス、HTTP を所有する。文書 ID・リビジョン付き snapshot、edit、save、cursor / mode 更新を共通契約とする。GUI / Neovim / AI の変更を直列化し、古い revision を拒否して再同期する。UTF-8 バイト位置と UTF-16 位置は明示的に変換する。`:w` を Rust 保存経路へ統一する。範囲編集で Markdown 原文を保持し、全体の再シリアライズを避ける。

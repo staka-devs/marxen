@@ -48,4 +48,4 @@ Linux devcontainer は x64 用で Node 22.23.2、Rust 1.99.0、GTK / WebKitGTK 4
 
 Rust tests は共通 fixture、ID、revision、Unicode、範囲、save / cursor / mode、wire shape を検証する。Vitest は接続状態・IPC エラー・transport、Playwright は実 Chromium の日本語 UI・読み取り専用動作・狭い画面を検証する。4 native CI に package build と実 Neovim smoke を設定する。ブラウザ E2E は WebView / IME の代替ではない。
 
-正本文書と所有権は coordinator 管理 ADR-0001 / ADR-0002、devcontainer は ADR-0003 に従う。基盤の判断は [ADR-0010](adr/ADR-0010-Rustの型から共通IPC契約を生成する.md)、[ADR-0011](adr/ADR-0011-未接続を明示した読み取り専用シェルを提供する.md)、[ADR-0012](adr/ADR-0012-固定ハッシュのNeovim実行環境を丸ごと同梱する.md)、[ADR-0013](adr/ADR-0013-四つのネイティブCIとブラウザ検証を分ける.md) に記録する。
+文書の正本と所有権は ADR-0001 / ADR-0002、devcontainer は ADR-0003 に従う。基盤の判断は [ADR-0010](adr/ADR-0010-Rustの型から共通IPC契約を生成する.md)、[ADR-0012](adr/ADR-0012-固定ハッシュのNeovim実行環境を丸ごと同梱する.md)、[ADR-0013](adr/ADR-0013-四つのネイティブCIとブラウザ検証を分ける.md) に記録する。
