@@ -21,6 +21,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_STDERR_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RpcError {
@@ -129,6 +130,13 @@ impl EmbedClient {
                             let text = String::from_utf8_lossy(&chunk[..n]).into_owned();
                             if let Ok(mut guard) = stderr_sink.lock() {
                                 guard.push_str(&text);
+                                if guard.len() > MAX_STDERR_BYTES {
+                                    let mut cut = guard.len() - MAX_STDERR_BYTES;
+                                    while !guard.is_char_boundary(cut) {
+                                        cut += 1;
+                                    }
+                                    guard.drain(..cut);
+                                }
                             }
                         }
                         Err(_) => break,
@@ -183,12 +191,19 @@ impl EmbedClient {
             return Err(cause);
         }
 
-        let response = rx.recv_timeout(CALL_TIMEOUT).map_err(|_| {
+        let response = rx.recv_timeout(CALL_TIMEOUT).map_err(|cause| {
             self.pending
                 .lock()
                 .ok()
                 .map(|mut pending| pending.remove(&id));
-            RpcError::Timeout(format!("{method} timed out after 15s"))
+            match cause {
+                mpsc::RecvTimeoutError::Timeout => {
+                    RpcError::Timeout(format!("{method} timed out after 15s"))
+                }
+                mpsc::RecvTimeoutError::Disconnected => {
+                    RpcError::Disconnected(format!("Neovim exited while calling {method}"))
+                }
+            }
         })?;
         if response.error != Value::Nil {
             return Err(RpcError::Remote(format!("{method}: {}", response.error)));
@@ -281,6 +296,12 @@ impl EmbedClient {
     }
 }
 
+impl Drop for EmbedClient {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
+    }
+}
+
 fn reader_loop<R: Read + Send + 'static>(
     mut reader: BufReader<R>,
     pending: Arc<Mutex<HashMap<u32, mpsc::Sender<Response>>>>,
@@ -342,6 +363,9 @@ fn reader_loop<R: Read + Send + 'static>(
             }
             _ => continue,
         }
+    }
+    if let Ok(mut pending) = pending.lock() {
+        pending.clear();
     }
 }
 

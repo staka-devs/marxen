@@ -36,7 +36,12 @@ fn get_runtime_status(state: tauri::State<ipc::ActorState>) -> contracts::Runtim
 
 #[cfg(feature = "desktop")]
 pub fn run() {
+    use tauri::Manager;
     tauri::Builder::default()
+        .setup(|app| {
+            neovim::configure_resource_dir(app.path().resource_dir()?);
+            Ok(())
+        })
         .manage(ipc::ActorState::default())
         .invoke_handler(tauri::generate_handler![
             get_runtime_status,

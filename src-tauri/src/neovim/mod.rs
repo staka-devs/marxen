@@ -16,7 +16,15 @@ pub mod rpc;
 use config::{argv_for, collect_errors, describe_source, ConfigReport, ConfigSource};
 use coordinates::{join_lines, split_lines};
 use rpc::{EmbedClient, RpcError};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+static RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Configure the installed Tauri resource directory before opening documents.
+pub fn configure_resource_dir(directory: PathBuf) {
+    let _ = RESOURCE_DIR.set(directory);
+}
 
 pub use coordinates::{display_width, global_utf16_to_line_byte, line_byte_to_global_utf16};
 
@@ -28,41 +36,51 @@ pub struct BundlePaths {
     pub manifest_target: String,
 }
 
-/// Locate `src-tauri/resources/neovim` for dev/test (manifest dir) and fall
-/// back to the executable directory for packaged builds.
+/// Resolve installed resources first. Source-tree resources are for dev/tests.
 pub fn bundle_paths() -> Result<BundlePaths, String> {
-    let manifest_resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/neovim");
-    let candidates = [
-        manifest_resources,
-        std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|dir| dir.join("neovim")))
-            .unwrap_or_else(|| PathBuf::from("neovim")),
-    ];
-    for root in candidates {
-        let exe = if cfg!(windows) {
-            root.join("bin/nvim.exe")
-        } else {
-            root.join("bin/nvim")
-        };
-        let runtime = root.join("share/nvim/runtime");
-        let meta = root.join("marxen-bundle.json");
-        if exe.is_file() && runtime.is_dir() {
-            let target = std::fs::read_to_string(&meta)
-                .ok()
-                .and_then(|text| {
-                    text.lines()
-                        .find_map(|line| line.split('"').nth(3).map(str::to_owned))
-                })
-                .unwrap_or_else(|| "unknown".into());
-            return Ok(BundlePaths {
-                exe,
-                runtime,
-                manifest_target: target,
-            });
+    if let Some(directory) = RESOURCE_DIR.get() {
+        let installed = directory.join("neovim");
+        if installed.is_dir() || !cfg!(debug_assertions) {
+            return bundle_paths_at(&installed);
         }
     }
-    Err("bundled Neovim not found; run `npm run bundle:neovim` first".into())
+    if cfg!(debug_assertions) || !cfg!(feature = "desktop") {
+        return bundle_paths_at(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/neovim"),
+        );
+    }
+    Err("Neovim のアプリ配布資源ディレクトリが設定されていません".into())
+}
+
+fn bundle_paths_at(root: &Path) -> Result<BundlePaths, String> {
+    let exe = root.join(if cfg!(windows) {
+        "bin/nvim.exe"
+    } else {
+        "bin/nvim"
+    });
+    let runtime = root.join("share/nvim/runtime");
+    if !exe.is_file() || !runtime.is_dir() {
+        return Err(format!(
+            "Neovim の実行ファイルまたは runtime が見つかりません: {}",
+            root.display()
+        ));
+    }
+    let metadata: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("marxen-bundle.json"))
+            .map_err(|cause| format!("Neovim の配布情報を読み込めません: {cause}"))?,
+    )
+    .map_err(|cause| format!("Neovim の配布情報が不正です: {cause}"))?;
+    let manifest_target = metadata
+        .get("target")
+        .and_then(serde_json::Value::as_str)
+        .filter(|target| !target.is_empty())
+        .ok_or_else(|| "Neovim の配布情報に target がありません".to_owned())?
+        .to_owned();
+    Ok(BundlePaths {
+        exe,
+        runtime,
+        manifest_target,
+    })
 }
 
 /// Authoritative embedded-Neovim buffer session.
@@ -119,7 +137,21 @@ impl NeovimSession {
                 .and_then(|ext| ext.to_str())
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("lua"));
             let verb = if is_lua { "luafile" } else { "source" };
-            let cmd = format!("{verb} {}", path.display());
+            let escaped = client
+                .call(
+                    "nvim_call_function",
+                    vec![
+                        rmpv::Value::from("fnameescape"),
+                        rmpv::Value::Array(vec![rmpv::Value::from(
+                            path.to_string_lossy().as_ref(),
+                        )]),
+                    ],
+                )
+                .map_err(|cause| format!("config path: {cause}"))?;
+            let escaped = escaped
+                .as_str()
+                .ok_or_else(|| "config path: fnameescape returned invalid text".to_owned())?;
+            let cmd = format!("{verb} {escaped}");
             if let Err(cause) = client.call("nvim_command", vec![rmpv::Value::from(cmd.as_str())]) {
                 errors.push(trim_remote(cause.to_string()));
             }
@@ -412,10 +444,4 @@ fn trim_remote(detail: String) -> String {
         .chars()
         .take(500)
         .collect()
-}
-
-impl Drop for NeovimSession {
-    fn drop(&mut self) {
-        let _ = self.client.shutdown();
-    }
 }
