@@ -1,15 +1,17 @@
 # Marxen
 
-Markdown の原文と実 Neovim の操作を大切にするデスクトップエディタ。現在は Issue #2 の開発基盤で、日本語シェルと読み取り専用サンプルを提供します。編集・保存・Vim 操作は後続の Neovim actor で追加します。
+Markdown の原文を保ち、実 Neovim と GUI で編集する Rust / Tauri デスクトップアプリ。
 
 ## 起動と検証
 
 CI / Linux x64 devcontainer は Node 22.23.2 と Rust 1.99.0 を使用します。Windows の MSVC / WebView2、macOS の Xcode Command Line Tools、Linux の WebKitGTK 4.1 など、[Tauri の前提環境](https://v2.tauri.app/start/prerequisites/)を用意してください。
 
 ```sh
-npm install
-npm run dev             # ブラウザ。Neovim 未接続を明示
-npm run desktop:dev     # Tauri v2。actor はまだ未接続
+npm ci
+npm run bundle:neovim
+npm run verify:neovim
+npm run dev             # 読み取り専用のブラウザ表示
+npm run desktop:dev     # 実 Neovim を使うデスクトップアプリ
 npm run typecheck
 npm test
 npx playwright install chromium
@@ -21,7 +23,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 cargo check --manifest-path src-tauri/Cargo.toml --locked
 ```
 
-Rust 型の変更後は `npm run contracts:generate` を実行します。GUI 依存のない環境では `cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --locked` で契約のみ検証できます。native Tauri の検証は別途必要です。
+Rust 型の変更後は `npm run contracts:generate` を実行します。GUI 依存のない環境では `cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --locked` で契約・文書アクターと実 Neovim を検証できます。native Tauri の検証は別途必要です。
 
 ## 実 Neovim の同梱
 
