@@ -10,3 +10,12 @@
 - Claude Code は起動・委任・実接続検証していない。OpenCode の後続タスクは未着手。設定ファイルには指定モデルがあるが、今回その実効モデル・Xhigh の検証や新規委任は行っていない。
 - 今回の確認対象は復旧と作業再開。アプリの機能完了、E2E、各 OS の実 WebView / IME の成功をこの記録から判断しない。既存ユーザー変更（AGENTS.md、ADR README、opencode.jsonc）は保持した。
 - 最終の端末確認では、再開した担当が README・AnyDR・基盤検証報告の書き込み承認で待機していた。子ワークスペースはこのセッションの writable root 外にある。確認画面はユーザーの承認が必要であり、coordinator から代理で承認入力は送っていない。
+
+## 2026-10-07 継続実装の再開
+
+- Issue #2 は worker_done とコミット `26acc9c` により完了。開発ブランチへ `dc36c83` として統合した。.gitignore の競合は双方の除外設定を保持して解決した。
+- Issue #3 の Codex と Issue #7 の OpenCode を、既存 Run 内の Issue 別子ワークスペースへ並行委任した。後続 Issue #9 の最終統合タスクも依存付きで登録した。
+- OpenCode のプロジェクト build 設定と起動 TUI で、実効 MuseSpark1.3 Contributor / OpenCode Go / Xhigh を確認してから委任した。一般 CLI のモデル一覧は Orca 管理アカウントの一覧と異なった。
+- OpenCode の管理サービスは既存ポート 49374 が使用中だった。同じ端末で `opencode --standalone` を起動し、作業開始を端末出力で確認した。既存サービスや他作業のプロセスは終了していない。
+- Codex の sandbox helper 起動失敗には、前回成功した full PowerShell -Command / require_escalated の呼出構文を伝達した。誤ってエスケープされたコマンドの確認を取消して同じ Dispatch を継続した。代理で承認入力は送っていない。
+- ユーザーの最新指示に従い、Orca 操作は既存の許可範囲で継続し、sandbox の Orca 実行許可は継続適用できるカテゴリとして要求した。
