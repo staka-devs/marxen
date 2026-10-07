@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Marxen foundation main window; no filesystem or process permissions exposed to JavaScript.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

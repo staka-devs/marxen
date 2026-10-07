@@ -9,4 +9,9 @@ playwright-report/
 .DS_Store
 src-tauri/resources/neovim/
 src-tauri/binaries/
-
+src-tauri/target/
+src-tauri/gen/
+src-tauri/icons/android/
+src-tauri/icons/ios/
+.cache/
+*.local
