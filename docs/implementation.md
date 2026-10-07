@@ -7,7 +7,7 @@
 | 作業 | 担当 | 依存 |
 | --- | --- | --- |
 | Tauri 基盤・IPC・3 OS CI・devcontainer | Codex | なし |
-| Neovim・IME・表示座標の技術検証 | Codex | 基盤 |
+| Neovim・IME・表示座標の技術検証 | OpenCode（Codex がレビュー・統合） | 基盤 |
 | ワークスペース・保存・復元 | Codex | IPC |
 | UI・ライブプレビュー・GUI 編集 | OpenCode | 技術検証 |
 | GitHub 記法・地図・3D | OpenCode | 描画基盤 |
@@ -16,6 +16,8 @@
 | 統合・回帰・配布 | Codex / OpenCode | 全機能 |
 
 Orca で Issue ごとの子ワークスペースとブランチを管理し、依存順に統合する。OpenCode は **MuseSpark1.3 Contributor / Xhigh** の実効設定を確認してから起動する。指定モデルが利用できなければ OpenCode の担当は停止して報告し、別モデルへ自動変更しない。Claude Code を起動・委任・接続検証しない。Anthropic Messages API は独立した接続先として利用者の認証設定後に有効化する。
+
+Issue #3 の実装担当変更は [ADR-0016](adr/ADR-0016-Neovimの実装担当を同じIssue内でOpenCodeへ引き継ぐ.md) に記録する。Issue #7 は初回実装の完了後、ACP の公式通信仕様に沿った相互運用修正を追加タスクとして同じ子ワークスペースで行う。
 
 ## 文書契約
 

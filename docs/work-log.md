@@ -19,3 +19,11 @@
 - OpenCode の管理サービスは既存ポート 49374 が使用中だった。同じ端末で `opencode --standalone` を起動し、作業開始を端末出力で確認した。既存サービスや他作業のプロセスは終了していない。
 - Codex の sandbox helper 起動失敗には、前回成功した full PowerShell -Command / require_escalated の呼出構文を伝達した。誤ってエスケープされたコマンドの確認を取消して同じ Dispatch を継続した。代理で承認入力は送っていない。
 - ユーザーの最新指示に従い、Orca 操作は既存の許可範囲で継続し、sandbox の Orca 実行許可は継続適用できるカテゴリとして要求した。
+
+## 2026-10-07 実装の引き継ぎと ACP 相互運用レビュー
+
+- Issue #3 の Codex は Dispatch `ctx_01ec32aa5b39` の failed worker_done で、変更なしの `dc36c83` checkout を引き継いだ。sandbox helper 1223 と反復する承認待ちにより実装・検証は未実施。worker-release は user_takeover / retained と判定し、旧端末は強制終了しなかった。
+- 同じ Run・Task・Issue #3 子ワークスペースで `opencode --standalone` を起動した。新端末 `term_6213fa46-2da6-4ce6-80dd-10dc618b0e43` の TUI は `Build · Muse Spark 1.3 Contributor OpenCode Go · xhigh`。旧 Dispatch を指定した retry `ctx_ab8426ea04f4` を受け付け、heartbeat と実ファイルの編集開始を確認した。担当変更は ADR-0016 に記録した。
+- Issue #7 の初回実装は commit `11a2b0ba45bff33ddc98c90c2a3c92a196333dc4`、worker_done `msg_8f93676b6389`。報告された 43 Rust / 21 Vitest / build / Playwright の成功はモック中心であり、ACP 実接続・UI 統合・隔離 resolver の接続完了を意味しない。
+- coordinator のレビューで ACP stdio が Content-Length framing になっていること、Codex preset が `codex acp` を想定していること、初期応答の ID 照合とエージェントからの permission request 応答が不足することを確認した。公式 ACP は改行区切り JSON-RPC、Codex は `@agentclientprotocol/codex-acp` adapter を使用する。根拠: https://agentclientprotocol.com/protocol/v1/transports 、https://github.com/agentclientprotocol/codex-acp 、https://opencode.ai/docs/acp/ 。
+- 同じ Issue #7 ワークスペース・確認済みモデルの端末に、追加 Task `task_1019ff4090af` / Dispatch `ctx_64843498a2a8` を委任した。独立した NDJSON mock、通知を挟む応答、stderr の上限、プロセス終了、実 OpenCode の initialize / session/new（有料 prompt なし）を検証し、結果を分けて記録させる。修正のレビュー前に全機能完了とは扱わない。
