@@ -90,9 +90,32 @@ function findFootnoteDefinition(docText: string, label: string): number {
   return match?.index ?? -1;
 }
 
-class LiveBlockWidget extends WidgetType {
-  private aborter: AbortController | null = null;
+interface HostBinding {
+  from: number;
+  text: string;
+  defs: string;
+  getCallbacks: () => LivePreviewCallbacks;
+}
 
+function readBinding(host: HTMLElement): HostBinding | null {
+  return (host as unknown as { __liveBinding?: HostBinding }).__liveBinding ?? null;
+}
+
+function writeBinding(host: HTMLElement, binding: HostBinding): void {
+  (host as unknown as { __liveBinding?: HostBinding }).__liveBinding = binding;
+}
+
+function abortHost(host: HTMLElement): void {
+  const controller = (host as unknown as { __liveController?: AbortController }).__liveController;
+  (host as unknown as { __liveController?: AbortController }).__liveController = undefined;
+  try {
+    controller?.abort();
+  } catch {
+    // Already settled: teardown stays idempotent.
+  }
+}
+
+class LiveBlockWidget extends WidgetType {
   constructor(
     readonly key: string,
     readonly kind: string,
@@ -105,7 +128,27 @@ class LiveBlockWidget extends WidgetType {
   }
 
   eq(other: LiveBlockWidget): boolean {
-    return other instanceof LiveBlockWidget && other.key === this.key;
+    // Identity pins exact text AND position: inserting text before an
+    // identical retained block must not reuse stale offsets or handlers.
+    return other instanceof LiveBlockWidget && other.key === this.key && other.blockFrom === this.blockFrom;
+  }
+
+  updateDOM(dom: HTMLElement, view: EditorView): boolean {
+    // Same widget type, shifted or recontextualized content: refresh the
+    // binding in place instead of redrawing. Delegated listeners read the
+    // binding at event time, so no stale closure can survive.
+    if (!(dom instanceof HTMLElement) || !dom.classList.contains("marxen-live-widget")) return false;
+    dom.dataset.liveKey = this.key;
+    dom.dataset.liveFrom = String(this.blockFrom);
+    dom.dataset.liveTo = String(this.blockFrom + this.blockText.length);
+    writeBinding(dom, { from: this.blockFrom, text: this.blockText, defs: this.defs, getCallbacks: this.getCallbacks });
+    if (dom.dataset.liveFilled !== this.key) {
+      abortHost(dom);
+      disposeMarkdownView(dom);
+      dom.innerHTML = `<div class="marxen-live-loading" aria-hidden="true">描画しています…</div>`;
+      void this.fillAsync(dom, view);
+    }
+    return true;
   }
 
   ignoreEvent(event: Event): boolean {
@@ -126,9 +169,15 @@ class LiveBlockWidget extends WidgetType {
     // Source range for the extension-level mousedown activation below.
     host.dataset.liveFrom = String(this.blockFrom);
     host.dataset.liveTo = String(this.blockFrom + this.blockText.length);
+    writeBinding(host, { from: this.blockFrom, text: this.blockText, defs: this.defs, getCallbacks: this.getCallbacks });
+    // Delegated once per host: later updateDOM refreshes only rebind the
+    // data above, so handlers can never close over stale offsets.
+    host.addEventListener("change", (event) => this.onHostChange(host, view, event));
+    host.addEventListener("click", (event) => this.onHostClick(host, view, event));
+    host.addEventListener("keydown", (event) => this.onHostKey(host, event));
     const cached = htmlCache.get(this.key);
     if (cached !== undefined) {
-      this.fill(host, view, cached);
+      this.fill(host, cached);
     } else {
       host.innerHTML = `<div class="marxen-live-loading" aria-hidden="true">描画しています…</div>`;
       void this.fillAsync(host, view);
@@ -137,8 +186,7 @@ class LiveBlockWidget extends WidgetType {
   }
 
   destroy(dom: HTMLElement): void {
-    this.aborter?.abort();
-    this.aborter = null;
+    abortHost(dom);
     disposeMarkdownView(dom);
   }
 
@@ -150,131 +198,127 @@ class LiveBlockWidget extends WidgetType {
     if (!host.isConnected) return;
     if (!view.contentDOM.contains(host)) return;
     if (host.dataset.liveKey !== this.key) return;
-    this.fill(host, view, html);
+    this.fill(host, html);
   }
 
-  private fill(host: HTMLElement, view: EditorView, html: string): void {
+  private fill(host: HTMLElement, html: string): void {
     // Idempotent per key: rebuilds may hand a fresh widget instance the same
     // reused DOM (eq match), and every pending fill races to populate it.
-    // The first fill wins; the rest (same key, same content) stand down so
-    // listeners and hydration passes are never attached twice.
+    // The first fill wins; the rest (same key, same content) stand down.
     if (host.dataset.liveFilled === this.key) return;
+    if (host.dataset.liveKey !== this.key) return;
     host.dataset.liveFilled = this.key;
     host.innerHTML = `<div class="marxen-md marxen-live-body">${html}</div>`;
     const body = host.firstElementChild as HTMLElement | null;
     if (!body) return;
-    this.aborter?.abort();
+    // Pipeline HTML disables task boxes; live widgets own them instead.
+    body.querySelectorAll('li.task-list-item > input[type="checkbox"]').forEach((box) => box.removeAttribute("disabled"));
+    // Cells stay keyboard-reachable for jump activation.
+    body.querySelectorAll("td,th").forEach((cell) => {
+      if (!cell.hasAttribute("tabindex")) cell.setAttribute("tabindex", "0");
+    });
+    abortHost(host);
     const controller = new AbortController();
-    this.aborter = controller;
-    this.wireTasks(body, view);
-    this.wireCells(body, view);
-    this.wireJumps(body, view);
+    (host as unknown as { __liveController?: AbortController }).__liveController = controller;
     void hydrateMarkdownView(body, controller.signal);
   }
 
-  private taskOffsets(): number[] {
+  private taskOffsets(binding: HostBinding): number[] {
     // Source offsets of each `- [ ]` / `- [x]` marker, in document order to
     // match the rendered checkboxes.
     const offsets: number[] = [];
     const pattern = /^(\s*(?:[-*]|\d+[.)])\s+)\[([ xX])\]/gm;
     let match: RegExpExecArray | null;
-    while ((match = pattern.exec(this.blockText)) !== null) {
-      offsets.push(this.blockFrom + match.index + match[1].length + 1);
+    while ((match = pattern.exec(binding.text)) !== null) {
+      offsets.push(binding.from + match.index + match[1].length + 1);
     }
     return offsets;
   }
 
-  private wireTasks(body: HTMLElement, view: EditorView): void {
-    const boxes = body.querySelectorAll<HTMLInputElement>('li.task-list-item > input[type="checkbox"]');
-    if (boxes.length === 0) return;
-    // Pipeline HTML disables task boxes; live widgets own them instead.
-    boxes.forEach((box) => box.removeAttribute("disabled"));
-    boxes.forEach((box, index) => {
-      box.addEventListener("change", () => {
-        // Revert the optimistic flip: the authoritative state arrives with
-        // the Neovim snapshot, and a rejected edit must never stick.
-        box.checked = !box.checked;
-        const docText = view.state.doc.toString();
-        const at = relocateBlock(docText, this.blockText, this.blockFrom);
-        if (at < 0) return;
-        const markers = this.taskOffsets();
-        const marker = markers[index];
-        if (marker === undefined) return;
-        // Relocated markers shift with the block; the marker index stays.
-        const shifted = at - this.blockFrom + marker;
-        try {
-          this.getCallbacks().onGuiEdits?.(toggleCheckbox(docText, shifted));
-        } catch {
-          // Invalid marker positions never reach the backend.
-        }
-      });
-    });
+  private onHostChange(host: HTMLElement, view: EditorView, event: Event): void {
+    const target = event.target as HTMLElement | null;
+    const box = target?.closest?.('li.task-list-item > input[type="checkbox"]') as HTMLInputElement | null;
+    if (!box || !host.contains(box)) return;
+    const binding = readBinding(host);
+    if (!binding) return;
+    const boxes = [...host.querySelectorAll('li.task-list-item > input[type="checkbox"]')];
+    const index = boxes.indexOf(box);
+    if (index < 0) return;
+    // Revert the optimistic flip: the authoritative state arrives with
+    // the Neovim snapshot, and a rejected edit must never stick.
+    box.checked = !box.checked;
+    const docText = view.state.doc.toString();
+    const at = relocateBlock(docText, binding.text, binding.from);
+    if (at < 0) return;
+    const marker = this.taskOffsets(binding)[index];
+    if (marker === undefined) return;
+    // Relocated markers shift with the block; the marker index stays.
+    const shifted = at - binding.from + marker;
+    try {
+      binding.getCallbacks().onGuiEdits?.(toggleCheckbox(docText, shifted));
+    } catch {
+      // Invalid marker positions never reach the backend.
+    }
   }
 
-  private wireCells(body: HTMLElement, view: EditorView): void {
-    // Table cells are view-only: activating one selects its exact source
-    // span (escaped pipes and code spans intact) so typing replaces just the
-    // cell through the normal range callbacks. No in-widget text input means
-    // no focus/selection fights with the editor, and unrelated bytes never
-    // move. Row 0 is the header; body rows skip the delimiter line.
-    body.querySelectorAll("table").forEach((table) => {
+  private onHostClick(host: HTMLElement, view: EditorView, event: MouseEvent): void {
+    const target = event.target as HTMLElement | null;
+    const binding = readBinding(host);
+    if (!binding) return;
+    const cell = target?.closest?.("td,th") as HTMLTableCellElement | null;
+    if (cell && host.contains(cell)) {
+      event.stopPropagation();
+      // View-only cells: select the exact source span (escaped pipes and
+      // code spans intact) so typing replaces just the cell through the
+      // normal range callbacks.
+      const table = cell.closest("table");
+      const tr = cell.parentElement as HTMLTableRowElement | null;
+      if (!table || !tr) return;
       const rows = [...table.rows];
-      rows.forEach((tr, rowIndex) => {
-        [...tr.cells].forEach((td, colIndex) => {
-          td.tabIndex = 0;
-          const jump = () => {
-            const docText = view.state.doc.toString();
-            const at = relocateBlock(docText, this.blockText, this.blockFrom);
-            if (at < 0) return;
-            const cell = findTableCellRange(docText.slice(at, at + this.blockText.length), at, rowIndex, colIndex);
-            if (!cell) return;
-            this.getCallbacks().focusSource?.(cell.from, cell.to);
-          };
-          td.addEventListener("click", (event) => {
-            event.stopPropagation();
-            jump();
-          });
-          td.addEventListener("keydown", (event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              event.stopPropagation();
-              jump();
-            } else {
-              event.stopPropagation();
-            }
-          });
-        });
-      });
-    });
-  }
-
-  private wireJumps(body: HTMLElement, view: EditorView): void {
-    body.querySelectorAll<HTMLAnchorElement>('a[href^="#"]').forEach((anchor) => {
-      anchor.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const label = anchor.getAttribute("href")?.slice(1) ?? "";
-        const docText = view.state.doc.toString();
+      const rowIndex = rows.indexOf(tr);
+      const colIndex = [...tr.cells].indexOf(cell);
+      if (rowIndex < 0 || colIndex < 0) return;
+      const docText = view.state.doc.toString();
+      const at = relocateBlock(docText, binding.text, binding.from);
+      if (at < 0) return;
+      const span = findTableCellRange(docText.slice(at, at + binding.text.length), at, rowIndex, colIndex);
+      if (!span) return;
+      binding.getCallbacks().focusSource?.(span.from, span.to);
+      return;
+    }
+    const anchor = target?.closest?.("a[href]") as HTMLAnchorElement | null;
+    if (anchor && host.contains(anchor)) {
+      event.preventDefault();
+      event.stopPropagation();
+      const href = anchor.getAttribute("href") ?? "";
+      const docText = view.state.doc.toString();
+      if (href.startsWith("#")) {
         // Footnote refs jump to their definition; other anchors reveal the block.
-        const footnote = /fn(?:ref)?-(.+)$/.exec(label);
+        const footnote = /fn(?:ref)?-(.+)$/.exec(href.slice(1));
         if (footnote) {
           const at = findFootnoteDefinition(docText, footnote[1]);
           if (at >= 0) {
-            this.getCallbacks().focusSource?.(at, at);
+            binding.getCallbacks().focusSource?.(at, at);
             return;
           }
         }
-        this.getCallbacks().focusSource?.(this.blockFrom, this.blockFrom);
-      });
-    });
-    body.querySelectorAll<HTMLAnchorElement>("a[href]:not([href^='#'])").forEach((anchor) => {
+      }
       // Links never navigate inside the editor: reveal the source instead.
-      anchor.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        this.getCallbacks().focusSource?.(this.blockFrom, this.blockFrom);
-      });
-    });
+      binding.getCallbacks().focusSource?.(binding.from, binding.from);
+    }
+  }
+
+  private onHostKey(host: HTMLElement, event: KeyboardEvent): void {
+    const target = event.target as HTMLElement | null;
+    const cell = target?.closest?.("td,th");
+    if (!cell || !host.contains(cell)) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      event.stopPropagation();
+      cell.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    } else {
+      event.stopPropagation();
+    }
   }
 }
 

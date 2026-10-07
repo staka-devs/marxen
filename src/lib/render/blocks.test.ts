@@ -36,6 +36,17 @@ describe("computeLiveBlocks", () => {
     expect(kinds).toContain("paragraph");
     expect(kinds).not.toContain("footnoteDefinition");
   });
+
+  it("gives repeated identical blocks distinct exact offsets", () => {
+    const line = "# 同じ";
+    const source = `${line}\n\n${line}\n`;
+    const blocks = computeLiveBlocks(source);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toMatchObject({ kind: "heading", from: 0 });
+    expect(source.slice(blocks[0].from, blocks[0].to)).toBe(line);
+    expect(source.slice(blocks[1].from, blocks[1].to)).toBe(line);
+    expect(blocks[1].from).toBe(line.length + 2);
+  });
 });
 
 describe("extractLinkDefinitions", () => {

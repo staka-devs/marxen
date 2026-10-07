@@ -8,6 +8,14 @@ async function harnessValue(page: Page): Promise<string> {
   return page.evaluate(() => window.__harness.getValue());
 }
 
+/** Park the cursor past the last block so every block renders as a widget. */
+async function parkCursorAtEnd(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const value = window.__harness.getValue();
+    window.__harness.echoCursor(value.length, value.length);
+  });
+}
+
 test("widgets render inside one editor, active block stays raw", async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto("/tests/live/harness/live.html");
@@ -129,6 +137,93 @@ test("malformed blocks stay contained with raw source and errors", async ({ page
   // The malformed block never breaks its neighbours.
   await expect(content.locator(".marxen-live-widget table")).toBeVisible();
   await expect(content.locator(".marxen-live-widget").getByText("末尾の段落。")).toBeVisible();
+});
+
+test("insertion before identical tasks keeps toggle offsets exact", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto("/tests/live/harness/live.html");
+  const content = page.locator(".cm-content");
+  await expect(content.locator(".marxen-live-widget table").first()).toBeVisible();
+
+  const line = "- [ ] 同じ";
+  await page.evaluate(() => window.__harness.setValue("- [ ] 同じ\n\n間\n\n- [ ] 同じ\n"));
+  await parkCursorAtEnd(page);
+  const boxes = content.locator('.marxen-live-widget li.task-list-item input[type="checkbox"]');
+  await expect(boxes).toHaveCount(2);
+
+  // Insert a block before both identical tasks: widgets keep their text but
+  // move, so reused DOM must rebind to the new offsets (never the neighbor).
+  await page.evaluate(() => window.__harness.setValue("# 新規\n\n- [ ] 同じ\n\n間\n\n- [ ] 同じ\n"));
+  await parkCursorAtEnd(page);
+  await expect(boxes).toHaveCount(2);
+  const value = await harnessValue(page);
+  const first = value.indexOf(line);
+  const second = value.indexOf(line, first + line.length);
+  expect(first).toBeGreaterThanOrEqual(0);
+  expect(second).toBeGreaterThan(first);
+
+  await boxes.nth(1).click();
+  await page.waitForFunction(() => window.__harness.getEdits().length > 0);
+
+  const edits = await page.evaluate(() => window.__harness.getEdits());
+  expect(edits[edits.length - 1]).toEqual([{ range: { start: second, end: second + line.length }, text: "- [x] 同じ" }]);
+
+  const after = await harnessValue(page);
+  expect(after.slice(0, second)).toContain("- [ ] 同じ");
+  expect(after.slice(second, second + line.length)).toBe("- [x] 同じ");
+});
+
+test("repeated identical tables activate the clicked copy only", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto("/tests/live/harness/live.html");
+  const content = page.locator(".cm-content");
+  await expect(content.locator(".marxen-live-widget table").first()).toBeVisible();
+
+  const table = "| a | b |\n| --- | --- |\n| 1 | 2 |\n";
+  await page.evaluate((text: string) => window.__harness.setValue(text), `${table}\n${table}`);
+  await parkCursorAtEnd(page);
+  const tables = content.locator(".marxen-live-widget table");
+  await expect(tables).toHaveCount(2);
+
+  await tables.nth(1).locator("td").first().click();
+  const value = await harnessValue(page);
+  const firstRow = value.indexOf("| 1 | 2 |");
+  const secondRow = value.indexOf("| 1 | 2 |", firstRow + 1);
+  // First body cell "1": trimmed content span inside "| 1 | 2 |".
+  const expected = { anchor: secondRow + 2, head: secondRow + 3 };
+  await page.waitForFunction(
+    (want: { anchor: number; head: number }) => {
+      const sel = window.__harness.getSelection();
+      return sel !== null && sel.anchor === want.anchor && sel.head === want.head;
+    },
+    expected,
+    { timeout: 15_000 },
+  );
+});
+
+test("moved special blocks dispose and never duplicate hydration", async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto("/tests/live/harness/live.html");
+  const content = page.locator(".cm-content");
+  await expect(content.locator(".marxen-live-widget table").first()).toBeVisible();
+
+  const geo = '{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[139.7,35.6]}}]}';
+  const doc = `# 図あり\n\n\`\`\`mermaid\nflowchart LR\n    A --> B\n\`\`\`\n\n\`\`\`geojson\n${geo}\n\`\`\`\n`;
+  await page.evaluate((text: string) => window.__harness.setValue(text), doc);
+  await expect(content.locator('.marxen-live-widget [data-marxen-kind="mermaid"] svg')).toBeVisible({ timeout: 60_000 });
+  await expect(content.locator('.marxen-live-widget [data-marxen-kind="geojson"] .marxen-map svg')).toBeVisible({ timeout: 60_000 });
+
+  // Move both blocks down: still exactly one hydrated view each, no orphans.
+  await page.evaluate((text: string) => window.__harness.setValue(`# 先頭\n\n${text}`), doc);
+  await expect(content.locator('.marxen-live-widget [data-marxen-kind="mermaid"] svg')).toBeVisible({ timeout: 60_000 });
+  expect(await content.locator('.marxen-live-widget [data-marxen-kind="mermaid"] svg').count()).toBe(1);
+  expect(await content.locator(".marxen-live-widget .leaflet-container").count()).toBe(1);
+
+  // Remove both blocks: views are disposed, nothing leaks into the editor.
+  await page.evaluate(() => window.__harness.setValue("# 空\n"));
+  await expect(content.locator('.marxen-live-widget [data-marxen-kind="mermaid"]')).toHaveCount(0);
+  expect(await content.locator(".marxen-live-widget .leaflet-container").count()).toBe(0);
+  expect(await content.locator(".cm-content canvas").count()).toBe(0);
 });
 
 test("shell cursor echoes apply per sequence, never swallowed", async ({ page }) => {
