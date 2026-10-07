@@ -3,6 +3,10 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "overrides": {
+    "@xmldom/xmldom": "0.9.12",
+    "katex": "0.18.2"
+  },
   "engines": {
     "node": ">=22.12.0"
   },
