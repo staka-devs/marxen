@@ -17,11 +17,12 @@
 
 use crate::contracts::{
     ContractError, CursorUpdate, DocumentEvent, DocumentId, DocumentSnapshot, EditRequest,
-    ModeUpdate, Revision, SaveRequest, SaveResult, VimMode,
+    GridUpdate, ModeUpdate, NvimConfig, Revision, SaveRequest, SaveResult, VimMode, WorkspaceError,
 };
 use crate::neovim::config::ConfigSource;
 use crate::neovim::coordinates::global_utf16_to_line_byte;
 use crate::neovim::{rpc::RpcError, NeovimSession};
+use crate::storage::{self, Fingerprint, RecoveryRecord};
 use crate::validation::{
     next_revision, validate_cursor, validate_document_id, validate_edit, validate_save,
 };
@@ -32,6 +33,7 @@ use std::sync::Mutex;
 pub enum ActorError {
     Contract(ContractError),
     Nvim(String),
+    Workspace(WorkspaceError),
 }
 
 impl std::fmt::Display for ActorError {
@@ -39,6 +41,7 @@ impl std::fmt::Display for ActorError {
         match self {
             Self::Contract(error) => write!(f, "contract: {error:?}"),
             Self::Nvim(detail) => write!(f, "neovim: {detail}"),
+            Self::Workspace(error) => write!(f, "{error}"),
         }
     }
 }
@@ -56,11 +59,30 @@ impl From<RpcError> for ActorError {
         Self::Nvim(error.to_string())
     }
 }
+impl From<WorkspaceError> for ActorError {
+    fn from(error: WorkspaceError) -> Self {
+        Self::Workspace(error)
+    }
+}
+impl From<ActorError> for WorkspaceError {
+    fn from(error: ActorError) -> Self {
+        match error {
+            ActorError::Contract(error) => Self::Contract { error },
+            ActorError::Nvim(detail) => Self::Neovim { detail },
+            ActorError::Workspace(error) => error,
+        }
+    }
+}
 
 struct ActorState {
     snapshot: DocumentSnapshot,
     nvim: NeovimSession,
     path: Option<PathBuf>,
+    root: Option<PathBuf>,
+    baseline: Option<Fingerprint>,
+    recovery: Option<PathBuf>,
+    grid: Vec<serde_json::Value>,
+    saved: Vec<SaveResult>,
 }
 
 /// Serialized owner of one document's Neovim buffer, snapshot, and file path.
@@ -85,6 +107,11 @@ impl DocumentActor {
         config: ConfigSource,
     ) -> Result<Self, ActorError> {
         validate_document_id(&document_id)?;
+        let baseline = path
+            .as_deref()
+            .map(storage::disk_fingerprint)
+            .transpose()?
+            .flatten();
         let nvim = NeovimSession::spawn_with_config(config).map_err(ActorError::Nvim)?;
         // Headless embed only processes typed input / mode changes with a UI
         // attached (verified: `nvim_input("i")` stays Normal without one).
@@ -96,7 +123,22 @@ impl DocumentActor {
             // Best-effort: a duplicate or missing-file name must not fail open.
             let _ = nvim.set_buf_name(&path.to_string_lossy());
         }
+        let undo_levels = nvim.client().call(
+            "nvim_get_option_value",
+            vec![rmpv::Value::from("undolevels"), rmpv::Value::Map(vec![])],
+        )?;
+        nvim.command("setlocal undolevels=-1")?;
         nvim.set_text(&initial_text)?;
+        nvim.client().call(
+            "nvim_set_option_value",
+            vec![
+                rmpv::Value::from("undolevels"),
+                undo_levels,
+                rmpv::Value::Map(vec![]),
+            ],
+        )?;
+        nvim.install_save_intercept()?;
+        nvim.command("setlocal buftype=acwrite")?;
         // Keep undo history anchored at the initial content: one clean change
         // so the first GUI edit is a single `undo` step back to initial.
         nvim.command("silent! setlocal nomodified")?;
@@ -112,6 +154,11 @@ impl DocumentActor {
                 snapshot,
                 nvim,
                 path,
+                root: None,
+                baseline,
+                recovery: None,
+                grid: Vec::new(),
+                saved: Vec::new(),
             }),
         })
     }
@@ -160,19 +207,45 @@ impl DocumentActor {
             let _ = byte_range;
             positioned.push((start_row, start_col, end_row, end_col, edit.text.clone()));
         }
-        for (start_row, start_col, end_row, end_col, replacement) in positioned.into_iter().rev() {
-            state
-                .nvim
-                .set_text_range(start_row, start_col, end_row, end_col, &replacement)?;
-        }
+        let edits = positioned
+            .into_iter()
+            .rev()
+            .map(|(sr, sc, er, ec, text)| {
+                rmpv::Value::Array(vec![
+                    sr.into(),
+                    sc.into(),
+                    er.into(),
+                    ec.into(),
+                    rmpv::Value::Array(text.split('\n').map(rmpv::Value::from).collect()),
+                ])
+            })
+            .collect();
+        // undojoin must run in the same RPC turn as the following API change.
+        state.nvim.client().call(
+            "nvim_exec_lua",
+            vec![
+                rmpv::Value::from(
+                    r#"
+            local buf, edits = ...
+            for i, e in ipairs(edits) do
+              if i > 1 then vim.cmd('undojoin') end
+              vim.api.nvim_buf_set_text(buf, e[1], e[2], e[3], e[4], e[5])
+            end
+        "#,
+                ),
+                rmpv::Value::Array(vec![state.nvim.buf().clone(), rmpv::Value::Array(edits)]),
+            ],
+        )?;
         let text = state.nvim.get_text()?;
         let revision = next_revision(state.snapshot.revision)?;
+        let dirty = state.baseline.as_ref() != Some(&storage::fingerprint(text.as_bytes()));
         state.snapshot = DocumentSnapshot {
             document_id: state.snapshot.document_id.clone(),
             revision,
             text,
-            dirty: true,
+            dirty,
         };
+        Self::checkpoint_locked(&state)?;
         Ok(state.snapshot.clone())
     }
 
@@ -184,6 +257,7 @@ impl DocumentActor {
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         Self::sync_locked(&mut state)?;
+        Self::service_notifications(&mut state)?;
         Ok(state.snapshot.clone())
     }
 
@@ -198,6 +272,25 @@ impl DocumentActor {
         // `nvim_input` queues keys; flush with a no-op request before reading.
         let _ = state.nvim.mode();
         Self::sync_locked(&mut state)?;
+        Self::service_notifications(&mut state)?;
+        Ok(state.snapshot.clone())
+    }
+
+    pub fn input_checked(
+        &self,
+        request: SaveRequest,
+        keys: &str,
+    ) -> Result<DocumentSnapshot, ActorError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::sync_locked(&mut state)?;
+        validate_save(&state.snapshot, &request)?;
+        state.nvim.input(keys)?;
+        let _ = state.nvim.mode();
+        Self::sync_locked(&mut state)?;
+        Self::service_notifications(&mut state)?;
         Ok(state.snapshot.clone())
     }
 
@@ -233,23 +326,7 @@ impl DocumentActor {
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         Self::sync_locked(&mut state)?;
         validate_save(&state.snapshot, &request)?;
-        let path = state.path.clone().ok_or_else(|| {
-            ActorError::Nvim("no file path for document; save requires a path".into())
-        })?;
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|cause| ActorError::Nvim(format!("create dirs: {cause}")))?;
-            }
-        }
-        std::fs::write(&path, state.snapshot.text.as_bytes())
-            .map_err(|cause| ActorError::Nvim(format!("write {}: {cause}", path.display())))?;
-        state.snapshot.dirty = false;
-        Ok(SaveResult {
-            document_id: state.snapshot.document_id.clone(),
-            revision: state.snapshot.revision,
-            dirty: false,
-        })
+        Self::save_locked(&mut state)
     }
 
     /// Current Vim mode paired with the latest revision.
@@ -284,6 +361,7 @@ impl DocumentActor {
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         state.nvim.install_save_intercept()?;
+        state.nvim.command("setlocal buftype=acwrite")?;
         Ok(())
     }
 
@@ -326,18 +404,335 @@ impl DocumentActor {
         DocumentEvent::Snapshot(self.snapshot())
     }
 
+    /// Workspace attaches a contained path and durable checkpoint location.
+    pub fn attach_storage(&self, root: PathBuf, recovery: PathBuf) -> Result<(), ActorError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        if let Some(path) = &state.path {
+            storage::check_target(Some(&root), path)?;
+        }
+        state.root = Some(root);
+        state.recovery = Some(recovery);
+        Self::checkpoint_locked(&state)
+    }
+
+    pub fn baseline(&self) -> Option<Fingerprint> {
+        self.state
+            .lock()
+            .expect("document lock poisoned")
+            .baseline
+            .clone()
+    }
+
+    pub fn mark_unsaved(&self) -> Result<(), ActorError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        state.snapshot.dirty = true;
+        Self::checkpoint_locked(&state)
+    }
+
+    pub fn path(&self) -> Option<PathBuf> {
+        self.state
+            .lock()
+            .expect("document lock poisoned")
+            .path
+            .clone()
+    }
+
+    pub fn restore_record(&self, record: &RecoveryRecord) -> Result<(), ActorError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        state.snapshot = record.snapshot.clone();
+        state.snapshot.dirty = true;
+        state.baseline = record.baseline.clone();
+        Self::checkpoint_locked(&state)
+    }
+
+    pub fn discard_recovery(&self) -> Result<(), ActorError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        if let Some(path) = &state.recovery {
+            storage::remove_checkpoint(path)?;
+        }
+        Ok(())
+    }
+
+    /// Explicit reload refuses dirty content; accepted disk text is a new revision.
+    pub fn reload(&self, request: SaveRequest) -> Result<DocumentSnapshot, ActorError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::sync_locked(&mut state)?;
+        validate_save(&state.snapshot, &request)?;
+        if state.snapshot.dirty {
+            return Err(WorkspaceError::UnsavedChanges {
+                snapshot: state.snapshot.clone(),
+            }
+            .into());
+        }
+        let path = state.path.as_ref().ok_or(WorkspaceError::InvalidPath)?;
+        storage::check_target(state.root.as_deref(), path)?;
+        let bytes = storage::read_disk(path)?.ok_or(WorkspaceError::NotFound)?;
+        let text = String::from_utf8(bytes.clone()).map_err(|_| WorkspaceError::InvalidUtf8)?;
+        let revision = next_revision(state.snapshot.revision)?;
+        state.nvim.set_text(&text)?;
+        state.nvim.command("setlocal nomodified")?;
+        state.snapshot.text = text;
+        state.snapshot.revision = revision;
+        state.baseline = Some(storage::fingerprint(&bytes));
+        Ok(state.snapshot.clone())
+    }
+
+    /// No-overwrite rename preserves the authoritative buffer and Undo tree.
+    pub fn rename(&self, request: SaveRequest, target: PathBuf) -> Result<(), ActorError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::sync_locked(&mut state)?;
+        validate_save(&state.snapshot, &request)?;
+        let source = state.path.clone().ok_or(WorkspaceError::InvalidPath)?;
+        if source == target {
+            return Ok(());
+        }
+        storage::check_target(state.root.as_deref(), &source)?;
+        storage::check_target(state.root.as_deref(), &target)?;
+        if storage::disk_fingerprint(&source)? != state.baseline {
+            return Err(WorkspaceError::Conflict {
+                path: source.display().to_string(),
+            }
+            .into());
+        }
+        // Hard-link creation is atomic and refuses an existing destination.
+        std::fs::hard_link(&source, &target).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                WorkspaceError::AlreadyExists
+            } else {
+                e.into()
+            }
+        })?;
+        if let Err(error) = state.nvim.set_buf_name(&target.to_string_lossy()) {
+            let _ = std::fs::remove_file(&target);
+            return Err(error.into());
+        }
+        if let Err(error) = std::fs::remove_file(&source) {
+            let _ = state.nvim.set_buf_name(&source.to_string_lossy());
+            let _ = std::fs::remove_file(&target);
+            return Err(WorkspaceError::from(error).into());
+        }
+        state.path = Some(target);
+        Self::checkpoint_locked(&state)?;
+        Ok(())
+    }
+
+    pub fn cursor(&self) -> Result<CursorUpdate, ActorError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::sync_locked(&mut state)?;
+        let (row, col) = state.nvim.win_cursor()?;
+        let offset = crate::neovim::coordinates::line_byte_to_global_utf16(
+            &state.snapshot.text,
+            (row - 1) as u32,
+            col as u32,
+        )?;
+        Ok(CursorUpdate {
+            document_id: state.snapshot.document_id.clone(),
+            revision: state.snapshot.revision,
+            anchor: offset,
+            head: offset,
+        })
+    }
+
+    pub fn set_cursor(&self, update: CursorUpdate) -> Result<CursorUpdate, ActorError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::sync_locked(&mut state)?;
+        validate_cursor(&state.snapshot, &update)?;
+        let (row, col) = global_utf16_to_line_byte(&state.snapshot.text, update.head)?;
+        state.nvim.client().call(
+            "nvim_win_set_cursor",
+            vec![
+                rmpv::Value::from(0),
+                rmpv::Value::Array(vec![rmpv::Value::from(row + 1), rmpv::Value::from(col)]),
+            ],
+        )?;
+        Ok(update)
+    }
+
+    /// Drain raw Neovim redraw deltas without losing pending Rust save requests.
+    pub fn grid(&self, width: u32, height: u32) -> Result<GridUpdate, ActorError> {
+        if !(1..=500).contains(&width) || !(1..=300).contains(&height) {
+            return Err(WorkspaceError::InvalidPath.into());
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        state.nvim.client().call(
+            "nvim_ui_try_resize",
+            vec![rmpv::Value::from(width), rmpv::Value::from(height)],
+        )?;
+        state.nvim.command("redraw!")?;
+        Self::sync_locked(&mut state)?;
+        Self::service_notifications(&mut state)?;
+        Ok(GridUpdate {
+            document_id: state.snapshot.document_id.clone(),
+            revision: state.snapshot.revision,
+            updates: std::mem::take(&mut state.grid),
+        })
+    }
+
+    pub fn configure(
+        &self,
+        request: SaveRequest,
+        path: Option<PathBuf>,
+    ) -> Result<NvimConfig, ActorError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::sync_locked(&mut state)?;
+        validate_save(&state.snapshot, &request)?;
+        let config = path
+            .clone()
+            .map(ConfigSource::UserFile)
+            .unwrap_or(ConfigSource::Isolated);
+        let nvim = NeovimSession::spawn_with_config(config).map_err(ActorError::Nvim)?;
+        crate::neovim::grid::attach(nvim.client(), 80, 24)?;
+        let levels = nvim.client().call(
+            "nvim_get_option_value",
+            vec![rmpv::Value::from("undolevels"), rmpv::Value::Map(vec![])],
+        )?;
+        nvim.command("setlocal undolevels=-1")?;
+        nvim.set_text(&state.snapshot.text)?;
+        nvim.client().call(
+            "nvim_set_option_value",
+            vec![
+                rmpv::Value::from("undolevels"),
+                levels,
+                rmpv::Value::Map(vec![]),
+            ],
+        )?;
+        if let Some(path) = &state.path {
+            nvim.set_buf_name(&path.to_string_lossy())?;
+        }
+        nvim.install_save_intercept()?;
+        nvim.command("setlocal buftype=acwrite")?;
+        let result = NvimConfig {
+            path: path.map(|p| p.display().to_string()),
+            errors: nvim.config_report().errors.clone(),
+        };
+        state.nvim = nvim;
+        state.grid.clear();
+        Ok(result)
+    }
+
+    pub fn take_saved(&self) -> Vec<SaveResult> {
+        self.state
+            .lock()
+            .map(|mut s| std::mem::take(&mut s.saved))
+            .unwrap_or_default()
+    }
+
+    fn service_notifications(state: &mut ActorState) -> Result<(), ActorError> {
+        let mut save = false;
+        for note in state.nvim.drain_notifications() {
+            if note.method == "marxen:save-requested" {
+                save = true;
+            }
+            if note.method == "redraw" {
+                if let Ok(value) = serde_json::to_value(&note.params) {
+                    state.grid.push(value);
+                }
+            }
+        }
+        // Keep only a bounded backlog; grid() requests a full redraw.
+        if state.grid.len() > 256 {
+            state.grid.drain(..state.grid.len() - 256);
+        }
+        if save {
+            let result = Self::save_locked(state)?;
+            state.saved.push(result);
+        }
+        Ok(())
+    }
+
+    fn save_locked(state: &mut ActorState) -> Result<SaveResult, ActorError> {
+        let path = state.path.as_ref().ok_or(WorkspaceError::InvalidPath)?;
+        let baseline = storage::atomic_write(
+            path,
+            state.snapshot.text.as_bytes(),
+            state.baseline.as_ref(),
+            state.root.as_deref(),
+        )?;
+        state.baseline = Some(baseline);
+        // A failed Neovim acknowledgement leaves recovery and dirty status intact.
+        state.nvim.command("setlocal nomodified")?;
+        if let Some(path) = &state.recovery {
+            storage::remove_checkpoint(path)?;
+        }
+        state.snapshot.dirty = false;
+        Ok(SaveResult {
+            document_id: state.snapshot.document_id.clone(),
+            revision: state.snapshot.revision,
+            dirty: false,
+        })
+    }
+
+    fn checkpoint_locked(state: &ActorState) -> Result<(), ActorError> {
+        if !state.snapshot.dirty {
+            if let Some(path) = &state.recovery {
+                storage::remove_checkpoint(path)?;
+            }
+            return Ok(());
+        }
+        if let (Some(root), Some(recovery)) = (&state.root, &state.recovery) {
+            storage::checkpoint(
+                recovery,
+                &RecoveryRecord {
+                    version: 1,
+                    root: root.clone(),
+                    path: state
+                        .path
+                        .as_ref()
+                        .map(|p| storage::relative(root, p))
+                        .transpose()?,
+                    baseline: state.baseline.clone(),
+                    snapshot: state.snapshot.clone(),
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     fn sync_locked(state: &mut ActorState) -> Result<bool, ActorError> {
         let text = state.nvim.get_text()?;
         if text == state.snapshot.text {
+            Self::checkpoint_locked(state)?;
             return Ok(false);
         }
         let revision = next_revision(state.snapshot.revision)?;
+        let dirty = state.baseline.as_ref() != Some(&storage::fingerprint(text.as_bytes()));
         state.snapshot = DocumentSnapshot {
             document_id: state.snapshot.document_id.clone(),
             revision,
             text,
-            dirty: true,
+            dirty,
         };
+        Self::checkpoint_locked(state)?;
         Ok(true)
     }
 }

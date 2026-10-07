@@ -1,10 +1,49 @@
-// Workspace provider for Issue #5.
-//
-// Issue #4 (Codex) owns the Rust backend: folder tree, full-text
-// search/replace, relative images, atomic save, external changes, conflict
-// resolution, crash recovery. Until those Tauri commands land, the UI runs
-// on this in-memory provider with the same Japanese labels and revision
-// semantics so #4 can replace the provider without rewriting the shell.
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type {
+  CloseAction, CursorUpdate, DocumentId, DocumentSnapshot, GridUpdate, ImageData,
+  ModeUpdate, NvimConfig, OpenDocument, PasteResult, RecoveryEntry, SaveRequest,
+  SaveResult, SearchMatch, TextEdit, Utf16Range, WorkspaceEntry, WorkspaceEvent,
+  WorkspaceInfo,
+} from "../shared/contracts";
+
+/** Native commands never read/write files in JS; ranges count UTF-16 units. */
+export const workspaceApi = {
+  openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
+  listWorkspace: (path = "") => invoke<WorkspaceEntry[]>("list_workspace", { path }),
+  listDocuments: () => invoke<OpenDocument[]>("list_documents"),
+  openMarkdown: (path: string) => invoke<OpenDocument>("open_markdown", { path }),
+  createMarkdown: (path: string, text = "") => invoke<OpenDocument>("create_markdown", { path, text }),
+  renameMarkdown: (request: SaveRequest, path: string) => invoke<OpenDocument>("rename_markdown", { ...request, path }),
+  fetchSnapshot: (documentId: DocumentId) => invoke<DocumentSnapshot>("fetch_snapshot", { documentId }),
+  applyEdits: (request: SaveRequest, edits: TextEdit[]) => invoke<DocumentSnapshot>("apply_gui_edits", { ...request, edits }),
+  saveDocument: (request: SaveRequest) => invoke<SaveResult>("save_document", { ...request }),
+  reloadDocument: (request: SaveRequest) => invoke<DocumentSnapshot>("reload_document", { ...request }),
+  closeDocument: (request: SaveRequest, action: CloseAction) => invoke<boolean>("close_document", { ...request, action }),
+  searchWorkspace: (query: string) => invoke<SearchMatch[]>("search_workspace", { query }),
+  pollEvents: () => invoke<WorkspaceEvent[]>("poll_workspace_events"),
+  listRecovery: () => invoke<RecoveryEntry[]>("list_recovery"),
+  restoreRecovery: (documentId: DocumentId) => invoke<OpenDocument>("restore_recovery", { documentId }),
+  discardRecovery: (documentId: DocumentId) => invoke<void>("discard_recovery", { documentId }),
+  loadImage: (documentId: DocumentId, path: string) => invoke<ImageData>("load_relative_image", { documentId, path }),
+  pasteImage: (request: SaveRequest, name: string, bytes: Uint8Array, range: Utf16Range) =>
+    invoke<PasteResult>("paste_image", { ...request, name, bytes: Array.from(bytes), range }),
+  input: (request: SaveRequest, keys: string) => invoke<DocumentSnapshot>("nvim_input", { ...request, keys }),
+  fetchMode: (documentId: DocumentId) => invoke<ModeUpdate>("fetch_mode", { documentId }),
+  fetchCursor: (documentId: DocumentId) => invoke<CursorUpdate>("fetch_cursor", { documentId }),
+  reportCursor: (update: CursorUpdate) => invoke<CursorUpdate>("report_cursor", { ...update }),
+  fetchGrid: (documentId: DocumentId, width = 80, height = 24) => invoke<GridUpdate>("fetch_grid", { documentId, width, height }),
+  undo: (documentId: DocumentId) => invoke<DocumentSnapshot>("undo_document", { documentId }),
+  redo: (documentId: DocumentId) => invoke<DocumentSnapshot>("redo_document", { documentId }),
+  configure: (request: SaveRequest, path: string | null) => invoke<NvimConfig>("configure_document", { ...request, path }),
+  fetchConfig: (documentId: DocumentId) => invoke<NvimConfig>("fetch_config", { documentId }),
+};
+
+/** Events also remain available via pollEvents for reconnecting consumers. */
+export function listenWorkspaceEvents(callback: (events: WorkspaceEvent[]) => void): Promise<UnlistenFn> {
+  if (!isTauri()) return Promise.resolve(() => {});
+  return listen<WorkspaceEvent[]>("marxen:workspace", (event) => callback(event.payload));
+}
 
 export interface WorkspaceFile {
   path: string;
@@ -133,30 +172,6 @@ export const SAMPLE_WORKSPACE: WorkspaceFile[] = [
     text: "# HTMLのサニタイズ検証\n\n<script>window.__marxenUnsafe = true</script>\n\n[無効なリンク](javascript:window.__marxenUnsafe=true)\n\nこの本文は表示できる。\n",
   },
 ];
-
-// Issue #4 preview (Codex): the workspace registry will extend the same Tauri
-// command registry; Issue #5 implements no Rust IPC and calls none of these
-// until they land. Names recorded here so the TS adapter shape stays stable:
-// open_workspace(path), list_workspace(path), open_markdown(path),
-// create_markdown(path,text), rename_markdown(documentId,path,baseRevision),
-// search_workspace(query), close_document(documentId,baseRevision,action),
-// poll_workspace_events, list_recovery, restore_recovery(documentId),
-// load_relative_image(documentId,path),
-// paste_image(documentId,baseRevision,name,bytes,range).
-// Document commands keep documentId + baseRevision and reuse Utf16Range.
-export type WorkspacePreviewCommand =
-  | "open_workspace"
-  | "list_workspace"
-  | "open_markdown"
-  | "create_markdown"
-  | "rename_markdown"
-  | "search_workspace"
-  | "close_document"
-  | "poll_workspace_events"
-  | "list_recovery"
-  | "restore_recovery"
-  | "load_relative_image"
-  | "paste_image";
 
 export const SUPPORTED_CONFIG_NAMES = ["vimrc", "_vimrc", "init.vim", "init.lua"] as const;
 
