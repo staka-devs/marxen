@@ -308,7 +308,9 @@ export default function AiPanel({ contexts, staging, onRemoveContext }: AiPanelP
             </>
           ) : (
             <p className="text-xs text-muted-foreground">
-              {PRESET_LABELS[preset]} CLI は利用者がインストールします。未検出時は起動せず明示します。
+              {preset === "codex"
+                ? "codex-acp アダプター (@agentclientprotocol/codex-acp) を利用者が事前にインストールします。未検出時は起動せず明示し、自動取得はしません。"
+                : "OpenCode を opencode acp として起動します。未検出時は起動せず明示します。"}
             </p>
           )}
         </div>

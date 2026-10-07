@@ -80,6 +80,7 @@ describe("ai transport", () => {
       { code: "unknown_session" },
       { code: "staging_unresolved", copy_id: "copy_1" },
       { code: "live_target_rejected", detail: "d" },
+      { code: "unsupported_protocol", version: 2 },
       { code: "claude_code_refused", command: "claude" },
       { code: "credential_store_failed", detail: "d" },
     ];

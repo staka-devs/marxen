@@ -22,7 +22,7 @@ Rust が AI transport と資格情報を所有し、React が AI パネルを提
 - `src/lib/ai.ts` (新規): invoke wrapper、run 単位の event 振り分け、cancel、資格情報の browser 誤用防止、全 error code の日本語対応表、Claude 拒否の mirror、送信範囲の 1 行要約。
 - `src/components/ai-panel.tsx` (新規): 接続先切替、ACP preset / custom argv (1 行 1 引数)、endpoint / model、Anthropic opt-in、資格情報の保存・削除 (値は非表示・password 入力)、dry-run / live テスト (live は明示 checkbox)、送信対象の正確な範囲表示、4 mode、送信・取消、stream 応答、提案と基準 revision、送信済み範囲、alert 表示。未解決 staging と無効 Anthropic では送信を disabled にする。
 - `tests/fixtures/ai_sse_{openai,anthropic}.txt` (新規): Rust と TypeScript で共有する SSE 記録。どちらも `Hello, 世界！` に結合する。
-- テスト: Rust unit 20 (`ai.rs` 内)、Rust integration 12 (`src-tauri/tests/ai.rs`: mock HTTP server 5 件相当、mock ACP subprocess 5 件、dry-run / handshake / resolver 2 件)、Vitest 8 件 (`ai.test.ts` + `ai-panel.test.tsx` を含む全 21 件)。
+- テスト: Rust unit 20 (`ai.rs` 内)、Rust integration 12 (`src-tauri/tests/ai.rs`: mock HTTP server 5 件相当、mock ACP subprocess 5 件、dry-run / handshake / resolver 2 件)、Vitest 8 件 (`ai.test.ts` + `ai-panel.test.tsx` を含む全 21 件)。追補後は unit 25、integration 19 (実機 handshake 1 件は環境変数指定時のみ実行)、全 Vitest 22。詳細は末尾の追補節。
 - 判断記録は `docs/adr/ADR-0070-AI接続とプロンプト送信の契約を定める.md` (予約枠 0070〜0079 の先頭)。Tauri コマンド / イベント契約表を編集側担当者向けに含めた。
 
 ## ローカル結果
@@ -60,3 +60,12 @@ coordinator 管理 ADR-0001 (実 Neovim 正本)、ADR-0002 (Rust 直列化) に�
 ## 運用ログ
 
 coordinator inbox の status (msg_d954b0430d2f) を作業開始時と完了前の 2 回確認し、追加指示がないことを確認した。heartbeat を約 5 分ごとに送った。`npm ci` は新規実行 (163 packages) し、`cargo add` で 4 crate を追加して `Cargo.lock` を更新した。`cargo test` の SSE 2 件失敗は mock server の Content-Length 見落とし (小文字 header) が原因で、読み取り側を case-insensitive に修正して再確認した。SSE payload の snake_case (`run_id`) は named struct 化で camelCase (`runId`) に統一し、生成物を commit する。push / PR は行わない。
+
+## 追補 2026-10-07: NDJSON 是正と実機 handshake (Dispatch ctx_af707c31ee6f)
+
+- モデル再検証: `opencode.models` で `opencode-go/muse-spark-1.3-contributor` の status `active` と variants の `xhigh` を再確認し、作業者の実効モデルと一致した。Claude Code は起動・委任・接続検証していない。
+- 公式調査: transports (NDJSON のみ)、codex-acp (バイナリ `codex-acp`、npm `@agentclientprotocol/codex-acp`)、opencode ACP (`opencode acp`)、schema (PermissionOption / outcome / StopReason / initialize / session 系) を取得し、ADR-0071 で ADR-0070 の transport 部分を置換した。`contracts.rs`、`App.tsx` には触れていない。
+- 実装差し替え: Content-Length を廃止し NDJSON (独立実装の mock 付き) にした。Codex preset を引数なし `codex-acp` にし、自動取得はしない。`session/cancel` を通知化し、stopReason 振り分け、権限要求の deny-by-default (`reject_once` 選択・`cancelled` outcome・未知 method は `-32601`)、ID 厳密照合、500 ms poll による取消上限、stdin-close の graceful shutdown、version 不一致の `unsupported_protocol` を追加した。
+- 実機 demo: 手元 OpenCode v2.0.24 (npm 版 `opencode.exe` の絶対パス + `acp`) に対し実 driver で initialize + session/new を成功 (protocol 1、session `ses_ee92d2f62ffenjt7T6aKw5zXv2`、通知 0 件、1.32 秒)。prompt は送っていない。WinGet 版 `opencode.exe` は起動直後に `Database is not empty and has no session table` で終了する利用者環境固有の状態で、Marxen の問題ではない。`codex-acp` 未導入のため missing-binary 経路を検証した。
+- 検証: `cargo test` (両 feature) で unit 25 + AI integration 19 + 文書契約 11、`npm test` 22 件、`ai-contracts:check`、`contracts:check`、`typecheck`、`fmt`、`clippy -D warnings` が成功。実機 handshake テストは `MARXEN_REAL_ACP_BIN` / `MARXEN_REAL_ACP_ARGS` 指定時のみ実行し、未指定時は skip する。
+- 既知の残件: 純粋 unit 25 件の wall clock が約 27 秒かかる (各テストは即時 ok。Windows Defender 等の実行環境要因と判断)。tool 通知の個別表示、承認 UI、session/load・resume・close、実 WebView / IME、macOS / Linux native、署名 / 配布は未実施。

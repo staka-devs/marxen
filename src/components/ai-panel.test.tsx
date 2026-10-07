@@ -49,6 +49,14 @@ describe("ai panel", () => {
     expect(screen.getByRole("button", { name: "送信" })).toBeDisabled();
   });
 
+  it("names the codex-acp adapter and never auto-downloads", () => {
+    render(<AiPanel contexts={contexts} staging={staging} />);
+    expect(screen.getByText(/codex-acp アダプター/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "OpenAI 互換" }));
+    fireEvent.click(screen.getByRole("button", { name: "ACP" }));
+    expect(screen.getByText(/codex-acp アダプター/)).toBeVisible();
+  });
+
   it("keeps Anthropic disabled until opt-in", () => {
     render(<AiPanel contexts={contexts} staging={staging} />);
     fireEvent.click(screen.getByRole("button", { name: "Anthropic" }));

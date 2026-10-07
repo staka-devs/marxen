@@ -10,15 +10,16 @@
 use crate::ai_contracts::*;
 use crate::contracts::Utf16Range;
 use crate::validation::{utf16_to_utf8, validate_document_id};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(feature = "desktop")]
 use std::sync::LazyLock;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant};
 #[cfg(feature = "desktop")]
 use tauri::Emitter;
 
@@ -79,10 +80,14 @@ pub fn is_claude_command(command: &str) -> bool {
 
 pub fn preset_argv(preset: AcpPreset) -> AcpArgv {
     match preset {
+        // Official adapter package @agentclientprotocol/codex-acp.
+        // The binary must already be installed; never auto-downloaded.
+        // Never `codex acp`: that subcommand does not exist.
         AcpPreset::Codex => AcpArgv {
-            command: "codex".into(),
-            args: vec!["acp".into()],
+            command: "codex-acp".into(),
+            args: vec![],
         },
+        // Per https://opencode.ai/docs/acp/ : `opencode acp`.
         AcpPreset::Opencode => AcpArgv {
             command: "opencode".into(),
             args: vec!["acp".into()],
@@ -512,102 +517,214 @@ pub fn anthropic_signal(data: &str) -> Result<AnthropicSignal, AiError> {
     }
 }
 
-// ---- ACP JSON-RPC framing (Content-Length, stdio) ----
+// ---- ACP stdio transport: newline-delimited compact UTF-8 JSON-RPC ----
+// Official transport (https://agentclientprotocol.com/protocol/v1/transports):
+// one compact JSON value per line, no embedded newlines, UTF-8 only.
+// Content-Length framing is NOT used and is rejected by compliant agents.
 
-pub fn encode_message(value: &serde_json::Value) -> Vec<u8> {
-    let body = serde_json::to_vec(value).expect("ACP message serializes");
-    let mut out = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
-    out.extend_from_slice(&body);
-    out
-}
+/// Maximum size of one NDJSON line (8 MiB). Larger lines are stream errors.
+pub const MAX_ACP_LINE_BYTES: usize = 8_388_608;
+/// Grace period for an agent to answer `session/prompt` after `session/cancel`.
+pub const CANCEL_GRACE: Duration = Duration::from_secs(5);
+/// Maximum silence between prompt-loop iterations before re-checking the
+/// cancel flag. Agents that go quiet (for example while waiting for our
+/// next message) must not delay cancellation past this bound.
+pub const ACP_POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// Grace period for an agent to exit after we close its stdin.
+pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+/// Latest ACP major protocol version this client speaks.
+pub const ACP_PROTOCOL_VERSION: u32 = 1;
 
-#[derive(Debug, Default)]
-pub struct FrameDecoder {
-    buf: Vec<u8>,
-}
-
-fn parse_content_length(headers: &[u8]) -> Result<usize, AiError> {
-    let text = String::from_utf8_lossy(headers);
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("Content-Length:") {
-            return rest
-                .trim()
-                .parse::<usize>()
-                .map_err(|_| AiError::StreamFailed {
-                    detail: "Content-Length が数値ではありません".into(),
-                });
-        }
-    }
-    Err(AiError::StreamFailed {
-        detail: "Content-Length がありません".into(),
+pub fn client_info() -> serde_json::Value {
+    serde_json::json!({
+        "name": "marxen",
+        "title": "Marxen",
+        "version": env!("CARGO_PKG_VERSION"),
     })
 }
 
-fn header_end(buffer: &[u8]) -> Option<usize> {
-    buffer
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .map(|pos| pos + 4)
+/// Encode one ACP message: compact JSON plus a single `\n`.
+/// serde_json never emits raw newlines inside strings, so the framing holds.
+pub fn encode_acp_message(value: &serde_json::Value) -> Vec<u8> {
+    let mut out = serde_json::to_vec(value).expect("ACP message serializes");
+    out.push(b'\n');
+    out
 }
 
-impl FrameDecoder {
-    pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<serde_json::Value>, AiError> {
-        self.buf.extend_from_slice(chunk);
-        let mut messages = Vec::new();
-        while let Some(end) = header_end(&self.buf) {
-            let length = parse_content_length(&self.buf[..end])?;
-            if self.buf.len() < end + length {
-                break;
-            }
-            let body: Vec<u8> = self.buf.drain(..end + length).collect();
-            let value =
-                serde_json::from_slice(&body[end..]).map_err(|_| AiError::StreamFailed {
-                    detail: "ACP の応答を解釈できません".into(),
+/// Incremental NDJSON reader. Handles fragmentation (splits mid-line and
+/// mid-UTF-8), coalescing (several lines per read), CRLF tolerance, and
+/// skips stray empty lines. Anything else is an explicit stream error.
+#[derive(Debug, Default)]
+pub struct NdjsonReader<R: BufRead> {
+    inner: R,
+    buf: Vec<u8>,
+}
+
+impl<R: BufRead> NdjsonReader<R> {
+    pub fn new(inner: R) -> Self {
+        Self {
+            inner,
+            buf: Vec::new(),
+        }
+    }
+
+    /// Read one message. `Ok(None)` only on clean EOF with no pending bytes.
+    pub fn next_value(&mut self) -> Result<Option<serde_json::Value>, AiError> {
+        loop {
+            if let Some(end) = self.buf.iter().position(|byte| *byte == b'\n') {
+                let raw: Vec<u8> = self.buf.drain(..=end).collect();
+                let mut line = &raw[..raw.len() - 1];
+                if line.ends_with(b"\r") {
+                    line = &line[..line.len() - 1];
+                }
+                if line.is_empty() {
+                    continue;
+                }
+                if line.len() > MAX_ACP_LINE_BYTES {
+                    return Err(AiError::StreamFailed {
+                        detail: "ACP の応答が大きすぎます".into(),
+                    });
+                }
+                let text = std::str::from_utf8(line).map_err(|_| AiError::StreamFailed {
+                    detail: "ACP の応答が UTF-8 ではありません".into(),
                 })?;
-            messages.push(value);
+                return serde_json::from_str(text)
+                    .map(Some)
+                    .map_err(|_| AiError::StreamFailed {
+                        detail: "ACP の応答を解釈できません".into(),
+                    });
+            }
+            if self.buf.len() > MAX_ACP_LINE_BYTES + 1 {
+                return Err(AiError::StreamFailed {
+                    detail: "ACP の応答が大きすぎます".into(),
+                });
+            }
+            let mut chunk = [0u8; 4096];
+            match self.inner.read(&mut chunk) {
+                Ok(0) => {
+                    if self.buf.is_empty() {
+                        return Ok(None);
+                    }
+                    return Err(AiError::StreamFailed {
+                        detail: "エージェントが途中で標準出力を閉じました".into(),
+                    });
+                }
+                Ok(read) => self.buf.extend_from_slice(&chunk[..read]),
+                Err(_) => {
+                    return Err(AiError::StreamFailed {
+                        detail: "ACP の応答を読み取れません".into(),
+                    });
+                }
+            }
         }
-        Ok(messages)
     }
 }
 
-pub fn read_framed_message(reader: &mut impl BufRead) -> Result<serde_json::Value, AiError> {
-    let mut headers = Vec::new();
-    loop {
-        let mut line = Vec::new();
-        reader
-            .read_until(b'\n', &mut line)
-            .map_err(|_| AiError::StreamFailed {
-                detail: "ACP の応答を読み取れません".into(),
-            })?;
-        if line.is_empty() {
-            return Err(AiError::StreamFailed {
-                detail: "エージェントが標準出力を閉じました".into(),
-            });
+/// One classified inbound message.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AgentIncoming {
+    /// Response to our request (`id` present, no `method`).
+    Response { id: serde_json::Value, body: Value },
+    /// Notification from the agent (no `id`).
+    Notification(Value),
+    /// Request from the agent that needs our response (`id` and `method`).
+    AgentRequest {
+        id: serde_json::Value,
+        method: String,
+        params: Value,
+    },
+}
+
+pub fn classify_incoming(message: Value) -> Result<AgentIncoming, AiError> {
+    let id = message.get("id");
+    let method = message.get("method").and_then(|method| method.as_str());
+    match (id, method) {
+        (Some(id), Some(method)) if !id.is_null() => Ok(AgentIncoming::AgentRequest {
+            id: id.clone(),
+            method: method.to_owned(),
+            params: message.get("params").cloned().unwrap_or(Value::Null),
+        }),
+        (Some(id), None) if !id.is_null() => Ok(AgentIncoming::Response {
+            id: id.clone(),
+            body: message,
+        }),
+        (None | Some(_), _) if message.get("method").is_some() => {
+            Ok(AgentIncoming::Notification(message))
         }
-        headers.extend_from_slice(&line);
-        if headers.ends_with(b"\r\n\r\n") {
-            break;
-        }
-        if headers.len() > 8192 {
-            return Err(AiError::StreamFailed {
-                detail: "ACP の応答ヘッダが大きすぎます".into(),
-            });
-        }
+        _ => Err(AiError::StreamFailed {
+            detail: "ACP の応答を解釈できません".into(),
+        }),
     }
-    let length = parse_content_length(&headers)?;
-    if length > 8_388_608 {
-        return Err(AiError::StreamFailed {
-            detail: "ACP の応答が大きすぎます".into(),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    EndTurn,
+    MaxTokens,
+    MaxTurnRequests,
+    Refusal,
+    Cancelled,
+}
+
+pub fn parse_stop_reason(body: &Value) -> Result<StopReason, AiError> {
+    match body
+        .pointer("/result/stopReason")
+        .and_then(|reason| reason.as_str())
+    {
+        Some("end_turn") => Ok(StopReason::EndTurn),
+        Some("max_tokens") => Ok(StopReason::MaxTokens),
+        Some("max_turn_requests") => Ok(StopReason::MaxTurnRequests),
+        Some("refusal") => Ok(StopReason::Refusal),
+        Some("cancelled") => Ok(StopReason::Cancelled),
+        _ => Err(AiError::StreamFailed {
+            detail: "prompt が stopReason を返しませんでした".into(),
+        }),
+    }
+}
+
+/// How to answer an inbound `session/request_permission`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionAnswer {
+    /// No approval UI exists, so deny by selecting a reject option.
+    Deny,
+    /// The turn is being cancelled; answer with the `cancelled` outcome.
+    Cancelled,
+}
+
+/// Build the `result` payload answering `session/request_permission`.
+/// Exact shapes per the official schema: `{outcome: {outcome: "selected",
+/// optionId}}` or `{outcome: {outcome: "cancelled"}}`.
+pub fn answer_permission(params: &Value, mode: PermissionAnswer) -> Value {
+    if mode == PermissionAnswer::Cancelled {
+        return serde_json::json!({ "outcome": { "outcome": "cancelled" } });
+    }
+    let options = params.get("options").and_then(|options| options.as_array());
+    let pick = |kind: &str| {
+        options?.iter().find_map(|option| {
+            (option.get("kind")?.as_str()? == kind)
+                .then(|| option.get("optionId")?.as_str())
+                .flatten()
+                .map(str::to_owned)
+        })
+    };
+    if let Some(option_id) = pick("reject_once").or_else(|| pick("reject_always")) {
+        return serde_json::json!({
+            "outcome": { "outcome": "selected", "optionId": option_id }
         });
     }
-    let mut body = vec![0u8; length];
-    reader
-        .read_exact(&mut body)
-        .map_err(|_| AiError::StreamFailed {
-            detail: "ACP の応答を読み取れません".into(),
-        })?;
-    serde_json::from_slice(&body).map_err(|_| AiError::StreamFailed {
-        detail: "ACP の応答を解釈できません".into(),
+    serde_json::json!({ "outcome": { "outcome": "cancelled" } })
+}
+
+/// JSON-RPC error for agent methods this client does not implement
+/// (fs/*, terminal/*, elicitation/*: no client capabilities are advertised).
+pub fn method_not_found(id: &Value, method: &str) -> Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": -32601,
+            "message": format!("method not supported: {method}")
+        }
     })
 }
 
@@ -616,8 +733,29 @@ pub fn acp_initialize(id: u64) -> serde_json::Value {
         "jsonrpc": "2.0",
         "id": id,
         "method": "initialize",
-        "params": { "protocolVersion": 1 }
+        "params": {
+            "protocolVersion": ACP_PROTOCOL_VERSION,
+            "clientCapabilities": {},
+            "clientInfo": client_info(),
+        }
     })
+}
+
+/// Negotiate the protocol version. Anything but v1 is an explicit error.
+pub fn check_protocol_version(body: &Value) -> Result<u32, AiError> {
+    let version = body
+        .pointer("/result/protocolVersion")
+        .and_then(|version| version.as_u64())
+        .ok_or_else(|| AiError::StreamFailed {
+            detail: "initialize が protocolVersion を返しませんでした".into(),
+        })?;
+    let version = u32::try_from(version).map_err(|_| AiError::StreamFailed {
+        detail: "protocolVersion が大きすぎます".into(),
+    })?;
+    if version != ACP_PROTOCOL_VERSION {
+        return Err(AiError::UnsupportedProtocol { version });
+    }
+    Ok(version)
 }
 
 pub fn acp_session_new(id: u64, staging_dir: &Path) -> serde_json::Value {
@@ -647,10 +785,12 @@ pub fn acp_session_prompt(
     })
 }
 
-pub fn acp_session_cancel(id: u64, session_id: &str) -> serde_json::Value {
+/// `session/cancel` is a notification: no `id`, no response expected.
+/// The agent answers by responding to `session/prompt` with stopReason
+/// `cancelled`.
+pub fn acp_session_cancel_notification(session_id: &str) -> serde_json::Value {
     serde_json::json!({
         "jsonrpc": "2.0",
-        "id": id,
         "method": "session/cancel",
         "params": { "sessionId": session_id }
     })
@@ -1074,6 +1214,14 @@ impl RunRegistry {
         })
     }
 
+    pub fn take_child(&self, id: &AiRunId) -> Option<Child> {
+        self.entries
+            .lock()
+            .expect("run registry lock")
+            .get(&id.0)
+            .and_then(|entry| entry.child.lock().expect("child lock").take())
+    }
+
     pub fn remove(&self, id: &AiRunId) {
         self.entries
             .lock()
@@ -1116,6 +1264,281 @@ fn spawn_acp(argv: &AcpArgv, staging_dir: &Path) -> Result<Child, AiError> {
                 }
             }
         })
+}
+
+// ---- ACP connection: id routing, permissions, cancel, cleanup ----
+
+/// One line read from the agent's stdout.
+#[derive(Debug)]
+pub enum ConnLine {
+    Value(serde_json::Value),
+    Eof,
+}
+
+#[derive(Debug)]
+pub enum ReadFail {
+    Timeout,
+    Stream(AiError),
+}
+
+/// One live agent subprocess. stdin is written from the driver thread while a
+/// side thread pumps stdout lines through a channel, so cancel and timeout
+/// handling never blocks on a read. Request/response id matching,
+/// notification dispatch, and inbound agent requests all flow through here.
+pub struct AgentConn {
+    stdin: ChildStdin,
+    rx: mpsc::Receiver<Result<ConnLine, AiError>>,
+    next_id: u64,
+}
+
+impl AgentConn {
+    pub fn launch(stdin: ChildStdin, stdout: ChildStdout) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let mut reader = NdjsonReader::new(BufReader::new(stdout));
+        std::thread::spawn(move || loop {
+            match reader.next_value() {
+                Ok(Some(value)) => {
+                    if tx.send(Ok(ConnLine::Value(value))).is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => {
+                    let _ = tx.send(Ok(ConnLine::Eof));
+                    break;
+                }
+                Err(error) => {
+                    let _ = tx.send(Err(error));
+                    break;
+                }
+            }
+        });
+        Self {
+            stdin,
+            rx,
+            next_id: 1,
+        }
+    }
+
+    pub fn fresh_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    pub fn write(&mut self, message: &serde_json::Value) -> Result<(), AiError> {
+        self.stdin
+            .write_all(&encode_acp_message(message))
+            .map_err(|_| AiError::StreamFailed {
+                detail: "エージェントに送信できません".into(),
+            })?;
+        self.stdin.flush().map_err(|_| AiError::StreamFailed {
+            detail: "エージェントに送信できません".into(),
+        })
+    }
+
+    pub fn notify(&mut self, message: &serde_json::Value) -> Result<(), AiError> {
+        self.write(message)
+    }
+
+    pub fn read_next(&self, timeout: Option<Duration>) -> Result<ConnLine, ReadFail> {
+        let received = match timeout {
+            Some(limit) => self.rx.recv_timeout(limit),
+            None => self
+                .rx
+                .recv()
+                .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+        };
+        match received {
+            Ok(Ok(line)) => Ok(line),
+            Ok(Err(error)) => Err(ReadFail::Stream(error)),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(ReadFail::Timeout),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Ok(ConnLine::Eof),
+        }
+    }
+
+    fn answer_agent_request(
+        &mut self,
+        id: &serde_json::Value,
+        method: &str,
+        params: &Value,
+        permission: PermissionAnswer,
+    ) -> Result<(), AiError> {
+        let response = if method == "session/request_permission" {
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": answer_permission(params, permission),
+            })
+        } else {
+            method_not_found(id, method)
+        };
+        self.write(&response)
+    }
+
+    /// Send a prebuilt request (carrying its own `id`) and wait for the
+    /// matching response. Interleaved notifications go to `sink`; inbound
+    /// agent requests are answered inline so they never deadlock the peer.
+    pub fn roundtrip(
+        &mut self,
+        message: serde_json::Value,
+        permission: PermissionAnswer,
+        sink: &mut dyn FnMut(serde_json::Value),
+    ) -> Result<serde_json::Value, AiError> {
+        let id = message
+            .get("id")
+            .cloned()
+            .ok_or_else(|| AiError::StreamFailed {
+                detail: "要求に ID がありません".into(),
+            })?;
+        self.write(&message)?;
+        loop {
+            match self.read_next(None) {
+                Ok(ConnLine::Value(message)) => match classify_incoming(message)? {
+                    AgentIncoming::Response { id: got, body } => {
+                        if got == id {
+                            if let Some(detail) = rpc_error(&body) {
+                                return Err(AiError::StreamFailed {
+                                    detail: format!("エージェントがエラーを返しました: {detail}"),
+                                });
+                            }
+                            return Ok(body);
+                        }
+                        return Err(AiError::StreamFailed {
+                            detail: format!("想定外の応答 ID を受けました: {got}"),
+                        });
+                    }
+                    AgentIncoming::Notification(note) => sink(note),
+                    AgentIncoming::AgentRequest {
+                        id: req_id,
+                        method: req_method,
+                        params: req_params,
+                    } => {
+                        self.answer_agent_request(&req_id, &req_method, &req_params, permission)?;
+                    }
+                },
+                Ok(ConnLine::Eof) => {
+                    return Err(AiError::StreamFailed {
+                        detail: "エージェントが標準出力を閉じました".into(),
+                    });
+                }
+                Err(ReadFail::Timeout) => {
+                    return Err(AiError::StreamFailed {
+                        detail: "応答待ちがタイムアウトしました".into(),
+                    });
+                }
+                Err(ReadFail::Stream(error)) => return Err(error),
+            }
+        }
+    }
+}
+
+fn wait_for_exit(child: &mut Child, grace: Duration) {
+    let start = Instant::now();
+    loop {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        if start.elapsed() >= grace {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Graceful shutdown: dropping the connection closes stdin (the transport's
+/// termination signal), then wait briefly and kill leftovers. Always reaps.
+fn shutdown_agent(conn: AgentConn, mut child: Child, grace: Duration) {
+    drop(conn);
+    wait_for_exit(&mut child, grace);
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Result of initialize + session/new. No prompt is ever sent by this path.
+#[derive(Debug, Clone)]
+pub struct HandshakeInfo {
+    pub protocol_version: u32,
+    pub session_id: String,
+    pub agent_name: Option<String>,
+    pub notifications: usize,
+}
+
+pub fn agent_handshake(
+    argv: &AcpArgv,
+    staging_dir: &Path,
+    timeout: Duration,
+) -> Result<HandshakeInfo, AiError> {
+    validate_argv(argv)?;
+    let mut child = spawn_acp(argv, staging_dir)?;
+    let stdin = child.stdin.take().ok_or_else(|| AiError::SpawnFailed {
+        detail: "エージェントの標準入力を開けません".into(),
+    })?;
+    let stdout = child.stdout.take().ok_or_else(|| AiError::SpawnFailed {
+        detail: "エージェントの標準出力を開けません".into(),
+    })?;
+    let stderr_captured: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    if let Some(mut stderr) = child.stderr.take() {
+        let captured = stderr_captured.clone();
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stderr.read_to_end(&mut buf);
+            *captured.lock().expect("stderr lock") = buf;
+        });
+    }
+    // Local kill handle for the overall timeout (no run registry here).
+    let shared: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(Some(child)));
+    {
+        let shared = Arc::clone(&shared);
+        std::thread::spawn(move || {
+            std::thread::sleep(timeout);
+            if let Some(mut child) = shared.lock().expect("child lock").take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        });
+    }
+    let mut conn = AgentConn::launch(stdin, stdout);
+    let notifications = std::cell::Cell::new(0usize);
+    let mut sink = |_: serde_json::Value| {
+        notifications.set(notifications.get() + 1);
+    };
+    let outcome = (|| {
+        let init_id = conn.fresh_id();
+        let init = conn.roundtrip(acp_initialize(init_id), PermissionAnswer::Deny, &mut sink)?;
+        let version = check_protocol_version(&init)?;
+        let agent_name = init
+            .pointer("/result/agentInfo/name")
+            .and_then(|name| name.as_str())
+            .map(str::to_owned);
+        let new_id = conn.fresh_id();
+        let reply = conn.roundtrip(
+            acp_session_new(new_id, staging_dir),
+            PermissionAnswer::Deny,
+            &mut sink,
+        )?;
+        let session_id = reply
+            .pointer("/result/sessionId")
+            .and_then(|id| id.as_str())
+            .ok_or_else(|| AiError::StreamFailed {
+                detail: "session/new が sessionId を返しませんでした".into(),
+            })?
+            .to_owned();
+        Ok(HandshakeInfo {
+            protocol_version: version,
+            session_id,
+            agent_name,
+            notifications: notifications.get(),
+        })
+    })();
+    // Reap exactly once: take the child back unless the watchdog already did.
+    let child = shared.lock().expect("child lock").take();
+    drop(conn);
+    if let Some(mut child) = child {
+        wait_for_exit(&mut child, SHUTDOWN_GRACE);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    outcome.map_err(|error| with_stderr(error, &stderr_captured))
 }
 
 fn rpc_error(message: &serde_json::Value) -> Option<String> {
@@ -1219,13 +1642,13 @@ pub fn run_acp_prompt(
             *captured.lock().expect("stderr lock") = buf;
         });
     }
-    let mut stdin = child.stdin.take().ok_or_else(|| AiError::SpawnFailed {
+    let stdin = child.stdin.take().ok_or_else(|| AiError::SpawnFailed {
         detail: "エージェントの標準入力を開けません".into(),
     })?;
     let stdout = child.stdout.take().ok_or_else(|| AiError::SpawnFailed {
         detail: "エージェントの標準出力を開けません".into(),
     })?;
-    let mut reader = BufReader::new(stdout);
+    let mut conn = AgentConn::launch(stdin, stdout);
     registry.set_child(run_id, child);
 
     // Overall watchdog: kill through the registry so cancel stays uniform.
@@ -1237,17 +1660,21 @@ pub fn run_acp_prompt(
         watchdog_registry.timeout_cancel(&watchdog_id);
     });
 
-    let outcome = run_acp_conversation(
-        params,
-        request,
-        run_id,
-        registry,
-        cancel,
-        emit,
-        &mut stdin,
-        &mut reader,
-    );
+    let outcome = run_acp_conversation(params, request, run_id, registry, cancel, emit, &mut conn);
     let outcome = outcome.map_err(|error| with_stderr(error, &stderr_captured));
+    // Reap exactly once on every path. Graceful turns (Done or a cooperating
+    // cancel) shut the agent down by closing stdin; kill paths already reaped
+    // through the registry, and error paths kill here.
+    match &outcome {
+        Ok(()) => {
+            if let Some(child) = registry.take_child(run_id) {
+                shutdown_agent(conn, child, SHUTDOWN_GRACE);
+            }
+        }
+        Err(_) => {
+            registry.cancel(run_id);
+        }
+    }
     registry.remove(run_id);
     outcome
 }
@@ -1260,41 +1687,22 @@ fn run_acp_conversation(
     registry: &RunRegistry,
     cancel: &AtomicBool,
     emit: &mut (dyn FnMut(AiStreamEvent) + Send),
-    stdin: &mut impl Write,
-    reader: &mut BufReader<ChildStdout>,
+    conn: &mut AgentConn,
 ) -> Result<(), AiError> {
-    let _ = &params.timeout;
     let mut tracker = AcpSessionTracker::new();
-    let mut next_id: u64 = 1;
+    let mut ignore = |_: serde_json::Value| {};
 
-    let mut roundtrip = |message: serde_json::Value| -> Result<serde_json::Value, AiError> {
-        stdin
-            .write_all(&encode_message(&message))
-            .map_err(|_| AiError::StreamFailed {
-                detail: "エージェントに送信できません".into(),
-            })?;
-        stdin.flush().map_err(|_| AiError::StreamFailed {
-            detail: "エージェントに送信できません".into(),
-        })?;
-        read_framed_message(reader)
-    };
-
-    let reply = roundtrip(acp_initialize(next_id))?;
-    next_id += 1;
-    if let Some(message) = rpc_error(&reply) {
-        return Err(AiError::StreamFailed {
-            detail: format!("initialize に失敗しました: {message}"),
-        });
-    }
+    let init_id = conn.fresh_id();
+    let init = conn.roundtrip(acp_initialize(init_id), PermissionAnswer::Deny, &mut ignore)?;
+    check_protocol_version(&init)?;
     tracker.initialized();
 
-    let reply = roundtrip(acp_session_new(next_id, &params.staging_dir))?;
-    next_id += 1;
-    if let Some(message) = rpc_error(&reply) {
-        return Err(AiError::StreamFailed {
-            detail: format!("session/new に失敗しました: {message}"),
-        });
-    }
+    let new_id = conn.fresh_id();
+    let reply = conn.roundtrip(
+        acp_session_new(new_id, &params.staging_dir),
+        PermissionAnswer::Deny,
+        &mut ignore,
+    )?;
     let session_id = reply
         .pointer("/result/sessionId")
         .and_then(|id| id.as_str())
@@ -1307,7 +1715,7 @@ fn run_acp_conversation(
     // unknown by construction. The tracker reports that explicitly.
     tracker.prompt_started(request.session_id.as_ref().map(|id| id.0.as_str()))?;
 
-    let prompt_id = next_id;
+    let prompt_id = conn.fresh_id();
     let prompt_message = acp_session_prompt(
         prompt_id,
         session_id,
@@ -1315,58 +1723,124 @@ fn run_acp_conversation(
         &request.prompt,
         &request.contexts,
     );
-    stdin
-        .write_all(&encode_message(&prompt_message))
-        .map_err(|_| AiError::StreamFailed {
-            detail: "エージェントに送信できません".into(),
-        })?;
-    stdin.flush().map_err(|_| AiError::StreamFailed {
-        detail: "エージェントに送信できません".into(),
-    })?;
+    conn.write(&prompt_message)?;
 
     let mut assembler = ProposalAssembler::new();
+    let mut cancel_sent = false;
     loop {
-        if cancel.load(Ordering::SeqCst) {
-            cancelled_or_timed_out(run_id, registry, emit);
-            tracker.prompt_finished();
-            return Ok(());
+        if cancel.load(Ordering::SeqCst) && !cancel_sent {
+            if registry.was_timed_out(run_id) {
+                registry.cancel(run_id);
+                emit(AiStreamEvent::Error(StreamError {
+                    run_id: Some(run_id.clone()),
+                    error: AiError::StreamFailed {
+                        detail: "エージェントが時間内に応答しませんでした".into(),
+                    },
+                }));
+                tracker.prompt_finished();
+                return Ok(());
+            }
+            // Official cancel is a notification; the agent answers with the
+            // `cancelled` stop reason. Kill only on grace expiry below.
+            let _ = conn.notify(&acp_session_cancel_notification(session_id));
+            cancel_sent = true;
         }
-        let message = match read_framed_message(reader) {
-            Ok(message) => message,
-            Err(_) if cancel.load(Ordering::SeqCst) => {
+        // Bound every wait so a quiet agent cannot delay cancellation past
+        // ACP_POLL_INTERVAL. Grace expiry kills; plain expiry re-polls.
+        let wait = if cancel_sent {
+            Some(CANCEL_GRACE)
+        } else {
+            Some(ACP_POLL_INTERVAL)
+        };
+        let message = match conn.read_next(wait) {
+            Ok(ConnLine::Value(message)) => message,
+            Ok(ConnLine::Eof) => {
+                if cancel_sent || cancel.load(Ordering::SeqCst) {
+                    cancelled_or_timed_out(run_id, registry, emit);
+                    tracker.prompt_finished();
+                    return Ok(());
+                }
+                return Err(AiError::StreamFailed {
+                    detail: "エージェントが標準出力を閉じました".into(),
+                });
+            }
+            Err(ReadFail::Timeout) => {
+                if cancel_sent {
+                    // Grace expired without the cancelled turn: kill and let
+                    // the EOF path below report the cancellation.
+                    registry.cancel(run_id);
+                }
+                continue;
+            }
+            Err(ReadFail::Stream(_)) if cancel.load(Ordering::SeqCst) => {
                 cancelled_or_timed_out(run_id, registry, emit);
                 tracker.prompt_finished();
                 return Ok(());
             }
-            Err(error) => return Err(error),
+            Err(ReadFail::Stream(error)) => return Err(error),
         };
-        if let Some(text) = acp_update_text(&message) {
-            assembler.push(&text);
-            emit(AiStreamEvent::Chunk(StreamChunk {
-                run_id: run_id.clone(),
-                text,
-            }));
-            continue;
-        }
-        let is_prompt_response = message.get("id") == Some(&serde_json::json!(prompt_id));
-        if is_prompt_response {
-            if let Some(detail) = rpc_error(&message) {
-                return Err(AiError::StreamFailed {
-                    detail: format!("prompt に失敗しました: {detail}"),
-                });
+        match classify_incoming(message)? {
+            AgentIncoming::Response { id: got, body } => {
+                if got != serde_json::json!(prompt_id) {
+                    return Err(AiError::StreamFailed {
+                        detail: format!("想定外の応答 ID を受けました: {got}"),
+                    });
+                }
+                if let Some(detail) = rpc_error(&body) {
+                    return Err(AiError::StreamFailed {
+                        detail: format!("prompt に失敗しました: {detail}"),
+                    });
+                }
+                match parse_stop_reason(&body)? {
+                    StopReason::Cancelled => {
+                        emit(AiStreamEvent::Cancelled(StreamCancelled {
+                            run_id: run_id.clone(),
+                        }));
+                    }
+                    _ if cancel_sent => {
+                        emit(AiStreamEvent::Cancelled(StreamCancelled {
+                            run_id: run_id.clone(),
+                        }));
+                    }
+                    _ => {
+                        emit(AiStreamEvent::Done(StreamDone {
+                            run_id: run_id.clone(),
+                            proposal: assembler.finish(request),
+                            sent: summarize_contexts(request),
+                        }));
+                    }
+                }
+                tracker.prompt_finished();
+                return Ok(());
             }
-            break;
+            AgentIncoming::Notification(note) => {
+                if let Some(text) = acp_update_text(&note) {
+                    assembler.push(&text);
+                    emit(AiStreamEvent::Chunk(StreamChunk {
+                        run_id: run_id.clone(),
+                        text,
+                    }));
+                }
+                // Other updates (tool calls, file edits inside the staging
+                // copy) stay in the isolated copy for #8 to diff; only text
+                // is proposed.
+            }
+            AgentIncoming::AgentRequest {
+                id: req_id,
+                method: req_method,
+                params: req_params,
+            } => {
+                // No approval UI exists: deny by default. After our own
+                // cancel, answer with the spec's `cancelled` outcome.
+                let mode = if cancel_sent || cancel.load(Ordering::SeqCst) {
+                    PermissionAnswer::Cancelled
+                } else {
+                    PermissionAnswer::Deny
+                };
+                conn.answer_agent_request(&req_id, &req_method, &req_params, mode)?;
+            }
         }
-        // Other notifications (tool calls, file edits inside the staging copy)
-        // stay in the isolated copy for #8 to diff; only text is proposed.
     }
-    tracker.prompt_finished();
-    emit(AiStreamEvent::Done(StreamDone {
-        run_id: run_id.clone(),
-        proposal: assembler.finish(request),
-        sent: summarize_contexts(request),
-    }));
-    Ok(())
 }
 
 // ---- HTTP SSE drivers (OpenAI-compatible and Anthropic) ----
@@ -1695,32 +2169,12 @@ pub async fn test_anthropic_live(
 pub fn handshake_acp(argv: &AcpArgv) -> Result<AiTestResult, AiError> {
     validate_argv(argv)?;
     let staging = std::env::temp_dir();
-    let mut child = spawn_acp(argv, &staging)?;
-    let mut stdin = child.stdin.take().ok_or_else(|| AiError::SpawnFailed {
-        detail: "エージェントの標準入力を開けません".into(),
-    })?;
-    let stdout = child.stdout.take().ok_or_else(|| AiError::SpawnFailed {
-        detail: "エージェントの標準出力を開けません".into(),
-    })?;
-    let mut reader = BufReader::new(stdout);
-    stdin
-        .write_all(&encode_message(&acp_initialize(1)))
-        .map_err(|_| AiError::StreamFailed {
-            detail: "エージェントに送信できません".into(),
-        })?;
-    let reply = read_framed_message(&mut reader);
-    let _ = child.kill();
-    let _ = child.wait();
-    match reply {
-        Ok(reply) if rpc_error(&reply).is_none() => Ok(AiTestResult {
+    match agent_handshake(argv, &staging, HTTP_TEST_TIMEOUT) {
+        Ok(info) => Ok(AiTestResult {
             ok: true,
-            detail: "ACP ハンドシェイクに成功しました".into(),
-        }),
-        Ok(reply) => Ok(AiTestResult {
-            ok: false,
             detail: format!(
-                "エージェントがエラーを返しました: {}",
-                rpc_error(&reply).unwrap_or_default()
+                "ACP ハンドシェイクに成功しました (protocol {}, session {}, 通知 {} 件)",
+                info.protocol_version, info.session_id, info.notifications
             ),
         }),
         Err(error) => Ok(AiTestResult {
@@ -1745,6 +2199,9 @@ fn error_detail(error: &AiError) -> String {
         AiError::UnknownSession => "不明なセッションです".into(),
         AiError::StagingUnresolved { .. } => "作業コピーを解決できません".into(),
         AiError::LiveTargetRejected { detail } => detail.clone(),
+        AiError::UnsupportedProtocol { version } => {
+            format!("protocol version {version} には未対応です")
+        }
         AiError::ClaudeCodeRefused { command } => format!("{command} は起動しません"),
         AiError::CredentialStoreFailed { detail } => detail.clone(),
     }
@@ -2002,8 +2459,9 @@ mod tests {
         assert_eq!(
             resolve_acp_argv(&codex).unwrap(),
             AcpArgv {
-                command: "codex".into(),
-                args: vec!["acp".into()]
+                // Official adapter binary, never `codex acp`.
+                command: "codex-acp".into(),
+                args: vec![]
             }
         );
         let custom_missing = AcpConfig {
@@ -2221,37 +2679,201 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn framing_roundtrips_split_messages() {
-        let first = serde_json::json!({"jsonrpc": "2.0", "id": 1});
-        let second = serde_json::json!({"jsonrpc": "2.0", "method": "n"});
-        let mut bytes = encode_message(&first);
-        bytes.extend_from_slice(&encode_message(&second));
-        let mut decoder = FrameDecoder::default();
-        let mut messages = Vec::new();
-        for chunk in bytes.chunks(7) {
-            messages.extend(decoder.push(chunk).unwrap());
+    /// BufRead that yields at most `max` bytes per read, forcing the real
+    /// NdjsonReader through fragmentation (including mid-UTF-8 splits).
+    struct Chunked<'a> {
+        data: &'a [u8],
+        max: usize,
+    }
+
+    impl std::io::Read for Chunked<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.data.is_empty() {
+                return Ok(0);
+            }
+            let take = self.data.len().min(buf.len()).min(self.max);
+            buf[..take].copy_from_slice(&self.data[..take]);
+            self.data = &self.data[take..];
+            Ok(take)
         }
-        assert_eq!(messages, vec![first, second]);
-        let mut decoder = FrameDecoder::default();
-        assert!(decoder.push(b"Content-Length: x\r\n\r\n").is_err());
+    }
+
+    impl std::io::BufRead for Chunked<'_> {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            Ok(self.data)
+        }
+
+        fn consume(&mut self, amount: usize) {
+            self.data = &self.data[amount.min(self.data.len())..];
+        }
+    }
+
+    #[test]
+    fn ndjson_survives_fragmentation_coalescing_and_utf8_splits() {
+        let first = serde_json::json!({"jsonrpc": "2.0", "id": 1});
+        let second = serde_json::json!({"jsonrpc": "2.0", "method": "n", "params": {"text": "こんにちは世界"}});
+        let mut bytes = encode_acp_message(&first);
+        bytes.extend_from_slice(&encode_acp_message(&second));
+        // Compact encoding: exactly one trailing newline per message, none inside.
+        assert_eq!(bytes.iter().filter(|byte| **byte == b'\n').count(), 2);
+        assert!(bytes.ends_with(b"\n"));
+
+        // Fragmented reads down to one byte per read: splits fall inside
+        // multibyte UTF-8 sequences and still decode.
+        for max in [1usize, 2, 3, 7] {
+            let mut reader = NdjsonReader::new(Chunked { data: &bytes, max });
+            assert_eq!(reader.next_value().unwrap(), Some(first.clone()));
+            assert_eq!(reader.next_value().unwrap(), Some(second.clone()));
+            assert_eq!(reader.next_value().unwrap(), None);
+        }
+
+        // Coalesced read: the whole stream at once also works.
+        let mut reader = NdjsonReader::new(&bytes[..]);
+        assert_eq!(reader.next_value().unwrap(), Some(first));
+        assert_eq!(reader.next_value().unwrap(), Some(second));
+        assert_eq!(reader.next_value().unwrap(), None);
+    }
+
+    #[test]
+    fn ndjson_rejects_bad_lines_and_limits_size() {
+        // Invalid UTF-8.
+        let mut reader = NdjsonReader::new(&b"\xff\xfe\n"[..]);
+        assert!(matches!(
+            reader.next_value(),
+            Err(AiError::StreamFailed { .. })
+        ));
+        // Invalid JSON.
+        let mut reader = NdjsonReader::new(&b"{oops}\n"[..]);
+        assert!(reader.next_value().is_err());
+        // Clean EOF.
+        let mut reader = NdjsonReader::new(&[][..]);
+        assert_eq!(reader.next_value().unwrap(), None);
+        // Truncated line at EOF.
+        let mut reader = NdjsonReader::new(&b"{\"a\": 1"[..]);
+        assert!(reader.next_value().is_err());
+        // Oversized line.
+        let mut big = vec![b' '; MAX_ACP_LINE_BYTES + 16];
+        big.push(b'\n');
+        let mut reader = NdjsonReader::new(&big[..]);
+        assert!(reader.next_value().is_err());
+        // Empty lines are skipped, CRLF is tolerated.
+        let mut reader = NdjsonReader::new(&b"\n{\"a\": 1}\r\n\n"[..]);
+        assert_eq!(
+            reader.next_value().unwrap(),
+            Some(serde_json::json!({"a": 1}))
+        );
+        assert_eq!(reader.next_value().unwrap(), None);
+    }
+
+    #[test]
+    fn incoming_messages_classify_by_id_and_method() {
+        let response = serde_json::json!({"jsonrpc": "2.0", "id": 3, "result": {}});
+        assert!(matches!(
+            classify_incoming(response),
+            Ok(AgentIncoming::Response { .. })
+        ));
+        let notification = serde_json::json!({"jsonrpc": "2.0", "method": "session/update"});
+        assert!(matches!(
+            classify_incoming(notification),
+            Ok(AgentIncoming::Notification(_))
+        ));
+        let agent_request = serde_json::json!({
+            "jsonrpc": "2.0", "id": 9, "method": "session/request_permission", "params": {}
+        });
+        match classify_incoming(agent_request).unwrap() {
+            AgentIncoming::AgentRequest { id, method, .. } => {
+                assert_eq!(id, serde_json::json!(9));
+                assert_eq!(method, "session/request_permission");
+            }
+            other => panic!("expected agent request, got {other:?}"),
+        }
+        let malformed = serde_json::json!({"jsonrpc": "2.0"});
+        assert!(classify_incoming(malformed).is_err());
+    }
+
+    #[test]
+    fn protocol_version_negotiation_is_explicit() {
+        let ok = serde_json::json!({"result": {"protocolVersion": 1}});
+        assert_eq!(check_protocol_version(&ok).unwrap(), 1);
+        let newer = serde_json::json!({"result": {"protocolVersion": 2}});
+        assert!(matches!(
+            check_protocol_version(&newer),
+            Err(AiError::UnsupportedProtocol { version: 2 })
+        ));
+        let missing = serde_json::json!({"result": {}});
+        assert!(check_protocol_version(&missing).is_err());
+        let roundtrip: AiError = serde_json::from_value(
+            serde_json::to_value(AiError::UnsupportedProtocol { version: 2 }).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(roundtrip, AiError::UnsupportedProtocol { version: 2 });
+    }
+
+    #[test]
+    fn permission_answers_deny_by_default_with_exact_shapes() {
+        let params = serde_json::json!({
+            "options": [
+                { "optionId": "allow", "name": "許可", "kind": "allow_once" },
+                { "optionId": "deny", "name": "拒否", "kind": "reject_once" }
+            ]
+        });
+        assert_eq!(
+            answer_permission(&params, PermissionAnswer::Deny),
+            serde_json::json!({
+                "outcome": { "outcome": "selected", "optionId": "deny" }
+            })
+        );
+        assert_eq!(
+            answer_permission(&params, PermissionAnswer::Cancelled),
+            serde_json::json!({ "outcome": { "outcome": "cancelled" } })
+        );
+        let without_reject = serde_json::json!({
+            "options": [{ "optionId": "allow", "name": "許可", "kind": "allow_always" }]
+        });
+        assert_eq!(
+            answer_permission(&without_reject, PermissionAnswer::Deny),
+            serde_json::json!({ "outcome": { "outcome": "cancelled" } })
+        );
+        let unknown = method_not_found(&serde_json::json!(7), "fs/read_text_file");
+        assert_eq!(unknown["error"]["code"], -32601);
+        assert_eq!(unknown["id"], 7);
+    }
+
+    #[test]
+    fn stop_reasons_route_cancellation() {
+        for (raw, expected) in [
+            ("end_turn", StopReason::EndTurn),
+            ("max_tokens", StopReason::MaxTokens),
+            ("max_turn_requests", StopReason::MaxTurnRequests),
+            ("refusal", StopReason::Refusal),
+            ("cancelled", StopReason::Cancelled),
+        ] {
+            let body = serde_json::json!({"result": {"stopReason": raw}});
+            assert_eq!(parse_stop_reason(&body).unwrap(), expected);
+        }
+        assert!(parse_stop_reason(&serde_json::json!({"result": {}})).is_err());
     }
 
     #[test]
     fn acp_builders_and_update_parsing_keep_protocol_shape() {
         let init = acp_initialize(1);
         assert_eq!(init["method"], "initialize");
+        assert_eq!(init["params"]["protocolVersion"], 1);
+        assert_eq!(init["params"]["clientInfo"]["name"], "marxen");
         let dir = Path::new("/tmp/staging-copy");
         let new = acp_session_new(2, dir);
         assert_eq!(new["params"]["cwd"], "/tmp/staging-copy");
+        assert_eq!(new["params"]["mcpServers"], serde_json::json!([]));
         let prompt = acp_session_prompt(3, "sess_1", PromptMode::Ask, "p", &[context()]);
         assert_eq!(prompt["params"]["sessionId"], "sess_1");
         assert!(prompt["params"]["prompt"][0]["text"]
             .as_str()
             .expect("text")
             .contains("doc_01"));
-        let cancel = acp_session_cancel(4, "sess_1");
+        // session/cancel is a notification: no id.
+        let cancel = acp_session_cancel_notification("sess_1");
         assert_eq!(cancel["method"], "session/cancel");
+        assert!(cancel.get("id").is_none());
 
         let update = serde_json::json!({
             "jsonrpc": "2.0",

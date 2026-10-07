@@ -221,6 +221,7 @@ pub enum AiError {
     UnknownSession,
     StagingUnresolved { copy_id: IsolatedCopyId },
     LiveTargetRejected { detail: String },
+    UnsupportedProtocol { version: u32 },
     ClaudeCodeRefused { command: String },
     CredentialStoreFailed { detail: String },
 }

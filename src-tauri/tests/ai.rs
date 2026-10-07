@@ -411,6 +411,24 @@ fn mock_agent_argv(extra: &[&str]) -> AcpArgv {
     }
 }
 
+fn mock_agent_argv_with_flag_dir(extra: &[&str], flag_dir: &Path) -> AcpArgv {
+    let exe = env!("CARGO_BIN_EXE_mock-acp-agent");
+    let mut args: Vec<String> = extra.iter().map(|arg| (*arg).to_owned()).collect();
+    args.push("--flag-dir".to_owned());
+    args.push(flag_dir.to_string_lossy().into_owned());
+    AcpArgv {
+        command: exe.into(),
+        args,
+    }
+}
+
+fn fresh_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("test dir");
+    dir
+}
+
 fn acp_params(argv: AcpArgv, dir: &Path, timeout: Duration) -> AcpRunParams {
     AcpRunParams {
         argv,
@@ -424,10 +442,11 @@ fn acp_full_run_streams_chunks_inside_staging_copy() {
     let staging = std::env::temp_dir().join("marxen-ai-test-staging");
     std::fs::create_dir_all(&staging).expect("staging dir");
     std::fs::create_dir_all(staging.join("copy_07")).expect("copy dir");
+    let flags = fresh_dir("marxen-ai-test-flags-full");
     let resolver = FixedResolver {
         root: staging.clone(),
     };
-    let request = acp_request(mock_agent_argv(&[]));
+    let request = acp_request(mock_agent_argv_with_flag_dir(&[], &flags));
     let staging_dir = resolver.resolve(&request.staging.copy_id).unwrap();
     assert!(staging_dir.starts_with(&staging));
     let registry = Arc::new(RunRegistry::new());
@@ -459,6 +478,23 @@ fn acp_full_run_streams_chunks_inside_staging_copy() {
     let (text, done, cancelled) = events_of(&events);
     assert_eq!(text, "こんにちは世界");
     assert!(done && !cancelled);
+    // The mock's permission request must have been answered by selecting
+    // the reject option, bearing the agent's own request id (900).
+    let logged = std::fs::read(flags.join("permission.json")).expect("permission log");
+    let answer: serde_json::Value = serde_json::from_slice(&logged).expect("permission json");
+    assert_eq!(answer.get("id"), Some(&serde_json::json!(900)));
+    assert_eq!(
+        answer
+            .pointer("/result/outcome/outcome")
+            .and_then(|outcome| outcome.as_str()),
+        Some("selected")
+    );
+    assert_eq!(
+        answer
+            .pointer("/result/outcome/optionId")
+            .and_then(|id| id.as_str()),
+        Some("mock_reject")
+    );
 }
 
 #[test]
@@ -663,11 +699,18 @@ fn dry_runs_and_handshakes_use_no_real_credentials() {
 
     let report = handshake_acp(&mock_agent_argv(&[])).unwrap();
     assert!(report.ok);
-    assert!(handshake_acp(&AcpArgv {
+    // Transport failure surfaces as data (ok:false), not as Err.
+    let report = handshake_acp(&AcpArgv {
         command: "marxen-definitely-missing-binary".into(),
         args: vec![],
     })
-    .is_err());
+    .unwrap();
+    assert!(!report.ok);
+    assert!(
+        report.detail.contains("marxen-definitely-missing-binary"),
+        "{}",
+        report.detail
+    );
 }
 
 #[test]
@@ -680,4 +723,205 @@ fn staging_resolver_interface_rejects_outside_copies() {
     assert!(RejectingResolver
         .resolve(&IsolatedCopyId("copy_07".into()))
         .is_err());
+}
+
+fn run_mock_prompt(
+    extra: &[&str],
+    flag_name: &str,
+    timeout: Duration,
+) -> (Vec<AiStreamEvent>, PathBuf) {
+    let staging = fresh_dir(&format!("marxen-ai-test-staging-{flag_name}"));
+    std::fs::create_dir_all(staging.join("copy_07")).expect("copy dir");
+    let flags = fresh_dir(&format!("marxen-ai-test-flags-{flag_name}"));
+    let argv = mock_agent_argv_with_flag_dir(extra, &flags);
+    let resolver = FixedResolver { root: staging };
+    let request = acp_request(argv.clone());
+    let staging_dir = resolver.resolve(&request.staging.copy_id).unwrap();
+    let registry = Arc::new(RunRegistry::new());
+    let (run_id, cancel) = registry.register();
+    let params = acp_params(argv, &staging_dir, timeout);
+    let mut events = Vec::new();
+    run_acp_prompt(
+        &params,
+        &request,
+        &run_id,
+        &registry,
+        &cancel,
+        &mut |event| {
+            events.push(event);
+        },
+    )
+    .unwrap();
+    (events, flags)
+}
+
+#[test]
+fn acp_fragmented_and_coalesced_writes_decode_identically() {
+    for (extra, name) in [
+        (vec!["--fragment"], "fragment"),
+        (vec!["--coalesce"], "coalesce"),
+    ] {
+        let (events, _) = run_mock_prompt(&extra, name, Duration::from_secs(30));
+        let (text, done, cancelled) = events_of(&events);
+        assert_eq!(text, "こんにちは世界", "{name}");
+        assert!(done && !cancelled, "{name}");
+    }
+}
+
+#[test]
+fn acp_rejects_oversized_lines() {
+    let staging = fresh_dir("marxen-ai-test-staging-huge");
+    std::fs::create_dir_all(staging.join("copy_07")).expect("copy dir");
+    let resolver = FixedResolver { root: staging };
+    let request = acp_request(mock_agent_argv(&["--huge-line", "--no-permission"]));
+    let staging_dir = resolver.resolve(&request.staging.copy_id).unwrap();
+    let registry = Arc::new(RunRegistry::new());
+    let (run_id, cancel) = registry.register();
+    let params = acp_params(
+        mock_agent_argv(&["--huge-line", "--no-permission"]),
+        &staging_dir,
+        Duration::from_secs(30),
+    );
+    let mut events = Vec::new();
+    let outcome = run_acp_prompt(
+        &params,
+        &request,
+        &run_id,
+        &registry,
+        &cancel,
+        &mut |event| {
+            events.push(event);
+        },
+    );
+    assert!(
+        matches!(outcome, Err(AiError::StreamFailed { .. })),
+        "oversized line must fail, got {outcome:?}"
+    );
+}
+
+#[test]
+fn acp_graceful_cancel_uses_notification_and_clean_exit() {
+    let staging = fresh_dir("marxen-ai-test-staging-graceful");
+    std::fs::create_dir_all(staging.join("copy_07")).expect("copy dir");
+    let flags = fresh_dir("marxen-ai-test-flags-graceful");
+    let argv = mock_agent_argv_with_flag_dir(&["--cancel-graceful"], &flags);
+    let resolver = FixedResolver { root: staging };
+    let request = acp_request(argv.clone());
+    let staging_dir = resolver.resolve(&request.staging.copy_id).unwrap();
+    let registry = Arc::new(RunRegistry::new());
+    let (run_id, cancel) = registry.register();
+    let params = acp_params(argv, &staging_dir, Duration::from_secs(30));
+    let events: Arc<Mutex<Vec<AiStreamEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let driver_events = events.clone();
+    let driver_registry = registry.clone();
+    let driver_cancel = cancel.clone();
+    let driver = std::thread::spawn(move || {
+        let mut emit = |event: AiStreamEvent| {
+            driver_events.lock().expect("events lock").push(event);
+        };
+        run_acp_prompt(
+            &params,
+            &request,
+            &run_id,
+            &driver_registry,
+            &driver_cancel,
+            &mut emit,
+        )
+    });
+    for _ in 0..500 {
+        let has_chunk = events
+            .lock()
+            .expect("events lock")
+            .iter()
+            .any(|event| matches!(event, AiStreamEvent::Chunk(_)));
+        if has_chunk {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Flag only: no kill. The agent must answer session/cancel with the
+    // `cancelled` stop reason and exit cleanly on stdin close.
+    cancel.store(true, Ordering::SeqCst);
+    driver.join().expect("driver").unwrap();
+    let events = events.lock().expect("events lock").clone();
+    let (text, done, cancelled) = events_of(&events);
+    assert_eq!(text, "こんにちは");
+    assert!(cancelled && !done);
+    assert!(
+        flags.join("clean_exit").is_file(),
+        "agent must exit cleanly without being killed"
+    );
+    assert!(
+        !flags.join("permission.json").exists(),
+        "cancel path asks no permission"
+    );
+}
+
+#[test]
+fn acp_handshake_reports_version_session_and_notifications() {
+    let staging = fresh_dir("marxen-ai-test-handshake");
+    let info = agent_handshake(&mock_agent_argv(&[]), &staging, Duration::from_secs(30)).unwrap();
+    assert_eq!(info.protocol_version, 1);
+    assert_eq!(info.session_id, "mock-sess-1");
+    assert_eq!(info.agent_name.as_deref(), Some("marxen-mock-acp"));
+    // The mock sends available_commands_update before the session/new
+    // response; id routing must have skipped it.
+    assert!(info.notifications >= 1);
+}
+
+#[test]
+fn codex_adapter_without_install_is_a_clear_missing_binary() {
+    if find_on_path("codex-acp").is_some() {
+        println!("codex-acp is installed; skipping missing-binary expectation");
+        return;
+    }
+    // No automatic downloads: the preset only names the adapter binary.
+    let config = AiProviderConfig {
+        kind: AiProviderKind::Acp,
+        acp: Some(AcpConfig {
+            preset: AcpPreset::Codex,
+            argv: None,
+        }),
+        openai: None,
+        anthropic: None,
+    };
+    let report = dry_run_report(&config, &MemoryKeyring::default()).unwrap();
+    assert!(!report.ok);
+    assert!(report.detail.contains("codex-acp"), "{}", report.detail);
+    let argv = resolve_acp_argv(config.acp.as_ref().expect("acp")).unwrap();
+    assert_eq!(argv.args.len(), 0);
+    // handshake_acp reports transport failure as data, not as Err.
+    let report = handshake_acp(&argv).unwrap();
+    assert!(!report.ok);
+    assert!(report.detail.contains("codex-acp"), "{}", report.detail);
+}
+
+#[test]
+fn real_opencode_handshake_when_binary_configured() {
+    let bin = match std::env::var("MARXEN_REAL_ACP_BIN") {
+        Ok(bin) => bin,
+        Err(_) => {
+            println!("MARXEN_REAL_ACP_BIN not set; skipping real-agent handshake");
+            return;
+        }
+    };
+    let args = std::env::var("MARXEN_REAL_ACP_ARGS").unwrap_or_default();
+    let argv = AcpArgv {
+        command: bin,
+        args: if args.is_empty() {
+            Vec::new()
+        } else {
+            args.split(',').map(str::to_owned).collect()
+        },
+    };
+    validate_argv(&argv).unwrap();
+    let staging = fresh_dir("marxen-ai-test-real-agent");
+    // initialize + session/new only. No prompt is ever sent: no cost, no auth.
+    let info = agent_handshake(&argv, &staging, Duration::from_secs(60)).expect("real handshake");
+    assert_eq!(info.protocol_version, 1);
+    assert!(!info.session_id.is_empty());
+    eprintln!(
+        "real agent handshake: name={:?} session={} notifications={}",
+        info.agent_name, info.session_id, info.notifications
+    );
 }

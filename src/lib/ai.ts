@@ -113,6 +113,8 @@ export function describeAiError(error: AiError): string {
       return `作業コピー ${error.copy_id} を解決できません。隔離コピー連携 (#8) の後に利用できます。`;
     case "live_target_rejected":
       return `原文ファイルは直接指定できません: ${error.detail}`;
+    case "unsupported_protocol":
+      return `protocol version ${error.version} には未対応です。接続を閉じました。`;
     case "claude_code_refused":
       return `${error.command} は起動しません。Codex / OpenCode / カスタムを使います。`;
     case "credential_store_failed":
