@@ -9,6 +9,17 @@ export interface EditorSelection {
   head: number;
 }
 
+/**
+ * Vim cursor echo from the shell. Applied once per `rev` (the snapshot
+ * revision the cursor was read at). This is the agreed key-router seam with
+ * renderer #6: decorations, widgets, and composition handling stay untouched.
+ */
+export interface ExternalCursor {
+  anchor: number;
+  head: number;
+  rev: number;
+}
+
 interface Props {
   value: string;
   editable?: boolean;
@@ -17,6 +28,7 @@ interface Props {
   onGuiEdits?: (edits: TextEdit[]) => void;
   onSelectionChange?: (selection: EditorSelection) => void;
   initialSelection?: EditorSelection | null;
+  externalCursor?: ExternalCursor | null;
 }
 
 /** Common prefix/suffix diff as a single wire range edit. */
@@ -45,7 +57,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   return [{ range: { start, end: endBefore }, text: after.slice(start, endAfter) }];
 }
 
-export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection }: Props) {
+export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const editableRef = useRef(new Compartment());
@@ -155,6 +167,28 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
     if (!view) return;
     view.dispatch({ effects: editableRef.current.reconfigure(EditorView.editable.of(editable)) });
   }, [editable]);
+
+  // Vim cursor echo: apply once per snapshot revision without disturbing
+  // composition or the user's active selection gestures.
+  const appliedCursorRev = useRef<number | null>(null);
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !externalCursor) return;
+    if (composing.current) return;
+    if (appliedCursorRev.current === externalCursor.rev) return;
+    appliedCursorRev.current = externalCursor.rev;
+    const len = view.state.doc.length;
+    const anchor = Math.min(Math.max(0, externalCursor.anchor), len);
+    const head = Math.min(Math.max(0, externalCursor.head), len);
+    const sel = view.state.selection.main;
+    if (sel.anchor === anchor && sel.head === head) return;
+    syncing.current = true;
+    try {
+      view.dispatch({ selection: { anchor, head }, scrollIntoView: true });
+    } finally {
+      syncing.current = false;
+    }
+  }, [externalCursor]);
 
   return <div ref={host} data-testid={testId ?? "editor"} aria-label={ariaLabel} className="h-full min-h-50 overflow-hidden rounded-lg border border-border bg-card" />;
 }
