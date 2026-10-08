@@ -13,6 +13,12 @@ export const workspaceApi = {
   listWorkspace: (path = "") => invoke<WorkspaceEntry[]>("list_workspace", { path }),
   listDocuments: () => invoke<OpenDocument[]>("list_documents"),
   openMarkdown: (path: string) => invoke<OpenDocument>("open_markdown", { path }),
+  openTextFile: (path: string) => invoke<OpenDocument>("open_text_file", { path }),
+  loadWorkspaceImage: (path: string) => invoke<ImageData>("load_workspace_image", { path }),
+  insertWorkspaceImage: (request: SaveRequest, path: string, range: Utf16Range) =>
+    invoke<DocumentSnapshot>("insert_workspace_image", { ...request, path, range }),
+  importExternalImage: (request: SaveRequest, path: string, range: Utf16Range) =>
+    invoke<PasteResult>("import_external_image", { ...request, path, range }),
   createMarkdown: (path: string, text = "") => invoke<OpenDocument>("create_markdown", { path, text }),
   renameMarkdown: (request: SaveRequest, path: string) => invoke<OpenDocument>("rename_markdown", { ...request, path }),
   fetchSnapshot: (documentId: DocumentId) => invoke<DocumentSnapshot>("fetch_snapshot", { documentId }),
