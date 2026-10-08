@@ -2086,7 +2086,7 @@ export function WorkspaceShell() {
                   </button>
                 </div>
               )}
-              {desktop && wsRoot && <p className="truncate px-2 text-[11px] text-muted-foreground" title={wsRoot}>{wsRoot}</p>}
+              {desktop && wsRoot && <p className="flex items-center gap-1.5 px-2 text-xs font-medium" title={wsRoot}><FolderOpen size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" /><span className="truncate">{wsRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? wsRoot}</span></p>}
               <FileTree nodes={treeNodes} activePath={activeImage ?? active?.path ?? null} onOpenFile={(path) => void openFile(path)} />
               {desktop && !wsRoot && (
                 <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
