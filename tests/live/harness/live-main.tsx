@@ -1,6 +1,6 @@
 // Dev-only harness for live-widget browser tests (never shipped: no build
 // entry references it, so `vite build` and Tauri packages exclude it).
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { CodeMirrorEditor, type EditorSelection, type ExternalCursor } from "../../../src/components/editor/CodeMirrorEditor";
 import type { TextEdit } from "../../../src/shared/contracts";
@@ -54,6 +54,8 @@ interface HarnessApi {
   getSelection: () => EditorSelection | null;
   /** Shell cursor echo with its own sequence (ExternalCursor seq seam). */
   echoCursor: (anchor: number, head: number) => void;
+  /** Relative sources the fake image resolver was asked for. */
+  imageCalls: () => string[];
 }
 
 declare global {
@@ -74,6 +76,15 @@ function Harness() {
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
   const seqRef = useRef(0);
+  const imageCallsRef = useRef<string[]>([]);
+  // Stand-in for the UI-owned Rust loader: resolves after a delay so stale
+  // passes can be observed, and records every requested relative source.
+  const resolveImage = useCallback((src: string) => {
+    imageCallsRef.current.push(src);
+    return new Promise<string | null>((done) => {
+      setTimeout(() => done(src.includes("missing") ? null : "data:image/png;base64,aG9uZXk="), 400);
+    });
+  }, []);
 
   window.__harness = {
     setValue: (text: string) => setValue(text),
@@ -85,6 +96,7 @@ function Harness() {
       seqRef.current += 1;
       setCursor({ anchor, head, seq: seqRef.current });
     },
+    imageCalls: () => [...imageCallsRef.current],
   };
 
   return (
@@ -95,6 +107,7 @@ function Harness() {
         testId="harness-editor"
         livePreview
         externalCursor={cursor}
+        resolveImage={resolveImage}
         onGuiEdits={(list) => {
           setEdits((prev) => [...prev, list]);
           // Simulate the backend round-trip synchronously for tests.

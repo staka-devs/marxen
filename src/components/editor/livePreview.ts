@@ -20,12 +20,16 @@ import { computeLiveBlocks, extractLinkDefinitions, findTableCellRange, type Liv
 import { renderMarkdownDocument } from "../../lib/render/pipeline";
 import { toggleCheckbox } from "../../lib/markdown-gui";
 import { disposeMarkdownView, hydrateMarkdownView } from "../preview/hydrate";
+import { hydrateLocalImages } from "../preview/images";
+import type { ImageResolver } from "../preview/images";
 import type { TextEdit } from "../../shared/contracts";
 
 export interface LivePreviewCallbacks {
   onGuiEdits?: (edits: TextEdit[]) => void;
   /** Move the editor cursor into a source span (activates its block). */
   focusSource?: (from: number, to: number) => void;
+  /** Local-image resolver shared with read previews (ADR-0063). */
+  resolveImage?: ImageResolver;
 }
 
 /** Rendered HTML by block key (`kind + text + definitions`). */
@@ -221,6 +225,11 @@ class LiveBlockWidget extends WidgetType {
     const controller = new AbortController();
     (host as unknown as { __liveController?: AbortController }).__liveController = controller;
     void hydrateMarkdownView(body, controller.signal);
+    // Local images resolve on the same widget lifecycle: abort and dispose
+    // (via destroy) also cancel or detach their late bytes. The binding
+    // carries the current resolver so rebinds never use a stale loader.
+    const resolveImage = readBinding(host)?.getCallbacks().resolveImage;
+    if (resolveImage) void hydrateLocalImages(body, resolveImage, controller.signal);
   }
 
   private taskOffsets(binding: HostBinding): number[] {

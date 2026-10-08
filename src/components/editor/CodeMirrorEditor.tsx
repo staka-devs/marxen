@@ -4,6 +4,7 @@ import { EditorView, lineNumbers } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 import type { TextEdit } from "../../shared/contracts";
 import { createLivePreview, type LivePreviewCallbacks } from "./livePreview";
+import type { ImageResolver } from "../preview/images";
 
 export interface EditorSelection {
   anchor: number;
@@ -37,6 +38,11 @@ interface Props {
    * panes that never opt in keep exact source behavior.
    */
   livePreview?: boolean;
+  /**
+   * Local-image resolver shared with read previews (ADR-0063). Widgets call
+   * it after their HTML mounts, on the widget abort lifecycle.
+   */
+  resolveImage?: ImageResolver;
 }
 
 /** Common prefix/suffix diff as a single wire range edit. */
@@ -85,7 +91,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   return [{ range: { start, end: endBefore }, text: after.slice(start, endAfter) }];
 }
 
-export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false }: Props) {
+export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const editableRef = useRef(new Compartment());
@@ -102,9 +108,12 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
 
   // Widget callbacks stay fresh without rebuilding the editor: checkbox and
   // cell commits always read the latest props through this getter.
+  const resolveImageRef = useRef(resolveImage);
+  resolveImageRef.current = resolveImage;
   const getLiveCallbacks = useCallback((): LivePreviewCallbacks => {
     return {
       onGuiEdits: (edits) => callbacks.current.onGuiEdits?.(edits),
+      resolveImage: resolveImageRef.current,
       focusSource: (from, to) => {
         const view = viewRef.current;
         if (!view) return;

@@ -75,6 +75,8 @@ export function sanitizeSvg(svg: string): string {
 }
 
 async function hydrateMermaid(root: HTMLElement, signal?: AbortSignal): Promise<void> {
+  // Already-aborted passes return synchronously: never pay lazy imports.
+  if (signal?.aborted) return;
   const blocks = [...root.querySelectorAll<HTMLElement>('[data-marxen-kind="mermaid"]:not([data-hydrated])')];
   if (blocks.length === 0) return;
   const { default: mermaid } = await import("mermaid");
@@ -103,6 +105,8 @@ async function hydrateMermaid(root: HTMLElement, signal?: AbortSignal): Promise<
 }
 
 async function hydrateGeoMaps(root: HTMLElement, signal?: AbortSignal): Promise<void> {
+  // Already-aborted passes return synchronously: never pay lazy imports.
+  if (signal?.aborted) return;
   const blocks = [...root.querySelectorAll<HTMLElement>('[data-marxen-kind="geojson"]:not([data-hydrated]), [data-marxen-kind="topojson"]:not([data-hydrated])')];
   if (blocks.length === 0) return;
   const [{ default: L }, topojson] = await Promise.all([import("leaflet"), import("topojson-client")]);
@@ -161,6 +165,8 @@ async function hydrateGeoMaps(root: HTMLElement, signal?: AbortSignal): Promise<
 }
 
 async function hydrateStlViews(root: HTMLElement, signal?: AbortSignal): Promise<void> {
+  // Already-aborted passes return synchronously: never pay lazy imports.
+  if (signal?.aborted) return;
   const blocks = [...root.querySelectorAll<HTMLElement>('[data-marxen-kind="stl"]:not([data-hydrated])')];
   if (blocks.length === 0) return;
   const THREE = await import("three");
@@ -250,5 +256,8 @@ export function disposeMarkdownView(root: HTMLElement): void {
  * passes: no DOM is written after abort. Resolves when all blocks settle.
  */
 export async function hydrateMarkdownView(root: HTMLElement, signal?: AbortSignal): Promise<void> {
+  // Synchronous short-circuit: an already-aborted pass resolves without
+  // touching lazy imports or the DOM.
+  if (signal?.aborted) return;
   await Promise.allSettled([hydrateMermaid(root, signal), hydrateGeoMaps(root, signal), hydrateStlViews(root, signal)]);
 }

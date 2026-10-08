@@ -226,6 +226,28 @@ test("moved special blocks dispose and never duplicate hydration", async ({ page
   expect(await content.locator(".cm-content canvas").count()).toBe(0);
 });
 
+test("relative images hydrate through the resolver, late bytes are discarded", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto("/tests/live/harness/live.html");
+  const content = page.locator(".cm-content");
+  await expect(content.locator(".marxen-live-widget table").first()).toBeVisible();
+
+  await page.evaluate(() => window.__harness.setValue("# 画像\n\n![見る](images/日本語.png)\n\n![欠](images/missing.png)\n"));
+  await parkCursorAtEnd(page);
+  const seen = content.locator('.marxen-live-widget img[alt="見る"]');
+  await expect(seen).toHaveAttribute("src", "data:image/png;base64,aG9uZXk=", { timeout: 30_000 });
+  const calls = await page.evaluate(() => window.__harness.imageCalls());
+  expect(calls).toContain("images/日本語.png");
+  // Unresolvable sources keep their authored path with a failed mark.
+  await expect(content.locator('.marxen-live-widget img[alt="欠"]')).toHaveAttribute("data-marxen-img", "failed");
+
+  // Switch documents mid-flight: the slow answer must never land anywhere.
+  await page.evaluate(() => window.__harness.setValue("# まず\n\n![遅い](images/slow.png)\n"));
+  await page.evaluate(() => window.__harness.setValue("# 空\n"));
+  await page.waitForTimeout(1000);
+  expect(await content.locator('img[src^="data:image"]').count()).toBe(0);
+});
+
 test("shell cursor echoes apply per sequence, never swallowed", async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto("/tests/live/harness/live.html");
