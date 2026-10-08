@@ -1,4 +1,4 @@
-name: Foundation
+name: Integration
 
 on:
   push:
@@ -47,6 +47,8 @@ jobs:
       - run: npm run bundle:neovim -- --target ${{ matrix.target }}
       - run: npm run verify:neovim -- --target ${{ matrix.target }}
       - run: npm run contracts:check
+      - run: npm run ai-contracts:check
+      - run: npm run isolation-contracts:check
       - run: npm run typecheck
       - run: npm test
       - run: npm run test:bundling
@@ -63,6 +65,7 @@ jobs:
         with:
           name: marxen-${{ matrix.target }}
           path: src-tauri/target/${{ matrix.target }}/release/bundle/
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
