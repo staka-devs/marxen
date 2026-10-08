@@ -29,6 +29,9 @@ const scenario = {
   applyStaleOnce: false,
   deferApplies: false,
   deferredReleases: [] as Array<() => void>,
+  deferCursor: false,
+  deferredCursorReleases: [] as Array<() => void>,
+  cursorResponses: [] as Array<{ anchor: number; head: number }>,
   imageBytes: new Map<string, { mime: string; bytes: number[] }>(),
   pasteImageStaleOnce: false,
   pastedImages: [] as Array<{ documentId: string; name: string; range: { start: number; end: number } }>,
@@ -47,6 +50,9 @@ function resetBackend() {
   scenario.applyStaleOnce = false;
   scenario.deferApplies = false;
   scenario.deferredReleases = [];
+  scenario.deferCursor = false;
+  scenario.deferredCursorReleases = [];
+  scenario.cursorResponses = [];
   scenario.imageBytes = new Map();
   scenario.pasteImageStaleOnce = false;
   scenario.pastedImages = [];
@@ -187,6 +193,17 @@ function installBackend() {
         return Promise.resolve(scenario.mappingResult);
       case "fetch_cursor": {
         const doc = docById(a.documentId as string);
+        if (scenario.deferCursor) {
+          // Park the native cursor answer so the test can release a newer
+          // response before an older one and prove the older cannot reset it.
+          // Each parked call captures its own response up front.
+          const mine = scenario.cursorResponses.shift() ?? { anchor: 0, head: 0 };
+          return new Promise((resolve) => {
+            scenario.deferredCursorReleases.push(() => {
+              resolve({ documentId: doc.id, revision: doc.revision, anchor: mine.anchor, head: mine.head });
+            });
+          });
+        }
         return Promise.resolve({ documentId: doc.id, revision: doc.revision, anchor: 0, head: 0 });
       }
       case "report_cursor":
@@ -643,6 +660,107 @@ it("appends each pasted image after the previous insert instead of reusing one o
   expect(firstCall.range).toEqual({ start: 0, end: 0 });
   expect(secondCall.range.start).toBeGreaterThan(firstCall.range.start);
   expect(secondCall.range.start).toBe(secondCall.range.end);
+});
+
+async function openInsertDocDisplay() {
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await screen.findByTestId("editor-primary");
+  scenario.mode = "insert";
+  fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await waitFor(() => expect(screen.getByTestId("vim-footer-mode")).toHaveTextContent("挿入"));
+  // Display basis lets arrows stay local; source mode keeps the editor a
+  // plain text surface (no live widgets) so DOM offsets equal source offsets.
+  fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "source" } });
+  fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
+  fireEvent.click(screen.getByRole("button", { name: "表示基準" }));
+}
+
+/** Drive a real editor selection through the DOM selection observer. */
+async function selectEditorRange(anchorLine: number, anchorOffset: number, headLine: number, headOffset: number) {
+  const content = screen.getByTestId("editor-primary").querySelector(".cm-content")! as HTMLElement;
+  // CodeMirror only honors selections while focused, and discards a selection
+  // at element start made within its focus-settle window: focus once, wait it
+  // out, then select.
+  content.focus();
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  const lines = screen.getByTestId("editor-primary").querySelectorAll(".cm-line");
+  const anchorNode = lines[anchorLine].firstChild!;
+  const headNode = lines[headLine].firstChild!;
+  const selection = window.getSelection()!;
+  selection.removeAllRanges();
+  selection.setBaseAndExtent(anchorNode, anchorOffset, headNode, headOffset);
+  document.dispatchEvent(new Event("selectionchange", { bubbles: false }));
+}
+
+it("preserves an Insert selection across refresh and replaces it exactly once", async () => {
+  const text = "ab😀XY\n12";
+  scenario.files.set("メモ/a.md", { id: "doc_a", path: "メモ/a.md", text, revision: 0, dirty: false, history: [text] });
+  await openInsertDocDisplay();
+  scenario.mappingResult = false;
+  const editor = screen.getByTestId("editor-primary");
+  // Forward selection [0,7] = "ab😀XY\n" across emoji and newline.
+  await selectEditorRange(0, 0, 1, 0);
+  await waitFor(() => expect(screen.getByTestId("cursor")).toHaveTextContent("カーソル 2:1"));
+  // The native cursor recomputes collapsed in Insert: stage the report and
+  // let every async refresh settle, then the range must still be intact.
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "report_cursor",
+      expect.objectContaining({ documentId: "doc_a", anchor: 0, head: 7 }),
+    ),
+  );
+  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("fetch_cursor", { documentId: "doc_a" }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(screen.getByTestId("cursor")).toHaveTextContent("カーソル 2:1");
+  fireEvent.keyDown(editor, { key: "Q" });
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "apply_gui_edits",
+      expect.objectContaining({ documentId: "doc_a", edits: [{ range: { start: 0, end: 7 }, text: "Q" }] }),
+    ),
+  );
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(1);
+  expect(scenario.files.get("メモ/a.md")!.text).toBe("Q12");
+  // Reverse selection [1,0] over the same span start replaces identically.
+  await selectEditorRange(0, 1, 0, 0);
+  await waitFor(() => expect(screen.getByTestId("cursor")).toHaveTextContent("カーソル 1:1"));
+  fireEvent.keyDown(screen.getByTestId("editor-primary"), { key: "Z" });
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "apply_gui_edits",
+      expect.objectContaining({ documentId: "doc_a", edits: [{ range: { start: 0, end: 1 }, text: "Z" }] }),
+    ),
+  );
+  expect(scenario.files.get("メモ/a.md")!.text).toBe("Z12");
+});
+
+it("never lets a late older selection response reset a newer range", async () => {
+  const text = "abcdefghij";
+  scenario.files.set("メモ/a.md", { id: "doc_a", path: "メモ/a.md", text, revision: 0, dirty: false, history: [text] });
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await screen.findByTestId("editor-primary");
+  fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "source" } });
+  fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
+  fireEvent.click(screen.getByRole("button", { name: "表示基準" }));
+  scenario.deferCursor = true;
+  scenario.cursorResponses = [
+    { anchor: 0, head: 2 },
+    { anchor: 0, head: 5 },
+  ];
+  await selectEditorRange(0, 0, 0, 2);
+  await waitFor(() => expect(scenario.deferredCursorReleases.length).toBeGreaterThan(0));
+  await selectEditorRange(0, 0, 0, 5);
+  await waitFor(() => expect(scenario.deferredCursorReleases).toHaveLength(2));
+  // Newer response first, older response late: the newer range must stand.
+  scenario.deferredCursorReleases[1]();
+  await waitFor(() => expect(screen.getByTestId("cursor")).toHaveTextContent("カーソル 1:6"));
+  scenario.deferredCursorReleases[0]();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(screen.getByTestId("cursor")).toHaveTextContent("カーソル 1:6");
+  scenario.deferCursor = false;
 });
 
 it("retries a stale text range once without duplicating", async () => {

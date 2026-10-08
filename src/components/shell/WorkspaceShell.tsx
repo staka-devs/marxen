@@ -219,6 +219,22 @@ export function WorkspaceShell() {
   navRef.current = navBasis;
   const vimModeRef = useRef(vimMode);
   vimModeRef.current = vimMode;
+  // Selection generation per document: every explicit user gesture (pointer or
+  // keyboard selection, explicit jump) bumps it. Async completions (cursor
+  // refreshes, queued-edit collapses) capture it on entry and skip their
+  // selection/echo writes when a newer gesture landed meanwhile, so a late
+  // refresh can never reset a newer range. In Insert/Replace the exact GUI
+  // range just reported stays authoritative because the native cursor there
+  // is a single recomputed point that cannot hold it.
+  const selectionGenRef = useRef<Record<string, number>>({});
+  const bumpSelectionGen = useCallback((id: string): number => {
+    const next = (selectionGenRef.current[id] ?? 0) + 1;
+    selectionGenRef.current[id] = next;
+    return next;
+  }, []);
+  const isSelectionGenCurrent = useCallback((id: string, gen: number): boolean => {
+    return (selectionGenRef.current[id] ?? 0) === gen;
+  }, []);
 
   const active: OpenDoc | null = activeId ? (docs[activeId] ?? null) : null;
 
@@ -245,16 +261,22 @@ export function WorkspaceShell() {
   );
 
   const refreshModeCursor = useCallback(
-    async (id: string) => {
+    async (id: string, gen?: number) => {
       if (!registry) return;
+      // A generation captured at the user gesture (or, by default, now):
+      // async completions whose generation went stale never overwrite a
+      // newer selection, echo, or mode display.
+      const ticket = gen ?? selectionGenRef.current[id] ?? 0;
       try {
         const mode = await registry.fetchMode(id);
+        if (!isSelectionGenCurrent(id, ticket)) return;
         if (activeRef.current === id) setVimMode(mode.mode);
       } catch {
         // Best-effort display only.
       }
       try {
         const cursor = await registry.fetchCursor(id);
+        if (!isSelectionGenCurrent(id, ticket)) return;
         setSelections((prev) => ({ ...prev, [id]: { anchor: cursor.anchor, head: cursor.head } }));
         caretRef.current[id] = cursor.head;
         echoCursor(id, cursor.anchor, cursor.head);
@@ -262,7 +284,38 @@ export function WorkspaceShell() {
         // Best-effort display only.
       }
     },
-    [registry, echoCursor],
+    [registry, echoCursor, isSelectionGenCurrent],
+  );
+
+  /**
+   * Follow-up for a just-reported GUI selection: refresh the actual mode, but
+   * preserve the exact reported range while in Insert/Replace (the native
+   * cursor there recomputes to a single point that cannot hold a range).
+   * Outside insert the fetched native selection (a real Visual install) wins
+   * and its mode is exposed.
+   */
+  const refreshModeAfterSelection = useCallback(
+    async (id: string, reported: EditorSelection, gen: number) => {
+      if (!registry) return;
+      let mode: string;
+      try {
+        const update = await registry.fetchMode(id);
+        if (!isSelectionGenCurrent(id, gen)) return;
+        mode = update.mode;
+        if (activeRef.current === id) setVimMode(mode);
+      } catch {
+        return;
+      }
+      if (mode === "insert" || mode === "replace") {
+        if (!isSelectionGenCurrent(id, gen)) return;
+        setSelections((prev) => ({ ...prev, [id]: { anchor: reported.anchor, head: reported.head } }));
+        caretRef.current[id] = reported.head;
+        echoCursor(id, reported.anchor, reported.head);
+        return;
+      }
+      await refreshModeCursor(id, gen);
+    },
+    [registry, echoCursor, isSelectionGenCurrent, refreshModeCursor],
   );
 
   // -- workspace lifecycle -------------------------------------------------
@@ -404,12 +457,13 @@ export function WorkspaceShell() {
       }
       if (!docsRef.current[id]) return;
       setVimKeys((prev) => (prev + keys).slice(-24));
+      const gen = selectionGenRef.current[id] ?? 0;
       try {
         // Revision binds at queue execution inside the client, so bursts
         // order against successive acknowledgements.
         const snapshot = await registry.vimInput(id, keys);
         mergeSnapshot(snapshot);
-        await refreshModeCursor(id);
+        await refreshModeCursor(id, gen);
       } catch (cause) {
         if (cause instanceof StaleResync) sayStale(cause.snapshot);
         else setNotice(workspaceErrorText(cause));
@@ -424,9 +478,10 @@ export function WorkspaceShell() {
       return;
     }
     const id = activeRef.current;
+    const gen = selectionGenRef.current[id] ?? 0;
     try {
       mergeSnapshot(await registry.undo(id));
-      await refreshModeCursor(id);
+      await refreshModeCursor(id, gen);
     } catch (cause) {
       setNotice(workspaceErrorText(cause));
     }
@@ -438,9 +493,10 @@ export function WorkspaceShell() {
       return;
     }
     const id = activeRef.current;
+    const gen = selectionGenRef.current[id] ?? 0;
     try {
       mergeSnapshot(await registry.redo(id));
-      await refreshModeCursor(id);
+      await refreshModeCursor(id, gen);
     } catch (cause) {
       setNotice(workspaceErrorText(cause));
     }
@@ -564,39 +620,42 @@ export function WorkspaceShell() {
 
   const handleSelection = useCallback(
     (id: string, selection: EditorSelection) => {
+      const gen = bumpSelectionGen(id);
       setSelections((prev) => ({ ...prev, [id]: selection }));
       caretRef.current[id] = selection.head;
       if (!registry) return;
       // Serialized and coalesced inside the client: rapid gestures send only
       // the latest selection and never race mutations or echo back. Mouse
-      // gestures keep their anchor; the actual mode is refreshed after the
-      // report so a native Visual install (740d5d5) surfaces instead of a
-      // stale Normal. Insert selections stay Insert on the Rust side.
+      // gestures keep their anchor; the follow-up refresh preserves the
+      // exact range in Insert/Replace and exposes real Visual otherwise.
       void registry
         .stageCursor(id, selection.anchor, selection.head)
         .then(() => {
-          void refreshModeCursor(id);
+          void refreshModeAfterSelection(id, selection, gen);
         })
         .catch(() => undefined);
     },
-    [registry, refreshModeCursor],
+    [registry, bumpSelectionGen, refreshModeAfterSelection],
   );
 
   const jumpToOffset = useCallback(
     async (id: string, anchor: number, head: number) => {
+      bumpSelectionGen(id);
+      const gen = selectionGenRef.current[id] ?? 0;
       echoCursor(id, anchor, head);
       if (!registry) return;
       if (!docsRef.current[id]) return;
       try {
         const cursor = await registry.reportCursorNow(id, anchor, head);
+        if (!isSelectionGenCurrent(id, gen)) return;
         setSelections((prev) => ({ ...prev, [id]: { anchor: cursor.anchor, head: cursor.head } }));
         echoCursor(id, cursor.anchor, cursor.head);
-        await refreshModeCursor(id);
+        await refreshModeCursor(id, gen);
       } catch {
         // Best-effort navigation; the editor keeps its own selection.
       }
     },
-    [registry, echoCursor, refreshModeCursor],
+    [registry, echoCursor, refreshModeCursor, bumpSelectionGen, isSelectionGenCurrent],
   );
 
   // -- GUI range actions -----------------------------------------------------
@@ -668,12 +727,19 @@ export function WorkspaceShell() {
       }
       if (!docsRef.current[id]) return;
       setVimKeys((prev) => (prev + key).slice(-24));
+      const gen = selectionGenRef.current[id] ?? 0;
       try {
         const decision = await registry.routeCharKey(id, key, range);
         if (decision.action === "vim") {
           // Native edit (any mode): the cursor truth comes from the refresh.
           mergeSnapshot(decision.snapshot);
-          await refreshModeCursor(id);
+          await refreshModeCursor(id, gen);
+          return;
+        }
+        if (!isSelectionGenCurrent(id, gen)) {
+          // A newer gesture landed mid-flight: keep its range, still absorb
+          // the authoritative text.
+          mergeSnapshot(decision.snapshot);
           return;
         }
         const next = range.start + key.length;
@@ -716,11 +782,16 @@ export function WorkspaceShell() {
       }
       if (!docsRef.current[id]) return;
       if (text === "") return;
+      const gen = selectionGenRef.current[id] ?? 0;
       try {
         const decision = await registry.routeCapturedPaste(id, keyNotation, text, range);
         if (decision.action === "vim") {
           mergeSnapshot(decision.snapshot);
-          await refreshModeCursor(id);
+          await refreshModeCursor(id, gen);
+          return;
+        }
+        if (!isSelectionGenCurrent(id, gen)) {
+          mergeSnapshot(decision.snapshot);
           return;
         }
         const next = range.start + text.length;
@@ -831,6 +902,7 @@ export function WorkspaceShell() {
       // appends after the previously inserted Markdown instead of reusing the
       // original offset. Revisions chain locally: each call builds on the
       // previous result, so the loop never goes stale on itself.
+      const gen = selectionGenRef.current[id] ?? 0;
       let cursor = { ...range };
       let revision = docsRef.current[id]?.revision ?? 0;
       let previousLength = docsRef.current[id]?.text.length ?? 0;
@@ -849,6 +921,11 @@ export function WorkspaceShell() {
           previousLength = result.snapshot.text.length;
           const next = cursor.start + Math.max(inserted, 0);
           cursor = { start: next, end: next };
+          if (!isSelectionGenCurrent(id, gen)) {
+            mergeSnapshot(result.snapshot);
+            setNotice(`画像を挿入しました（${result.path}）。`);
+            continue;
+          }
           caretRef.current[id] = next;
           setSelections((prev) => ({ ...prev, [id]: { anchor: next, head: next } }));
           echoCursor(id, next, next);
@@ -862,7 +939,7 @@ export function WorkspaceShell() {
         }
       }
     },
-    [registry, mergeSnapshot, sayStale, echoCursor],
+    [registry, mergeSnapshot, sayStale, echoCursor, isSelectionGenCurrent],
   );
 
   const onPasteCapture = useCallback(
