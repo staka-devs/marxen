@@ -78,6 +78,26 @@ test("rendered list and table use compact document spacing", async ({ page }) =>
   expect(tableBox!.y - (listBox!.y + listBox!.height)).toBeLessThan(90);
 });
 
+test("highlighted code follows dark, light, and contrast themes without changing source", async ({ page }) => {
+  await page.goto("/tests/live/harness/live.html");
+  const source = '# 見出し\n\n```rust\nfn main() { println!("日本語 😀"); }\n```\n';
+  await page.evaluate((text) => window.__harness.setValue(text), source);
+  const code = page.locator(".cm-content .marxen-live-widget pre.shiki");
+  await expect(code).toBeVisible();
+  const stringToken = code.locator("span").filter({ hasText: /^"日本語 😀"$/ }).last();
+  for (const [theme, background, foreground] of [
+    ["dark", "rgb(36, 41, 46)", "rgb(158, 203, 255)"],
+    ["light", "rgb(255, 255, 255)", "rgb(3, 47, 98)"],
+    ["contrast", "rgb(255, 255, 255)", "rgb(0, 0, 0)"],
+  ]) {
+    await page.evaluate((name) => document.getElementById("root")!.setAttribute("data-theme", name), theme);
+    await expect(code).toHaveCSS("background-color", background);
+    await expect(stringToken).toHaveCSS("color", foreground);
+  }
+  expect(await harnessValue(page)).toBe(source);
+  expect(await page.evaluate(() => window.__harness.getEdits())).toHaveLength(0);
+});
+
 test("table cell click selects the source span; typing preserves neighbours", async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto("/tests/live/harness/live.html");
