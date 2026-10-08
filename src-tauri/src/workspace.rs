@@ -47,6 +47,9 @@ impl Workspace {
             root: self.root.display().to_string(),
         }
     }
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
     pub fn is_empty(&self) -> bool {
         self.actors.is_empty()
     }

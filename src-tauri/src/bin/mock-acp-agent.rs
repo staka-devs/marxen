@@ -5,7 +5,10 @@
 //!
 //! Flags: --respond-after-ms N, --no-chunks, --no-early-notify,
 //! --no-permission, --fragment, --coalesce, --huge-line,
-//! --cancel-graceful, --exit-early, --flag-dir PATH.
+//! --cancel-graceful, --exit-early, --flag-dir PATH,
+//! --write-staging REL --write-text TEXT (fake CLI edit of the staging cwd).
+//! --write-after-response-ms N delays that edit until after the prompt
+//! terminal, while the child is still being reaped.
 //! flag-dir receives permission.json / clean_exit markers (per-test dirs,
 //! safe under parallel test threads).
 use std::io::{BufRead, BufReader, Write};
@@ -105,6 +108,41 @@ fn has_flag(name: &str) -> bool {
 
 fn flag_dir() -> Option<std::path::PathBuf> {
     flag_value("--flag-dir").map(std::path::PathBuf::from)
+}
+
+/// Independent staging guard: the mock only writes contained relative paths
+/// inside its cwd, mirroring the production containment rule.
+fn guarded_staging_target(
+    root: &std::path::Path,
+    candidate: &str,
+) -> Result<std::path::PathBuf, String> {
+    use std::path::Component;
+    if candidate.is_empty() {
+        return Err("empty file".into());
+    }
+    let mut normalized = std::path::PathBuf::new();
+    for component in std::path::Path::new(candidate).components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err("traversal outside staging".into());
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+            Component::RootDir | Component::Prefix(_) => {
+                return Err("absolute path rejected".into());
+            }
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return Err("empty file".into());
+    }
+    let joined = root.join(&normalized);
+    if !joined.starts_with(root) {
+        return Err("outside staging".into());
+    }
+    Ok(joined)
 }
 
 fn read_message(reader: &mut BufReader<std::io::StdinLock<'_>>) -> Option<serde_json::Value> {
@@ -315,8 +353,50 @@ fn main() {
                     agent.notify_update(&session_id, "世界");
                     agent.flush();
                 }
+                // A fake CLI edit of the scoped staging copy: the agent's cwd
+                // is the staging dir, and it may only write contained paths.
+                // With --write-after-response-ms, the write lands AFTER the
+                // prompt terminal, while the child is still being reaped.
+                let write_after_ms: u64 = flag_value("--write-after-response-ms")
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(0);
+                let staged_write = |agent: &mut Agent| {
+                    if let (Some(rel), Some(text)) =
+                        (flag_value("--write-staging"), flag_value("--write-text"))
+                    {
+                        let cwd = std::env::current_dir().unwrap_or_default();
+                        match guarded_staging_target(&cwd, &rel) {
+                            Ok(target) => {
+                                if let Some(parent) = target.parent() {
+                                    let _ = std::fs::create_dir_all(parent);
+                                }
+                                if std::fs::write(&target, text.as_bytes()).is_err() {
+                                    agent.respond_error(&id, "staging write failed");
+                                    agent.flush();
+                                    return false;
+                                }
+                            }
+                            Err(detail) => {
+                                agent.respond_error(&id, &format!("staging rejected: {detail}"));
+                                agent.flush();
+                                return false;
+                            }
+                        }
+                    }
+                    true
+                };
+                if write_after_ms == 0 && !staged_write(&mut agent) {
+                    continue;
+                }
                 agent.respond(&id, serde_json::json!({ "stopReason": "end_turn" }));
                 agent.flush();
+                if write_after_ms > 0 {
+                    std::thread::sleep(Duration::from_millis(write_after_ms));
+                    if !staged_write(&mut agent) {
+                        continue;
+                    }
+                    agent.flush();
+                }
             }
             "session/cancel" => {
                 // Notification: no response is ever sent.

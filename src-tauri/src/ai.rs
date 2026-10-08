@@ -9,7 +9,7 @@
 //! - Tests use mock servers and a mock subprocess; no real credentials.
 use crate::ai_contracts::*;
 use crate::contracts::Utf16Range;
-use crate::validation::{utf16_to_utf8, validate_document_id};
+use crate::validation::validate_document_id;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -242,6 +242,11 @@ pub fn validate_prompt_request(request: &AiPromptRequest) -> Result<(), AiError>
         (None, _) => {}
     }
     validate_copy_id(&request.staging.copy_id)?;
+    // Ranges are source-document UTF-16 offsets, not excerpt offsets: an
+    // excerpt may be shorter than the document, so only structural checks
+    // (ordering) happen here. Authority checks (ranges, excerpts, revisions
+    // against the captured Rust snapshots) run in the production paths via
+    // IsolationManager::authorize_prompt before any side effect.
     for context in &request.contexts {
         validate_document_id(&context.document_id)
             .map_err(|_| invalid("文書 ID が正しくありません"))?;
@@ -255,10 +260,6 @@ pub fn validate_prompt_request(request: &AiPromptRequest) -> Result<(), AiError>
             if range.start.0 > range.end.0 {
                 return Err(invalid("範囲の開始は終了以下です"));
             }
-            utf16_to_utf8(&context.text, range.start)
-                .map_err(|_| invalid("範囲が抜粋テキストの境界にありません"))?;
-            utf16_to_utf8(&context.text, range.end)
-                .map_err(|_| invalid("範囲が抜粋テキストの境界にありません"))?;
         }
     }
     Ok(())
@@ -2282,19 +2283,195 @@ pub async fn ai_test_connection(
 }
 
 #[cfg(feature = "desktop")]
+fn scope_error(request: &AiPromptRequest, error: crate::contracts::WorkspaceError) -> AiError {
+    use crate::contracts::WorkspaceError as W;
+    match error {
+        W::OutsideWorkspace => AiError::LiveTargetRejected {
+            detail: "作業コピーの外を指しています".into(),
+        },
+        W::NotFound | W::UnknownDocument | W::NoWorkspace => AiError::StagingUnresolved {
+            copy_id: request.staging.copy_id.clone(),
+        },
+        W::Contract { error } => AiError::InvalidConfig {
+            detail: format!("送信範囲が原文と一致しません: {error:?}"),
+        },
+        W::Conflict { path } => AiError::InvalidConfig {
+            detail: format!("ディスクが変更されています。再同期してください: {path}"),
+        },
+        W::Io { detail } => AiError::InvalidConfig { detail },
+        _ => AiError::StagingUnresolved {
+            copy_id: request.staging.copy_id.clone(),
+        },
+    }
+}
+
+/// Resolve the staging copy, authorize the prompt scope against the captured
+/// Rust snapshots, and pin the copy for the run. Workspace is locked before
+/// the isolation manager, matching the isolation IPC order.
+#[cfg(feature = "desktop")]
+fn prepare_scoped_run(
+    workspace_state: &tauri::State<'_, crate::ipc::ActorState>,
+    isolation: &tauri::State<'_, crate::isolation::IsolationState>,
+    request: &AiPromptRequest,
+) -> Result<std::path::PathBuf, AiError> {
+    let mut wguard = workspace_state
+        .workspace
+        .lock()
+        .map_err(|_| AiError::ConnectionFailed {
+            detail: "ワークスペースの状態を取得できません".into(),
+        })?;
+    let workspace = wguard.as_mut().ok_or_else(|| AiError::StagingUnresolved {
+        copy_id: request.staging.copy_id.clone(),
+    })?;
+    let mut mguard = isolation
+        .manager
+        .lock()
+        .map_err(|_| AiError::ConnectionFailed {
+            detail: "隔離コピーの状態を取得できません".into(),
+        })?;
+    let dir = mguard
+        .resolve(&request.staging.copy_id)
+        .map_err(|error| scope_error(request, error))?;
+    mguard
+        .authorize_prompt(workspace, request)
+        .map_err(|error| scope_error(request, error))?;
+    mguard
+        .pin_for_run(&request.staging.copy_id)
+        .map_err(|error| scope_error(request, error))?;
+    Ok(dir)
+}
+
+#[cfg(feature = "desktop")]
+fn release_scoped_run(app: &tauri::AppHandle, copy_id: &IsolatedCopyId) {
+    // Settlement-only release looked up from the owned handle, so background
+    // threads never need to carry State across lifetimes.
+    use tauri::Manager as _;
+    if let Some(state) = app.try_state::<crate::isolation::IsolationState>() {
+        if let Ok(mut manager) = state.manager.lock() {
+            manager.unpin_for_run(copy_id);
+        }
+    }
+}
+
+// ---- Terminal event gating (settlement before delivery) ----
+
+/// Buffers terminal stream events until the run truly settles. Started and
+/// chunk events pass through immediately in order; Done, Cancelled, and Error
+/// are held back and delivered exactly once after the driver completes, the
+/// child is reaped (or the HTTP stream settles), and the scope pin is
+/// released. A GUI reacting to a terminal event therefore never races
+/// continued agent writes or a live pin. A second terminal is dropped: the
+/// first settlement wins.
+#[derive(Debug, Default)]
+pub struct TerminalGate {
+    terminal: Option<AiStreamEvent>,
+}
+
+fn is_terminal(event: &AiStreamEvent) -> bool {
+    matches!(
+        event,
+        AiStreamEvent::Done(_) | AiStreamEvent::Cancelled(_) | AiStreamEvent::Error(_)
+    )
+}
+
+impl TerminalGate {
+    pub fn new() -> Self {
+        Self { terminal: None }
+    }
+
+    /// Route one driver event: live events go to `emit` now, terminals held.
+    pub fn push(&mut self, event: AiStreamEvent, emit: &mut (dyn FnMut(AiStreamEvent) + Send)) {
+        if is_terminal(&event) {
+            if self.terminal.is_none() {
+                self.terminal = Some(event);
+            }
+        } else {
+            emit(event);
+        }
+    }
+
+    /// The single terminal to deliver after settlement and pin release.
+    /// Drivers settle with exactly one terminal; a silent Ok still delivers
+    /// an explicit internal error rather than hanging the panel.
+    pub fn settle(self, outcome: &Result<(), AiError>, run_id: &AiRunId) -> AiStreamEvent {
+        if let Some(event) = self.terminal {
+            return event;
+        }
+        match outcome {
+            Err(error) => AiStreamEvent::Error(StreamError {
+                run_id: Some(run_id.clone()),
+                error: error.clone(),
+            }),
+            Ok(()) => AiStreamEvent::Error(StreamError {
+                run_id: Some(run_id.clone()),
+                error: AiError::StreamFailed {
+                    detail: "エージェントが終了状態を返しませんでした".into(),
+                },
+            }),
+        }
+    }
+}
+
+// ---- Production run settlement (shared by orchestration and tests) ----
+
+/// Resolve HTTP credentials and target without touching any scope state.
+/// Credential/target readiness runs BEFORE any scope pin, so missing secrets,
+/// store errors, and invalid endpoints fail without pinning the copy.
+pub fn resolve_http_request(
+    keyring: &dyn AgentKeyring,
+    provider: &AiProviderConfig,
+) -> Result<(HttpTarget, String), AiError> {
+    let target = http_target(provider)?;
+    let secret = keyring
+        .get(provider.kind)?
+        .ok_or(AiError::MissingCredentials {
+            provider: provider.kind,
+        })?;
+    Ok((target, secret))
+}
+
+/// Settle one production run on every path with a fixed order: reap the
+/// child first (kill on abnormal paths; idempotent when already reaped),
+/// then release the scope pin, then return exactly one terminal event.
+/// Cancellation alone never reaches this helper; only driver completion,
+/// errors, and panics settle here. Both IPC orchestration and tests call
+/// this helper, so ordering is exercised rather than re-described.
+pub fn settle_production_run(
+    outcome: std::thread::Result<(TerminalGate, Result<(), AiError>)>,
+    run_id: &AiRunId,
+    reap_child: impl FnOnce(),
+    release_pin: impl FnOnce(),
+) -> AiStreamEvent {
+    // Reap before unpin on every path: a panicking driver must not leave a
+    // writing child alive past the pin release.
+    reap_child();
+    release_pin();
+    match outcome {
+        Ok((gate, inner)) => gate.settle(&inner, run_id),
+        Err(_) => AiStreamEvent::Error(StreamError {
+            run_id: Some(run_id.clone()),
+            error: AiError::StreamFailed {
+                detail: "エージェント実行が異常終了しました".into(),
+            },
+        }),
+    }
+}
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn ai_prompt_stream(
     app: tauri::AppHandle,
+    workspace_state: tauri::State<'_, crate::ipc::ActorState>,
+    isolation: tauri::State<'_, crate::isolation::IsolationState>,
     request: AiPromptRequest,
 ) -> Result<AiRunId, AiError> {
     validate_prompt_request(&request)?;
     match request.provider.kind {
         AiProviderKind::Acp => {
             let argv = resolve_acp_argv(request.provider.acp.as_ref().expect("validated"))?;
-            // #8 plugs its resolver here; until then every ACP run is refused
-            // with staging_unresolved instead of touching live files.
-            let staging_dir = RejectingResolver.resolve(&request.staging.copy_id)?;
-            let staging_dir = guard_staging_path(RejectingResolver.root(), &staging_dir)?;
+            // #8: agents run with the isolated copy as cwd after scope
+            // authorization. Live paths never cross this boundary; unknown,
+            // inactive, or out-of-scope copies are refused before spawning.
+            let staging_dir = prepare_scoped_run(&workspace_state, &isolation, &request)?;
             let (run_id, cancel) = RUNS.register();
             let registry = RUNS.clone();
             let owned_run_id = run_id.clone();
@@ -2305,66 +2482,83 @@ pub async fn ai_prompt_stream(
                     staging_dir,
                     timeout: ACP_DEFAULT_TIMEOUT,
                 };
-                let mut emit = |event: AiStreamEvent| emit_to_frontend(&app, event);
-                let outcome = run_acp_prompt(
-                    &params,
-                    &owned_request,
-                    &owned_run_id,
-                    &registry,
-                    &cancel,
-                    &mut emit,
-                );
-                if let Err(error) = outcome {
-                    emit_to_frontend(
-                        &app,
-                        AiStreamEvent::Error(StreamError {
-                            run_id: Some(owned_run_id.clone()),
-                            error,
-                        }),
+                // Production settlement order shared with tests: the driver
+                // runs with terminals buffered, then the child is reaped,
+                // the pin released, and exactly one terminal delivered. The
+                // panel's Done never precedes settlement, and panics settle
+                // without leaking the child, the pin, or delivery.
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut gate = TerminalGate::new();
+                    let inner = run_acp_prompt(
+                        &params,
+                        &owned_request,
+                        &owned_run_id,
+                        &registry,
+                        &cancel,
+                        &mut |event| {
+                            gate.push(event, &mut |live| emit_to_frontend(&app, live));
+                        },
                     );
-                }
+                    (gate, inner)
+                }));
+                let terminal = settle_production_run(
+                    outcome,
+                    &owned_run_id,
+                    || {
+                        registry.cancel(&owned_run_id);
+                    },
+                    || release_scoped_run(&app, &owned_request.staging.copy_id),
+                );
+                emit_to_frontend(&app, terminal);
                 registry.remove(&owned_run_id);
             });
             Ok(run_id)
         }
         AiProviderKind::OpenaiCompatible | AiProviderKind::Anthropic => {
-            let target = http_target(&request.provider)?;
-            let secret =
-                OsKeyring
-                    .get(request.provider.kind)?
-                    .ok_or(AiError::MissingCredentials {
-                        provider: request.provider.kind,
-                    })?;
+            // Credential and target readiness BEFORE any scope pin: a missing
+            // secret or keyring failure must return without pinning, so the
+            // copy stays usable for reject/cancel/approve. Scope
+            // authorization still precedes every network side effect.
+            let (target, secret) = resolve_http_request(&OsKeyring, &request.provider)?;
+            prepare_scoped_run(&workspace_state, &isolation, &request)?;
             let (run_id, cancel) = RUNS.register();
             let registry = RUNS.clone();
             let owned_run_id = run_id.clone();
             let owned_request = request.clone();
+            let owned_copy = request.staging.copy_id.clone();
             tauri::async_runtime::spawn(async move {
-                let outcome = async {
-                    let client = http_client(Duration::from_secs(600))?;
-                    run_http_prompt(
-                        &client,
-                        &target,
-                        &secret,
-                        &owned_request,
-                        &owned_run_id,
-                        &cancel,
-                        &mut |event| {
-                            emit_to_frontend(&app, event);
-                        },
-                    )
-                    .await
-                }
-                .await;
-                if let Err(error) = outcome {
-                    emit_to_frontend(
-                        &app,
-                        AiStreamEvent::Error(StreamError {
-                            run_id: Some(owned_run_id.clone()),
-                            error,
-                        }),
-                    );
-                }
+                // Same production settlement contract as ACP, shared with
+                // tests: buffer terminals, settle HTTP, release the pin,
+                // then deliver exactly once.
+                let settled =
+                    futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async {
+                        let mut gate = TerminalGate::new();
+                        let inner = async {
+                            let client = http_client(Duration::from_secs(600))?;
+                            run_http_prompt(
+                                &client,
+                                &target,
+                                &secret,
+                                &owned_request,
+                                &owned_run_id,
+                                &cancel,
+                                &mut |event| {
+                                    gate.push(event, &mut |live| emit_to_frontend(&app, live));
+                                },
+                            )
+                            .await
+                        }
+                        .await;
+                        (gate, inner)
+                    }))
+                    .await;
+                let terminal = settle_production_run(
+                    settled,
+                    &owned_run_id,
+                    || {},
+                    || release_scoped_run(&app, &owned_copy),
+                );
+                emit_to_frontend(&app, terminal);
                 registry.remove(&owned_run_id);
             });
             Ok(run_id)
@@ -2553,17 +2747,27 @@ mod tests {
     }
 
     #[test]
-    fn prompt_requests_check_ranges_against_excerpt_text() {
+    fn prompt_requests_check_ranges_structurally() {
         assert!(validate_prompt_request(&acp_request()).is_ok());
         let mut bad = acp_request();
         bad.prompt = "   ".into();
         assert!(validate_prompt_request(&bad).is_err());
-        let mut bad = acp_request();
-        bad.contexts[0].ranges[0] = Utf16Range {
+        // Ranges are source-document offsets, so a nonzero offset beyond the
+        // excerpt length is structurally valid here; authority checks against
+        // the captured Rust snapshots (IsolationManager::authorize_prompt)
+        // decide it in production. Surrogate and excerpt checks live there.
+        let mut far = acp_request();
+        far.contexts[0].ranges[0] = Utf16Range {
+            start: Utf16Offset(100),
+            end: Utf16Offset(105),
+        };
+        assert!(validate_prompt_request(&far).is_ok());
+        let mut split = acp_request();
+        split.contexts[0].ranges[0] = Utf16Range {
             start: Utf16Offset(2),
             end: Utf16Offset(3),
-        }; // splits the surrogate pair of 😀
-        assert!(validate_prompt_request(&bad).is_err());
+        }; // splits the surrogate pair of 😀 in the excerpt
+        assert!(validate_prompt_request(&split).is_ok());
         let mut bad = acp_request();
         bad.contexts[0].ranges.clear();
         assert!(validate_prompt_request(&bad).is_err());
@@ -3000,6 +3204,110 @@ mod tests {
             events.push(event);
         });
         assert!(matches!(events[1], AiStreamEvent::Error(_)));
+    }
+
+    fn gate_done(run_id: &AiRunId) -> AiStreamEvent {
+        AiStreamEvent::Done(StreamDone {
+            run_id: run_id.clone(),
+            proposal: ProposalText {
+                text: "done".into(),
+                base_contexts: vec![],
+            },
+            sent: vec![],
+        })
+    }
+
+    #[test]
+    fn terminal_gate_streams_live_then_delivers_once() {
+        let run_id = AiRunId("run_gate".into());
+        let mut gate = TerminalGate::new();
+        let mut live = Vec::new();
+        gate.push(
+            AiStreamEvent::Started(StreamStarted {
+                run_id: run_id.clone(),
+            }),
+            &mut |event| live.push(event),
+        );
+        gate.push(
+            AiStreamEvent::Chunk(StreamChunk {
+                run_id: run_id.clone(),
+                text: "a".into(),
+            }),
+            &mut |event| live.push(event),
+        );
+        gate.push(
+            AiStreamEvent::Chunk(StreamChunk {
+                run_id: run_id.clone(),
+                text: "b".into(),
+            }),
+            &mut |event| live.push(event),
+        );
+        // Terminal stays buffered: live delivery holds chunks in order only.
+        gate.push(gate_done(&run_id), &mut |event| live.push(event));
+        assert_eq!(live.len(), 3);
+        assert!(matches!(live[1], AiStreamEvent::Chunk(_)));
+        let terminal = gate.settle(&Ok(()), &run_id);
+        assert!(matches!(terminal, AiStreamEvent::Done(_)));
+    }
+
+    #[test]
+    fn terminal_gate_keeps_first_settlement_only() {
+        let run_id = AiRunId("run_gate2".into());
+        let mut gate = TerminalGate::new();
+        let mut live = Vec::new();
+        // A driver bug emitting Error after Done must not double-deliver:
+        // the first terminal wins and the outcome error is absorbed.
+        gate.push(gate_done(&run_id), &mut |event| live.push(event));
+        gate.push(
+            AiStreamEvent::Error(StreamError {
+                run_id: Some(run_id.clone()),
+                error: AiError::StreamFailed {
+                    detail: "late".into(),
+                },
+            }),
+            &mut |event| live.push(event),
+        );
+        assert!(live.is_empty());
+        let outcome: Result<(), AiError> = Err(AiError::ConnectionFailed {
+            detail: "also failed".into(),
+        });
+        assert!(matches!(
+            gate.settle(&outcome, &run_id),
+            AiStreamEvent::Done(_)
+        ));
+    }
+
+    #[test]
+    fn terminal_gate_maps_silent_and_error_outcomes() {
+        let run_id = AiRunId("run_gate3".into());
+        let gate = TerminalGate::new();
+        let outcome: Result<(), AiError> = Err(AiError::AuthFailed {
+            detail: "bad".into(),
+        });
+        assert!(matches!(
+            gate.settle(&outcome, &run_id),
+            AiStreamEvent::Error(_)
+        ));
+        // A silent Ok (driver bug) still terminates explicitly, never hangs.
+        let gate = TerminalGate::new();
+        assert!(matches!(
+            gate.settle(&Ok(()), &run_id),
+            AiStreamEvent::Error(_)
+        ));
+        // Cancelled is terminal and buffered like Done.
+        let mut gate = TerminalGate::new();
+        let mut live = Vec::new();
+        gate.push(
+            AiStreamEvent::Cancelled(StreamCancelled {
+                run_id: run_id.clone(),
+            }),
+            &mut |event| live.push(event),
+        );
+        assert!(live.is_empty());
+        assert!(matches!(
+            gate.settle(&Ok(()), &run_id),
+            AiStreamEvent::Cancelled(_)
+        ));
     }
 
     #[test]
