@@ -12,31 +12,34 @@
 }
 
 :root {
-  --background: #f6f4ef;
-  --foreground: #292e28;
-  --card: #fffefa;
-  --primary: #4d674b;
-  --primary-foreground: #fffefa;
-  --muted: #eeeee5;
-  --muted-foreground: #666b60;
-  --border: #dddcd2;
+  color-scheme: light;
+  --background: #ffffff;
+  --foreground: #242424;
+  --card: #f3f3f3;
+  --primary: #0078d4;
+  --primary-foreground: #ffffff;
+  --muted: #e8e8e8;
+  --muted-foreground: #616161;
+  --border: #dedede;
   font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
 
 [data-theme="dark"] {
-  --background: #14161a;
-  --foreground: #e8eaed;
-  --card: #1c1f26;
-  --primary: #8ab4f8;
-  --primary-foreground: #14161a;
-  --muted: #262a33;
-  --muted-foreground: #9aa0ab;
-  --border: #333945;
+  color-scheme: dark;
+  --background: #1f1f1f;
+  --foreground: #cccccc;
+  --card: #181818;
+  --primary: #4daafc;
+  --primary-foreground: #181818;
+  --muted: #2a2a2a;
+  --muted-foreground: #9d9d9d;
+  --border: #303030;
 }
 
 [data-theme="contrast"] {
+  color-scheme: light;
   --background: #ffffff;
   --foreground: #000000;
   --card: #ffffff;

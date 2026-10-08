@@ -112,7 +112,7 @@ describe("ai panel", () => {
     const sentSection = screen.getByText("送信済みの範囲").parentElement!;
     expect(within(sentSection).getByText(/doc_01 rev 7/)).toBeVisible();
     expect(screen.queryByRole("button", { name: "取り消し" })).not.toBeInTheDocument();
-    expect(screen.getByText(/原文は変更しません/)).toBeVisible();
+    expect(screen.getByText(/Markdownは変更しません/)).toBeVisible();
   });
 
   it("shows stream errors as alerts and not as answers", async () => {

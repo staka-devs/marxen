@@ -142,6 +142,14 @@ function installBackend() {
         doc.history.push(doc.text);
         return Promise.resolve(snapshotOf(doc));
       }
+      case "nvim_input_with_copy": {
+        const doc = docById(a.documentId as string);
+        if (a.baseRevision !== doc.revision) throw { code: "contract", error: { code: "stale_revision", expected: doc.revision, received: a.baseRevision } };
+        doc.revision += 1;
+        doc.dirty = true;
+        doc.history.push(doc.text);
+        return Promise.resolve({ snapshot: snapshotOf(doc), copy: null, copyReady: false });
+      }
       case "undo_document": {
         const doc = docById(a.documentId as string);
         if (doc.history.length > 1) {
@@ -321,7 +329,7 @@ it("routes Vim keys serially with the live revision", async () => {
   await screen.findByText("# A");
   const editor = screen.getByTestId("editor-primary");
   fireEvent.keyDown(editor, { key: "j" });
-  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 0, keys: "j" }));
+  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("nvim_input_with_copy", { documentId: "doc_a", baseRevision: 0, keys: "j" }));
   expect(screen.getByTestId("vim-keys")).toHaveTextContent("Vim入力");
 });
 
@@ -420,14 +428,14 @@ it("keeps display-basis arrows in the editor and routes Vim keys natively", asyn
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
   await screen.findByText("# A");
   fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
-  fireEvent.click(screen.getByRole("button", { name: "表示基準" }));
+  fireEvent.click(screen.getByRole("button", { name: "表示行" }));
   const editor = screen.getByTestId("editor-primary");
   fireEvent.keyDown(editor, { key: "ArrowDown" });
   fireEvent.keyDown(editor, { key: "Process" });
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input")).toHaveLength(0);
   fireEvent.keyDown(editor, { key: "j" });
   await waitFor(() =>
-    expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 0, keys: "j" }),
+    expect(mockedInvoke).toHaveBeenCalledWith("nvim_input_with_copy", { documentId: "doc_a", baseRevision: 0, keys: "j" }),
   );
 });
 
@@ -563,11 +571,11 @@ it("types immediately after i without waiting for the mode echo", async () => {
   fireEvent.keyDown(editor, { key: "é" });
   fireEvent.keyDown(editor, { key: "<" });
   await waitFor(() => {
-    const inputs = mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input");
+    const inputs = mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input_with_copy");
     expect(inputs.map(([, args]) => (args as { keys: string }).keys)).toEqual(["i", "é", "<"]);
   });
   const bases = mockedInvoke.mock.calls
-    .filter(([command]) => command === "nvim_input")
+    .filter(([command]) => command === "nvim_input_with_copy")
     .map(([, args]) => (args as { baseRevision: number }).baseRevision);
   expect(bases).toEqual([0, 1, 2]);
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
@@ -683,7 +691,7 @@ async function openInsertDocDisplay() {
   // plain text surface (no live widgets) so DOM offsets equal source offsets.
   fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "source" } });
   fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
-  fireEvent.click(screen.getByRole("button", { name: "表示基準" }));
+  fireEvent.click(screen.getByRole("button", { name: "表示行" }));
 }
 
 /** Drive a real editor selection through the DOM selection observer. */
@@ -776,7 +784,7 @@ it("never lets a late older selection response reset a newer range", async () =>
   await screen.findByTestId("editor-primary");
   fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "source" } });
   fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
-  fireEvent.click(screen.getByRole("button", { name: "表示基準" }));
+  fireEvent.click(screen.getByRole("button", { name: "表示行" }));
   scenario.deferCursor = true;
   scenario.cursorResponses = [
     { anchor: 0, head: 2 },
@@ -886,7 +894,7 @@ it("keeps normal-mode Ctrl+V as native visual-block without a mapping query", as
   const editor = screen.getByTestId("editor-primary");
   fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
   await waitFor(() =>
-    expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 0, keys: "<C-v>" }),
+    expect(mockedInvoke).toHaveBeenCalledWith("nvim_input_with_copy", { documentId: "doc_a", baseRevision: 0, keys: "<C-v>" }),
   );
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "has_nvim_mapping")).toHaveLength(0);
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
@@ -900,7 +908,7 @@ it("feeds an immediate key natively when Visual installed before the mode refres
   const editor = screen.getByTestId("editor-primary");
   fireEvent.keyDown(editor, { key: "x" });
   await waitFor(() =>
-    expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 0, keys: "x" }),
+    expect(mockedInvoke).toHaveBeenCalledWith("nvim_input_with_copy", { documentId: "doc_a", baseRevision: 0, keys: "x" }),
   );
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
   expect(scenario.files.get("メモ/a.md")!.text).toBe("# A\n\n- [ ] task\n");
@@ -955,6 +963,6 @@ it("routes display-basis arrows natively in Visual so x-mode mappings fire", asy
   const editor = screen.getByTestId("editor-primary");
   fireEvent.keyDown(editor, { key: "ArrowUp" });
   await waitFor(() =>
-    expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 0, keys: "<Up>" }),
+    expect(mockedInvoke).toHaveBeenCalledWith("nvim_input_with_copy", { documentId: "doc_a", baseRevision: 0, keys: "<Up>" }),
   );
 });

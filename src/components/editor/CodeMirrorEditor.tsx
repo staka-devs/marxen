@@ -143,9 +143,9 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
           EditorView.theme({
             "&": { backgroundColor: "transparent", fontSize: "14px", height: "100%" },
             ".cm-content": { fontFamily: "ui-monospace, monospace", padding: "12px 0" },
-            ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "#949084" },
+            ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "var(--muted-foreground)" },
             ".cm-scroller": { overflow: "auto" },
-            "&.cm-focused": { outline: "2px solid #6b8067", outlineOffset: "-2px" },
+            "&.cm-focused": { outline: "none" },
           }),
           EditorView.updateListener.of((update) => {
             if (syncing.current) return;

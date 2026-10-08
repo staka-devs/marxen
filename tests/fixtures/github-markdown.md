@@ -57,7 +57,7 @@ fn main() {
 
 ```mermaid
 flowchart LR
-    Source[Markdown原文] --> Editor[実Neovim]
+    Source[MarkdownMarkdown] --> Editor[実Neovim]
     Editor --> View[ライブプレビュー]
     Editor --> Save[Rust保存]
 ```
@@ -132,7 +132,7 @@ solid tetrahedron
 endsolid tetrahedron
 ```
 
-## 原文保持
+## Markdown保持
 
 * 箇条書きの記号と    空白は未編集なら保持する。
 

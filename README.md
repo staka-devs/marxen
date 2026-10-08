@@ -1,14 +1,34 @@
 # Marxen
 
-Markdown の原文を保ち、実 Neovim と GUI で編集する Rust / Tauri デスクトップアプリです。Rust が編集・保存・AI 通信を所有し、GUI と AI は revision 付きの範囲編集を行います。
+Markdown のMarkdownを保ち、実 Neovim と GUI で編集する Rust / Tauri デスクトップアプリです。Rust が編集・保存・AI 通信を所有し、GUI と AI は revision 付きの範囲編集を行います。
 
 ## デスクトップでの操作
 
 1. 「フォルダーを開く」で作業フォルダーを選び、ファイルツリーから Markdown を開きます。タブ、クイックオープン、検索・置換、アウトライン、コマンドパレットも使用できます。
-2. 本文は「ライブ」「原文」「閲覧」「分割」で切り替えます。ライブは本文内の非アクティブなブロックを描画し、編集中のブロックは原文を表示します。表示切替では本文・cursor・Undo を保持します。
-3. 原文基準の Vim 操作では実 Neovim が `i` / `Esc`、移動、text object、macro、`u` / `Ctrl+r` を処理します。「表示基準」は折り返し行の上下・行頭末を扱います。画面依存の plugin 操作にはメニューの「原文ビュー」を使用します。
+2. 本文は「ライブ」「Markdown」「閲覧」「分割」で切り替えます。ライブは本文内の非アクティブなブロックを描画し、編集中のブロックはコードを表示します。表示切替では本文・cursor・Undo を保持します。
+3. Vim の移動の Vim 操作では実 Neovim が `i` / `Esc`、移動、text object、macro、`u` / `Ctrl+r` を処理します。「表示基準」は折り返し行の上下・行頭末を扱います。画面依存の plugin 操作にはメニューの「Neovim 画面」を使用します。
 4. 「保存」または Vim の `:w` で Rust の保存経路を使います。外部変更や保存競合は通知されます。「再読込（未保存を破棄）」は編集中の内容を破棄する操作です。未保存のタブを閉じると選択肢が表示され、次回起動時にはクラッシュ復元の候補を表示します。
 5. 設定ではテーマと Neovim 設定ファイルを選べます。既定は専用設定で、`.vimrc` / `vimrc` / `_vimrc` / `init.vim` / `init.lua` に対応します。「設定を適用して再起動する」は本文・revision・未保存状態を保持し、Undo とモードを初期化します。設定のエラーは画面に表示します。
+
+`yy` / `yw` / `yiw` / 選択して `y` の直後に、次の形式キーを押すと OS のクリップボードへコピーします。別のキーを押すと通常の Vim 操作になります。既存のユーザーマッピングがあるキーはそのマッピングを優先します。
+
+| キー | コピー形式 |
+| --- | --- |
+| F6 | Markdown |
+| F7 | 装飾なしテキスト |
+| F8 | リッチテキスト（HTML と通常テキスト、Windows / macOS は画像入り RTF も提供） |
+| F9 | HTML ソース |
+
+リッチテキストの相対画像は埋め込みデータにして渡します。PNG / JPEG は画像を保持し、RTF 用の GIF / WebP は静止画になります。外部 URL の画像は HTML の参照を保持します。貼り付け先が使う形式はアプリにより異なります。
+
+vimrc の例（1 キーの Neovim 表記を指定、空文字で無効化）:
+
+```vim
+let g:marxen_copy_markdown_key = '<F6>'
+let g:marxen_copy_text_key = '<F7>'
+let g:marxen_copy_rich_key = '<F8>'
+let g:marxen_copy_html_key = '<F9>'
+```
 
 GFM の表・task list・Alerts・脚注、highlight、数式、Mermaid、sanitized HTML、GeoJSON / TopoJSON、ASCII STL を描画します。描画ライブラリは同梱します。相対画像と画像貼付はワークスペースの資源として扱います。
 

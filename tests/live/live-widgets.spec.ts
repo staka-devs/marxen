@@ -112,7 +112,7 @@ test("task checkbox emits a minimal range edit preserving unrelated bytes", asyn
 
 test("rendered list and table use compact document spacing", async ({ page }) => {
   await page.goto("/tests/live/harness/live.html");
-  await page.evaluate(() => window.__harness.setValue("# 見出し\n\n- [ ] 一つ\n- [ ] 二つ\n\n| 項目 | 状態 |\n| --- | --- |\n| 原文 | 保持 |\n"));
+  await page.evaluate(() => window.__harness.setValue("# 見出し\n\n- [ ] 一つ\n- [ ] 二つ\n\n| 項目 | 状態 |\n| --- | --- |\n| Markdown | 保持 |\n"));
   const list = page.locator(".marxen-live-widget ul");
   const table = page.locator(".marxen-live-widget table");
   await expect(table).toBeVisible();

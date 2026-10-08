@@ -27,7 +27,7 @@ describe("native Neovim screen", () => {
   it("forwards native keys and one composition commit while suppressing browser insertion", () => {
     const send = vi.fn();
     render(<RawGridView text="plugin screen" onVimKeys={send} />);
-    const view = screen.getByRole("textbox", { name: "Neovim 原文ビュー" });
+    const view = screen.getByRole("textbox", { name: "Neovim 画面" });
     expect(fireEvent.keyDown(view, { key: "g", cancelable: true })).toBe(false);
     fireEvent.keyDown(view, { key: "Escape" });
     fireEvent.keyDown(view, { key: "Process", keyCode: 229, isComposing: true });

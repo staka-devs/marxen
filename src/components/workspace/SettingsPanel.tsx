@@ -1,4 +1,5 @@
 import { THEMES, isSupportedConfigName, type ThemeId } from "../../lib/workspace";
+import { COPY_LABELS } from "../../lib/clipboard";
 
 interface Props {
   theme: ThemeId;
@@ -10,10 +11,11 @@ interface Props {
   onApplyConfig: () => void;
   applyingConfig: boolean;
   currentConfig: string | null;
+  copyKeys?: Record<string, string>;
   onClose: () => void;
 }
 
-export function SettingsPanel({ theme, onTheme, configPath, configError, onConfigPath, onBrowseConfig, onApplyConfig, applyingConfig, currentConfig, onClose }: Props) {
+export function SettingsPanel({ theme, onTheme, configPath, configError, onConfigPath, onBrowseConfig, onApplyConfig, applyingConfig, currentConfig, copyKeys, onClose }: Props) {
   const nameInvalid = configPath !== "" && !isSupportedConfigName(configPath);
   return (
     <div data-testid="settings" role="dialog" aria-label="設定" className="absolute inset-x-0 top-12 z-20 mx-auto max-w-lg rounded-lg border border-border bg-card p-5 shadow-lg">
@@ -77,9 +79,12 @@ export function SettingsPanel({ theme, onTheme, configPath, configError, onConfi
       <section aria-label="操作の説明" className="mt-5">
         <p className="mb-2 text-sm font-medium">操作の説明</p>
         <ul className="list-disc space-y-1 pl-5 text-xs leading-6 text-muted-foreground">
+          <li>ヤンク（yy / yw / 選択して y）の直後に形式キーを押すとコピーできます。通常の y と既存のマッピングが優先されます。</li>
+          <li>{Object.entries(copyKeys ?? {}).map(([format, key]) => `${key}: ${COPY_LABELS[format as keyof typeof COPY_LABELS]}`).join(" / ")}</li>
+          <li>vimrc の g:marxen_copy_markdown_key、g:marxen_copy_text_key、g:marxen_copy_rich_key、g:marxen_copy_html_key でキーを変更できます。空文字で無効にできます。</li>
           <li>IME は確定のみ送信します。編集中の未確定文は送りません。</li>
           <li>GUI 編集は範囲パッチで実 Neovim へ送り、改訂で直列化します。</li>
-          <li>表示基準では折り返し行の上下・行頭末が表示通りに動き、原文基準では実 Neovim が動かします。</li>
+          <li>表示基準では折り返し行の上下・行頭末が表示通りに動き、Vim の移動では実 Neovim が動かします。</li>
         </ul>
       </section>
       <button type="button" onClick={onClose} className="mt-5 w-full rounded-md border border-border px-3 py-2 text-sm">

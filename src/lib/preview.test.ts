@@ -7,7 +7,7 @@ const fixture = (name: string) => readFileSync(join(__dirname, "../../tests/fixt
 
 describe("preview renderer", () => {
   it("renders Japanese headings, checkboxes, and tables", () => {
-    const html = renderMarkdownPreview("# 東京 😀\n\n- [ ] 買い物\n\n| 項目 | 状態 |\n| --- | --- |\n| 原文 | 保持 |\n");
+    const html = renderMarkdownPreview("# 東京 😀\n\n- [ ] 買い物\n\n| 項目 | 状態 |\n| --- | --- |\n| Markdown | 保持 |\n");
     expect(html).toContain("<h1>東京 😀</h1>");
     expect(html).toContain('type="checkbox" disabled');
     expect(html).toContain("<table>");

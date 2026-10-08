@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Bot, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis } from "lucide-react";
+import { Bot, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight } from "lucide-react";
 import { CodeMirrorEditor, type EditorSelection, type ExternalCursor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
 import AiPanel from "../ai-panel";
@@ -68,6 +68,8 @@ import { applyGridUpdates, createGridState, type NvimGridState } from "../../lib
 import type { ImageResolver } from "../preview/images";
 import { offsetToLineCol } from "../../lib/utf16";
 import { correspondSource as correspondSnapshotSource, resolveEditRange } from "../../lib/selection-range";
+import { copyYankToClipboard, COPY_LABELS } from "../../lib/clipboard";
+import type { YankCopy } from "../../shared/contracts";
 
 export type ViewMode = "live" | "source" | "read" | "split";
 export type NavBasis = "display" | "source";
@@ -98,10 +100,10 @@ const MODE_JA: Record<string, string> = {
 };
 
 const MODE_LABEL: Record<ViewMode, string> = {
-  live: "ライブ",
-  source: "原文",
-  read: "閲覧",
-  split: "分割",
+  live: "ライブプレビュー",
+  source: "Markdown",
+  read: "プレビュー",
+  split: "分割表示",
 };
 
 function docFromOpen(open: OpenDocument): OpenDoc {
@@ -157,6 +159,7 @@ export function WorkspaceShell() {
   const [tabs, setTabs] = useState<string[]>(() => (desktop ? [] : [SAMPLE_WORKSPACE[0].path]));
   const [activeId, setActiveId] = useState<string | null>(() => (desktop ? null : SAMPLE_WORKSPACE[0].path));
   const [viewMode, setViewMode] = useState<ViewMode>("live");
+  const [splitRatio, setSplitRatio] = useState(50);
   const [navBasis, setNavBasis] = useState<NavBasis>("source");
   const [showRaw, setShowRaw] = useState(false);
   const [sideView, setSideView] = useState<SideView | null>("explorer");
@@ -188,6 +191,10 @@ export function WorkspaceShell() {
   const [configError, setConfigError] = useState<string | null>(null);
   const [applyingConfig, setApplyingConfig] = useState(false);
   const [currentConfig, setCurrentConfig] = useState<string | null>(null);
+  const [copyKeys, setCopyKeys] = useState<Record<string, string>>({
+    markdown: "<F6>", text: "<F7>", rich: "<F8>", html: "<F9>",
+  });
+  const [copyReady, setCopyReady] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [registryHits, setRegistryHits] = useState<SearchHitItem[]>([]);
   const [searching, setSearching] = useState(false);
@@ -450,6 +457,15 @@ export function WorkspaceShell() {
     [registry, mergeSnapshot, sayStale, bumpSelectionGen],
   );
 
+  const writeYankToClipboard = useCallback(async (copy: YankCopy, id: string) => {
+    try {
+      await copyYankToClipboard(copy, id);
+      setNotice(`${COPY_LABELS[copy.format]}をコピーしました。`);
+    } finally {
+      setCopyReady((ready) => ready === id ? null : ready);
+    }
+  }, []);
+
   const routeVimKeys = useCallback(
     async (id: string, keys: string) => {
       if (!registry) {
@@ -462,15 +478,16 @@ export function WorkspaceShell() {
       try {
         // Revision binds at queue execution inside the client, so bursts
         // order against successive acknowledgements.
-        const snapshot = await registry.vimInput(id, keys);
-        mergeSnapshot(snapshot);
+        const result = await registry.vimInputWithCopy(id, keys, (copy) => writeYankToClipboard(copy, id));
+        mergeSnapshot(result.snapshot);
+        if (activeRef.current === id && isSelectionGenCurrent(id, gen)) setCopyReady(result.copyReady ? id : null);
         await refreshModeCursor(id, gen);
       } catch (cause) {
         if (cause instanceof StaleResync) sayStale(cause.snapshot);
         else setNotice(workspaceErrorText(cause));
       }
     },
-    [registry, mergeSnapshot, refreshModeCursor, sayStale, bumpSelectionGen],
+    [registry, mergeSnapshot, refreshModeCursor, sayStale, bumpSelectionGen, isSelectionGenCurrent, writeYankToClipboard],
   );
 
   const handleUndo = useCallback(async () => {
@@ -545,7 +562,7 @@ export function WorkspaceShell() {
         delete next[id];
         return next;
       });
-      setNotice("最新の原文に再読込しました。");
+      setNotice("最新のMarkdownに再読込しました。");
     } catch (cause) {
       setNotice(workspaceErrorText(cause));
     }
@@ -730,8 +747,9 @@ export function WorkspaceShell() {
       setVimKeys((prev) => (prev + key).slice(-24));
       const gen = retried ? selectionGenRef.current[id] ?? 0 : bumpSelectionGen(id);
       try {
-        const decision = await registry.routeCharKey(id, key, range);
+        const decision = await registry.routeCharKey(id, key, range, (copy) => writeYankToClipboard(copy, id));
         if (decision.action === "vim") {
+          if (isSelectionGenCurrent(id, gen)) setCopyReady(decision.copyReady ? id : null);
           // Native edit (any mode): the cursor truth comes from the refresh.
           mergeSnapshot(decision.snapshot);
           await refreshModeCursor(id, gen);
@@ -762,7 +780,7 @@ export function WorkspaceShell() {
         }
       }
     },
-    [registry, mergeSnapshot, refreshModeCursor, sayStale, echoCursor, correspondRange, bumpSelectionGen, isSelectionGenCurrent],
+    [registry, mergeSnapshot, refreshModeCursor, sayStale, echoCursor, correspondRange, bumpSelectionGen, isSelectionGenCurrent, writeYankToClipboard],
   );
 
   // Captured paste replaces the exact half-open range as one serial edit and
@@ -828,6 +846,8 @@ export function WorkspaceShell() {
       const mod = event.ctrlKey || event.metaKey;
       const lower = event.key.toLowerCase();
       if (mod && (lower === "p" || lower === "s")) return;
+      const id = activeRef.current;
+      if (!id) return;
       if (event.key.toLowerCase() === "v" && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
         // Keyboard paste gesture in any mode: record it and let the paste
         // event carry the bytes synchronously. Preventing default here would
@@ -856,7 +876,6 @@ export function WorkspaceShell() {
         // range, so fast Normal->i->characters cannot use invented offsets.
         event.preventDefault();
         event.stopPropagation();
-        const id = activeRef.current;
         if (!docsRef.current[id]) return;
         const insertHint = vimModeRef.current === "insert" || vimModeRef.current === "replace";
         if (!insertHint) {
@@ -1324,6 +1343,7 @@ export function WorkspaceShell() {
       const result = await registry.configure({ documentId: id, baseRevision: current.revision }, trimmed === "" ? null : trimmed);
       setConfigError(result.errors.length > 0 ? result.errors.join("\n") : null);
       setCurrentConfig(result.path);
+      setCopyKeys(result.copyKeys ?? { markdown: "<F6>", text: "<F7>", rich: "<F8>", html: "<F9>" });
       const snapshot = await registry.fetchSnapshot(id);
       mergeSnapshot(snapshot);
       await refreshModeCursor(id);
@@ -1337,12 +1357,13 @@ export function WorkspaceShell() {
   }, [registry, configPath, mergeSnapshot, refreshModeCursor, sayStale]);
 
   useEffect(() => {
-    if (!settings || !registry || !activeId) return;
+    if (!registry || !activeId) return;
     registry
       .fetchConfig(activeId)
       .then((config) => {
         setCurrentConfig(config.path);
         setConfigError(config.errors.length > 0 ? config.errors.join("\n") : null);
+        setCopyKeys(config.copyKeys ?? { markdown: "<F6>", text: "<F7>", rich: "<F8>", html: "<F9>" });
       })
       .catch(() => undefined);
   }, [settings, registry, activeId]);
@@ -1352,11 +1373,11 @@ export function WorkspaceShell() {
   const commands: PaletteCommand[] = useMemo(
     () => [
       { id: "view-live", label: "表示: ライブにする" },
-      { id: "view-source", label: "表示: 原文にする" },
+      { id: "view-source", label: "表示: Markdownにする" },
       { id: "view-read", label: "表示: 閲覧にする" },
       { id: "view-split", label: "表示: 分割にする" },
       { id: "nav-display", label: "移動: 表示基準にする" },
-      { id: "nav-source", label: "移動: 原文基準にする" },
+      { id: "nav-source", label: "移動: Vim の移動にする" },
       { id: "file-new", label: "ファイル: 新規作成する" },
       { id: "file-rename", label: "ファイル: 名前を変更する" },
       { id: "file-save", label: "ファイル: 保存する" },
@@ -1365,8 +1386,8 @@ export function WorkspaceShell() {
       { id: "edit-undo", label: "編集: 元に戻す" },
       { id: "edit-redo", label: "編集: やり直す" },
       { id: "palette-quickopen", label: "移動: ファイルをすばやく開く" },
-      { id: "palette-raw", label: "表示: Neovim 原文ビューを切り替える" },
-      { id: "palette-raw-refresh", label: "表示: 原文ビューを更新する" },
+      { id: "palette-raw", label: "表示: Neovim 画面を切り替える" },
+      { id: "palette-raw-refresh", label: "表示: Neovim 画面を更新する" },
       { id: "palette-recovery", label: "復旧: 復旧一覧を更新する" },
       { id: "palette-ai", label: "AI: AI 支援を開く" },
       { id: "palette-settings", label: "設定: 設定を開く" },
@@ -1517,7 +1538,7 @@ export function WorkspaceShell() {
         const fetched = await fetchIsolationDiff(copyId);
         setDiffs(fetched);
         if (fetched.some((diff) => diff.drifted)) {
-          setReviewStatus("原文が動いています。範囲を再登録してから承認してください。");
+          setReviewStatus("文書が更新されています。選択範囲を指定し直してください。");
         }
       } catch (cause: unknown) {
         setReviewMessage(describeIsolationError(cause));
@@ -1556,7 +1577,7 @@ export function WorkspaceShell() {
       const fetched = await fetchIsolationDiff(copyId);
       setDiffs(fetched);
       if (fetched.some((diff) => diff.drifted)) {
-        setReviewStatus("原文が動いています。範囲を再登録してから承認してください。");
+        setReviewStatus("文書が更新されています。選択範囲を指定し直してください。");
       }
     } catch (cause: unknown) {
       setReviewMessage(describeIsolationError(cause));
@@ -1611,7 +1632,7 @@ export function WorkspaceShell() {
       const fetched = await fetchIsolationDiff(copyId);
       setDiffs(fetched);
       setReviewMessage(null);
-      setReviewStatus(fetched.some((diff) => diff.drifted) ? "原文が動いています。範囲を再登録してから承認してください。" : null);
+      setReviewStatus(fetched.some((diff) => diff.drifted) ? "文書が更新されています。選択範囲を指定し直してください。" : null);
     } catch (cause) {
       setReviewMessage(describeIsolationError(cause));
     } finally {
@@ -1632,7 +1653,7 @@ export function WorkspaceShell() {
     const copyId = stagingRef.current;
     if (!copyId) return;
     if (diffs.some((diff) => diff.drifted)) {
-      setReviewMessage("原文が動いています。範囲を再登録してから承認してください。");
+      setReviewMessage("文書が更新されています。選択範囲を指定し直してください。");
       return;
     }
     setReviewBusy(true);
@@ -1700,7 +1721,7 @@ export function WorkspaceShell() {
       await rejectIsolatedCopy(copyId);
       clearStaging();
       setAiProposal(null);
-      setNotice("提案を却下しました。原文とディスクは変更していません。");
+      setNotice("提案を却下しました。Markdownとディスクは変更していません。");
     } catch (cause) {
       setReviewMessage(describeIsolationError(cause));
     } finally {
@@ -1717,7 +1738,7 @@ export function WorkspaceShell() {
       await cancelIsolatedCopy(copyId);
       clearStaging();
       setAiProposal(null);
-      setNotice("取り消しました。原文とディスクは変更していません。");
+      setNotice("取り消しました。Markdownとディスクは変更していません。");
     } catch (cause) {
       setReviewMessage(describeIsolationError(cause));
     } finally {
@@ -1837,7 +1858,7 @@ export function WorkspaceShell() {
           onClick={() => setSettings(true)}
           aria-label="設定表示切替"
           title="設定"
-          className="rounded-md p-2 text-muted-foreground hover:bg-muted"
+          className="mt-auto rounded p-2 text-muted-foreground hover:bg-muted"
         >
           <SettingsIcon size={17} aria-hidden="true" />
         </button>
@@ -1928,24 +1949,17 @@ export function WorkspaceShell() {
       )}
 
       <div className="relative flex min-w-0 flex-1 flex-col">
-        <header className="flex h-10 shrink-0 items-center gap-1 border-b border-border px-2">
-          <span className="min-w-0 flex-1 truncate px-1 text-xs text-muted-foreground" title={active?.path ?? "Marxen"}>
-            {active ? (
-              <>
-                {fileLabel(active.path, active.documentId)}
-                {active.dirty ? " ●" : ""}
-              </>
-            ) : (
-              "Marxen"
-            )}
-          </span>
+        <header className="flex h-9 shrink-0 items-center gap-1 border-b border-border bg-card pr-2">
+          <div className="min-w-0 flex-1">
+            <Tabs tabs={tabItems} activeId={activeId} onSelect={setActiveId} onClose={(id) => void closeTab(id)} />
+          </div>
           <label className="sr-only" htmlFor="view-mode-select">表示モード</label>
           <select
             id="view-mode-select"
             value={viewMode}
             onChange={(event) => setViewMode(event.target.value as ViewMode)}
             aria-label="表示モード"
-            className="h-7 rounded-md border border-border bg-background px-1 text-xs"
+            className="h-7 max-w-36 rounded bg-transparent px-1 text-xs text-muted-foreground hover:bg-muted"
           >
             {(Object.keys(MODE_LABEL) as ViewMode[]).map((mode) => (
               <option key={mode} value={mode}>
@@ -1953,6 +1967,16 @@ export function WorkspaceShell() {
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            onClick={() => setViewMode((mode) => mode === "split" ? "live" : "split")}
+            aria-label="プレビューを横に開く"
+            aria-pressed={viewMode === "split"}
+            title="プレビューを横に開く"
+            className={`rounded p-1.5 hover:bg-muted ${viewMode === "split" ? "text-primary" : "text-muted-foreground"}`}
+          >
+            <PanelsLeftRight size={16} aria-hidden="true" />
+          </button>
           <button
             type="button"
             onClick={() => void handleSave()}
@@ -2060,17 +2084,17 @@ export function WorkspaceShell() {
                     setMoreOpen(false);
                   }}
                   aria-pressed={navBasis === basis}
-                  title={basis === "display" ? "折り返し行の上下・行頭末は表示基準で移動します" : "上下・行頭末・単語・テキストオブジェクト・マクロは実 Neovim の原文基準で動作します"}
+                  title={basis === "display" ? "折り返し行の上下・行頭末は表示基準で移動します" : "上下・行頭末・単語・テキストオブジェクト・マクロは実 Neovim のVim の移動で動作します"}
                   className={`rounded-md px-2 py-1 text-xs ${navBasis === basis ? "bg-primary text-primary-foreground" : "border border-border"}`}
                 >
-                  {basis === "display" ? "表示基準" : "原文基準"}
+                  {basis === "display" ? "表示行" : "Vim"}
                 </button>
               ))}
             </div>
             <div className="mt-2 grid grid-cols-2 gap-1">
               {(
                 [
-                  ["raw", "原文ビュー"],
+                  ["raw", "Neovim 画面"],
                   ["quick", "クイックオープン"],
                   ["palette", "コマンドパレット"],
                   ["new", "新規ファイル"],
@@ -2111,11 +2135,7 @@ export function WorkspaceShell() {
           </div>
         )}
 
-        <div className="border-b border-border px-2 pt-1">
-          <Tabs tabs={tabItems} activeId={activeId} onSelect={setActiveId} onClose={(id) => void closeTab(id)} />
-        </div>
-
-        <div className="min-h-0 shrink-0 space-y-2 overflow-y-auto px-2 pt-2 empty:hidden">
+        <div className="min-h-0 shrink-0 space-y-2 overflow-y-auto empty:hidden">
           {notice && (
             <span role="alert" className="mb-2 block truncate rounded-md border border-border px-2 py-1 text-xs">
               {notice}
@@ -2152,7 +2172,7 @@ export function WorkspaceShell() {
                       setTabs((prev) => prev.map((tab) => (tab === id ? doc.documentId : tab)));
                       setActiveId(doc.documentId);
                       setConflictDoc(null);
-                      setNotice("最新の原文に再読込しました（未保存の変更は破棄）。");
+                      setNotice("最新のMarkdownに再読込しました（未保存の変更は破棄）。");
                     } catch (cause) {
                       setNotice(workspaceErrorText(cause));
                     }
@@ -2240,20 +2260,22 @@ export function WorkspaceShell() {
           )}
         </div>
 
-        {/* Live stacks editor over its rendered preview (inline live
-            renderer); only split lays two panes side by side. */}
-        <main className={`grid min-h-0 flex-1 gap-2 overflow-y-auto px-2 pb-2 ${viewMode === "split" ? "md:grid-cols-2" : ""}`} aria-label="編集領域">
+        <main
+          className="grid min-h-0 min-w-0 flex-1 overflow-hidden"
+          style={{ gridTemplateColumns: viewMode === "split" && active ? `minmax(0, ${splitRatio}fr) 5px minmax(0, ${100 - splitRatio}fr)` : "minmax(0, 1fr)" }}
+          aria-label="編集領域"
+        >
           {/* One editor-primary at a time: live owns the inline preview
               pane, source/split own the raw pane. Selections live in shell
               state so scroll/cursor survive mode switches. */}
           {active ? (
             viewMode === "live" ? (
-              <div onKeyDownCapture={onEditorKeyDown} onPasteCapture={onPasteCapture} className="min-h-0">
+              <div onKeyDownCapture={onEditorKeyDown} onPasteCapture={onPasteCapture} className="min-h-0 min-w-0">
                 <CodeMirrorEditor
                   key={`live-${active.documentId}`}
                   value={active.text}
                   editable={desktop}
-                  ariaLabel={`${active.path ?? active.documentId}の原文エディタ`}
+                  ariaLabel={`${active.path ?? active.documentId}のMarkdownエディタ`}
                   testId="editor-primary"
                   initialSelection={selections[active.documentId] ?? null}
                   externalCursor={cursorEcho[active.documentId] ?? null}
@@ -2267,14 +2289,15 @@ export function WorkspaceShell() {
               <div
                 onKeyDownCapture={onEditorKeyDown}
                 onPasteCapture={onPasteCapture}
-                className={viewMode === "read" ? "hidden" : "min-h-0"}
+                className={viewMode === "read" ? "hidden" : "flex min-h-0 min-w-0 flex-col"}
                 aria-hidden={viewMode === "read"}
               >
+                {viewMode === "split" && <div className="flex h-7 shrink-0 items-center border-b border-border px-3 text-xs text-muted-foreground">Markdown</div>}
                 <CodeMirrorEditor
                   key={`primary-${active.documentId}`}
                   value={active.text}
                   editable={desktop}
-                  ariaLabel={`${active.path ?? active.documentId}の原文エディタ`}
+                  ariaLabel={`${active.path ?? active.documentId}のMarkdownエディタ`}
                   testId="editor-primary"
                   initialSelection={selections[active.documentId] ?? null}
                   externalCursor={cursorEcho[active.documentId] ?? null}
@@ -2289,24 +2312,42 @@ export function WorkspaceShell() {
             </div>
           )}
           {viewMode === "read" && active && (
-            <div className="min-h-0">
+            <div className="min-h-0 min-w-0">
               <MarkdownPreview key={`read-${active.documentId}`} text={active.text} resolveImage={readResolver} />
             </div>
           )}
           {viewMode === "split" && active && (
-            <div className="min-h-0">
-              <CodeMirrorEditor
-                key={`secondary-${active.documentId}`}
-                value={active.text}
-                editable={desktop}
-                ariaLabel={`${active.path ?? active.documentId}の原文エディタ（分割右）`}
-                testId="editor-secondary"
-                initialSelection={selections[active.documentId] ?? null}
-                externalCursor={cursorEcho[active.documentId] ?? null}
-                onGuiEdits={(edits) => void applyEdits(active.documentId, edits)}
-                onSelectionChange={(selection) => handleSelection(active.documentId, selection)}
+            <>
+              <div
+                role="separator"
+                aria-label="Markdown とプレビューの幅"
+                aria-orientation="vertical"
+                aria-valuemin={25}
+                aria-valuemax={75}
+                aria-valuenow={splitRatio}
+                tabIndex={0}
+                className="z-10 cursor-col-resize touch-none border-x border-border bg-card hover:bg-primary focus-visible:bg-primary focus-visible:outline-none"
+                onPointerDown={(event) => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); }}
+                onPointerMove={(event) => {
+                  if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+                  const bounds = event.currentTarget.parentElement!.getBoundingClientRect();
+                  setSplitRatio(Math.max(25, Math.min(75, (event.clientX - bounds.left) / bounds.width * 100)));
+                }}
+                onPointerUp={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+                onDoubleClick={() => setSplitRatio(50)}
+                onKeyDown={(event) => {
+                  if (!["ArrowLeft", "ArrowRight", "Home"].includes(event.key)) return;
+                  event.preventDefault();
+                  setSplitRatio((ratio) => event.key === "Home" ? 50 : Math.max(25, Math.min(75, ratio + (event.key === "ArrowLeft" ? -5 : 5))));
+                }}
               />
-            </div>
+              <div className="flex min-h-0 min-w-0 flex-col" data-testid="split-preview-pane">
+                <div className="flex h-7 shrink-0 items-center border-b border-border px-3 text-xs text-muted-foreground">プレビュー</div>
+                <div className="min-h-0 flex-1">
+                  <MarkdownPreview key={`split-${active.documentId}`} text={active.text} resolveImage={readResolver} />
+                </div>
+              </div>
+            </>
           )}
         </main>
 
@@ -2323,12 +2364,13 @@ export function WorkspaceShell() {
         )}
 
         <footer className="flex h-[22px] shrink-0 items-center gap-3 overflow-hidden whitespace-nowrap border-t border-border px-2 text-[11px] text-muted-foreground">
-          <span className="min-w-0 flex-1 truncate">{active?.path ?? "（未開封）"}</span>
+          <span className="min-w-0 flex-1 truncate">{active?.path ?? "ファイルを開いてください"}</span>
           {cursorPos && <span data-testid="cursor">カーソル {cursorPos}</span>}
           {desktop && active && <span data-testid="vim-footer-mode">{MODE_JA[vimMode] ?? vimMode}</span>}
           <span data-testid="revision">リビジョン {active?.revision ?? "—"}</span>
           <span data-testid="dirty">{!active || active.dirty ? (active ? "未保存" : "—") : "保存済み"}</span>
           {desktop && vimKeys !== "" && <span data-testid="vim-keys">Vim入力 {vimKeys}</span>}
+          {desktop && copyReady === activeId && <span data-testid="copy-ready">コピー: {Object.entries(copyKeys).map(([format, key]) => `${key} ${COPY_LABELS[format as keyof typeof COPY_LABELS]}`).join(" / ")}</span>}
           {!desktop && <span data-testid="readonly-note">ブラウザ表示は読み取り専用です</span>}
           <span role="status" className="shrink-0">
             {runtime ? (runtime.connection === "disconnected" ? "Neovim 未接続" : runtime.connection === "connected" ? "Neovim 接続済み" : runtime.detail) : "接続状態を確認中…"}
@@ -2363,6 +2405,7 @@ export function WorkspaceShell() {
             onApplyConfig={() => void applyConfig()}
             applyingConfig={applyingConfig}
             currentConfig={currentConfig}
+            copyKeys={copyKeys}
             onClose={() => setSettings(false)}
           />
         )}
@@ -2410,7 +2453,7 @@ export function WorkspaceShell() {
           )}
           {aiProposal && (
             <div data-testid="ai-proposal" className="mt-3 rounded-lg border border-border bg-card p-3 text-xs">
-              <p className="font-medium">AI の提案（原文は変更しません）</p>
+              <p className="font-medium">AI の提案</p>
               <p className="mt-1 whitespace-pre-wrap">{aiProposal.proposal.text}</p>
               <p className="mt-1 text-muted-foreground">
                 基準: {aiProposal.proposal.baseContexts.map((ref) => `${ref.documentId} rev ${ref.revision}`).join(", ")}

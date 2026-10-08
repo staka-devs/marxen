@@ -24,6 +24,8 @@ import type {
   Utf16Range,
   VimMode,
   WorkspaceError,
+  VimInputResult,
+  YankCopy,
 } from "../shared/contracts";
 import { isDesktop as isDesktopShell, workspaceApi } from "./workspace";
 
@@ -37,7 +39,7 @@ export function isDesktop(): boolean {
 export class StaleResync extends Error {
   readonly snapshot: DocumentSnapshot;
   constructor(snapshot: DocumentSnapshot) {
-    super(`改訂が古いため最新の原文に再同期しました（リビジョン ${snapshot.revision}）。`);
+    super(`改訂が古いため最新のMarkdownに再同期しました（リビジョン ${snapshot.revision}）。`);
     this.name = "StaleResync";
     this.snapshot = snapshot;
   }
@@ -298,6 +300,27 @@ export class RegistryClient {
     });
   }
 
+  /** Native yanks and format selectors run in the same order as key input.
+   * Await clipboard presentation before accepting the next queued key. */
+  vimInputWithCopy(
+    documentId: DocumentId,
+    keys: string,
+    onCopy: (copy: YankCopy) => Promise<void>,
+  ): Promise<VimInputResult> {
+    return this.enqueue(documentId, async () => {
+      const revision = this.rev.get(documentId) ?? 0;
+      try {
+        const result = await workspaceApi.inputWithCopy({ documentId, baseRevision: revision }, keys);
+        this.bump(result.snapshot);
+        if (result.copy) await onCopy(result.copy);
+        return result;
+      } catch (cause) {
+        if (isStaleError(cause)) await this.resync(documentId);
+        throw cause;
+      }
+    });
+  }
+
   /**
    * Printable character routing with the actual native mode read inside the
    * serial queue. The shell enqueues synchronously on keydown (multi-key
@@ -311,7 +334,8 @@ export class RegistryClient {
     documentId: DocumentId,
     key: string,
     range: { start: number; end: number },
-  ): Promise<{ action: "vim"; snapshot: DocumentSnapshot } | { action: "gui"; snapshot: DocumentSnapshot }> {
+    onCopy?: (copy: YankCopy) => Promise<void>,
+  ): Promise<{ action: "vim"; snapshot: DocumentSnapshot; copyReady?: boolean } | { action: "gui"; snapshot: DocumentSnapshot }> {
     return this.enqueue(documentId, async () => {
       // A mode revision is never proof of known source text: on mismatch the
       // buffer moved out of band (external/native/AI edit), so refresh and
@@ -323,6 +347,12 @@ export class RegistryClient {
       if (update.mode !== "insert" && update.mode !== "replace") {
         this.pendingPrefix.set(documentId, "");
         try {
+          if (onCopy) {
+            const result = await workspaceApi.inputWithCopy({ documentId, baseRevision: revision }, key);
+            this.bump(result.snapshot);
+            if (result.copy) await onCopy(result.copy);
+            return { action: "vim" as const, snapshot: result.snapshot, copyReady: result.copyReady };
+          }
           return { action: "vim" as const, snapshot: this.bump(await workspaceApi.input({ documentId, baseRevision: revision }, key)) };
         } catch (cause) {
           if (isStaleError(cause)) await this.resync(documentId);
@@ -516,6 +546,9 @@ export class ReadonlyRegistry {
     return this.reject();
   }
   vimInput(_documentId?: string, _keys?: string): Promise<never> {
+    return this.reject();
+  }
+  vimInputWithCopy(): Promise<never> {
     return this.reject();
   }
   routeCharKey(_documentId?: string, _key?: string, _range?: { start: number; end: number }): Promise<never> {
