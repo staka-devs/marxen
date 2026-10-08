@@ -67,6 +67,7 @@ import {
 import { applyGridUpdates, createGridState, type NvimGridState } from "../../lib/grid";
 import type { ImageResolver } from "../preview/images";
 import { offsetToLineCol } from "../../lib/utf16";
+import { correspondRange as correspondSnapshotRange, resolveEditRange, sliceRange } from "../../lib/selection-range";
 
 export type ViewMode = "live" | "source" | "read" | "split";
 export type NavBasis = "display" | "source";
@@ -616,90 +617,61 @@ export function WorkspaceShell() {
 
   // -- Vim key router (shell level; CodeMirror internals untouched) ---------
   //
-  // Mapping-first order per keystroke, decided BEFORE any async work:
-  // 1. preventDefault + stopPropagation immediately (no DOM insertion can
-  //    interleave, key order is preserved through the serial queue).
-  // 2. Normal/visual/operator/command keys always go native (mappings fire
-  //    inside Neovim; words/textobjects/macros stay source-based).
-  // 3. Insert-mode printable keys go through ONE serial task that queries
-  //    has_nvim_mapping for pending+key: claimed -> nvim_input, else a GUI
-  //    range edit at the tracked caret. Display-basis arrows/Home/End stay
-  //    local; source basis routes them as <Up> etc.
-  const pendingRef = useRef<Record<string, string>>({});
-  // Optimistic caret for GUI insert fallback: advanced synchronously per
-  // keystroke so fast bursts keep source order through the serial queue.
-  // Corrected by real cursor echoes after Vim syncs and pointer moves.
+  // Event-time work stays synchronous (no awaiting before enqueue) so
+  // multi-key g/gg and operator prefixes never block: each keystroke is
+  // queued immediately and the actual native mode is read inside the serial
+  // queue, where routing and mapping checks happen at execution. Printable
+  // keys therefore never consult stale Normal/Insert refs for routing.
+  // Optimistic caret: GUI edits always collapse, so bursts advance a single
+  // collapsed caret; a fresh noncollapsed selection is consumed once by the
+  // first key and then collapses. Corrected by cursor echoes and refreshes.
   const caretRef = useRef<Record<string, number>>({});
   // Insert-mode keyboard Ctrl+V is recorded here WITHOUT preventing default:
   // the follow-up paste event carries the bytes synchronously (OS image
   // pastes emit no readable text via readText, and readText can fail in a
   // native WebView while normal paste works). The capture handler below
   // prevents default synchronously and routes exactly once.
-  const pendingPasteRef = useRef(0);
+  const pendingPasteRef = useRef<{ time: number; dropText: boolean } | null>(null);
 
-  useEffect(() => {
-    if (vimMode !== "insert" && vimMode !== "replace") pendingRef.current = {};
-  }, [vimMode]);
-
-  useEffect(() => {
-    if (activeId) delete pendingRef.current[activeId];
-  }, [activeId]);
-
-  const routeInsertKey = useCallback(
-    async (id: string, key: string, at: number, retried = false): Promise<void> => {
-      if (!registry) {
-        setNotice(READONLY_MESSAGE);
-        return;
-      }
-      if (!docsRef.current[id]) return;
-      const pending = (pendingRef.current[id] ?? "").slice(-16);
-      try {
-        const decision = await registry.routeInsertKey(id, pending, key, at);
-        if (decision.action === "vim") {
-          pendingRef.current[id] = (pending + key).slice(-16);
-        } else {
-          pendingRef.current[id] = "";
-          const next = at + key.length;
-          caretRef.current[id] = next;
-          setSelections((prev) => ({ ...prev, [id]: { anchor: next, head: next } }));
-          echoCursor(id, next, next);
-        }
-        mergeSnapshot(decision.snapshot);
-        if (decision.action === "vim") await refreshModeCursor(id);
-      } catch (cause) {
-        if (cause instanceof StaleResync) {
-          sayStale(cause.snapshot);
-          // The rejected keystroke applied nothing, so exactly one retry
-          // against the fresh revision cannot duplicate it.
-          if (!retried) await routeInsertKey(id, key, at, true);
-        } else {
-          setNotice(workspaceErrorText(cause));
-        }
-      }
+  /** Exact half-open range for one edit with safe-retry correspondence data. */
+  const takeRange = useCallback(
+    (id: string): { range: { start: number; end: number }; beforeText: string } => {
+      const current = docsRef.current[id];
+      const sel = selections[id] ?? { anchor: 0, head: 0 };
+      const range = resolveEditRange(current?.text.length ?? 0, sel.anchor, sel.head, caretRef.current[id]);
+      return { range, beforeText: sliceRange(current?.text ?? "", range) };
     },
-    [registry, mergeSnapshot, refreshModeCursor, sayStale, echoCursor],
+    [selections],
   );
 
-  // Captured paste text in insert/replace modes: a keyboard Ctrl+V wins an
-  // explicit <C-v> mapping check and feeds natively, otherwise the captured
-  // text lands as one serial range insert. Context-menu pastes (no keyboard
-  // gesture) never simulate a mapping and insert directly.
-  const routeCapturedPaste = useCallback(
-    async (id: string, keyNotation: string | null, text: string, at: number, retried = false): Promise<void> => {
+  /**
+   * A newer revision must never silently reuse an old range: after a stale
+   * rejection, retry once only when the fresh text still holds the captured
+   * slice at the clamped range (collapsed carets always correspond).
+   */
+  const correspondRange = useCallback(
+    (snapshot: DocumentSnapshot, range: { start: number; end: number }, beforeText: string): { start: number; end: number } | null =>
+      correspondSnapshotRange(snapshot.text, range, beforeText),
+    [],
+  );
+
+  const routeCharKey = useCallback(
+    async (id: string, key: string, range: { start: number; end: number }, beforeText: string, retried = false): Promise<void> => {
       if (!registry) {
         setNotice(READONLY_MESSAGE);
         return;
       }
       if (!docsRef.current[id]) return;
-      if (text === "") return;
+      setVimKeys((prev) => (prev + key).slice(-24));
       try {
-        const decision = await registry.routeCapturedPaste(id, keyNotation, text, at);
+        const decision = await registry.routeCharKey(id, key, range);
         if (decision.action === "vim") {
+          // Native edit (any mode): the cursor truth comes from the refresh.
           mergeSnapshot(decision.snapshot);
           await refreshModeCursor(id);
           return;
         }
-        const next = at + text.length;
+        const next = range.start + key.length;
         caretRef.current[id] = next;
         setSelections((prev) => ({ ...prev, [id]: { anchor: next, head: next } }));
         echoCursor(id, next, next);
@@ -707,15 +679,61 @@ export function WorkspaceShell() {
       } catch (cause) {
         if (cause instanceof StaleResync) {
           sayStale(cause.snapshot);
-          // The rejected paste applied nothing, so exactly one retry
-          // against the fresh revision cannot duplicate it.
-          if (!retried) await routeCapturedPaste(id, keyNotation, text, at, true);
+          if (!retried) {
+            const fresh = correspondRange(cause.snapshot, range, beforeText);
+            if (fresh) await routeCharKey(id, key, fresh, cause.snapshot.text.slice(fresh.start, fresh.end), true);
+          }
         } else {
           setNotice(workspaceErrorText(cause));
         }
       }
     },
-    [registry, mergeSnapshot, refreshModeCursor, sayStale, echoCursor],
+    [registry, mergeSnapshot, refreshModeCursor, sayStale, echoCursor, correspondRange],
+  );
+
+  // Captured paste replaces the exact half-open range as one serial edit and
+  // collapses there. Context-menu pastes (no keyboard gesture) never simulate
+  // a mapping and insert directly.
+  const routeCapturedPaste = useCallback(
+    async (
+      id: string,
+      keyNotation: string | null,
+      text: string,
+      range: { start: number; end: number },
+      beforeText: string,
+      retried = false,
+    ): Promise<void> => {
+      if (!registry) {
+        setNotice(READONLY_MESSAGE);
+        return;
+      }
+      if (!docsRef.current[id]) return;
+      if (text === "") return;
+      try {
+        const decision = await registry.routeCapturedPaste(id, keyNotation, text, range);
+        if (decision.action === "vim") {
+          mergeSnapshot(decision.snapshot);
+          await refreshModeCursor(id);
+          return;
+        }
+        const next = range.start + text.length;
+        caretRef.current[id] = next;
+        setSelections((prev) => ({ ...prev, [id]: { anchor: next, head: next } }));
+        echoCursor(id, next, next);
+        mergeSnapshot(decision.snapshot);
+      } catch (cause) {
+        if (cause instanceof StaleResync) {
+          sayStale(cause.snapshot);
+          if (!retried) {
+            const fresh = correspondRange(cause.snapshot, range, beforeText);
+            if (fresh) await routeCapturedPaste(id, keyNotation, text, fresh, cause.snapshot.text.slice(fresh.start, fresh.end), true);
+          }
+        } else {
+          setNotice(workspaceErrorText(cause));
+        }
+      }
+    },
+    [registry, mergeSnapshot, refreshModeCursor, sayStale, echoCursor, correspondRange],
   );
 
   const onEditorKeyDown = useCallback(
@@ -731,27 +749,37 @@ export function WorkspaceShell() {
       const mod = event.ctrlKey || event.metaKey;
       const lower = event.key.toLowerCase();
       if (mod && (lower === "p" || lower === "s")) return;
-      const isInsert = vimModeRef.current === "insert" || vimModeRef.current === "replace";
-      if (isInsert && event.key.toLowerCase() === "v" && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
-        // Keyboard paste gesture: record it and let the paste event carry
-        // the bytes synchronously. Preventing default here would swallow OS
-        // image bytes (no paste event fires) and readText can fail in a
-        // native WebView while normal paste works. The capture handler
+      if (event.key.toLowerCase() === "v" && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
+        // Keyboard paste gesture in any mode: record it and let the paste
+        // event carry the bytes synchronously. Preventing default here would
+        // swallow OS image bytes (no paste event fires) and readText can fail
+        // in a native WebView while normal paste works. The capture handler
         // prevents default synchronously and routes text-or-image exactly
-        // once, mapping-first. Normal-mode Ctrl+V keeps flowing below as
-        // native visual-block.
-        pendingPasteRef.current = Date.now();
+        // once. When the gesture was made outside insert/replace, the keydown
+        // below already fed it natively (Normal Ctrl+V stays visual-block),
+        // so the text half is dropped there to preserve exactly-once native.
+        const insertGesture = vimModeRef.current === "insert" || vimModeRef.current === "replace";
+        pendingPasteRef.current = { time: Date.now(), dropText: !insertGesture };
+        if (!insertGesture) {
+          const keys = serializeVimKey({ key: event.key, ctrlKey: event.ctrlKey, metaKey: event.metaKey, altKey: event.altKey, shiftKey: event.shiftKey });
+          if (!keys) return;
+          event.preventDefault();
+          event.stopPropagation();
+          void routeVimKeys(activeRef.current, keys);
+        }
         return;
       }
-      if (isInsert && event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        // Every printable key enqueues immediately; the actual native mode is
+        // read inside the serial queue, so fast Normal->i->characters and a
+        // Visual install followed by a key never consult stale refs.
         event.preventDefault();
         event.stopPropagation();
         const id = activeRef.current;
-        const current = docsRef.current[id];
-        const sel = selections[id] ?? { anchor: 0, head: 0 };
-        const at = Math.min(caretRef.current[id] ?? sel.head, current?.text.length ?? 0);
-        caretRef.current[id] = at + event.key.length;
-        void routeInsertKey(id, event.key, at);
+        if (!docsRef.current[id]) return;
+        const { range, beforeText } = takeRange(id);
+        caretRef.current[id] = range.start + event.key.length;
+        void routeCharKey(id, event.key, range, beforeText);
         return;
       }
       if (navRef.current === "display" && !event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -770,7 +798,7 @@ export function WorkspaceShell() {
       event.stopPropagation();
       void routeVimKeys(activeRef.current, keys);
     },
-    [desktop, registry, routeVimKeys, routeInsertKey, routeCapturedPaste, selections],
+    [desktop, registry, routeVimKeys, routeCharKey, routeCapturedPaste, takeRange, selections],
   );
 
   // -- paste text/images (capture phase; preview pipeline untouched) --------
@@ -780,11 +808,18 @@ export function WorkspaceShell() {
   // synchronously, before CodeMirror can insert anything. No async
   // preventDefault after insertion, no readText round-trip, exactly once.
   const pasteImageFiles = useCallback(
-    async (id: string, files: File[], at: number) => {
+    async (id: string, files: File[], range: { start: number; end: number }) => {
       if (!registry) {
         setNotice(READONLY_MESSAGE);
         return;
       }
+      // The first file replaces the exact selected range; each following file
+      // appends after the previously inserted Markdown instead of reusing the
+      // original offset. Revisions chain locally: each call builds on the
+      // previous result, so the loop never goes stale on itself.
+      let cursor = { ...range };
+      let revision = docsRef.current[id]?.revision ?? 0;
+      let previousLength = docsRef.current[id]?.text.length ?? 0;
       for (const file of files) {
         if (file.size > 20 * 1024 * 1024) {
           setNotice("対応画像（PNG/JPEG/GIF/WebP、20 MiB 以下）のみ扱えます。");
@@ -793,8 +828,16 @@ export function WorkspaceShell() {
         try {
           const bytes = new Uint8Array(await file.arrayBuffer());
           const result = await registry.pasteImage(
-            { request: { documentId: id, baseRevision: docsRef.current[id]?.revision ?? 0 }, name: file.name, bytes, range: { start: at, end: at } },
+            { request: { documentId: id, baseRevision: revision }, name: file.name, bytes, range: cursor },
           );
+          revision = result.snapshot.revision;
+          const inserted = result.snapshot.text.length - previousLength;
+          previousLength = result.snapshot.text.length;
+          const next = cursor.start + Math.max(inserted, 0);
+          cursor = { start: next, end: next };
+          caretRef.current[id] = next;
+          setSelections((prev) => ({ ...prev, [id]: { anchor: next, head: next } }));
+          echoCursor(id, next, next);
           mergeSnapshot(result.snapshot);
           setNotice(`画像を挿入しました（${result.path}）。`);
         } catch (cause) {
@@ -805,43 +848,57 @@ export function WorkspaceShell() {
         }
       }
     },
-    [registry, mergeSnapshot, sayStale],
+    [registry, mergeSnapshot, sayStale, echoCursor],
   );
 
   const onPasteCapture = useCallback(
     (event: React.ClipboardEvent) => {
       if (!desktop || !registry || !activeRef.current) return;
       const id = activeRef.current;
-      const current = docsRef.current[id];
-      if (!current) return;
+      if (!docsRef.current[id]) return;
       const data = event.clipboardData;
       const files = Array.from(data?.files ?? []).filter((file) => /^image\/(png|jpeg|gif|webp)$/.test(file.type));
-      // Synchronously capture the range: the selection may go stale before
-      // the serial queue executes (execution-time revision + one retry).
-      const sel = selections[id] ?? { anchor: 0, head: 0 };
-      const at = Math.min(Math.max(sel.anchor, sel.head), current.text.length);
       if (files.length > 0) {
         // Empty text alongside images is a pure image paste: files win and
         // the (empty) text is ignored so nothing inserts twice.
         event.preventDefault();
         event.stopPropagation();
-        pendingPasteRef.current = 0;
-        void pasteImageFiles(id, files, at);
+        pendingPasteRef.current = null;
+        const { range } = takeRange(id);
+        void pasteImageFiles(id, files, range);
         return;
       }
       const text = data?.getData("text/plain") ?? data?.getData("text") ?? "";
-      if (text === "") return;
+      if (text === "") {
+        pendingPasteRef.current = null;
+        return;
+      }
+      const pending = pendingPasteRef.current !== null && Date.now() - pendingPasteRef.current.time < 1500
+        ? pendingPasteRef.current
+        : null;
+      pendingPasteRef.current = null;
+      if (pending !== null) {
+        // Keyboard paste: prevent synchronously before CodeMirror default,
+        // then let the serial queue read the actual mode. A gesture made
+        // outside insert/replace was already fed natively above, so its text
+        // half is dropped here to preserve exactly-once native.
+        event.preventDefault();
+        event.stopPropagation();
+        if (pending.dropText) return;
+        const { range, beforeText } = takeRange(id);
+        void routeCapturedPaste(id, "<C-v>", text, range, beforeText);
+        return;
+      }
       const mode = vimModeRef.current;
       if (mode !== "insert" && mode !== "replace") return;
-      // Insert/replace text paste: prevent synchronously before CodeMirror
-      // default, then route mapping-first (keyboard) or direct (menu).
+      // Context-menu paste in insert/replace inserts directly without
+      // simulating a mapping. Prevent synchronously before CodeMirror default.
       event.preventDefault();
       event.stopPropagation();
-      const keyboard = Date.now() - pendingPasteRef.current < 1500;
-      pendingPasteRef.current = 0;
-      void routeCapturedPaste(id, keyboard ? "<C-v>" : null, text, at);
+      const { range, beforeText } = takeRange(id);
+      void routeCapturedPaste(id, null, text, range, beforeText);
     },
-    [desktop, registry, selections, pasteImageFiles, routeCapturedPaste],
+    [desktop, registry, takeRange, pasteImageFiles, routeCapturedPaste],
   );
 
   // -- search + revision-aware replace ---------------------------------------

@@ -113,49 +113,89 @@ export interface VimKey {
 
 /**
  * Serialize a DOM key event to Neovim input notation for `nvim_input`.
- * Returns null for pure modifiers and UI-reserved keys the shell handles
- * itself (the shell filters Ctrl+P / Ctrl+S etc. before calling this).
- * Multi-character keys (IME-committed text) pass through verbatim so they
- * are typed natively; composition preedit never reaches here.
+ * Returns null for pure modifiers, platform IME keys, and UI-reserved keys
+ * the shell handles itself (the shell filters Ctrl+P / Ctrl+S etc. before
+ * calling this). Platform IME keys return null BEFORE any modifier
+ * formatting so the OS default (e.g. real Alt+backquote IME toggle) is never
+ * prevented and no invalid `<M-KanjiMode>` text is fed. Named keys are
+ * normalized before modifiers so Ctrl+ArrowUp becomes `<C-Up>`, never
+ * `<C-ArrowUp>`. Multi-character keys (IME-committed text) pass through
+ * verbatim so they are typed natively; composition preedit never reaches
+ * here. Both the shell router and the raw grid view share this serializer.
  */
+const NAMED_VIM_KEYS: Record<string, string> = {
+  Enter: "CR",
+  Backspace: "BS",
+  Tab: "Tab",
+  Escape: "Esc",
+  Delete: "Del",
+  ArrowUp: "Up",
+  ArrowDown: "Down",
+  ArrowLeft: "Left",
+  ArrowRight: "Right",
+  Home: "Home",
+  End: "End",
+  PageUp: "PageUp",
+  PageDown: "PageDown",
+  " ": "Space",
+};
+
+/** DOM keys owned by the platform IME or the composition system. Never Vim. */
+const PLATFORM_IME_KEYS = new Set([
+  "KanjiMode",
+  "Convert",
+  "NonConvert",
+  "Hiragana",
+  "HiraganaKatakana",
+  "Katakana",
+  "Zenkaku",
+  "Hankaku",
+  "ZenkakuHankaku",
+  "Romaji",
+  "Alphanumeric",
+  "ModeChange",
+  "HangulMode",
+  "JunjaMode",
+  "FinalMode",
+  "HanjaMode",
+  "Eisu",
+  "Process",
+  "Dead",
+  "Unidentified",
+]);
+
 export function serializeVimKey(event: VimKey): string | null {
   const { key, ctrlKey, metaKey, altKey, shiftKey } = event;
   if (key === "Control" || key === "Shift" || key === "Alt" || key === "Meta") return null;
+  if (PLATFORM_IME_KEYS.has(key)) return null;
+  const normalized = NAMED_VIM_KEYS[key] ?? key;
   if (ctrlKey || metaKey) {
     const mod = "C";
-    const base = key.length === 1 ? key.toLowerCase() : key;
-    const named: Record<string, string> = {
-      Enter: "CR",
-      Backspace: "BS",
-      Tab: "Tab",
-      Escape: "Esc",
-      " ": "Space",
-    };
-    const inner = named[base] ?? base;
+    const base = normalized.length === 1 ? normalized.toLowerCase() : normalized;
     void metaKey;
-    return `<${mod}-${inner}>`;
+    return `<${mod}-${base}>`;
   }
   if (altKey) {
-    return `<M-${key.length === 1 ? key : key}>`;
+    return `<M-${normalized}>`;
   }
-  switch (key) {
-    case "Enter":
+  switch (normalized) {
+    case "CR":
       return "<CR>";
-    case "Backspace":
+    case "BS":
       return "<BS>";
     case "Tab":
       return "<Tab>";
-    case "Escape":
+    case "Esc":
       return "<Esc>";
-    case "Delete":
+    case "Del":
       return "<Del>";
-    case "ArrowUp":
+    case "Up":
       return "<Up>";
-    case "ArrowDown":
+    case "Down":
       return "<Down>";
-    case "ArrowLeft":
+    case "Left":
       return "<Left>";
-    case "ArrowRight":
+    case "Right":
       return "<Right>";
     case "Home":
       return "<Home>";
@@ -165,22 +205,10 @@ export function serializeVimKey(event: VimKey): string | null {
       return "<PageUp>";
     case "PageDown":
       return "<PageDown>";
-    case "F1":
-    case "F2":
-    case "F3":
-    case "F4":
-    case "F5":
-    case "F6":
-    case "F7":
-    case "F8":
-    case "F9":
-    case "F10":
-    case "F11":
-    case "F12":
-      return shiftKey ? `<S-${key}>` : `<${key}>`;
-    case " ":
+    case "Space":
       return " ";
     default:
+      if (/^F\d{1,2}$/.test(normalized)) return shiftKey ? `<S-${normalized}>` : `<${normalized}>`;
       return key;
   }
 }
@@ -202,6 +230,8 @@ export class RegistryClient {
   private queues = new Map<DocumentId, Promise<unknown>>();
   private rev = new Map<DocumentId, number>();
   private cursorStaged = new Map<DocumentId, Array<{ anchor: number; head: number }>>();
+  /** Insert-mode mapping prefix per document, owned inside the serial queue. */
+  private pendingPrefix = new Map<DocumentId, string>();
 
   /** Record an authoritative snapshot (newer-or-equal wins). */
   noteSnapshot(snapshot: DocumentSnapshot): void {
@@ -269,31 +299,45 @@ export class RegistryClient {
   }
 
   /**
-   * Mapping-first insert as ONE serial task: the revision is read at
-   * execution time (never at event time), then the pending prefix plus the
-   * key is queried via `has_nvim_mapping`. A claimed key feeds natively; an
-   * unclaimed key becomes a GUI caret insert. Either way the snapshot feeds
-   * back so bursts keep source order with no duplication. Mapping precedence
-   * is fail-closed: an unreadable mapping query throws visibly instead of
-   * silently landing a GUI edit that bypasses a mapping.
+   * Printable character routing with the actual native mode read inside the
+   * serial queue. The shell enqueues synchronously on keydown (multi-key
+   * g/gg and operator prefixes never wait), and the decision happens at
+   * execution: insert/replace runs the mapping-first insert flow against the
+   * queue-owned pending prefix, any other mode feeds the key natively so a
+   * Visual install followed immediately by a key cannot append raw GUI chars
+   * from stale Normal/Insert refs. Mapping precedence is fail-closed.
    */
-  routeInsertKey(
+  routeCharKey(
     documentId: DocumentId,
-    pending: string,
     key: string,
-    at: number,
+    range: { start: number; end: number },
   ): Promise<{ action: "vim"; snapshot: DocumentSnapshot } | { action: "gui"; snapshot: DocumentSnapshot }> {
     return this.enqueue(documentId, async () => {
-      const revision = this.rev.get(documentId) ?? 0;
+      const update = await workspaceApi.fetchMode(documentId);
+      const current = this.rev.get(documentId) ?? 0;
+      const revision = update.revision > current ? update.revision : current;
+      this.rev.set(documentId, revision);
+      if (update.mode !== "insert" && update.mode !== "replace") {
+        this.pendingPrefix.set(documentId, "");
+        try {
+          return { action: "vim" as const, snapshot: this.bump(await workspaceApi.input({ documentId, baseRevision: revision }, key)) };
+        } catch (cause) {
+          if (isStaleError(cause)) await this.resync(documentId);
+          throw cause;
+        }
+      }
+      const pending = this.pendingPrefix.get(documentId) ?? "";
       const mapped = await workspaceApi.hasMapping(documentId, "i", pending + key);
       try {
         if (mapped) {
+          this.pendingPrefix.set(documentId, (pending + key).slice(-16));
           return { action: "vim" as const, snapshot: this.bump(await workspaceApi.input({ documentId, baseRevision: revision }, key)) };
         }
+        this.pendingPrefix.set(documentId, "");
         return {
           action: "gui" as const,
           snapshot: this.bump(
-            await workspaceApi.applyEdits({ documentId, baseRevision: revision }, [{ range: { start: at, end: at }, text: key }]),
+            await workspaceApi.applyEdits({ documentId, baseRevision: revision }, [{ range, text: key }]),
           ),
         };
       } catch (cause) {
@@ -304,28 +348,13 @@ export class RegistryClient {
   }
 
   /**
-   * Clipboard paste as ONE serial task: an explicit insert-mode <C-v>
-   * mapping wins and feeds natively, otherwise the clipboard text lands as
-   * a single GUI range insert. The caller prevents default BEFORE awaiting
-   * this so no duplicate default paste can interleave. Mapping precedence is
-   * fail-closed: an unreadable mapping query throws visibly instead of
-   * silently landing a GUI insert that bypasses a mapping.
-   */
-  routePasteText(
-    documentId: DocumentId,
-    keyNotation: string,
-    text: string,
-    at: number,
-  ): Promise<{ action: "vim"; snapshot: DocumentSnapshot } | { action: "gui"; snapshot: DocumentSnapshot }> {
-    return this.routeCapturedPaste(documentId, keyNotation, text, at);
-  }
-
-  /**
    * Captured paste as ONE serial task from a synchronously-read paste event.
    * `keyNotation` carries the keyboard gesture (`"<C-v>"`) or null for
-   * context-menu pastes, which never simulate a mapping. A keyboard paste
-   * queries the explicit insert-mode mapping first (fail-closed on unreadable
-   * state); otherwise the captured text lands as a single GUI range insert.
+   * context-menu pastes, which never simulate a mapping. The actual native
+   * mode is read inside the queue: a keyboard paste in insert/replace queries
+   * the explicit mapping first (fail-closed on unreadable state), a keyboard
+   * gesture that lands outside insert feeds natively, and otherwise the
+   * captured text replaces the exact half-open range as a single GUI edit.
    * The caller prevents default synchronously BEFORE awaiting this so no
    * default insertion can interleave and the paste lands exactly once.
    */
@@ -333,11 +362,14 @@ export class RegistryClient {
     documentId: DocumentId,
     keyNotation: string | null,
     text: string,
-    at: number,
+    range: { start: number; end: number },
   ): Promise<{ action: "vim"; snapshot: DocumentSnapshot } | { action: "gui"; snapshot: DocumentSnapshot }> {
     return this.enqueue(documentId, async () => {
-      const revision = this.rev.get(documentId) ?? 0;
-      if (keyNotation !== null) {
+      const update = await workspaceApi.fetchMode(documentId);
+      const current = this.rev.get(documentId) ?? 0;
+      const revision = update.revision > current ? update.revision : current;
+      this.rev.set(documentId, revision);
+      if (keyNotation !== null && (update.mode === "insert" || update.mode === "replace")) {
         const mapped = await workspaceApi.hasMapping(documentId, "i", keyNotation);
         if (mapped) {
           try {
@@ -347,12 +379,19 @@ export class RegistryClient {
             throw cause;
           }
         }
+      } else if (keyNotation !== null) {
+        try {
+          return { action: "vim" as const, snapshot: this.bump(await workspaceApi.input({ documentId, baseRevision: revision }, keyNotation)) };
+        } catch (cause) {
+          if (isStaleError(cause)) await this.resync(documentId);
+          throw cause;
+        }
       }
       try {
         return {
           action: "gui" as const,
           snapshot: this.bump(
-            await workspaceApi.applyEdits({ documentId, baseRevision: revision }, [{ range: { start: at, end: at }, text }]),
+            await workspaceApi.applyEdits({ documentId, baseRevision: revision }, [{ range, text }]),
           ),
         };
       } catch (cause) {
@@ -392,7 +431,11 @@ export class RegistryClient {
   }
 
   pasteImage(args: PasteImageArgs) {
-    return this.enqueue(args.request.documentId, () => workspaceApi.pasteImage(args.request, args.name, args.bytes, args.range));
+    return this.enqueue(args.request.documentId, async () => {
+      const result = await workspaceApi.pasteImage(args.request, args.name, args.bytes, args.range);
+      this.bump(result.snapshot);
+      return result;
+    });
   }
 
   fetchSnapshot(documentId: DocumentId): Promise<DocumentSnapshot> {
@@ -469,10 +512,7 @@ export class ReadonlyRegistry {
   vimInput(_documentId?: string, _keys?: string): Promise<never> {
     return this.reject();
   }
-  routeInsertKey(_documentId?: string, _pending?: string, _key?: string, _at?: number): Promise<never> {
-    return this.reject();
-  }
-  routePasteText(): Promise<never> {
+  routeCharKey(_documentId?: string, _key?: string, _range?: { start: number; end: number }): Promise<never> {
     return this.reject();
   }
   routeCapturedPaste(): Promise<never> {

@@ -127,66 +127,107 @@ describe("registry client sends revision-aware requests", () => {
   });
 });
 
-describe("mapping-first insert routing", () => {
+describe("execution-mode character routing", () => {
+  let nativeMode = "insert";
+
+  beforeEach(() => {
+    nativeMode = "insert";
+  });
+
+  function installModeAware(handlers: (command: string, args?: unknown) => Promise<unknown>) {
+    mockedInvoke.mockImplementation((command: string, args?: unknown) => {
+      if (command === "fetch_mode") return Promise.resolve({ documentId: "doc_1", revision: 0, mode: nativeMode });
+      return handlers(command, args);
+    });
+  }
+
   it("queries the mapping prefix then feeds claimed keys natively, in order", async () => {
     const client = new RegistryClient();
-    mockedInvoke.mockImplementation((command: string) => {
+    installModeAware((command: string) => {
       if (command === "has_nvim_mapping") return Promise.resolve(true);
       if (command === "nvim_input") return Promise.resolve(snapshot("doc_1", 1, "x"));
       throw new Error(`unexpected ${command}`);
     });
-    const decision = await client.routeInsertKey("doc_1", "", "j", 0);
+    const decision = await client.routeCharKey("doc_1", "j", { start: 0, end: 0 });
     expect(decision).toEqual({ action: "vim", snapshot: snapshot("doc_1", 1, "x") });
     const order = mockedInvoke.mock.calls.map(([command]) => command);
-    expect(order).toEqual(["has_nvim_mapping", "nvim_input"]);
-    expect(mockedInvoke).toHaveBeenNthCalledWith(1, "has_nvim_mapping", { documentId: "doc_1", mode: "i", lhs: "j" });
-    expect(mockedInvoke).toHaveBeenNthCalledWith(2, "nvim_input", { documentId: "doc_1", baseRevision: 0, keys: "j" });
+    expect(order).toEqual(["fetch_mode", "has_nvim_mapping", "nvim_input"]);
+    expect(mockedInvoke).toHaveBeenNthCalledWith(2, "has_nvim_mapping", { documentId: "doc_1", mode: "i", lhs: "j" });
+    expect(mockedInvoke).toHaveBeenNthCalledWith(3, "nvim_input", { documentId: "doc_1", baseRevision: 0, keys: "j" });
   });
 
-  it("sends the pending prefix so multi-key mappings keep priority", async () => {
+  it("keeps the queue-owned pending prefix so multi-key mappings keep priority", async () => {
     const client = new RegistryClient();
-    mockedInvoke.mockImplementation((command: string) => {
+    installModeAware((command: string) => {
       if (command === "has_nvim_mapping") return Promise.resolve(true);
       return Promise.resolve(snapshot("doc_1", 2, "x"));
     });
-    await client.routeInsertKey("doc_1", "j", "j", 0);
-    expect(mockedInvoke).toHaveBeenNthCalledWith(1, "has_nvim_mapping", { documentId: "doc_1", mode: "i", lhs: "jj" });
+    await client.routeCharKey("doc_1", "j", { start: 0, end: 0 });
+    await client.routeCharKey("doc_1", "j", { start: 1, end: 1 });
+    expect(mockedInvoke).toHaveBeenNthCalledWith(2, "has_nvim_mapping", { documentId: "doc_1", mode: "i", lhs: "j" });
+    expect(mockedInvoke).toHaveBeenNthCalledWith(5, "has_nvim_mapping", { documentId: "doc_1", mode: "i", lhs: "jj" });
   });
 
-  it("applies unclaimed keys as GUI caret inserts with the live revision", async () => {
+  it("replaces the exact selected range for unclaimed keys", async () => {
     const client = new RegistryClient();
-    mockedInvoke.mockImplementation((command: string) => {
+    installModeAware((command: string) => {
       if (command === "has_nvim_mapping") return Promise.resolve(false);
       if (command === "apply_gui_edits") return Promise.resolve(snapshot("doc_1", 1, "ax"));
       throw new Error(`unexpected ${command}`);
     });
-    const decision = await client.routeInsertKey("doc_1", "", "a", 0);
+    const decision = await client.routeCharKey("doc_1", "a", { start: 2, end: 5 });
     expect(decision).toEqual({ action: "gui", snapshot: snapshot("doc_1", 1, "ax") });
     expect(mockedInvoke).toHaveBeenCalledWith("apply_gui_edits", {
       documentId: "doc_1",
       baseRevision: 0,
-      edits: [{ range: { start: 0, end: 0 }, text: "a" }],
+      edits: [{ range: { start: 2, end: 5 }, text: "a" }],
     });
     expect(mockedInvoke).not.toHaveBeenCalledWith("nvim_input", expect.anything());
+  });
+
+  it("feeds keys natively when the actual mode is visual, never appending GUI chars", async () => {
+    const client = new RegistryClient();
+    nativeMode = "visual";
+    installModeAware((command: string) => {
+      if (command === "nvim_input") return Promise.resolve(snapshot("doc_1", 1, "x"));
+      throw new Error(`unexpected ${command}`);
+    });
+    const decision = await client.routeCharKey("doc_1", "x", { start: 2, end: 7 });
+    expect(decision.action).toBe("vim");
+    expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_1", baseRevision: 0, keys: "x" });
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === "has_nvim_mapping")).toHaveLength(0);
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+  });
+
+  it("feeds keys natively when the actual mode is normal despite an insert hint", async () => {
+    const client = new RegistryClient();
+    nativeMode = "normal";
+    installModeAware((command: string) => {
+      if (command === "nvim_input") return Promise.resolve(snapshot("doc_1", 1, "x"));
+      throw new Error(`unexpected ${command}`);
+    });
+    const decision = await client.routeCharKey("doc_1", "g", { start: 0, end: 0 });
+    expect(decision.action).toBe("vim");
+    expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_1", baseRevision: 0, keys: "g" });
   });
 
   it("keeps bursts ordered against execution-time revisions", async () => {
     const client = new RegistryClient();
     let revision = 0;
-    mockedInvoke.mockImplementation((command: string, args?: unknown) => {
+    installModeAware((command: string, args?: unknown) => {
       const a = (args ?? {}) as { edits?: Array<{ range: { start: number; end: number }; text: string }> };
       if (command === "has_nvim_mapping") return Promise.resolve(false);
       if (command === "apply_gui_edits") {
         revision += 1;
         const edit = a.edits![0];
-        return Promise.resolve(snapshot("doc_1", revision, `<${edit.range.start}${edit.text}>`));
+        return Promise.resolve(snapshot("doc_1", revision, `<${edit.range.start}-${edit.range.end}${edit.text}>`));
       }
       throw new Error(`unexpected ${command}`);
     });
     const results = await Promise.all([
-      client.routeInsertKey("doc_1", "", "a", 0),
-      client.routeInsertKey("doc_1", "", "b", 1),
-      client.routeInsertKey("doc_1", "", "c", 2),
+      client.routeCharKey("doc_1", "a", { start: 0, end: 0 }),
+      client.routeCharKey("doc_1", "b", { start: 1, end: 1 }),
+      client.routeCharKey("doc_1", "c", { start: 2, end: 2 }),
     ]);
     expect(results.map((result) => result.snapshot.revision)).toEqual([1, 2, 3]);
     const bases = mockedInvoke.mock.calls
@@ -197,21 +238,33 @@ describe("mapping-first insert routing", () => {
 
   it("fails closed without a GUI edit when the mapping state is unreadable", async () => {
     const client = new RegistryClient();
-    mockedInvoke.mockImplementation((command: string) => {
+    installModeAware((command: string) => {
       if (command === "has_nvim_mapping") return Promise.reject(new Error("rpc down"));
       if (command === "apply_gui_edits") return Promise.resolve(snapshot("doc_1", 1, "a"));
       throw new Error(`unexpected ${command}`);
     });
-    await expect(client.routeInsertKey("doc_1", "", "a", 0)).rejects.toThrow("rpc down");
+    await expect(client.routeCharKey("doc_1", "a", { start: 0, end: 0 })).rejects.toThrow("rpc down");
     expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+  });
+
+  it("fails closed without feeding when the mode query is unreadable", async () => {
+    const client = new RegistryClient();
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === "fetch_mode") return Promise.reject(new Error("mode down"));
+      throw new Error(`unexpected ${command}`);
+    });
+    await expect(client.routeCharKey("doc_1", "a", { start: 0, end: 0 })).rejects.toThrow("mode down");
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input")).toHaveLength(0);
   });
 
   it("resyncs instead of duplicating when the base went stale", async () => {
     const client = new RegistryClient();
+    mockedInvoke.mockImplementationOnce(() => Promise.resolve({ documentId: "doc_1", revision: 3, mode: "insert" }));
     mockedInvoke.mockResolvedValueOnce(true);
     mockedInvoke.mockRejectedValueOnce({ code: "contract", error: { code: "stale_revision", expected: 4, received: 3 } });
     mockedInvoke.mockResolvedValueOnce(snapshot("doc_1", 4, "latest"));
-    const failure = await client.routeInsertKey("doc_1", "", "j", 0).then(
+    const failure = await client.routeCharKey("doc_1", "j", { start: 0, end: 0 }).then(
       () => null,
       (cause: unknown) => cause,
     );
@@ -251,52 +304,94 @@ describe("Vim key contract", () => {
     expect(serializeVimKey({ key: "Alt" })).toBeNull();
     expect(serializeVimKey({ key: "Meta" })).toBeNull();
   });
+
+  it("normalizes named keys before modifiers", () => {
+    expect(serializeVimKey({ key: "ArrowUp", ctrlKey: true })).toBe("<C-Up>");
+    expect(serializeVimKey({ key: "ArrowDown", ctrlKey: true })).toBe("<C-Down>");
+    expect(serializeVimKey({ key: "ArrowLeft", ctrlKey: true })).toBe("<C-Left>");
+    expect(serializeVimKey({ key: "ArrowRight", ctrlKey: true })).toBe("<C-Right>");
+    expect(serializeVimKey({ key: "Home", ctrlKey: true })).toBe("<C-Home>");
+    expect(serializeVimKey({ key: "End", ctrlKey: true })).toBe("<C-End>");
+    expect(serializeVimKey({ key: "F5", ctrlKey: true })).toBe("<C-F5>");
+    expect(serializeVimKey({ key: "Enter", ctrlKey: true })).toBe("<C-CR>");
+    expect(serializeVimKey({ key: "Escape", ctrlKey: true })).toBe("<C-Esc>");
+    expect(serializeVimKey({ key: "ArrowLeft", altKey: true })).toBe("<M-Left>");
+    expect(serializeVimKey({ key: "Enter", altKey: true })).toBe("<M-CR>");
+  });
+
+  it("leaves platform IME and composition keys to the OS", () => {
+    // Actual Windows native Alt+backquote emits key=KanjiMode: returning null
+    // keeps the real IME toggle alive and feeds no invalid Vim text.
+    expect(serializeVimKey({ key: "KanjiMode" })).toBeNull();
+    expect(serializeVimKey({ key: "KanjiMode", altKey: true })).toBeNull();
+    expect(serializeVimKey({ key: "KanjiMode", ctrlKey: true })).toBeNull();
+    for (const key of ["Convert", "NonConvert", "Hiragana", "Katakana", "Zenkaku", "Hankaku", "Alphanumeric", "ModeChange"]) {
+      expect(serializeVimKey({ key })).toBeNull();
+      expect(serializeVimKey({ key, altKey: true })).toBeNull();
+    }
+    expect(serializeVimKey({ key: "Process" })).toBeNull();
+    expect(serializeVimKey({ key: "Dead" })).toBeNull();
+    expect(serializeVimKey({ key: "Unidentified" })).toBeNull();
+  });
 });
 
 describe("clipboard paste respects explicit mappings", () => {
+  let nativeMode = "insert";
+
+  beforeEach(() => {
+    nativeMode = "insert";
+  });
+
+  function installPaste(handlers: (command: string, args?: unknown) => Promise<unknown>) {
+    mockedInvoke.mockImplementation((command: string, args?: unknown) => {
+      if (command === "fetch_mode") return Promise.resolve({ documentId: "doc_1", revision: 0, mode: nativeMode });
+      return handlers(command, args);
+    });
+  }
+
   it("feeds a mapped Ctrl+V natively without inserting text", async () => {
     const client = new RegistryClient();
-    mockedInvoke.mockImplementation((command: string) => {
+    installPaste((command: string) => {
       if (command === "has_nvim_mapping") return Promise.resolve(true);
       if (command === "nvim_input") return Promise.resolve(snapshot("doc_1", 1, "x"));
       throw new Error(`unexpected ${command}`);
     });
-    const decision = await client.routePasteText("doc_1", "<C-v>", "貼付😀\n2行目", 0);
+    const decision = await client.routeCapturedPaste("doc_1", "<C-v>", "貼付😀\n2行目", { start: 0, end: 0 });
     expect(decision.action).toBe("vim");
-    expect(mockedInvoke).toHaveBeenNthCalledWith(1, "has_nvim_mapping", { documentId: "doc_1", mode: "i", lhs: "<C-v>" });
-    expect(mockedInvoke).toHaveBeenNthCalledWith(2, "nvim_input", { documentId: "doc_1", baseRevision: 0, keys: "<C-v>" });
+    expect(mockedInvoke).toHaveBeenNthCalledWith(2, "has_nvim_mapping", { documentId: "doc_1", mode: "i", lhs: "<C-v>" });
+    expect(mockedInvoke).toHaveBeenNthCalledWith(3, "nvim_input", { documentId: "doc_1", baseRevision: 0, keys: "<C-v>" });
     expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
   });
 
-  it("lands unmapped clipboard text as one serial range insert", async () => {
+  it("replaces the exact selected range for unmapped text", async () => {
     const client = new RegistryClient();
-    mockedInvoke.mockImplementation((command: string, args?: unknown) => {
+    installPaste((command: string, args?: unknown) => {
       if (command === "has_nvim_mapping") return Promise.resolve(false);
       if (command === "apply_gui_edits") {
         const a = args as { baseRevision: number; edits: Array<{ range: { start: number; end: number }; text: string }> };
-        return Promise.resolve(snapshot("doc_1", a.baseRevision + 1, `[${a.edits[0].range.start}]`));
+        return Promise.resolve(snapshot("doc_1", a.baseRevision + 1, `[${a.edits[0].range.start}-${a.edits[0].range.end}]`));
       }
       throw new Error(`unexpected ${command}`);
     });
-    const decision = await client.routePasteText("doc_1", "<C-v>", "日本語😀\n2行目", 5);
+    const decision = await client.routeCapturedPaste("doc_1", "<C-v>", "日本語😀\n2行目", { start: 3, end: 8 });
     expect(decision.action).toBe("gui");
     expect(mockedInvoke).toHaveBeenCalledWith("apply_gui_edits", {
       documentId: "doc_1",
       baseRevision: 0,
-      edits: [{ range: { start: 5, end: 5 }, text: "日本語😀\n2行目" }],
+      edits: [{ range: { start: 3, end: 8 }, text: "日本語😀\n2行目" }],
     });
   });
 
   it("inserts context-menu captures directly without a mapping query", async () => {
     const client = new RegistryClient();
-    mockedInvoke.mockImplementation((command: string, args?: unknown) => {
+    installPaste((command: string, args?: unknown) => {
       if (command === "apply_gui_edits") {
         const a = args as { baseRevision: number };
         return Promise.resolve(snapshot("doc_1", a.baseRevision + 1, "menu"));
       }
       throw new Error(`unexpected ${command}`);
     });
-    const decision = await client.routeCapturedPaste("doc_1", null, "メニュー", 2);
+    const decision = await client.routeCapturedPaste("doc_1", null, "メニュー", { start: 2, end: 2 });
     expect(decision.action).toBe("gui");
     expect(mockedInvoke.mock.calls.filter(([command]) => command === "has_nvim_mapping")).toHaveLength(0);
     expect(mockedInvoke).toHaveBeenCalledWith(
@@ -307,11 +402,11 @@ describe("clipboard paste respects explicit mappings", () => {
 
   it("fails closed without an insert when a keyboard mapping query is unreadable", async () => {
     const client = new RegistryClient();
-    mockedInvoke.mockImplementation((command: string) => {
+    installPaste((command: string) => {
       if (command === "has_nvim_mapping") return Promise.reject(new Error("rpc down"));
       throw new Error(`unexpected ${command}`);
     });
-    await expect(client.routeCapturedPaste("doc_1", "<C-v>", "x", 0)).rejects.toThrow("rpc down");
+    await expect(client.routeCapturedPaste("doc_1", "<C-v>", "x", { start: 0, end: 0 })).rejects.toThrow("rpc down");
     expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
     expect(mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input")).toHaveLength(0);
   });
@@ -369,7 +464,7 @@ describe("readonly registry never simulates authority", () => {
     await expect(transport.save()).rejects.toThrow(READONLY_MESSAGE);
     await expect(transport.undo()).rejects.toThrow(READONLY_MESSAGE);
     await expect(transport.vimInput("doc_1", "j")).rejects.toThrow(READONLY_MESSAGE);
-    await expect(transport.routeInsertKey("doc_1", "", "a", 0)).rejects.toThrow(READONLY_MESSAGE);
+    await expect(transport.routeCharKey("doc_1", "a", { start: 0, end: 0 })).rejects.toThrow(READONLY_MESSAGE);
   });
 });
 

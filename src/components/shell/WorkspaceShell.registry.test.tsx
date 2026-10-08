@@ -26,9 +26,10 @@ const scenario = {
   configErrors: [] as string[],
   mode: "normal" as string,
   mappingResult: false as boolean,
+  applyStaleOnce: false,
   imageBytes: new Map<string, { mime: string; bytes: number[] }>(),
   pasteImageStaleOnce: false,
-  pastedImages: [] as Array<{ documentId: string; name: string }>,
+  pastedImages: [] as Array<{ documentId: string; name: string; range: { start: number; end: number } }>,
 };
 
 function resetBackend() {
@@ -41,6 +42,7 @@ function resetBackend() {
   scenario.configErrors = [];
   scenario.mode = "normal";
   scenario.mappingResult = false;
+  scenario.applyStaleOnce = false;
   scenario.imageBytes = new Map();
   scenario.pasteImageStaleOnce = false;
   scenario.pastedImages = [];
@@ -100,6 +102,10 @@ function installBackend() {
       }
       case "apply_gui_edits": {
         const doc = docById(a.documentId as string);
+        if (scenario.applyStaleOnce) {
+          scenario.applyStaleOnce = false;
+          throw { code: "contract", error: { code: "stale_revision", expected: doc.revision + 1, received: a.baseRevision } };
+        }
         if (a.baseRevision !== doc.revision) throw { code: "contract", error: { code: "stale_revision", expected: doc.revision, received: a.baseRevision } };
         doc.text = applyText(doc.text, a.edits as Array<{ range: { start: number; end: number }; text: string }>);
         doc.revision += 1;
@@ -181,7 +187,7 @@ function installBackend() {
         return Promise.resolve(found);
       }
       case "paste_image": {
-        const request = a as unknown as { documentId: string; baseRevision: number; name: string };
+        const request = a as unknown as { documentId: string; baseRevision: number; name: string; range: { start: number; end: number } };
         const doc = docById(request.documentId);
         if (scenario.pasteImageStaleOnce) {
           scenario.pasteImageStaleOnce = false;
@@ -190,7 +196,7 @@ function installBackend() {
         if (request.baseRevision !== doc.revision) {
           throw { code: "contract", error: { code: "stale_revision", expected: doc.revision, received: request.baseRevision } };
         }
-        scenario.pastedImages.push({ documentId: request.documentId, name: request.name as string });
+        scenario.pastedImages.push({ documentId: request.documentId, name: request.name as string, range: request.range });
         doc.text += `\n![${request.name}](images/${request.name})\n`;
         doc.revision += 1;
         doc.dirty = true;
@@ -432,6 +438,15 @@ it("keeps fast insert bursts in source order", async () => {
   fireEvent.keyDown(editor, { key: "c" });
   await waitFor(() => expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 3"));
   expect(scenario.files.get("メモ/a.md")!.text.startsWith("abc")).toBe(true);
+  // Rapid bursts advance the collapsed caret so queued ranges keep order.
+  const burstRanges = mockedInvoke.mock.calls
+    .filter(([command]) => command === "apply_gui_edits")
+    .map(([, args]) => (args as { edits: Array<{ range: { start: number; end: number } }> }).edits[0].range);
+  expect(burstRanges).toEqual([
+    { start: 0, end: 0 },
+    { start: 1, end: 1 },
+    { start: 2, end: 2 },
+  ]);
 });
 
 async function openInsertDoc() {
@@ -513,16 +528,31 @@ it("pastes an OS image with empty text exactly once without text insertion", asy
   fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
   pasteEvent(editor, "", [file]);
   await waitFor(() => expect(scenario.pastedImages).toHaveLength(1));
-  expect(scenario.pastedImages[0]).toEqual({ documentId: "doc_a", name: "shot.png" });
+  expect(scenario.pastedImages[0]).toMatchObject({ documentId: "doc_a", name: "shot.png" });
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input")).toHaveLength(0);
+});
+
+it("appends each pasted image after the previous insert instead of reusing one offset", async () => {
+  await openInsertDoc();
+  const editor = screen.getByTestId("editor-primary");
+  const first = { name: "one.png", type: "image/png", size: 4, arrayBuffer: async () => new Uint8Array([1]).buffer } as unknown as File;
+  const second = { name: "two.png", type: "image/png", size: 4, arrayBuffer: async () => new Uint8Array([2]).buffer } as unknown as File;
+  fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
+  pasteEvent(editor, "", [first, second]);
+  await waitFor(() => expect(scenario.pastedImages).toHaveLength(2));
+  const [firstCall, secondCall] = scenario.pastedImages;
+  expect(firstCall.range).toEqual({ start: 0, end: 0 });
+  expect(secondCall.range.start).toBeGreaterThan(firstCall.range.start);
+  expect(secondCall.range.start).toBe(secondCall.range.end);
 });
 
 it("retries a stale text range once without duplicating", async () => {
   await openInsertDoc();
   scenario.mappingResult = false;
-  // Concurrent native move: the first apply goes stale, the single retry lands.
-  scenario.files.get("メモ/a.md")!.revision = 1;
+  // Transient revision bump between capture and apply: the first apply goes
+  // stale, the single correspondence-checked retry lands exactly once.
+  scenario.applyStaleOnce = true;
   const editor = screen.getByTestId("editor-primary");
   fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
   pasteEvent(editor, "再送");
@@ -531,7 +561,6 @@ it("retries a stale text range once without duplicating", async () => {
       "apply_gui_edits",
       expect.objectContaining({
         documentId: "doc_a",
-        baseRevision: 1,
         edits: [{ range: { start: 0, end: 0 }, text: "再送" }],
       }),
     ),
@@ -539,6 +568,8 @@ it("retries a stale text range once without duplicating", async () => {
   const applies = mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits");
   expect(applies).toHaveLength(2);
   expect(scenario.files.get("メモ/a.md")!.text.startsWith("再送")).toBe(true);
+  const occurrences = scenario.files.get("メモ/a.md")!.text.split("再送").length - 1;
+  expect(occurrences).toBe(1);
 });
 
 it("surfaces a stale image range once without a duplicate file write", async () => {
@@ -566,6 +597,20 @@ it("keeps normal-mode Ctrl+V as native visual-block without a mapping query", as
   );
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "has_nvim_mapping")).toHaveLength(0);
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+});
+
+it("feeds an immediate key natively when Visual installed before the mode refresh", async () => {
+  await openInsertDoc();
+  // Rust installed Visual via a selection report, but the shell refresh has
+  // not landed yet: the footer still shows a stale Insert.
+  scenario.mode = "visual";
+  const editor = screen.getByTestId("editor-primary");
+  fireEvent.keyDown(editor, { key: "x" });
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 0, keys: "x" }),
+  );
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+  expect(scenario.files.get("メモ/a.md")!.text).toBe("# A\n\n- [ ] task\n");
 });
 
 it("binds read image hydration to the document and never reuses another doc bytes", async () => {
@@ -606,8 +651,7 @@ it("binds read image hydration to the document and never reuses another doc byte
   });
 });
 
-it("routes display-basis arrows natively in Visual so x-mode mappings fire", async () => {
-  await openWorkspace();
+it("routes display-basis arrows natively in Visual so x-mode mappings fire", async () => {  await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
   await screen.findByText("# A");
   // Native Visual install (740d5d5): refresh the shell mode snapshot.
