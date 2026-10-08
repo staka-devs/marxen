@@ -120,6 +120,12 @@ fn guarded_staging_target(
     if candidate.is_empty() {
         return Err("empty file".into());
     }
+    let bytes = candidate.as_bytes();
+    if candidate.starts_with('\\')
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+    {
+        return Err("absolute path rejected".into());
+    }
     let mut normalized = std::path::PathBuf::new();
     for component in std::path::Path::new(candidate).components() {
         match component {

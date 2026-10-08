@@ -14,7 +14,7 @@ use marxen_lib::ai_contracts::{
     ProposalText,
 };
 use marxen_lib::contracts::{DocumentSnapshot, Revision, Utf16Offset, Utf16Range, WorkspaceError};
-use marxen_lib::isolation::IsolationManager;
+use marxen_lib::isolation::{guard_staging_path, IsolationManager};
 use marxen_lib::workspace::Workspace;
 use std::fs;
 use std::path::Path;
@@ -665,6 +665,33 @@ fn disk_change_conflicts_before_apply() {
 }
 
 #[test]
+fn staging_paths_reject_foreign_os_roots() {
+    let root = tempfile::tempdir().unwrap();
+    for bad in [
+        "../a.md",
+        "/a.md",
+        "C:/a.md",
+        "c:a.md",
+        r"C:\a.md",
+        r"\a.md",
+        r"\\server\share\a.md",
+    ] {
+        assert!(
+            guard_staging_path(root.path(), Path::new(bad)).is_err(),
+            "{bad} must be rejected"
+        );
+    }
+    assert_eq!(
+        guard_staging_path(root.path(), Path::new("メモ/../日本語 😀.md")).unwrap(),
+        root.path().join("日本語 😀.md")
+    );
+    assert_eq!(
+        guard_staging_path(root.path(), Path::new("メモ/確認.md")).unwrap(),
+        root.path().join("メモ").join("確認.md")
+    );
+}
+
+#[test]
 fn traversal_absolute_and_symlink_are_rejected() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "x").unwrap();
@@ -673,7 +700,15 @@ fn traversal_absolute_and_symlink_are_rejected() {
         .unwrap();
     let staging_dir = manager.resolve(&copy.copy_id).unwrap();
     let exe = env!("CARGO_BIN_EXE_mock-isolation-agent");
-    for bad in ["../live.md", "/abs.md", "C:/a.md"] {
+    for bad in [
+        "../live.md",
+        "/abs.md",
+        "C:/a.md",
+        "c:a.md",
+        r"C:\a.md",
+        r"\a.md",
+        r"\\server\share\a.md",
+    ] {
         let status = std::process::Command::new(exe)
             .args([
                 "--staging-dir",
