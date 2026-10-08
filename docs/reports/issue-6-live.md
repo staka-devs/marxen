@@ -8,4 +8,4 @@ CodeMirror 内の非アクティブな Markdown ブロックを描画し、編�
 
 Chromium の `Input.imeSetComposition` で未確定文字を段階的に変更し、正本への編集がないことを確認した。日本語・絵文字を確定すると正確な UTF-16 範囲の編集が一度だけ発生し、取消では編集が発生しない。これはブラウザエンジンの Composition 検証であり、OS の実 IME とは別の結果である。
 
-Windows 実 WebView2 の開発アプリではライブの表・タスク・コード・Alert・Mermaid・数式を表示し、タスク変更、保存、実 Neovim Undo、再保存による原文保持を確認した。Windows の実 IME と macOS / Linux の実 WebView・IME は未確認。開発用ハーネスは配布物に含めない。
+Windows 実 WebView2 の開発アプリではライブの表・タスク・コード・Alert・Mermaid・数式を表示し、タスク変更、保存、実 Neovim Undo、再保存による原文保持を確認した。同アプリの原文表示では実日本語 IME と OS クリップボードを検証した ([UI 検証報告](issue-5-ui.md))。ライブ表示中の OS IME、macOS / Linux の実 WebView・IME は未確認。開発用ハーネスは配布物に含めない。
