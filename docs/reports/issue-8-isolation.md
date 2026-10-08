@@ -13,17 +13,17 @@
 
 | 検証 | 結果 |
 | --- | --- |
-| cargo test --lib --no-default-features | 43 件成功 (端末ゲート 3 件・構造検証を含む) |
+| cargo test --lib | 48 件成功 (終端イベントのゲート・構造検証を含む) |
 | cargo test --test contracts | 11 件成功 |
 | cargo test --test workspace | 21 件成功 |
 | cargo test --test isolation | 26 件成功 (選択限定・鍛造拒否・全文条件・提案取り込み・最小適用と単一 Undo・BOM/CRLF 保持・未選択ファイル無視・隠れドリフトの preflight 拒否・明示設定の注入による適用失敗と部分結果・ロールバック・死 actor・pin と settlement 順序・遅延書き込み・panic 時の刈り取り先行・HTTP 遅延端末・準備失敗の非 pin・stale と disk 競合・OS 共通の相対パス、traversal と symlink・scope 完全一致) |
-| cargo test --test ai | 18 件成功 (巨大行は Done 提案にならないことを、`Err` または `Ok`＋Error イベントあり＋Done なしのいずれかで判定) |
+| cargo test --test ai | 21 件成功 (巨大行は Done 提案にならないことを、`Err` または `Ok`＋Error イベントあり＋Done なしのいずれかで判定) |
 | cargo test --test vim_input | 9 件成功 |
 | cargo clippy --all-targets -- -D warnings | 成功 |
 | cargo fmt -- --check | 成功 |
 | npm run contracts:check / ai-contracts:check / isolation-contracts:check | 成功 |
 | npm run typecheck | 成功 |
-| npm run test (Vitest) | 25 ファイル / 185 件成功 |
+| npm run test (Vitest) | UI・IPC の回帰が成功。全体の最終件数は統合検証報告を参照 |
 | npm run build | 成功 (chunk size 警告あり) |
 | npm run test:bundling | 3 tests 成功 |
 
@@ -31,7 +31,7 @@
 
 - 各 OS の native CI と配布確認は [統合検証報告](issue-9-integration.md) に記載する。
 - 実 CLI (Codex / OpenCode) との workspace prompt 送信。mock ACP 子プロセスと 127.0.0.1 の mock HTTP のみで検証した。
-- 各 OS の実 WebView からの認証済み AI 生成と差分承認の全操作。Chromium と Rust の成功から推定しない。
-- 署名・公証・配布後の runtime 配置確認。
+- 各 OS の実 WebView からの認証済み AI 生成。Windows のローカル ACP fixture による差分承認・適用・Undo は確認済みだが、実 provider の生成からは検証していない。
+- 署名・公証。Windows の配布後 runtime 配置確認は統合検証報告を参照。
 - `credentials_native` は環境変数指定時のみ実行する opt-in であり、既定では何も検証せずに通過する。Windows の実 OS ストアでは使い捨て entry を保存・再取得・削除した。利用者の API 資格情報は使っていない。
 - 実電源断・ディスク容量不足、最終置換直前の競合、OS の部分失敗時の保証。staging は同一マシン上のコピーであり OS サンドボックスではない。

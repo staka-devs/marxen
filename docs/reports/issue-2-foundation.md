@@ -1,30 +1,16 @@
-# デスクトップ基盤の検証結果
+# デスクトップ基盤の検証
 
-- 日付: 2026-10-07
-- 対象: Rust / Tauri v2、React / TypeScript、IPC 契約、Neovim 配布資源
-- 環境: Windows x64、Node 22.23.2、npm 11.17.0、Rust 1.99.0 MSVC
-
-## 実施済み
+Windows x64、Node 22.23.2、Rust 1.99.0 MSVC で Rust / Tauri、React / TypeScript、IPC 契約、Neovim 配布資源を検証した。
 
 | 検証 | 結果 |
 | --- | --- |
-| `npm run build` / `npm run typecheck` | 成功 |
-| `npm test` | Vitest 5 tests 成功 |
-| `npm run test:bundling` | Node 3 tests 成功 |
-| `cargo test --no-default-features --locked` | 11 tests 成功 |
-| `cargo test --locked` | Windows native 11 tests 成功 |
-| `cargo check --locked --offline` | WebView2 / wry / Tauri を含め成功 |
-| `cargo fmt -- --check` | 成功 |
-| `cargo clippy --locked --offline --all-targets -- -D warnings` | 成功 |
-| `npm run contracts:check` | Rust / TypeScript 契約の一致を確認 |
-| `npm run verify:neovim` | 実 Neovim 0.11.5、Markdown runtime、日本語・絵文字 buffer の smoke 成功 |
-| `npm run test:e2e` | Chromium 3 tests 成功 |
+| TypeScript と製品ビルド | typecheck / build 成功 |
+| 配布資源スクリプト | Node 3 件成功 |
+| IPC 契約 | 文書・AI・隔離の生成型と Rust 型が一致 |
+| Rust | desktop を含むテスト、fmt、全 target の Clippy 成功 |
+| 同梱 Neovim | 0.11.5、Markdown runtime、日本語・絵文字 buffer の smoke 成功 |
+| Windows 配布 | NSIS を生成し、展開した実行ファイルと Neovim 資源を照合。展開先から実 WebView2 と同梱 Neovim を起動 |
 
-## 未実施
+全体の件数、配布物のハッシュ、各 OS の確認範囲は [統合検証報告](issue-9-integration.md) を参照する。ブラウザ E2E と headless Neovim は、OS 固有の実 WebView / IME の代替ではない。
 
-- macOS arm64 / x64、Linux x64 の native compile、Neovim smoke、package 操作。
-- Windows / macOS / Linux の実 WebView 操作・日本語 IME。Chromium の結果から推定しない。
-- NSIS / DMG / deb / AppImage の package build、配布後の runtime 配置確認、署名 / 公証。
-- devcontainer の Docker build。
-
-この結果は基盤に対する検証であり、編集・保存・描画・AI を含むアプリ全体の検証結果ではない。
+devcontainer の Docker build、署名・公証、Windows インストーラーによる実インストールは未実施。

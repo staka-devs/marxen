@@ -370,9 +370,8 @@ it("opens the natively picked folder instead of a typed prompt", async () => {
   fireEvent.click(screen.getAllByRole("button", { name: "フォルダーを開く" })[0]);
   await screen.findByRole("button", { name: "メモ/a.md" });
   expect(mockedInvoke).toHaveBeenCalledWith("open_workspace", { path: "/picked/ws" });
-  // Clean chrome shows the root in the explorer; the manual path field stays
-  // collapsed until explicitly requested.
-  expect(screen.getByText("/picked/ws")).toBeVisible();
+  expect(screen.getByText("ws")).toBeVisible();
+  expect(screen.getByTitle("/picked/ws")).toHaveTextContent("ws");
 });
 
 it("picks the config file natively and applies it with restart", async () => {

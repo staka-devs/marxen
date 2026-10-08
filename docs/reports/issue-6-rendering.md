@@ -11,12 +11,12 @@ GFM の表・タスク・取消線・自動リンク・脚注、5 種の Alerts�
 | 検証 | 実施結果 |
 | --- | --- |
 | `npm run typecheck` | 成功 |
-| `npm test` | 25 ファイル / 185 件成功。描画、サニタイズ、原文範囲、画像、取消、絵文字の境界を含む |
-| `npm run test:e2e` | 製品ビルド 11 件、ライブ編集器 15 件成功。Mermaid SVG、地図 SVG、STL canvas、数式、コード、Alerts、脚注、エラー表示を確認 |
+| `npm test` | 描画、サニタイズ、文書範囲、画像、取消、絵文字の境界を含む回帰が成功。最終件数は統合検証報告を参照 |
+| `npm run test:e2e` | 製品ビルド 12 件、ライブ編集器 17 件成功。Mermaid SVG、地図 SVG、STL canvas、数式、コード、Alerts、脚注、エラー表示を確認 |
 | テーマ | ライト・ダーク・ハイコントラストのコード背景と文字色を計算済み CSS で照合し、原文の不変を確認 |
 | Windows 実 WebView2・開発アプリ | 表、タスク、Rust コードの強調、NOTE、Mermaid、数式の表示を確認。タスク変更の保存と実 Neovim Undo 後の原文復元も確認 |
 | UI 画像 | [ライブ](issue-6-rendering/live-github.png)、[閲覧](issue-6-rendering/read-github.png)、[Alerts](issue-6-rendering/alerts.png)、[数式・Mermaid](issue-6-rendering/mermaid-math.png)、[地図・3D](issue-6-rendering/map-3d.png)、[STL](issue-6-rendering/stl.png)、[不正入力](issue-6-rendering/malformed.png) を製品 E2E で生成 |
 
-Windows 実 WebView2 での地図・3D と OS IME、macOS / Linux の実 WebView・IME、配布後の操作は未確認。ブラウザの成功から推定しない。開発用ハーネスは配布物に含めない。
+Windows 実 WebView2 での地図・3D、macOS / Linux の実 WebView・IME は未確認。Windows IME と展開した配布アプリの操作は [統合検証報告](issue-9-integration.md) に記載する。ブラウザの成功から推定しない。開発用ハーネスは配布物に含めない。
 
 ライブ固有の検証は [ライブ編集器の検証](issue-6-live.md)、設計は [ADR-0060](../adr/ADR-0060-共通ASTでGFMと数式と地図と3Dをローカル描画する.md) を参照する。
