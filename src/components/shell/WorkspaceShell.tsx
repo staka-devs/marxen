@@ -563,10 +563,18 @@ export function WorkspaceShell() {
       caretRef.current[id] = selection.head;
       if (!registry) return;
       // Serialized and coalesced inside the client: rapid gestures send only
-      // the latest selection and never race mutations or echo back.
-      void registry.stageCursor(id, selection.anchor, selection.head);
+      // the latest selection and never race mutations or echo back. Mouse
+      // gestures keep their anchor; the actual mode is refreshed after the
+      // report so a native Visual install (740d5d5) surfaces instead of a
+      // stale Normal. Insert selections stay Insert on the Rust side.
+      void registry
+        .stageCursor(id, selection.anchor, selection.head)
+        .then(() => {
+          void refreshModeCursor(id);
+        })
+        .catch(() => undefined);
     },
-    [registry],
+    [registry, refreshModeCursor],
   );
 
   const jumpToOffset = useCallback(
@@ -578,11 +586,12 @@ export function WorkspaceShell() {
         const cursor = await registry.reportCursorNow(id, anchor, head);
         setSelections((prev) => ({ ...prev, [id]: { anchor: cursor.anchor, head: cursor.head } }));
         echoCursor(id, cursor.anchor, cursor.head);
+        await refreshModeCursor(id);
       } catch {
         // Best-effort navigation; the editor keeps its own selection.
       }
     },
-    [registry, echoCursor],
+    [registry, echoCursor, refreshModeCursor],
   );
 
   // -- GUI range actions -----------------------------------------------------
@@ -621,9 +630,12 @@ export function WorkspaceShell() {
   // keystroke so fast bursts keep source order through the serial queue.
   // Corrected by real cursor echoes after Vim syncs and pointer moves.
   const caretRef = useRef<Record<string, number>>({});
-  // Set when our Ctrl+V interception queues the text insert, so the
-  // follow-up DOM paste event cannot insert it a second time.
-  const suppressPasteUntilRef = useRef(0);
+  // Insert-mode keyboard Ctrl+V is recorded here WITHOUT preventing default:
+  // the follow-up paste event carries the bytes synchronously (OS image
+  // pastes emit no readable text via readText, and readText can fail in a
+  // native WebView while normal paste works). The capture handler below
+  // prevents default synchronously and routes exactly once.
+  const pendingPasteRef = useRef(0);
 
   useEffect(() => {
     if (vimMode !== "insert" && vimMode !== "replace") pendingRef.current = {};
@@ -668,25 +680,20 @@ export function WorkspaceShell() {
     [registry, mergeSnapshot, refreshModeCursor, sayStale, echoCursor],
   );
 
-  // Clipboard text in insert/replace modes: an explicit <C-v> mapping wins
-  // and feeds natively, otherwise the text lands as one serial range insert.
-  const routePasteText = useCallback(
-    async (id: string, at: number, retried = false): Promise<void> => {
+  // Captured paste text in insert/replace modes: a keyboard Ctrl+V wins an
+  // explicit <C-v> mapping check and feeds natively, otherwise the captured
+  // text lands as one serial range insert. Context-menu pastes (no keyboard
+  // gesture) never simulate a mapping and insert directly.
+  const routeCapturedPaste = useCallback(
+    async (id: string, keyNotation: string | null, text: string, at: number, retried = false): Promise<void> => {
       if (!registry) {
         setNotice(READONLY_MESSAGE);
         return;
       }
       if (!docsRef.current[id]) return;
-      let text: string;
-      try {
-        text = await navigator.clipboard.readText();
-      } catch {
-        setNotice("クリップボードを読み取れませんでした。");
-        return;
-      }
       if (text === "") return;
       try {
-        const decision = await registry.routePasteText(id, "<C-v>", text, at);
+        const decision = await registry.routeCapturedPaste(id, keyNotation, text, at);
         if (decision.action === "vim") {
           mergeSnapshot(decision.snapshot);
           await refreshModeCursor(id);
@@ -702,7 +709,7 @@ export function WorkspaceShell() {
           sayStale(cause.snapshot);
           // The rejected paste applied nothing, so exactly one retry
           // against the fresh revision cannot duplicate it.
-          if (!retried) await routePasteText(id, at, true);
+          if (!retried) await routeCapturedPaste(id, keyNotation, text, at, true);
         } else {
           setNotice(workspaceErrorText(cause));
         }
@@ -726,17 +733,14 @@ export function WorkspaceShell() {
       if (mod && (lower === "p" || lower === "s")) return;
       const isInsert = vimModeRef.current === "insert" || vimModeRef.current === "replace";
       if (isInsert && event.key.toLowerCase() === "v" && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
-        // Insert-mode paste is never an unconditional <C-v>: prevent default
-        // first, then an explicit mapping wins or the text lands serialized.
-        // Normal-mode Ctrl+V keeps flowing below as native visual-block.
-        event.preventDefault();
-        event.stopPropagation();
-        const id = activeRef.current;
-        const current = docsRef.current[id];
-        const sel = selections[id] ?? { anchor: 0, head: 0 };
-        const at = Math.min(caretRef.current[id] ?? sel.head, current?.text.length ?? 0);
-        suppressPasteUntilRef.current = Date.now() + 1500;
-        void routePasteText(id, at);
+        // Keyboard paste gesture: record it and let the paste event carry
+        // the bytes synchronously. Preventing default here would swallow OS
+        // image bytes (no paste event fires) and readText can fail in a
+        // native WebView while normal paste works. The capture handler
+        // prevents default synchronously and routes text-or-image exactly
+        // once, mapping-first. Normal-mode Ctrl+V keeps flowing below as
+        // native visual-block.
+        pendingPasteRef.current = Date.now();
         return;
       }
       if (isInsert && event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -752,9 +756,13 @@ export function WorkspaceShell() {
       }
       if (navRef.current === "display" && !event.ctrlKey && !event.metaKey && !event.altKey) {
         // Display-basis vertical motion, line start/end, and keyboard
-        // selection stay in the editor; word/textobject/macro keys below
-        // still route natively in non-insert modes.
-        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        // selection stay in the editor only outside Visual: in Visual and
+        // VisualLine the same keys route natively so x-mode mappings fire
+        // instead of being overridden by a stale Normal assumption.
+        // Word/textobject/macro keys below still route natively in all
+        // non-insert modes.
+        const mode = vimModeRef.current;
+        if ((mode === "normal" || mode === "insert" || mode === "replace") && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
       }
       const keys = serializeVimKey({ key: event.key, ctrlKey: event.ctrlKey, metaKey: event.metaKey, altKey: event.altKey, shiftKey: event.shiftKey });
       if (!keys) return;
@@ -762,52 +770,78 @@ export function WorkspaceShell() {
       event.stopPropagation();
       void routeVimKeys(activeRef.current, keys);
     },
-    [desktop, registry, routeVimKeys, routeInsertKey, routePasteText, selections],
+    [desktop, registry, routeVimKeys, routeInsertKey, routeCapturedPaste, selections],
   );
 
-  // -- paste text/images (shell level; preview pipeline untouched) ---------
+  // -- paste text/images (capture phase; preview pipeline untouched) --------
+  //
+  // Event-first clipboard: the paste event's clipboardData is read
+  // synchronously (text AND image bytes) and default is prevented
+  // synchronously, before CodeMirror can insert anything. No async
+  // preventDefault after insertion, no readText round-trip, exactly once.
+  const pasteImageFiles = useCallback(
+    async (id: string, files: File[], at: number) => {
+      if (!registry) {
+        setNotice(READONLY_MESSAGE);
+        return;
+      }
+      for (const file of files) {
+        if (file.size > 20 * 1024 * 1024) {
+          setNotice("対応画像（PNG/JPEG/GIF/WebP、20 MiB 以下）のみ扱えます。");
+          continue;
+        }
+        try {
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const result = await registry.pasteImage(
+            { request: { documentId: id, baseRevision: docsRef.current[id]?.revision ?? 0 }, name: file.name, bytes, range: { start: at, end: at } },
+          );
+          mergeSnapshot(result.snapshot);
+          setNotice(`画像を挿入しました（${result.path}）。`);
+        } catch (cause) {
+          // A stale range rejects without applying: surface it once and
+          // never retry a file write that might already have landed.
+          if (cause instanceof StaleResync) sayStale(cause.snapshot);
+          else setNotice(workspaceErrorText(cause));
+        }
+      }
+    },
+    [registry, mergeSnapshot, sayStale],
+  );
 
-  const onEditorPaste = useCallback(
+  const onPasteCapture = useCallback(
     (event: React.ClipboardEvent) => {
       if (!desktop || !registry || !activeRef.current) return;
-      const files = Array.from(event.clipboardData?.files ?? []).filter((file) => /^image\/(png|jpeg|gif|webp)$/.test(file.type));
+      const id = activeRef.current;
+      const current = docsRef.current[id];
+      if (!current) return;
+      const data = event.clipboardData;
+      const files = Array.from(data?.files ?? []).filter((file) => /^image\/(png|jpeg|gif|webp)$/.test(file.type));
+      // Synchronously capture the range: the selection may go stale before
+      // the serial queue executes (execution-time revision + one retry).
+      const sel = selections[id] ?? { anchor: 0, head: 0 };
+      const at = Math.min(Math.max(sel.anchor, sel.head), current.text.length);
       if (files.length > 0) {
-        const id = activeRef.current;
-        const current = docsRef.current[id];
-        if (!current) return;
+        // Empty text alongside images is a pure image paste: files win and
+        // the (empty) text is ignored so nothing inserts twice.
         event.preventDefault();
-        const sel = selections[id] ?? { anchor: 0, head: 0 };
-        const at = Math.min(sel.head, current.text.length);
-        void (async () => {
-          for (const file of files) {
-            if (file.size > 20 * 1024 * 1024) {
-              setNotice("対応画像（PNG/JPEG/GIF/WebP、20 MiB 以下）のみ扱えます。");
-              continue;
-            }
-            try {
-              const bytes = new Uint8Array(await file.arrayBuffer());
-              const result = await registry.pasteImage(
-                { request: { documentId: id, baseRevision: docsRef.current[id]?.revision ?? current.revision }, name: file.name, bytes, range: { start: at, end: at } },
-              );
-              mergeSnapshot(result.snapshot);
-              setNotice(`画像を挿入しました（${result.path}）。`);
-            } catch (cause) {
-              if (cause instanceof StaleResync) sayStale(cause.snapshot);
-              else setNotice(workspaceErrorText(cause));
-            }
-          }
-        })();
+        event.stopPropagation();
+        pendingPasteRef.current = 0;
+        void pasteImageFiles(id, files, at);
         return;
       }
-      if (Date.now() < suppressPasteUntilRef.current) {
-        // Our Ctrl+V interception already queued the text insert below.
-        event.preventDefault();
-        return;
-      }
-      // Otherwise (e.g. context-menu paste): allow default; the editor
-      // transaction flows through the GUI range path.
+      const text = data?.getData("text/plain") ?? data?.getData("text") ?? "";
+      if (text === "") return;
+      const mode = vimModeRef.current;
+      if (mode !== "insert" && mode !== "replace") return;
+      // Insert/replace text paste: prevent synchronously before CodeMirror
+      // default, then route mapping-first (keyboard) or direct (menu).
+      event.preventDefault();
+      event.stopPropagation();
+      const keyboard = Date.now() - pendingPasteRef.current < 1500;
+      pendingPasteRef.current = 0;
+      void routeCapturedPaste(id, keyboard ? "<C-v>" : null, text, at);
     },
-    [desktop, registry, mergeSnapshot, sayStale, selections],
+    [desktop, registry, selections, pasteImageFiles, routeCapturedPaste],
   );
 
   // -- search + revision-aware replace ---------------------------------------
@@ -1073,36 +1107,51 @@ export function WorkspaceShell() {
   // the Rust workspace loader (containment/symlink/type checked) to data URLs.
   // Abort-aware and stale-safe; failures keep alt text, never fake content.
   // No secrets touch localStorage; credentials stay in the OS store.
+  // The resolver is bound to an explicit document ID: late responses after
+  // switching documents are rejected, and the read preview is keyed by
+  // document so identical Markdown with the same filename cannot reuse
+  // another document's bytes from an already-hydrated node.
   const imageUrlCache = useRef(new Map<string, string>());
-  const resolveImage = useCallback(
-    async (src: string, signal: AbortSignal): Promise<string | null> => {
-      if (!desktop) return null;
-      const id = activeRef.current;
-      const current = id ? docsRef.current[id] : undefined;
-      if (!id || !current) return null;
-      if (signal.aborted) return null;
-      const key = `${id}:${src}`;
-      const cached = imageUrlCache.current.get(key);
-      if (cached) return cached;
-      try {
-        const data = await workspaceApi.loadImage(id, src);
+  const makeImageResolver = useCallback(
+    (documentId: string): ImageResolver =>
+      async (src: string, signal: AbortSignal): Promise<string | null> => {
+        if (!desktop) return null;
         if (signal.aborted) return null;
-        if (!/^image\/(png|jpeg|gif|webp)$/.test(data.mime)) return null;
-        let binary = "";
-        const bytes = data.bytes;
-        for (let i = 0; i < bytes.length; i += 0x8000) {
-          binary += String.fromCharCode(...bytes.slice(i, i + 0x8000));
+        const key = `${documentId}:${src}`;
+        const cached = imageUrlCache.current.get(key);
+        if (cached) {
+          if (signal.aborted) return null;
+          return cached;
         }
-        const url = `data:${data.mime};base64,${btoa(binary)}`;
-        imageUrlCache.current.set(key, url);
-        return url;
-      } catch {
-        return null;
-      }
-    },
+        try {
+          const data = await workspaceApi.loadImage(documentId, src);
+          if (signal.aborted) return null;
+          // The user may have switched documents while the bytes were in
+          // flight: only the resolver's own document may consume them.
+          if (activeRef.current !== documentId) return null;
+          if (!/^image\/(png|jpeg|gif|webp)$/.test(data.mime)) return null;
+          let binary = "";
+          const bytes = data.bytes;
+          for (let i = 0; i < bytes.length; i += 0x8000) {
+            binary += String.fromCharCode(...bytes.slice(i, i + 0x8000));
+          }
+          const url = `data:${data.mime};base64,${btoa(binary)}`;
+          imageUrlCache.current.set(key, url);
+          return url;
+        } catch {
+          return null;
+        }
+      },
     [desktop],
   );
-  const resolveImageProp: ImageResolver | undefined = desktop ? resolveImage : undefined;
+  const liveResolver = useMemo(
+    () => (desktop && active ? makeImageResolver(active.documentId) : undefined),
+    [desktop, active, makeImageResolver],
+  );
+  const readResolver = useMemo(
+    () => (desktop && active ? makeImageResolver(active.documentId) : undefined),
+    [desktop, active, makeImageResolver],
+  );
 
   // -- config -----------------------------------------------------------------
 
@@ -1440,9 +1489,10 @@ export function WorkspaceShell() {
       const result = await approveIsolatedCopy(copyId);
       setOutcomes(result.outcomes);
       // Applied buffers moved in Neovim; pull fresh snapshots so the shell
-      // shows the same text, then refresh mode/cursor. Partial application
-      // is never presented as all-or-nothing; failures keep their errors
-      // in outcomes and ask for a fresh copy.
+      // shows the same text, then refresh mode/cursor. An unchanged scope
+      // returns applied=false with no error and counts as success, not
+      // failure. Only error/rollbackError/rolledBack outcomes fail; partial
+      // application is never presented as all-or-nothing.
       if (registry) {
         for (const outcome of result.outcomes) {
           if (!outcome.applied) continue;
@@ -1455,18 +1505,30 @@ export function WorkspaceShell() {
         }
         if (activeRef.current) await refreshModeCursor(activeRef.current);
       }
-      const failed = result.outcomes.filter((outcome) => !outcome.applied);
+      const failed = result.outcomes.filter(
+        (outcome) => outcome.error !== null || outcome.rollbackError !== null || outcome.rolledBack,
+      );
+      const appliedCount = result.outcomes.filter((outcome) => outcome.applied).length;
+      const unchangedCount = result.outcomes.filter(
+        (outcome) => !outcome.applied && outcome.error === null && outcome.rollbackError === null && !outcome.rolledBack,
+      ).length;
       setStaging(null);
       setStagingBasis(null);
       setDiffs([]);
       setAiProposal(null);
       if (failed.length === 0) {
         setReviewMessage(null);
-        setReviewStatus("承認して適用しました。");
+        setReviewStatus(
+          unchangedCount > 0 && appliedCount === 0
+            ? "変更はありませんでした。"
+            : appliedCount > 0 && unchangedCount > 0
+              ? `${appliedCount} 文書に適用し、${unchangedCount} 文書は変更なしでした。`
+              : "承認して適用しました。",
+        );
         setNotice("承認して適用しました。保存は保存ボタンで行います。");
       } else {
         setReviewMessage(
-          `${failed.length} 文書が未適用です: ${failed.map((outcome) => `${outcome.documentId}${outcome.error ? ` (${outcome.error})` : ""}`).join(", ")}。`,
+          `${failed.length} 文書が未適用です: ${failed.map((outcome) => `${outcome.documentId}${outcome.error ? ` (${outcome.error})` : ""}${outcome.rolledBack ? "（ロールバック済み）" : ""}${outcome.rollbackError ? `（ロールバック失敗: ${outcome.rollbackError}）` : ""}`).join(", ")}。`,
         );
         setReviewStatus("失敗時は新規コピーで再同期してください。");
         setNotice("一部が未適用です。承認結果を確認してください。");
@@ -2035,7 +2097,7 @@ export function WorkspaceShell() {
               state so scroll/cursor survive mode switches. */}
           {active ? (
             viewMode === "live" ? (
-              <div onKeyDownCapture={onEditorKeyDown} onPaste={onEditorPaste} className="min-h-0">
+              <div onKeyDownCapture={onEditorKeyDown} onPasteCapture={onPasteCapture} className="min-h-0">
                 <CodeMirrorEditor
                   key={`live-${active.documentId}`}
                   value={active.text}
@@ -2045,7 +2107,7 @@ export function WorkspaceShell() {
                   initialSelection={selections[active.documentId] ?? null}
                   externalCursor={cursorEcho[active.documentId] ?? null}
                   livePreview
-                  resolveImage={resolveImageProp}
+                  resolveImage={liveResolver}
                   onGuiEdits={(edits) => void applyEdits(active.documentId, edits)}
                   onSelectionChange={(selection) => handleSelection(active.documentId, selection)}
                 />
@@ -2053,7 +2115,7 @@ export function WorkspaceShell() {
             ) : (
               <div
                 onKeyDownCapture={onEditorKeyDown}
-                onPaste={onEditorPaste}
+                onPasteCapture={onPasteCapture}
                 className={viewMode === "read" ? "hidden" : "min-h-0"}
                 aria-hidden={viewMode === "read"}
               >
@@ -2077,7 +2139,7 @@ export function WorkspaceShell() {
           )}
           {viewMode === "read" && active && (
             <div className="min-h-0">
-              <MarkdownPreview text={active.text} resolveImage={resolveImageProp} />
+              <MarkdownPreview key={`read-${active.documentId}`} text={active.text} resolveImage={readResolver} />
             </div>
           )}
           {viewMode === "split" && active && (
@@ -2093,16 +2155,6 @@ export function WorkspaceShell() {
                 onGuiEdits={(edits) => void applyEdits(active.documentId, edits)}
                 onSelectionChange={(selection) => handleSelection(active.documentId, selection)}
               />
-            </div>
-          )}
-          {viewMode === "source" && (
-            <div className="hidden md:block" aria-label="原文メモ">
-              <p className="rounded-md border border-dashed border-border p-4 text-xs leading-6 text-muted-foreground">
-                原文モードではエディタのみを表示します。{navBasis === "display"
-                  ? "表示基準の移動（折り返し行の上下・行頭末）はエディタ既定に従います。"
-                  : "上下・行頭末・単語・テキストオブジェクト・マクロは実 Neovim の原文基準で動作します。"}
-                ユーザーマッピングを上書きしません。
-              </p>
             </div>
           )}
         </main>

@@ -67,7 +67,8 @@ test("invalid fixtures render safely without executing", async ({ page }) => {
 
 test("tree/tabs/quick-open/search/outline/palette/themes work in Japanese", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByTestId("file-tree")).toContainText("メモ/はじめに.md");
+  await expect(page.getByTestId("file-tree")).toContainText("メモ");
+  await expect(page.getByTestId("file-tree")).toContainText("はじめに.md");
   await page.getByRole("button", { name: "メモ/東京.md" }).click();
   await expect(page.getByTestId("tabs")).toContainText("東京.md");
 

@@ -195,15 +195,15 @@ describe("mapping-first insert routing", () => {
     expect(bases).toEqual([0, 1, 2]);
   });
 
-  it("falls back to GUI when the mapping state is unreadable", async () => {
+  it("fails closed without a GUI edit when the mapping state is unreadable", async () => {
     const client = new RegistryClient();
     mockedInvoke.mockImplementation((command: string) => {
       if (command === "has_nvim_mapping") return Promise.reject(new Error("rpc down"));
       if (command === "apply_gui_edits") return Promise.resolve(snapshot("doc_1", 1, "a"));
       throw new Error(`unexpected ${command}`);
     });
-    const decision = await client.routeInsertKey("doc_1", "", "a", 0);
-    expect(decision.action).toBe("gui");
+    await expect(client.routeInsertKey("doc_1", "", "a", 0)).rejects.toThrow("rpc down");
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
   });
 
   it("resyncs instead of duplicating when the base went stale", async () => {
@@ -286,6 +286,35 @@ describe("clipboard paste respects explicit mappings", () => {
       edits: [{ range: { start: 5, end: 5 }, text: "日本語😀\n2行目" }],
     });
   });
+
+  it("inserts context-menu captures directly without a mapping query", async () => {
+    const client = new RegistryClient();
+    mockedInvoke.mockImplementation((command: string, args?: unknown) => {
+      if (command === "apply_gui_edits") {
+        const a = args as { baseRevision: number };
+        return Promise.resolve(snapshot("doc_1", a.baseRevision + 1, "menu"));
+      }
+      throw new Error(`unexpected ${command}`);
+    });
+    const decision = await client.routeCapturedPaste("doc_1", null, "メニュー", 2);
+    expect(decision.action).toBe("gui");
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === "has_nvim_mapping")).toHaveLength(0);
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "apply_gui_edits",
+      expect.objectContaining({ documentId: "doc_1", edits: [{ range: { start: 2, end: 2 }, text: "メニュー" }] }),
+    );
+  });
+
+  it("fails closed without an insert when a keyboard mapping query is unreadable", async () => {
+    const client = new RegistryClient();
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === "has_nvim_mapping") return Promise.reject(new Error("rpc down"));
+      throw new Error(`unexpected ${command}`);
+    });
+    await expect(client.routeCapturedPaste("doc_1", "<C-v>", "x", 0)).rejects.toThrow("rpc down");
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input")).toHaveLength(0);
+  });
 });
 
 describe("cursor reporting stays serial without feedback", () => {
@@ -311,6 +340,16 @@ describe("cursor reporting stays serial without feedback", () => {
     const cursor = await client.reportCursorNow("doc_1", 0, 5);
     expect(mockedInvoke).toHaveBeenCalledWith("report_cursor", { documentId: "doc_1", revision: 7, anchor: 0, head: 5 });
     expect(cursor).toMatchObject({ anchor: 0, head: 5 });
+  });
+
+  it("preserves a noncollapsed mouse anchor instead of collapsing to head", async () => {
+    const client = new RegistryClient();
+    client.noteSnapshot(snapshot("doc_1", 3, "hello world"));
+    mockedInvoke.mockResolvedValue({ documentId: "doc_1", revision: 3, anchor: 2, head: 7 });
+    const cursor = await client.reportCursorNow("doc_1", 2, 7);
+    expect(mockedInvoke).toHaveBeenCalledWith("report_cursor", { documentId: "doc_1", revision: 3, anchor: 2, head: 7 });
+    expect(cursor.anchor).toBe(2);
+    expect(cursor.head).toBe(7);
   });
 });
 

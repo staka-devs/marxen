@@ -232,6 +232,8 @@ export class RegistryClient {
 
   private async resync(documentId: DocumentId): Promise<never> {
     const snapshot = await workspaceApi.fetchSnapshot(documentId);
+    // Record the fresh revision so exactly one retry builds against it.
+    this.noteSnapshot(snapshot);
     throw new StaleResync(snapshot);
   }
 
@@ -271,7 +273,9 @@ export class RegistryClient {
    * execution time (never at event time), then the pending prefix plus the
    * key is queried via `has_nvim_mapping`. A claimed key feeds natively; an
    * unclaimed key becomes a GUI caret insert. Either way the snapshot feeds
-   * back so bursts keep source order with no duplication.
+   * back so bursts keep source order with no duplication. Mapping precedence
+   * is fail-closed: an unreadable mapping query throws visibly instead of
+   * silently landing a GUI edit that bypasses a mapping.
    */
   routeInsertKey(
     documentId: DocumentId,
@@ -281,13 +285,7 @@ export class RegistryClient {
   ): Promise<{ action: "vim"; snapshot: DocumentSnapshot } | { action: "gui"; snapshot: DocumentSnapshot }> {
     return this.enqueue(documentId, async () => {
       const revision = this.rev.get(documentId) ?? 0;
-      let mapped = false;
-      try {
-        mapped = await workspaceApi.hasMapping(documentId, "i", pending + key);
-      } catch {
-        // Mapping state unreadable: fall through to the GUI range edit so a
-        // keystroke is never swallowed by the router.
-      }
+      const mapped = await workspaceApi.hasMapping(documentId, "i", pending + key);
       try {
         if (mapped) {
           return { action: "vim" as const, snapshot: this.bump(await workspaceApi.input({ documentId, baseRevision: revision }, key)) };
@@ -309,7 +307,9 @@ export class RegistryClient {
    * Clipboard paste as ONE serial task: an explicit insert-mode <C-v>
    * mapping wins and feeds natively, otherwise the clipboard text lands as
    * a single GUI range insert. The caller prevents default BEFORE awaiting
-   * this so no duplicate default paste can interleave.
+   * this so no duplicate default paste can interleave. Mapping precedence is
+   * fail-closed: an unreadable mapping query throws visibly instead of
+   * silently landing a GUI insert that bypasses a mapping.
    */
   routePasteText(
     documentId: DocumentId,
@@ -317,18 +317,38 @@ export class RegistryClient {
     text: string,
     at: number,
   ): Promise<{ action: "vim"; snapshot: DocumentSnapshot } | { action: "gui"; snapshot: DocumentSnapshot }> {
+    return this.routeCapturedPaste(documentId, keyNotation, text, at);
+  }
+
+  /**
+   * Captured paste as ONE serial task from a synchronously-read paste event.
+   * `keyNotation` carries the keyboard gesture (`"<C-v>"`) or null for
+   * context-menu pastes, which never simulate a mapping. A keyboard paste
+   * queries the explicit insert-mode mapping first (fail-closed on unreadable
+   * state); otherwise the captured text lands as a single GUI range insert.
+   * The caller prevents default synchronously BEFORE awaiting this so no
+   * default insertion can interleave and the paste lands exactly once.
+   */
+  routeCapturedPaste(
+    documentId: DocumentId,
+    keyNotation: string | null,
+    text: string,
+    at: number,
+  ): Promise<{ action: "vim"; snapshot: DocumentSnapshot } | { action: "gui"; snapshot: DocumentSnapshot }> {
     return this.enqueue(documentId, async () => {
       const revision = this.rev.get(documentId) ?? 0;
-      let mapped = false;
-      try {
-        mapped = await workspaceApi.hasMapping(documentId, "i", keyNotation);
-      } catch {
-        // Mapping state unreadable: land the text rather than swallowing it.
+      if (keyNotation !== null) {
+        const mapped = await workspaceApi.hasMapping(documentId, "i", keyNotation);
+        if (mapped) {
+          try {
+            return { action: "vim" as const, snapshot: this.bump(await workspaceApi.input({ documentId, baseRevision: revision }, keyNotation)) };
+          } catch (cause) {
+            if (isStaleError(cause)) await this.resync(documentId);
+            throw cause;
+          }
+        }
       }
       try {
-        if (mapped) {
-          return { action: "vim" as const, snapshot: this.bump(await workspaceApi.input({ documentId, baseRevision: revision }, keyNotation)) };
-        }
         return {
           action: "gui" as const,
           snapshot: this.bump(
@@ -453,6 +473,9 @@ export class ReadonlyRegistry {
     return this.reject();
   }
   routePasteText(): Promise<never> {
+    return this.reject();
+  }
+  routeCapturedPaste(): Promise<never> {
     return this.reject();
   }
   undo(): Promise<never> {

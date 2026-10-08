@@ -26,6 +26,9 @@ const scenario = {
   configErrors: [] as string[],
   mode: "normal" as string,
   mappingResult: false as boolean,
+  imageBytes: new Map<string, { mime: string; bytes: number[] }>(),
+  pasteImageStaleOnce: false,
+  pastedImages: [] as Array<{ documentId: string; name: string }>,
 };
 
 function resetBackend() {
@@ -38,6 +41,9 @@ function resetBackend() {
   scenario.configErrors = [];
   scenario.mode = "normal";
   scenario.mappingResult = false;
+  scenario.imageBytes = new Map();
+  scenario.pasteImageStaleOnce = false;
+  scenario.pastedImages = [];
 }
 
 function docById(id: string): BackendDoc {
@@ -168,6 +174,29 @@ function installBackend() {
       }
       case "report_cursor":
         return Promise.resolve({ documentId: a.documentId, revision: a.revision, anchor: a.anchor, head: a.head });
+      case "load_relative_image": {
+        const key = `${a.documentId as string}:${a.path as string}`;
+        const found = scenario.imageBytes.get(key);
+        if (!found) throw { code: "not_found" };
+        return Promise.resolve(found);
+      }
+      case "paste_image": {
+        const request = a as unknown as { documentId: string; baseRevision: number; name: string };
+        const doc = docById(request.documentId);
+        if (scenario.pasteImageStaleOnce) {
+          scenario.pasteImageStaleOnce = false;
+          return Promise.reject({ code: "contract", error: { code: "stale_revision", expected: doc.revision, received: request.baseRevision } });
+        }
+        if (request.baseRevision !== doc.revision) {
+          throw { code: "contract", error: { code: "stale_revision", expected: doc.revision, received: request.baseRevision } };
+        }
+        scenario.pastedImages.push({ documentId: request.documentId, name: request.name as string });
+        doc.text += `\n![${request.name}](images/${request.name})\n`;
+        doc.revision += 1;
+        doc.dirty = true;
+        doc.history.push(doc.text);
+        return Promise.resolve({ path: `images/${request.name}`, snapshot: snapshotOf(doc) });
+      }
       case "fetch_grid": {
         const doc = docById(a.documentId as string);
         return Promise.resolve({ documentId: doc.id, revision: doc.revision, updates: [] });
@@ -405,13 +434,6 @@ it("keeps fast insert bursts in source order", async () => {
   expect(scenario.files.get("メモ/a.md")!.text.startsWith("abc")).toBe(true);
 });
 
-const readText = vi.fn();
-
-function mockClipboard(text: string) {
-  Object.defineProperty(window.navigator, "clipboard", { value: { readText }, configurable: true });
-  readText.mockResolvedValue(text);
-}
-
 async function openInsertDoc() {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
@@ -422,12 +444,22 @@ async function openInsertDoc() {
   await waitFor(() => expect(screen.getByTestId("vim-footer-mode")).toHaveTextContent("挿入"));
 }
 
-it("lands unmapped insert paste as one insert without duplicating the DOM paste", async () => {
-  mockClipboard("貼付😀\n2行目");
+function pasteEvent(editor: HTMLElement, text: string, files: File[] = []) {
+  fireEvent.paste(editor, {
+    clipboardData: {
+      getData: (type: string) => (type.startsWith("text") ? text : ""),
+      files,
+    },
+  });
+}
+
+it("lands unmapped keyboard paste as one insert exactly once", async () => {
   await openInsertDoc();
   scenario.mappingResult = false;
   const editor = screen.getByTestId("editor-primary");
+  // Keyboard gesture first: the follow-up paste event carries the bytes.
   fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
+  pasteEvent(editor, "貼付😀\n2行目");
   await waitFor(() =>
     expect(mockedInvoke).toHaveBeenCalledWith(
       "apply_gui_edits",
@@ -437,28 +469,93 @@ it("lands unmapped insert paste as one insert without duplicating the DOM paste"
       }),
     ),
   );
-  // The follow-up DOM paste must not insert a second time.
-  fireEvent.paste(editor);
-  await new Promise((resolve) => setTimeout(resolve, 50));
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(1);
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input")).toHaveLength(0);
   expect(scenario.files.get("メモ/a.md")!.text.startsWith("貼付😀\n2行目")).toBe(true);
 });
 
-it("routes explicitly mapped insert paste natively", async () => {
-  mockClipboard("貼付");
+it("routes explicitly mapped keyboard paste natively", async () => {
   await openInsertDoc();
   scenario.mappingResult = true;
   const editor = screen.getByTestId("editor-primary");
   fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
+  pasteEvent(editor, "貼付");
   await waitFor(() =>
     expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 0, keys: "<C-v>" }),
   );
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
 });
 
+it("inserts context-menu paste directly without simulating a mapping", async () => {
+  await openInsertDoc();
+  scenario.mappingResult = true;
+  const editor = screen.getByTestId("editor-primary");
+  // No keyboard gesture: the paste must not query <C-v> mappings.
+  pasteEvent(editor, "メニュー貼付");
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "apply_gui_edits",
+      expect.objectContaining({
+        documentId: "doc_a",
+        edits: [{ range: { start: 0, end: 0 }, text: "メニュー貼付" }],
+      }),
+    ),
+  );
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "has_nvim_mapping")).toHaveLength(0);
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input")).toHaveLength(0);
+});
+
+it("pastes an OS image with empty text exactly once without text insertion", async () => {
+  await openInsertDoc();
+  scenario.mappingResult = false;
+  const editor = screen.getByTestId("editor-primary");
+  const file = { name: "shot.png", type: "image/png", size: 4, arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer } as unknown as File;
+  fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
+  pasteEvent(editor, "", [file]);
+  await waitFor(() => expect(scenario.pastedImages).toHaveLength(1));
+  expect(scenario.pastedImages[0]).toEqual({ documentId: "doc_a", name: "shot.png" });
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input")).toHaveLength(0);
+});
+
+it("retries a stale text range once without duplicating", async () => {
+  await openInsertDoc();
+  scenario.mappingResult = false;
+  // Concurrent native move: the first apply goes stale, the single retry lands.
+  scenario.files.get("メモ/a.md")!.revision = 1;
+  const editor = screen.getByTestId("editor-primary");
+  fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
+  pasteEvent(editor, "再送");
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "apply_gui_edits",
+      expect.objectContaining({
+        documentId: "doc_a",
+        baseRevision: 1,
+        edits: [{ range: { start: 0, end: 0 }, text: "再送" }],
+      }),
+    ),
+  );
+  const applies = mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits");
+  expect(applies).toHaveLength(2);
+  expect(scenario.files.get("メモ/a.md")!.text.startsWith("再送")).toBe(true);
+});
+
+it("surfaces a stale image range once without a duplicate file write", async () => {
+  await openInsertDoc();
+  scenario.pasteImageStaleOnce = true;
+  const editor = screen.getByTestId("editor-primary");
+  const file = { name: "stale.png", type: "image/png", size: 4, arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer } as unknown as File;
+  fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
+  pasteEvent(editor, "", [file]);
+  await waitFor(() =>
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === "paste_image")).toHaveLength(1),
+  );
+  expect(scenario.pastedImages).toHaveLength(0);
+  expect(await screen.findByRole("alert")).toBeVisible();
+});
+
 it("keeps normal-mode Ctrl+V as native visual-block without a mapping query", async () => {
-  mockClipboard("貼付");
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
   await screen.findByText("# A");
@@ -469,4 +566,58 @@ it("keeps normal-mode Ctrl+V as native visual-block without a mapping query", as
   );
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "has_nvim_mapping")).toHaveLength(0);
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+});
+
+it("binds read image hydration to the document and never reuses another doc bytes", async () => {
+  const identical = "![alt](img.png)\n";
+  scenario.files.set("メモ/a.md", { id: "doc_a", path: "メモ/a.md", text: identical, revision: 0, dirty: false, history: [identical] });
+  scenario.files.set("メモ/b.md", { id: "doc_b", path: "メモ/b.md", text: identical, revision: 0, dirty: false, history: [identical] });
+  scenario.imageBytes.set("doc_a:img.png", { mime: "image/png", bytes: [1, 2, 3, 4] });
+  scenario.imageBytes.set("doc_b:img.png", { mime: "image/png", bytes: [9, 8, 7, 6, 5] });
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "read" } });
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith("load_relative_image", { documentId: "doc_a", path: "img.png" }),
+  );
+  await waitFor(() => {
+    const src = screen.getByTestId("preview").querySelector("img")?.getAttribute("src") ?? "";
+    expect(src.startsWith("data:image/png;base64,")).toBe(true);
+  });
+  const srcA = screen.getByTestId("preview").querySelector("img")?.getAttribute("src") ?? "";
+  // Identical Markdown and filename in doc B must resolve B's own bytes.
+  // Wait for B's own Rust fetch before reading the remounted preview, since
+  // identical content cannot distinguish the old node from the new one.
+  fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith("load_relative_image", { documentId: "doc_b", path: "img.png" }),
+  );
+  await waitFor(() => {
+    const src = screen.getByTestId("preview").querySelector("img")?.getAttribute("src") ?? "";
+    expect(src.startsWith("data:image/png;base64,")).toBe(true);
+    expect(src).not.toBe(srcA);
+  });
+  const srcB = screen.getByTestId("preview").querySelector("img")?.getAttribute("src") ?? "";
+  expect(srcB).not.toBe(srcA);
+  // Switching back restores A's bytes, not a stale reuse of B.
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await waitFor(() => {
+    expect(screen.getByTestId("preview").querySelector("img")?.getAttribute("src")).toBe(srcA);
+  });
+});
+
+it("routes display-basis arrows natively in Visual so x-mode mappings fire", async () => {
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await screen.findByText("# A");
+  // Native Visual install (740d5d5): refresh the shell mode snapshot.
+  scenario.mode = "visual";
+  fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await waitFor(() => expect(screen.getByTestId("vim-footer-mode")).toHaveTextContent("選択"));
+  const editor = screen.getByTestId("editor-primary");
+  fireEvent.keyDown(editor, { key: "ArrowUp" });
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 0, keys: "<Up>" }),
+  );
 });

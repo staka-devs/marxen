@@ -238,6 +238,58 @@ it("displays ask proposals without staging", async () => {
   expect(await screen.findByText(/表示のみ/)).toBeVisible();
 });
 
+it("treats an unchanged scope as success alongside an applied document", async () => {
+  mockStream();
+  await openDocAndAi();
+  await registerAndSend();
+  await screen.findByTestId("ai-proposal");
+  // Simulate the applied buffer moving; the unchanged scope stays put.
+  const doc = backend.docs.get("メモ/a.md")!;
+  doc.text += "[適用]";
+  doc.revision += 1;
+  doc.dirty = true;
+  mockedInvoke.mockResolvedValueOnce({
+    copyId: "copy_1",
+    outcomes: [
+      { documentId: "doc_a", applied: true, revision: 1, error: null, rolledBack: false, rollbackError: null },
+      { documentId: "doc_b", applied: false, revision: 0, error: null, rolledBack: false, rollbackError: null },
+    ],
+  });
+  fireEvent.click(screen.getByRole("button", { name: "承認して適用" }));
+  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
+  const results = await screen.findByLabelText("承認結果");
+  expect(results).toHaveTextContent(/doc_a.*適用/);
+  expect(results).toHaveTextContent(/doc_b.*変更なし/);
+  // Unchanged is success: no failure text, no false all-or-nothing label.
+  expect(screen.queryByText(/未適用/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/all-or-nothing/i)).not.toBeInTheDocument();
+  expect(await screen.findByText(/1 文書に適用し、1 文書は変更なし/)).toBeVisible();
+  await waitFor(() => expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 1"));
+});
+
+it("reports a rollback failure per document without all-or-nothing claims", async () => {
+  mockStream();
+  await openDocAndAi();
+  await registerAndSend();
+  await screen.findByTestId("ai-proposal");
+  mockedInvoke.mockResolvedValueOnce({
+    copyId: "copy_1",
+    outcomes: [
+      { documentId: "doc_a", applied: false, revision: 0, error: "neovim error", rolledBack: true, rollbackError: "rollback failed" },
+    ],
+  });
+  fireEvent.click(screen.getByRole("button", { name: "承認して適用" }));
+  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
+  const results = await screen.findByLabelText("承認結果");
+  expect(results).toHaveTextContent(/doc_a.*未適用/);
+  expect(results).toHaveTextContent(/ロールバック済み/);
+  expect(results).toHaveTextContent(/ロールバック失敗/);
+  expect(await screen.findByText(/1 文書が未適用/)).toBeVisible();
+  expect(screen.queryByText(/all-or-nothing/i)).not.toBeInTheDocument();
+  expect(backend.docs.get("メモ/a.md")!.text).toBe("# A\n");
+  expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 0");
+});
+
 it("rejects without touching source or disk state", async () => {
   mockStream();
   await openDocAndAi();
