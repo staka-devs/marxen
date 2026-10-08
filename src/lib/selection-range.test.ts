@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { correspondRange, resolveEditRange, sliceRange } from "./selection-range";
+import { correspondSource, resolveEditRange, sliceRange } from "./selection-range";
 
 describe("exact half-open selection ranges", () => {
   it("replaces a forward selection once, then collapses bursts", () => {
@@ -25,17 +25,23 @@ describe("exact half-open selection ranges", () => {
     expect(sliceRange(text, { start: 0, end: 5 })).toBe("ab\ncd");
   });
 
-  it("clamps out-of-range offsets to the document", () => {
-    expect(resolveEditRange(4, 0, 99, 99)).toEqual({ start: 0, end: 4 });
+  it("clamps untrusted offsets but never the own projected caret", () => {
+    // A fresh selection still replaces exactly once.
+    expect(resolveEditRange(4, 0, 4, 4)).toEqual({ start: 0, end: 4 });
+    // The own projection survives clamping so rapid input cannot reverse.
+    expect(resolveEditRange(4, 0, 99, 99)).toEqual({ start: 99, end: 99 });
+    expect(resolveEditRange(0, 0, 0, 2)).toEqual({ start: 2, end: 2 });
     expect(resolveEditRange(4, -3, 2, 2)).toEqual({ start: 0, end: 2 });
     expect(sliceRange("abcd", { start: 2, end: 99 })).toBe("cd");
   });
 
-  it("admits a stale retry only when the slice still corresponds", () => {
-    expect(correspondRange("hello world", { start: 6, end: 11 }, "world")).toEqual({ start: 6, end: 11 });
-    expect(correspondRange("hello!", { start: 6, end: 11 }, "world")).toBeNull();
-    // Collapsed carets clamp and always correspond.
-    expect(correspondRange("hi", { start: 0, end: 0 }, "")).toEqual({ start: 0, end: 0 });
-    expect(correspondRange("hi", { start: 50, end: 50 }, "")).toEqual({ start: 2, end: 2 });
+  it("admits a stale retry only on full source equality", () => {
+    expect(correspondSource("hello world", "hello world", { start: 6, end: 11 })).toEqual({ start: 6, end: 11 });
+    // Same excerpt at the same offset is not enough: shifted context rejects.
+    expect(correspondSource("!hello world", "hello world", { start: 6, end: 11 })).toBeNull();
+    expect(correspondSource("hello!", "hello world", { start: 0, end: 0 })).toBeNull();
+    // Identical source retries at the clamped range.
+    expect(correspondSource("hi", "hi", { start: 0, end: 0 })).toEqual({ start: 0, end: 0 });
+    expect(correspondSource("hi", "hi", { start: 50, end: 50 })).toEqual({ start: 2, end: 2 });
   });
 });

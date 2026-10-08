@@ -134,9 +134,9 @@ describe("execution-mode character routing", () => {
     nativeMode = "insert";
   });
 
-  function installModeAware(handlers: (command: string, args?: unknown) => Promise<unknown>) {
+  function installModeAware(handlers: (command: string, args?: unknown) => Promise<unknown>, getRevision?: () => number) {
     mockedInvoke.mockImplementation((command: string, args?: unknown) => {
-      if (command === "fetch_mode") return Promise.resolve({ documentId: "doc_1", revision: 0, mode: nativeMode });
+      if (command === "fetch_mode") return Promise.resolve({ documentId: "doc_1", revision: getRevision?.() ?? 0, mode: nativeMode });
       return handlers(command, args);
     });
   }
@@ -158,10 +158,18 @@ describe("execution-mode character routing", () => {
 
   it("keeps the queue-owned pending prefix so multi-key mappings keep priority", async () => {
     const client = new RegistryClient();
-    installModeAware((command: string) => {
-      if (command === "has_nvim_mapping") return Promise.resolve(true);
-      return Promise.resolve(snapshot("doc_1", 2, "x"));
-    });
+    let revision = 0;
+    installModeAware(
+      (command: string) => {
+        if (command === "has_nvim_mapping") return Promise.resolve(true);
+        if (command === "nvim_input") {
+          revision += 1;
+          return Promise.resolve(snapshot("doc_1", revision, "x"));
+        }
+        throw new Error(`unexpected ${command}`);
+      },
+      () => revision,
+    );
     await client.routeCharKey("doc_1", "j", { start: 0, end: 0 });
     await client.routeCharKey("doc_1", "j", { start: 1, end: 1 });
     expect(mockedInvoke).toHaveBeenNthCalledWith(2, "has_nvim_mapping", { documentId: "doc_1", mode: "i", lhs: "j" });
@@ -214,16 +222,19 @@ describe("execution-mode character routing", () => {
   it("keeps bursts ordered against execution-time revisions", async () => {
     const client = new RegistryClient();
     let revision = 0;
-    installModeAware((command: string, args?: unknown) => {
-      const a = (args ?? {}) as { edits?: Array<{ range: { start: number; end: number }; text: string }> };
-      if (command === "has_nvim_mapping") return Promise.resolve(false);
-      if (command === "apply_gui_edits") {
-        revision += 1;
-        const edit = a.edits![0];
-        return Promise.resolve(snapshot("doc_1", revision, `<${edit.range.start}-${edit.range.end}${edit.text}>`));
-      }
-      throw new Error(`unexpected ${command}`);
-    });
+    installModeAware(
+      (command: string, args?: unknown) => {
+        const a = (args ?? {}) as { edits?: Array<{ range: { start: number; end: number }; text: string }> };
+        if (command === "has_nvim_mapping") return Promise.resolve(false);
+        if (command === "apply_gui_edits") {
+          revision += 1;
+          const edit = a.edits![0];
+          return Promise.resolve(snapshot("doc_1", revision, `<${edit.range.start}-${edit.range.end}${edit.text}>`));
+        }
+        throw new Error(`unexpected ${command}`);
+      },
+      () => revision,
+    );
     const results = await Promise.all([
       client.routeCharKey("doc_1", "a", { start: 0, end: 0 }),
       client.routeCharKey("doc_1", "b", { start: 1, end: 1 }),
@@ -260,7 +271,7 @@ describe("execution-mode character routing", () => {
 
   it("resyncs instead of duplicating when the base went stale", async () => {
     const client = new RegistryClient();
-    mockedInvoke.mockImplementationOnce(() => Promise.resolve({ documentId: "doc_1", revision: 3, mode: "insert" }));
+    mockedInvoke.mockImplementationOnce(() => Promise.resolve({ documentId: "doc_1", revision: 0, mode: "insert" }));
     mockedInvoke.mockResolvedValueOnce(true);
     mockedInvoke.mockRejectedValueOnce({ code: "contract", error: { code: "stale_revision", expected: 4, received: 3 } });
     mockedInvoke.mockResolvedValueOnce(snapshot("doc_1", 4, "latest"));

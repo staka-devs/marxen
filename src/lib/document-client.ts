@@ -313,10 +313,13 @@ export class RegistryClient {
     range: { start: number; end: number },
   ): Promise<{ action: "vim"; snapshot: DocumentSnapshot } | { action: "gui"; snapshot: DocumentSnapshot }> {
     return this.enqueue(documentId, async () => {
+      // A mode revision is never proof of known source text: on mismatch the
+      // buffer moved out of band (external/native/AI edit), so refresh and
+      // reject instead of mutating offsets that may point elsewhere.
+      const known = this.rev.get(documentId) ?? 0;
       const update = await workspaceApi.fetchMode(documentId);
-      const current = this.rev.get(documentId) ?? 0;
-      const revision = update.revision > current ? update.revision : current;
-      this.rev.set(documentId, revision);
+      if (update.revision !== known) await this.resync(documentId);
+      const revision = this.rev.get(documentId) ?? 0;
       if (update.mode !== "insert" && update.mode !== "replace") {
         this.pendingPrefix.set(documentId, "");
         try {
@@ -365,10 +368,13 @@ export class RegistryClient {
     range: { start: number; end: number },
   ): Promise<{ action: "vim"; snapshot: DocumentSnapshot } | { action: "gui"; snapshot: DocumentSnapshot }> {
     return this.enqueue(documentId, async () => {
+      // A mode revision is never proof of known source text: on mismatch the
+      // buffer moved out of band (external/native/AI edit), so refresh and
+      // reject instead of mutating offsets that may point elsewhere.
+      const known = this.rev.get(documentId) ?? 0;
       const update = await workspaceApi.fetchMode(documentId);
-      const current = this.rev.get(documentId) ?? 0;
-      const revision = update.revision > current ? update.revision : current;
-      this.rev.set(documentId, revision);
+      if (update.revision !== known) await this.resync(documentId);
+      const revision = this.rev.get(documentId) ?? 0;
       if (keyNotation !== null && (update.mode === "insert" || update.mode === "replace")) {
         const mapped = await workspaceApi.hasMapping(documentId, "i", keyNotation);
         if (mapped) {

@@ -67,7 +67,7 @@ import {
 import { applyGridUpdates, createGridState, type NvimGridState } from "../../lib/grid";
 import type { ImageResolver } from "../preview/images";
 import { offsetToLineCol } from "../../lib/utf16";
-import { correspondRange as correspondSnapshotRange, resolveEditRange, sliceRange } from "../../lib/selection-range";
+import { correspondSource as correspondSnapshotSource, resolveEditRange } from "../../lib/selection-range";
 
 export type ViewMode = "live" | "source" | "read" | "split";
 export type NavBasis = "display" | "source";
@@ -318,7 +318,10 @@ export function WorkspaceShell() {
         await loadEntries();
         const open = await workspaceApi.listDocuments();
         const next: Record<string, OpenDoc> = {};
-        for (const doc of open) next[doc.snapshot.documentId] = docFromOpen(doc);
+        for (const doc of open) {
+          if (registry instanceof RegistryClient) registry.noteSnapshot(doc.snapshot);
+          next[doc.snapshot.documentId] = docFromOpen(doc);
+        }
         setDocs(next);
         const ids = open.map((doc) => doc.snapshot.documentId);
         setTabs(ids);
@@ -354,6 +357,7 @@ export function WorkspaceShell() {
       try {
         const open = await workspaceApi.openMarkdown(path);
         const doc = docFromOpen(open);
+        if (registry instanceof RegistryClient) registry.noteSnapshot(open.snapshot);
         setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
         setTabs((prev) => (prev.includes(doc.documentId) ? prev : [...prev, doc.documentId]));
         setActiveId(doc.documentId);
@@ -633,30 +637,31 @@ export function WorkspaceShell() {
   // prevents default synchronously and routes exactly once.
   const pendingPasteRef = useRef<{ time: number; dropText: boolean } | null>(null);
 
-  /** Exact half-open range for one edit with safe-retry correspondence data. */
+  /** Exact half-open range for one edit plus the full source it was read from. */
   const takeRange = useCallback(
-    (id: string): { range: { start: number; end: number }; beforeText: string } => {
-      const current = docsRef.current[id];
+    (id: string): { range: { start: number; end: number }; fullText: string } => {
+      const text = docsRef.current[id]?.text ?? "";
       const sel = selections[id] ?? { anchor: 0, head: 0 };
-      const range = resolveEditRange(current?.text.length ?? 0, sel.anchor, sel.head, caretRef.current[id]);
-      return { range, beforeText: sliceRange(current?.text ?? "", range) };
+      const range = resolveEditRange(text.length, sel.anchor, sel.head, caretRef.current[id]);
+      return { range, fullText: text };
     },
     [selections],
   );
 
   /**
    * A newer revision must never silently reuse an old range: after a stale
-   * rejection, retry once only when the fresh text still holds the captured
-   * slice at the clamped range (collapsed carets always correspond).
+   * rejection, retry once only when the fresh source still equals the
+   * captured source in full. A matching excerpt at the same offset alone is
+   * not enough, since unrelated changes can shift repeated text.
    */
   const correspondRange = useCallback(
-    (snapshot: DocumentSnapshot, range: { start: number; end: number }, beforeText: string): { start: number; end: number } | null =>
-      correspondSnapshotRange(snapshot.text, range, beforeText),
+    (snapshot: DocumentSnapshot, range: { start: number; end: number }, fullText: string): { start: number; end: number } | null =>
+      correspondSnapshotSource(snapshot.text, fullText, range),
     [],
   );
 
   const routeCharKey = useCallback(
-    async (id: string, key: string, range: { start: number; end: number }, beforeText: string, retried = false): Promise<void> => {
+    async (id: string, key: string, range: { start: number; end: number }, fullText: string, retried = false): Promise<void> => {
       if (!registry) {
         setNotice(READONLY_MESSAGE);
         return;
@@ -679,9 +684,11 @@ export function WorkspaceShell() {
       } catch (cause) {
         if (cause instanceof StaleResync) {
           sayStale(cause.snapshot);
+          // Never retry against unknown source automatically: once, and only
+          // when the fresh source still equals the captured source in full.
           if (!retried) {
-            const fresh = correspondRange(cause.snapshot, range, beforeText);
-            if (fresh) await routeCharKey(id, key, fresh, cause.snapshot.text.slice(fresh.start, fresh.end), true);
+            const fresh = correspondRange(cause.snapshot, range, fullText);
+            if (fresh) await routeCharKey(id, key, fresh, cause.snapshot.text, true);
           }
         } else {
           setNotice(workspaceErrorText(cause));
@@ -700,7 +707,7 @@ export function WorkspaceShell() {
       keyNotation: string | null,
       text: string,
       range: { start: number; end: number },
-      beforeText: string,
+      fullText: string,
       retried = false,
     ): Promise<void> => {
       if (!registry) {
@@ -725,8 +732,8 @@ export function WorkspaceShell() {
         if (cause instanceof StaleResync) {
           sayStale(cause.snapshot);
           if (!retried) {
-            const fresh = correspondRange(cause.snapshot, range, beforeText);
-            if (fresh) await routeCapturedPaste(id, keyNotation, text, fresh, cause.snapshot.text.slice(fresh.start, fresh.end), true);
+            const fresh = correspondRange(cause.snapshot, range, fullText);
+            if (fresh) await routeCapturedPaste(id, keyNotation, text, fresh, cause.snapshot.text, true);
           }
         } else {
           setNotice(workspaceErrorText(cause));
@@ -770,16 +777,23 @@ export function WorkspaceShell() {
         return;
       }
       if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
-        // Every printable key enqueues immediately; the actual native mode is
-        // read inside the serial queue, so fast Normal->i->characters and a
-        // Visual install followed by a key never consult stale refs.
+        // Enqueue immediately so pending g/gg and operator prefixes never
+        // block. When the event-time mode is insert/replace, take the exact
+        // range with an optimistic caret and let the queue read the actual
+        // mode; otherwise fall back to real native input with no speculative
+        // range, so fast Normal->i->characters cannot use invented offsets.
         event.preventDefault();
         event.stopPropagation();
         const id = activeRef.current;
         if (!docsRef.current[id]) return;
-        const { range, beforeText } = takeRange(id);
+        const insertHint = vimModeRef.current === "insert" || vimModeRef.current === "replace";
+        if (!insertHint) {
+          void routeVimKeys(id, event.key);
+          return;
+        }
+        const { range, fullText } = takeRange(id);
         caretRef.current[id] = range.start + event.key.length;
-        void routeCharKey(id, event.key, range, beforeText);
+        void routeCharKey(id, event.key, range, fullText);
         return;
       }
       if (navRef.current === "display" && !event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -885,8 +899,8 @@ export function WorkspaceShell() {
         event.preventDefault();
         event.stopPropagation();
         if (pending.dropText) return;
-        const { range, beforeText } = takeRange(id);
-        void routeCapturedPaste(id, "<C-v>", text, range, beforeText);
+        const { range, fullText } = takeRange(id);
+        void routeCapturedPaste(id, "<C-v>", text, range, fullText);
         return;
       }
       const mode = vimModeRef.current;
@@ -895,8 +909,8 @@ export function WorkspaceShell() {
       // simulating a mapping. Prevent synchronously before CodeMirror default.
       event.preventDefault();
       event.stopPropagation();
-      const { range, beforeText } = takeRange(id);
-      void routeCapturedPaste(id, null, text, range, beforeText);
+      const { range, fullText } = takeRange(id);
+      void routeCapturedPaste(id, null, text, range, fullText);
     },
     [desktop, registry, takeRange, pasteImageFiles, routeCapturedPaste],
   );
@@ -948,6 +962,7 @@ export function WorkspaceShell() {
         try {
           const open = await workspaceApi.openMarkdown(hit.path);
           const doc = docFromOpen(open);
+          if (registry instanceof RegistryClient) registry.noteSnapshot(open.snapshot);
           setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
           setTabs((prev) => (prev.includes(doc.documentId) ? prev : [...prev, doc.documentId]));
           id = doc.documentId;
@@ -977,6 +992,7 @@ export function WorkspaceShell() {
         if (!id) {
           const open = await workspaceApi.openMarkdown(hit.path);
           const doc = docFromOpen(open);
+          if (registry instanceof RegistryClient) registry.noteSnapshot(open.snapshot);
           setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
           setTabs((prev) => (prev.includes(doc.documentId) ? prev : [...prev, doc.documentId]));
           id = doc.documentId;

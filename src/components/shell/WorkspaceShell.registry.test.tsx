@@ -27,6 +27,8 @@ const scenario = {
   mode: "normal" as string,
   mappingResult: false as boolean,
   applyStaleOnce: false,
+  deferApplies: false,
+  deferredReleases: [] as Array<() => void>,
   imageBytes: new Map<string, { mime: string; bytes: number[] }>(),
   pasteImageStaleOnce: false,
   pastedImages: [] as Array<{ documentId: string; name: string; range: { start: number; end: number } }>,
@@ -43,6 +45,8 @@ function resetBackend() {
   scenario.mode = "normal";
   scenario.mappingResult = false;
   scenario.applyStaleOnce = false;
+  scenario.deferApplies = false;
+  scenario.deferredReleases = [];
   scenario.imageBytes = new Map();
   scenario.pasteImageStaleOnce = false;
   scenario.pastedImages = [];
@@ -111,6 +115,13 @@ function installBackend() {
         doc.revision += 1;
         doc.dirty = true;
         doc.history.push(doc.text);
+        if (scenario.deferApplies) {
+          // Mutate now but acknowledge later: every keystroke queues against
+          // event-time ranges before any acknowledgment lands.
+          return new Promise((resolve) => {
+            scenario.deferredReleases.push(() => resolve(snapshotOf(doc)));
+          });
+        }
         return Promise.resolve(snapshotOf(doc));
       }
       case "nvim_input": {
@@ -449,6 +460,93 @@ it("keeps fast insert bursts in source order", async () => {
   ]);
 });
 
+it("keeps rapid input ordered on an empty document before any acknowledgment", async () => {
+  const empty = "";
+  scenario.files.set("メモ/a.md", { id: "doc_a", path: "メモ/a.md", text: empty, revision: 0, dirty: false, history: [empty] });
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  scenario.mode = "insert";
+  fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await waitFor(() => expect(screen.getByTestId("vim-footer-mode")).toHaveTextContent("挿入"));
+  scenario.mappingResult = false;
+  scenario.deferApplies = true;
+  const editor = screen.getByTestId("editor-primary");
+  // All three ranges resolve before the first acknowledgment lands: a
+  // clamped projection would send 0..0 three times and yield CBA.
+  fireEvent.keyDown(editor, { key: "A" });
+  fireEvent.keyDown(editor, { key: "B" });
+  fireEvent.keyDown(editor, { key: "C" });
+  // Drain the serial queue one acknowledgment at a time, in order.
+  for (const expected of ["A", "AB", "ABC"]) {
+    await waitFor(() => expect(scenario.deferredReleases.length).toBeGreaterThan(0));
+    scenario.deferredReleases.shift()!();
+    await waitFor(() => expect(scenario.files.get("メモ/a.md")!.text).toBe(expected));
+  }
+  scenario.deferApplies = false;
+  await waitFor(() => expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 3"));
+  // Native undo restores the exact previous text.
+  fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "コマンドパレット" }));
+  await screen.findByTestId("command-palette");
+  fireEvent.change(screen.getByLabelText("コマンドで絞り込む"), { target: { value: "元に戻す" } });
+  fireEvent.click(await screen.findByText("編集: 元に戻す"));
+  await waitFor(() => expect(scenario.files.get("メモ/a.md")!.text).toBe("AB"));
+  await waitFor(() => expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 4"));
+});
+
+it("keeps rapid input ordered at EOF before any acknowledgment", async () => {
+  const empty = "";
+  scenario.files.set("メモ/a.md", { id: "doc_a", path: "メモ/a.md", text: empty, revision: 0, dirty: false, history: [empty] });
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  scenario.mode = "insert";
+  fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await waitFor(() => expect(screen.getByTestId("vim-footer-mode")).toHaveTextContent("挿入"));
+  scenario.mappingResult = false;
+  const editor = screen.getByTestId("editor-primary");
+  let built = "";
+  for (const key of ["a", "b", "c"]) {
+    fireEvent.keyDown(editor, { key });
+    built += key;
+    await waitFor(() => expect(scenario.files.get("メモ/a.md")!.text).toBe(built));
+  }
+  // Caret now sits at EOF (offset 3): the next burst must project past the
+  // known length instead of clamping back to it (which would yield ZYX).
+  scenario.deferApplies = true;
+  fireEvent.keyDown(editor, { key: "X" });
+  fireEvent.keyDown(editor, { key: "Y" });
+  fireEvent.keyDown(editor, { key: "Z" });
+  for (const expected of ["abcX", "abcXY", "abcXYZ"]) {
+    await waitFor(() => expect(scenario.deferredReleases.length).toBeGreaterThan(0));
+    scenario.deferredReleases.shift()!();
+    await waitFor(() => expect(scenario.files.get("メモ/a.md")!.text).toBe(expected));
+  }
+  scenario.deferApplies = false;
+});
+
+it("types immediately after i without waiting for the mode echo", async () => {
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await screen.findByText("# A");
+  // Still Normal on screen: no mode echo has run since opening.
+  expect(screen.getByTestId("vim-footer-mode")).toHaveTextContent("ノーマル");
+  const editor = screen.getByTestId("editor-primary");
+  fireEvent.keyDown(editor, { key: "i" });
+  fireEvent.keyDown(editor, { key: "é" });
+  fireEvent.keyDown(editor, { key: "<" });
+  await waitFor(() => {
+    const inputs = mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input");
+    expect(inputs.map(([, args]) => (args as { keys: string }).keys)).toEqual(["i", "é", "<"]);
+  });
+  const bases = mockedInvoke.mock.calls
+    .filter(([command]) => command === "nvim_input")
+    .map(([, args]) => (args as { baseRevision: number }).baseRevision);
+  expect(bases).toEqual([0, 1, 2]);
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+});
+
 async function openInsertDoc() {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
@@ -570,6 +668,51 @@ it("retries a stale text range once without duplicating", async () => {
   expect(scenario.files.get("メモ/a.md")!.text.startsWith("再送")).toBe(true);
   const occurrences = scenario.files.get("メモ/a.md")!.text.split("再送").length - 1;
   expect(occurrences).toBe(1);
+});
+
+it("writes nothing when a concurrent edit shifts the text under a collapsed caret", async () => {
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await screen.findByText("# A");
+  scenario.mode = "insert";
+  fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await waitFor(() => expect(screen.getByTestId("vim-footer-mode")).toHaveTextContent("挿入"));
+  scenario.mappingResult = false;
+  // Concurrent external edit shifts every offset before the paste lands.
+  const doc = scenario.files.get("メモ/a.md")!;
+  doc.text = "外部\n" + doc.text;
+  doc.revision += 1;
+  const editor = screen.getByTestId("editor-primary");
+  fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
+  pasteEvent(editor, "Q");
+  await waitFor(() => expect(screen.getByRole("alert")).toBeVisible());
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input")).toHaveLength(0);
+  expect(scenario.files.get("メモ/a.md")!.text.startsWith("外部\n# A")).toBe(true);
+});
+
+it("retries once when only the revision moved but the source is identical", async () => {
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await screen.findByText("# A");
+  scenario.mode = "insert";
+  fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await waitFor(() => expect(screen.getByTestId("vim-footer-mode")).toHaveTextContent("挿入"));
+  scenario.mappingResult = false;
+  // Revision-only bump (checkpoint): the source still proves correspondence.
+  scenario.files.get("メモ/a.md")!.revision += 1;
+  const editor = screen.getByTestId("editor-primary");
+  fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
+  pasteEvent(editor, "Q");
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "apply_gui_edits",
+      expect.objectContaining({ edits: [{ range: { start: 0, end: 0 }, text: "Q" }] }),
+    ),
+  );
+  expect(scenario.files.get("メモ/a.md")!.text.startsWith("Q")).toBe(true);
 });
 
 it("surfaces a stale image range once without a duplicate file write", async () => {
