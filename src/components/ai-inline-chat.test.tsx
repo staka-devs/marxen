@@ -6,7 +6,7 @@ import type { AiStreamEvent, PromptContext } from "../shared/ai-contracts";
 
 vi.mock("../lib/ai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/ai")>();
-  return { ...actual, startPrompt: vi.fn(), cancelPromptSafe: vi.fn() };
+  return { ...actual, startPrompt: vi.fn(), cancelPromptSafe: vi.fn(async (stop: () => Promise<void>) => { await stop(); }) };
 });
 
 beforeEach(() => {
@@ -21,7 +21,61 @@ const context: PromptContext = {
   text: "# A\n本文\n",
 };
 
+const provider = { kind: "acp", acp: { preset: "codex", argv: null }, openai: null, anthropic: null } as const;
+
+function renderInline(extra?: Partial<Parameters<typeof InlineChat>[0]>) {
+  return render(
+    <InlineChat
+      documentId="doc_a"
+      documentLabel="a.md"
+      target={{ start: 4, end: 9, kind: "selection", excerpt: "本文" }}
+      context={context}
+      staging={{ copyId: "copy_inline" }}
+      ensureStaging={vi.fn(async () => ({ copyId: "copy_inline" }))}
+      provider={{ ...provider }}
+      onProposal={() => undefined}
+      onReview={() => undefined}
+      onClose={() => undefined}
+      {...extra}
+    />,
+  );
+}
+
 describe("inline chat", () => {
+  it("discards a response completed after the user requested cancellation", async () => {
+    let handler!: (event: AiStreamEvent) => void;
+    const onProposal = vi.fn();
+    vi.mocked(startPrompt).mockImplementation(async (_request, onEvent) => {
+      handler = onEvent;
+      return { runId: "inline-cancel", stop: vi.fn(async () => undefined) };
+    });
+    renderInline({ onProposal });
+    fireEvent.change(screen.getByLabelText("インライン指示"), { target: { value: "止める" } });
+    fireEvent.click(screen.getByRole("button", { name: "インライン送信" }));
+    await vi.waitFor(() => expect(startPrompt).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "インライン取消" }));
+    handler({ type: "done", payload: { runId: "inline-cancel", proposal: { text: "取消後の提案", baseContexts: [] }, sent: [] } });
+    expect(await screen.findByText("取り消しました。")).toBeVisible();
+    expect(onProposal).not.toHaveBeenCalled();
+    expect(screen.queryByText("取消後の提案")).not.toBeInTheDocument();
+  });
+
+  it("holds its busy ownership until a pending start is cancelled after unmount", async () => {
+    let resolve!: (value: { runId: string; stop: () => Promise<void> }) => void;
+    const pending = new Promise<{ runId: string; stop: () => Promise<void> }>((done) => { resolve = done; });
+    vi.mocked(startPrompt).mockReturnValue(pending);
+    const stop = vi.fn(async () => undefined);
+    const onBusyChange = vi.fn();
+    const { unmount } = renderInline({ onBusyChange });
+    fireEvent.change(screen.getByLabelText("インライン指示"), { target: { value: "保留中" } });
+    fireEvent.click(screen.getByRole("button", { name: "インライン送信" }));
+    await vi.waitFor(() => expect(startPrompt).toHaveBeenCalled());
+    unmount();
+    expect(onBusyChange).toHaveBeenLastCalledWith(true);
+    resolve({ runId: "late", stop });
+    await vi.waitFor(() => expect(stop).toHaveBeenCalled());
+    expect(onBusyChange).toHaveBeenLastCalledWith(false);
+  });
   it("targets the separate inline context and offers an explicit review action", async () => {
     let handler: ((event: AiStreamEvent) => void) | null = null;
     vi.mocked(startPrompt).mockImplementation(async (request, onEvent) => {
@@ -33,21 +87,11 @@ describe("inline chat", () => {
     });
     const onProposal = vi.fn();
     const onReview = vi.fn();
-    render(
-      <InlineChat
-        documentId="doc_a"
-        target={{ start: 4, end: 9, kind: "selection", excerpt: "本文" }}
-        context={context}
-        staging={{ copyId: "copy_inline" }}
-        ensureStaging={vi.fn()}
-        provider={{ kind: "acp", acp: { preset: "codex", argv: null }, openai: null, anthropic: null }}
-        onProposal={onProposal}
-        onReview={onReview}
-        onClose={() => undefined}
-      />,
-    );
+    renderInline({ onProposal, onReview });
     expect(screen.getByTestId("inline-chat")).toHaveTextContent(/選択/);
-    expect(screen.getByText(/doc_a rev 3/)).toBeVisible();
+    expect(screen.getByText("a.md")).toBeVisible();
+    expect(screen.getByText("本文")).toBeVisible();
+    expect(screen.queryByText(/doc_a/)).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("インライン指示"), { target: { value: "短く" } });
     fireEvent.click(screen.getByRole("button", { name: "インライン送信" }));
     await vi.waitFor(() => expect(handler).not.toBeNull());
@@ -73,19 +117,7 @@ describe("inline chat", () => {
       handler = onEvent;
       return { runId: "run_inline2", stop: vi.fn() };
     });
-    render(
-      <InlineChat
-        documentId="doc_a"
-        target={{ start: 0, end: 3, kind: "paragraph", excerpt: "# A" }}
-        context={context}
-        staging={{ copyId: "copy_inline" }}
-        ensureStaging={vi.fn()}
-        provider={{ kind: "acp", acp: { preset: "codex", argv: null }, openai: null, anthropic: null }}
-        onProposal={() => undefined}
-        onReview={() => undefined}
-        onClose={() => undefined}
-      />,
-    );
+    renderInline({ target: { start: 0, end: 3, kind: "paragraph", excerpt: "# A" } });
     fireEvent.change(screen.getByLabelText("インライン指示"), { target: { value: "直して" } });
     fireEvent.click(screen.getByRole("button", { name: "インライン送信" }));
     await vi.waitFor(() => expect(handler).not.toBeNull());
@@ -93,5 +125,31 @@ describe("inline chat", () => {
     expect(await screen.findByRole("button", { name: "インライン取消" })).toBeVisible();
     handler!({ type: "cancelled", payload: { runId: "run_inline2" } });
     expect(await screen.findByText("取り消しました。")).toBeVisible();
+  });
+
+  it("closes with Escape after requesting cancellation", async () => {
+    let handler: ((event: AiStreamEvent) => void) | null = null;
+    const stop = vi.fn(async () => undefined);
+    vi.mocked(startPrompt).mockImplementation(async (_request, onEvent) => {
+      handler = onEvent;
+      return { runId: "run_inline3", stop };
+    });
+    const onClose = vi.fn();
+    renderInline({ onClose });
+    fireEvent.change(screen.getByLabelText("インライン指示"), { target: { value: "直して" } });
+    fireEvent.click(screen.getByRole("button", { name: "インライン送信" }));
+    await vi.waitFor(() => expect(handler).not.toBeNull());
+    handler!({ type: "started", payload: { runId: "run_inline3" } });
+    await vi.waitFor(() => expect(stop).not.toHaveBeenCalled());
+    fireEvent.keyDown(screen.getByTestId("inline-chat"), { key: "Escape" });
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("stays fenced while the Agent chat owns a run", () => {
+    renderInline({ disabled: true });
+    fireEvent.change(screen.getByLabelText("インライン指示"), { target: { value: "直して" } });
+    expect(screen.getByRole("button", { name: "インライン送信" })).toBeDisabled();
+    expect(screen.getByText("他の応答を生成しています。")).toBeVisible();
+    expect(startPrompt).not.toHaveBeenCalled();
   });
 });

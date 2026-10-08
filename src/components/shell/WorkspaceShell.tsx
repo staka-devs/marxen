@@ -9,6 +9,7 @@ import type { AiProviderConfig, ContextSummary, PromptMode, ProposalText, Prompt
 import { buildProviderConfig } from "../../lib/ai";
 import { loadAiProfile } from "../../lib/ai-profiles";
 import { resolveInlineTarget } from "../../lib/ai-inline-target";
+import { EditorView } from "@codemirror/view";
 import type { ApproveDocOutcome, IsolationDiff } from "../../shared/isolation-contracts";
 import {
   approveIsolatedCopy,
@@ -174,10 +175,23 @@ export function WorkspaceShell() {
   const [aiDismissed, setAiDismissed] = useState(false);
   const [aiProposal, setAiProposal] = useState<{ proposal: ProposalText; sent: ContextSummary[]; mode: PromptMode } | null>(null);
   const [staging, setStaging] = useState<{ copyId: string } | null>(null);
-  const [stagingBasis, setStagingBasis] = useState<{ documentId: string; revision: number } | null>(null);
-  const [stagingBusy, setStagingBusy] = useState(false);
   const [aiProvider, setAiProvider] = useState<AiProviderConfig>(() => buildProviderConfig(loadAiProfile()));
   const [aiSettingsToken, setAiSettingsToken] = useState(0);
+  // Mutual fence for the single shared staging slot: while one chat runs,
+  // the other chat's send stays disabled so its owned copy cannot be lost.
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [inlineBusy, setInlineBusy] = useState(false);
+  const chatOwnerRef = useRef<"agent" | "inline" | null>(null);
+  const setAgentChatBusy = useCallback((busy: boolean) => {
+    if (busy && chatOwnerRef.current === null) chatOwnerRef.current = "agent";
+    if (!busy && chatOwnerRef.current === "agent") chatOwnerRef.current = null;
+    setAgentBusy(busy);
+  }, []);
+  const setInlineChatBusy = useCallback((busy: boolean) => {
+    if (busy && chatOwnerRef.current === null) chatOwnerRef.current = "inline";
+    if (!busy && chatOwnerRef.current === "inline") chatOwnerRef.current = null;
+    setInlineBusy(busy);
+  }, []);
   const [inlineOpen, setInlineOpen] = useState(false);
   const [inlineSnapshot, setInlineSnapshot] = useState<PromptContext | null>(null);
   const [inlineKind, setInlineKind] = useState<"selection" | "paragraph">("selection");
@@ -1388,6 +1402,9 @@ export function WorkspaceShell() {
 
   // -- palette / keys ----------------------------------------------------------
 
+  // Late-bound opener for the inline chat (defined below with the AI scope).
+  const openInlineChatRef = useRef<() => void>(() => undefined);
+
   const commands: PaletteCommand[] = useMemo(
     () => [
       { id: "view-live", label: "表示: ライブにする" },
@@ -1408,14 +1425,14 @@ export function WorkspaceShell() {
       { id: "palette-raw-refresh", label: "表示: Neovim 画面を更新する" },
       { id: "palette-recovery", label: "復旧: 復旧一覧を更新する" },
       { id: "palette-ai", label: "AI: AI 支援を開く" },
+      { id: "inline-chat", label: "インライン: チャットを開く" },
       { id: "palette-settings", label: "設定: 設定を開く" },
     ],
     [],
   );
 
   const runCommand = useCallback(
-    (id: string) => {
-      if (id === "view-live") setViewMode("live");
+    (id: string) => {      if (id === "view-live") setViewMode("live");
       else if (id === "view-source") setViewMode("source");
       else if (id === "view-read") setViewMode("read");
       else if (id === "view-split") setViewMode("split");
@@ -1440,6 +1457,9 @@ export function WorkspaceShell() {
       else if (id === "palette-ai") {
         if (!desktop) setNotice(READONLY_MESSAGE);
         else setShowAi(true);
+      } else if (id === "inline-chat") {
+        if (!desktop) setNotice(READONLY_MESSAGE);
+        else openInlineChatRef.current();
       } else if (id === "palette-settings") setSettings(true);
     },
     [desktop, handleSave, handleReload, handleUndo, handleRedo, closeTab, refreshRecovery],
@@ -1500,6 +1520,16 @@ export function WorkspaceShell() {
     }
   }, [active, selections]);
 
+  // Visible filename labels for AI scopes (never internal ids in product text).
+  const contextLabels = useMemo(() => {
+    const labels: Record<string, string> = {};
+    for (const doc of Object.values(docs)) {
+      const base = doc.path?.split("/").pop() ?? doc.documentId;
+      labels[doc.documentId] = base === "" ? doc.documentId : base;
+    }
+    return labels;
+  }, [docs]);
+
   const activeExternal = active ? externalByDoc[active.documentId] : undefined;
   const isConflicted = active ? conflictDoc === active.documentId : false;
 
@@ -1509,9 +1539,10 @@ export function WorkspaceShell() {
   const aiContexts: PromptContext[] = useMemo(() => {
     if (!desktop || !active || aiDismissed) return [];
     const sel = selections[active.documentId] ?? { anchor: 0, head: 0 };
-    const start = Math.min(sel.anchor, sel.head, active.text.length);
-    const end = Math.min(Math.max(sel.anchor, sel.head), active.text.length);
-    return [{ documentId: active.documentId, revision: active.revision, ranges: [{ start, end }], text: active.text }];
+    const collapsed = sel.anchor === sel.head;
+    const start = collapsed ? 0 : Math.min(sel.anchor, sel.head, active.text.length);
+    const end = collapsed ? active.text.length : Math.min(Math.max(sel.anchor, sel.head), active.text.length);
+    return [{ documentId: active.documentId, revision: active.revision, ranges: [{ start, end }], text: active.text.slice(start, end) }];
   }, [desktop, active, selections, aiDismissed]);
 
   const stagingRef = useRef<string | null>(null);
@@ -1529,7 +1560,7 @@ export function WorkspaceShell() {
       }
       if (mode === "ask") {
         // Questions display only; staging refuses ask.
-        setNotice("AI の提案を受け取りました。差分を確認してください。");
+        setNotice("AI の回答を受け取りました。");
         setReviewStatus("質問モードは表示のみです。取り込みは行いません。");
         setReviewBusy(true);
         try {
@@ -1543,7 +1574,7 @@ export function WorkspaceShell() {
         }
         return;
       }
-      setNotice("AI の提案を受け取りました。作業コピーに取り込んで差分を確認してください。");
+      setNotice("AI の変更案を受け取りました。差分を確認してください。");
       setReviewBusy(true);
       try {
         const staged = await stageProposal(copyId, proposal, mode);
@@ -1627,51 +1658,17 @@ export function WorkspaceShell() {
     });
   }
 
-  const registerStaging = useCallback(async () => {
-    if (!registry) {
-      setNotice(READONLY_MESSAGE);
-      return;
-    }
-    const contexts = aiContextsRef.current;
-    if (contexts.length === 0) {
-      setNotice("送信範囲がありません。文書を開いて選択してください。");
-      return;
-    }
-    setStagingBusy(true);
-    try {
-      if (stagingRef.current) {
-        await cancelIsolatedCopy(stagingRef.current).catch(() => undefined);
-      }
-      const info = await createIsolatedCopy(contexts);
-      setStaging({ copyId: info.copyId });
-      setStagingBasis({ documentId: contexts[0].documentId, revision: contexts[0].revision });
-      registeredContextsRef.current = contexts.map((context) => ({ ...context }));
-      setDiffs([]);
-      setOutcomes([]);
-      setAiProposal(null);
-      setReviewMessage(null);
-      setReviewStatus("送信範囲を登録しました。");
-    } catch (cause) {
-      setNotice(describeIsolationError(cause));
-    } finally {
-      setStagingBusy(false);
-    }
-  }, [registry]);
-
-  // Auto-prepare the isolation copy on send: reuse the registered copy when
-  // the exact contexts still match, otherwise replace it. Agent and inline
-  // chats share this slot but carry separate transcripts and exact base
-  // contexts per turn, so each send re-validates before any AI side effect.
   const ensureStagingFor = useCallback(
-    async (wanted: PromptContext[]): Promise<{ copyId: string }> => {
+    async (wanted: PromptContext[], owner: "agent" | "inline"): Promise<{ copyId: string }> => {
+      if (chatOwnerRef.current !== owner) throw { code: "session_busy" };
       if (!registry) throw new Error(READONLY_MESSAGE);
       if (wanted.length === 0) throw { code: "staging_unresolved", copy_id: "(未解決)" };
       const current = stagingRef.current;
       if (current && contextsEqual(registeredContextsRef.current, wanted)) return { copyId: current };
       if (current) await cancelIsolatedCopy(current).catch(() => undefined);
       const info = await createIsolatedCopy(wanted);
+      stagingRef.current = info.copyId;
       setStaging({ copyId: info.copyId });
-      setStagingBasis({ documentId: wanted[0].documentId, revision: wanted[0].revision });
       registeredContextsRef.current = wanted.map((context) => ({ ...context }));
       setDiffs([]);
       setOutcomes([]);
@@ -1683,6 +1680,7 @@ export function WorkspaceShell() {
   );
 
   const openInlineChat = useCallback(() => {
+    if (inlineBusy) { setNotice("インラインチャットの応答が終わるか、停止するまでお待ちください。"); return; }
     const doc = activeRef.current ? docsRef.current[activeRef.current] : undefined;
     if (!doc || !registry) {
       setNotice(READONLY_MESSAGE);
@@ -1694,23 +1692,51 @@ export function WorkspaceShell() {
       documentId: doc.documentId,
       revision: doc.revision,
       ranges: [{ start: target.start, end: target.end }],
-      text: doc.text,
+      text: target.excerpt,
     });
     setInlineKind(target.kind);
     setInlineOpen(true);
     setShowAi(true);
-  }, [registry, selections]);
+  }, [registry, selections, inlineBusy]);
+
+  const inlineAnchor = useCallback(() => {
+    const host = document.querySelector<HTMLElement>('[data-testid="editor-primary"] .cm-editor');
+    if (!host) return null;
+    try {
+      const view = EditorView.findFromDOM(host);
+      const range = inlineSnapshot?.ranges[0];
+      const caret = view?.coordsAtPos(Math.min(range?.end ?? 0, view.state.doc.length));
+      if (caret) return caret;
+    } catch { /* Editor may be rebuilding after a view switch. */ }
+    const box = host.getBoundingClientRect();
+    return { left: box.left + 24, top: box.top + 24, bottom: box.top + 48 };
+  }, [inlineSnapshot]);
+
+  const closeInlineChat = useCallback(() => {
+    setInlineOpen(false);
+    document.querySelector<HTMLElement>('[data-testid="editor-primary"] .cm-content')?.focus();
+  }, []);
+
+  useEffect(() => { setInlineOpen(false); }, [activeId]);
 
   useEffect(() => {
+    // Inline chat keeps native Vim Ctrl+I (jump forward / Tab) untouched:
+    // only Ctrl+Shift+I / Cmd+Shift+I opens the composer.
     const onInlineKey = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "i") return;
+      if (!(event.ctrlKey || event.metaKey) || !event.shiftKey) return;
+      if (event.key.toLowerCase() !== "i") return;
       const target = event.target as HTMLElement | null;
       if (target && typeof target.closest === "function" && target.closest('input,textarea,select,[role="dialog"]')) return;
       event.preventDefault();
+      event.stopPropagation();
       openInlineChat();
     };
-    window.addEventListener("keydown", onInlineKey);
-    return () => window.removeEventListener("keydown", onInlineKey);
+    window.addEventListener("keydown", onInlineKey, true);
+    return () => window.removeEventListener("keydown", onInlineKey, true);
+  }, [openInlineChat]);
+
+  useEffect(() => {
+    openInlineChatRef.current = openInlineChat;
   }, [openInlineChat]);
 
   useEffect(() => {
@@ -1735,7 +1761,6 @@ export function WorkspaceShell() {
 
   const clearStaging = useCallback(() => {
     setStaging(null);
-    setStagingBasis(null);
     setDiffs([]);
     setOutcomes([]);
     setReviewMessage(null);
@@ -1778,7 +1803,6 @@ export function WorkspaceShell() {
         (outcome) => !outcome.applied && outcome.error === null && outcome.rollbackError === null && !outcome.rolledBack,
       ).length;
       setStaging(null);
-      setStagingBasis(null);
       setDiffs([]);
       setAiProposal(null);
       if (failed.length === 0) {
@@ -1839,13 +1863,8 @@ export function WorkspaceShell() {
     }
   }, [clearStaging]);
 
-  // Closing the AI sidebar settles by discarding its unused copy.
-  useEffect(() => {
-    if (showAi || !stagingRef.current) return;
-    const copyId = stagingRef.current;
-    clearStaging();
-    void cancelIsolatedCopy(copyId).catch(() => undefined);
-  }, [showAi, clearStaging]);
+  // Hiding the sidebar preserves the transcript and staging: the aside stays
+  // mounted and is only visually hidden, so no copy is discarded here.
 
   const createFile = useCallback(async () => {
     if (!registry) {
@@ -2190,6 +2209,7 @@ export function WorkspaceShell() {
                   ["raw", "Neovim 画面"],
                   ["quick", "クイックオープン"],
                   ["palette", "コマンドパレット"],
+                  ["inline", "インラインチャット"],
                   ["new", "新規ファイル"],
                   ["rename", "名前を変更"],
                   ["reload", "再読込"],
@@ -2207,6 +2227,7 @@ export function WorkspaceShell() {
                     if (id === "raw") setShowRaw((value) => !value);
                     else if (id === "quick") setQuickOpen(true);
                     else if (id === "palette") setPalette(true);
+                    else if (id === "inline") openInlineChat();
                     else if (id === "new") {
                       setNewFilePath("");
                       setNewFileOpen(true);
@@ -2484,18 +2505,28 @@ export function WorkspaceShell() {
           onSelect={(path) => void openFile(path)}
           onClose={() => setQuickOpen(false)}
         />
-        {inlineOpen && inlineSnapshot && active && (
-          <div className="absolute bottom-10 right-4 z-30" data-testid="inline-chat-anchor">
+          {inlineOpen && inlineSnapshot && active && inlineSnapshot.documentId === active.documentId && (
+          <div data-testid="inline-chat-anchor">
             <InlineChat
+              key={`${inlineSnapshot.documentId}:${inlineSnapshot.revision}:${inlineSnapshot.ranges[0]?.start}:${inlineSnapshot.ranges[0]?.end}`}
+              anchor={inlineAnchor}
               documentId={inlineSnapshot.documentId}
-              target={{ start: inlineSnapshot.ranges[0]?.start ?? 0, end: inlineSnapshot.ranges[0]?.end ?? 0, kind: inlineKind, excerpt: "" }}
+              documentLabel={contextLabels[inlineSnapshot.documentId] ?? "現在の文書"}
+              target={{
+                start: inlineSnapshot.ranges[0]?.start ?? 0,
+                end: inlineSnapshot.ranges[0]?.end ?? 0,
+                kind: inlineKind,
+                excerpt: inlineSnapshot.text,
+              }}
               context={inlineSnapshot}
               staging={staging}
-              ensureStaging={ensureStagingFor}
+              ensureStaging={(contexts) => ensureStagingFor(contexts, "inline")}
               provider={aiProvider}
+              disabled={agentBusy}
+              onBusyChange={setInlineChatBusy}
               onProposal={handleProposal}
               onReview={() => void fetchReviewDiff()}
-              onClose={() => setInlineOpen(false)}
+              onClose={closeInlineChat}
             />
           </div>
         )}
@@ -2506,7 +2537,7 @@ export function WorkspaceShell() {
             onTheme={setTheme}
             preferences={preferences}
             onPreferences={updatePreferences}
-            onOpenAiSettings={desktop ? () => { setSettings(false); setShowAi(true); } : undefined}
+            onOpenAiSettings={desktop ? () => { setSettings(false); setShowAi(true); setAiSettingsToken((token) => token + 1); } : undefined}
             configPath={configPath}
             configError={configError}
             onConfigPath={setConfigPath}
@@ -2528,67 +2559,44 @@ export function WorkspaceShell() {
         )}
       </div>
 
-      {showAi && desktop && (
-        <aside data-testid="ai-sidebar" aria-label="AI サイドバー" className="hidden w-80 shrink-0 overflow-y-auto border-l border-border bg-card/50 p-3 md:block">
+      {desktop && (
+        <aside
+          data-testid="ai-sidebar"
+          aria-label="AI サイドバー"
+          aria-hidden={!showAi}
+          className={
+            showAi
+              ? "flex w-80 max-w-[85vw] shrink-0 flex-col border-l border-border bg-card/50 p-3"
+              : "hidden"
+          }
+        >
+          <div className="flex min-h-0 flex-1 flex-col">
           <AiPanel
             contexts={aiContexts}
             staging={staging}
-            ensureStaging={ensureStagingFor}
+            ensureStaging={(contexts) => ensureStagingFor(contexts, "agent")}
             provider={aiProvider}
             onProvider={setAiProvider}
             openSettingsToken={aiSettingsToken}
+            contextLabels={contextLabels}
+            disabled={inlineBusy}
+            onBusyChange={setAgentChatBusy}
             onRemoveContext={() => setAiDismissed(true)}
             onProposal={handleProposal}
           />
-          <div className="mt-2">
-            <button
-              type="button"
-              aria-label="接続設定を開く"
-              title="折りたたみの接続設定を展開します（root 設定連携用）"
-              onClick={() => setAiSettingsToken((token) => token + 1)}
-              className="w-full rounded-md border border-border px-3 py-1.5 text-xs"
-            >
-              接続設定を開く
-            </button>
           </div>
-          <div className="mt-2">
-            <button
-              type="button"
-              aria-label="インライン chat を開く"
-              title="選択または段落を対象に Ctrl+I でも開きます"
-              onClick={openInlineChat}
-              className="w-full rounded-md border border-border px-3 py-1.5 text-xs"
-            >
-              インライン chat を開く (Ctrl+I)
-            </button>
-          </div>
-          <div className="mt-3 rounded-lg border border-border bg-card p-3 text-xs">
-            <p className="font-medium">送信範囲の登録</p>
-            <p className="mt-1 text-muted-foreground">
-              {staging && stagingBasis
-                ? `作業コピー ${staging.copyId}（${stagingBasis.documentId} rev ${stagingBasis.revision}）`
-                : "未登録。送信前に正確な範囲を登録します。"}
-            </p>
-            <button
-              type="button"
-              onClick={() => void registerStaging()}
-              disabled={stagingBusy || aiContexts.length === 0}
-              className="mt-2 w-full rounded-md border border-border px-3 py-1.5 disabled:opacity-50"
-            >
-              {stagingBusy ? "登録中…" : staging ? "範囲を再登録" : "送信範囲を登録する"}
-            </button>
-          </div>
-          <div className="mt-3">
+          <div className="mt-3 max-h-64 min-h-0 overflow-y-auto">
             <ReviewPanel
+              documentLabels={contextLabels}
               copyId={staging?.copyId ?? null}
               diffs={diffs}
               outcomes={outcomes}
-              busy={reviewBusy || stagingBusy}
+              busy={reviewBusy || agentBusy || inlineBusy}
               message={reviewMessage}
               status={reviewStatus}
               proposalText={aiProposal?.proposal.text ?? null}
               onFetchDiff={() => void fetchReviewDiff()}
-              onStageProposal={aiProposal && staging ? () => void stageStoredProposal() : null}
+              onStageProposal={aiProposal && aiProposal.mode !== "ask" && staging && reviewMessage ? () => void stageStoredProposal() : null}
               onApprove={() => void approveStaging()}
               onReject={() => void rejectStaging()}
               onCancel={() => void cancelStaging()}
@@ -2599,18 +2607,22 @@ export function WorkspaceShell() {
               現在の選択を送る
             </button>
           )}
-          {aiProposal && (
-            <div data-testid="ai-proposal" className="mt-3 rounded-lg border border-border bg-card p-3 text-xs">
+          {aiProposal && aiProposal.mode !== "ask" && (
+            <details data-testid="ai-proposal" className="mt-3 max-h-48 min-h-0 overflow-y-auto border-t border-border pt-2 text-xs">
+              <summary className="cursor-pointer text-muted-foreground">提案の Markdown</summary>
               <p className="font-medium">AI の提案</p>
               <p className="mt-1 whitespace-pre-wrap">{aiProposal.proposal.text}</p>
-              <p className="mt-1 text-muted-foreground">
-                基準: {aiProposal.proposal.baseContexts.map((ref) => `${ref.documentId} rev ${ref.revision}`).join(", ")}
+              <p
+                className="mt-1 text-muted-foreground"
+                title={aiProposal.proposal.baseContexts.map((ref) => `rev ${ref.revision}`).join(", ")}
+              >
+                対象: {aiProposal.proposal.baseContexts.map((ref) => contextLabels[ref.documentId] ?? "現在の文書").join(", ")}
               </p>
               <p className="mt-1 text-muted-foreground">適用は上の差分レビューで行います。</p>
               <button type="button" onClick={() => setAiProposal(null)} className="mt-2 w-full rounded-md border border-border px-3 py-1.5">
                 却下する
               </button>
-            </div>
+            </details>
           )}
         </aside>
       )}

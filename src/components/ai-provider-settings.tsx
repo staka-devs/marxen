@@ -107,7 +107,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken }: 
   const claudeBlocked = kind === "acp" && preset === "custom" && isClaudeCommand(command);
 
   return (
-    <details ref={detailsRef} data-testid="ai-provider-settings" className="rounded-lg border border-border">
+    <details ref={detailsRef} data-testid="ai-provider-settings" className="max-h-[45dvh] overflow-y-auto rounded-md border border-border">
       <summary className="cursor-pointer px-2 py-1.5 text-xs font-medium">接続設定</summary>
       <div className="space-y-3 border-t border-border p-2">
         <div role="group" aria-label="接続先">

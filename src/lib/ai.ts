@@ -33,7 +33,7 @@ export const MODE_LABELS: Record<PromptMode, string> = {
   ask: "質問",
   generate: "生成",
   rewrite: "選択書き換え",
-  workspace: "workspace 修正",
+  workspace: "ワークスペース編集",
 };
 
 export const DEFAULT_ENDPOINTS: Record<AiProviderKind, string> = {
@@ -152,9 +152,9 @@ export function describeAiError(error: AiError): string {
     case "session_busy":
       return "実行中のため、新しい送信はできません。";
     case "unknown_session":
-      return "セッションの再開には未対応です。session_id を外して送信してください。";
+      return "この接続は再開できません。新しい会話を開始してください。";
     case "staging_unresolved":
-      return `作業コピー ${error.copy_id} を解決できません。隔離コピー連携 (#8) の後に利用できます。`;
+      return "作業コピーを準備できません。文書を開いて対象範囲を指定してください。";
     case "live_target_rejected":
       return `Markdownファイルは直接指定できません: ${error.detail}`;
     case "unsupported_protocol":
@@ -163,6 +163,10 @@ export function describeAiError(error: AiError): string {
       return `${error.command} は起動しません。Codex / OpenCode / カスタムを使います。`;
     case "credential_store_failed":
       return `資格情報ストアの操作に失敗しました: ${error.detail}`;
+    default: {
+      const failure = error as { detail?: unknown };
+      return typeof failure.detail === "string" ? failure.detail : "処理に失敗しました。";
+    }
   }
 }
 
@@ -215,19 +219,35 @@ export async function startPrompt(
   let unlisten: UnlistenFn | null = null;
   let runId: AiRunId | null = null;
   let stopped = false;
+  let completed = false;
+  const pending: AiStreamEvent[] = [];
+  const deliver = (payload: AiStreamEvent) => {
+    const eventRunId = payload.payload.runId;
+    if (eventRunId !== runId || completed) return;
+    const terminal = payload.type === "done" || payload.type === "error" || payload.type === "cancelled";
+    if (terminal) completed = true;
+    try { onEvent(payload); }
+    finally {
+      if (terminal) { unlisten?.(); unlisten = null; }
+    }
+  };
   unlisten = await listen<AiStreamEvent>(AI_STREAM_EVENT, (event) => {
     const payload = event.payload;
-    const eventRunId =
-      payload.type === "error" ? (payload.payload.runId ?? runId) : payload.payload.runId;
-    if (runId !== null && eventRunId !== runId) {
+    if (runId === null) {
+      // IPC can emit before returning its run id. Fence other runs first;
+      // keep this temporary queue bounded while the command is pending.
+      if (pending.length === 256) pending.shift();
+      pending.push(payload);
       return;
     }
-    onEvent(payload);
+    deliver(payload);
   });
   try {
     runId = await invoke<AiRunId>("ai_prompt_stream", { request });
+    for (const event of pending) deliver(event);
+    pending.length = 0;
   } catch (cause) {
-    unlisten();
+    unlisten?.();
     throw cause;
   }
   const owned = runId;
@@ -239,7 +259,7 @@ export async function startPrompt(
       }
       stopped = true;
       try {
-        await invoke("ai_prompt_cancel", { runId: owned });
+        if (!completed) await invoke("ai_prompt_cancel", { runId: owned });
       } finally {
         unlisten?.();
       }

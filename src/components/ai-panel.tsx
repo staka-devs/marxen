@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./ui/button";
 import AiProviderSettings from "./ai-provider-settings";
+import { MarkdownPreview } from "./preview/MarkdownPreview";
 import {
   buildProviderConfig,
   cancelPromptSafe,
@@ -8,7 +9,6 @@ import {
   describeInvokeError,
   isClaudeCommand,
   startPrompt,
-  summarizeContext,
 } from "../lib/ai";
 import { loadAiProfile, saveAiProfile } from "../lib/ai-profiles";
 import {
@@ -43,20 +43,26 @@ import type {
 export interface AiPanelProps {
   contexts: PromptContext[];
   staging: StagingTarget | null;
-  /** Auto-prepare the isolation copy on send; falls back to `staging` when absent. */
+  /** Always validates the exact contexts; reuses the copy only on exact match. */
   ensureStaging?: (contexts: PromptContext[]) => Promise<StagingTarget>;
   /** Controlled provider shared with inline chat; uncontrolled when absent. */
   provider?: AiProviderConfig;
   onProvider?: (provider: AiProviderConfig) => void;
   /** Increment to expand the collapsed connection settings (root Settings entry point). */
   openSettingsToken?: number;
+  /** Visible filename labels per document id (no internal ids in product text). */
+  contextLabels?: Record<string, string>;
+  /** Fenced while the other chat owns a run on the shared staging slot. */
+  disabled?: boolean;
+  onBusyChange?: (busy: boolean) => void;
   onRemoveContext?: (documentId: string) => void;
   /**
    * Called once per completed run with the proposal text and the mode it was
    * sent with. The proposal never edits the document: review/apply belongs
    * to the Issue #8 ReviewPanel, which consumes the same (proposal, sent)
    * pair via `stageProposal`. `ask` proposals display only and are refused
-   * by staging.
+   * by staging. Stale runs (reset, conversation switch, provider change,
+   * unmount) never call this.
    */
   onProposal?: (proposal: ProposalText, sent: ContextSummary[], mode: PromptMode) => void;
 }
@@ -67,36 +73,126 @@ export const MODE_LABELS: Record<PromptMode, string> = {
   ask: "質問",
   generate: "生成",
   rewrite: "選択書き換え",
-  workspace: "workspace 修正",
+  workspace: "ワークスペース編集",
 };
 
 // Kept for existing imports; the implementation lives in `lib/ai`.
 export { buildProviderConfig };
 
-export default function AiPanel({ contexts, staging, ensureStaging, provider: controlled, onProvider, openSettingsToken, onRemoveContext, onProposal }: AiPanelProps) {
+function labelFor(labels: Record<string, string> | undefined, documentId: string): string {
+  return labels?.[documentId] ?? "現在の文書";
+}
+
+export default function AiPanel({
+  contexts,
+  staging,
+  ensureStaging,
+  provider: controlled,
+  onProvider,
+  openSettingsToken,
+  contextLabels,
+  disabled,
+  onBusyChange,
+  onRemoveContext,
+  onProposal,
+}: AiPanelProps) {
   const [saved] = useState(loadAiProfile);
   const [internal, setInternal] = useState<AiProviderConfig>(() => buildProviderConfig(saved));
   const provider = controlled ?? internal;
-  const setProvider = (next: AiProviderConfig) => {
-    if (onProvider) onProvider(next);
-    else setInternal(next);
-  };
+  const providerKey = JSON.stringify(provider);
+  const providerKeyRef = useRef(providerKey);
+  // In-memory conversation list: 新規 preserves prior conversations in the
+  // selector instead of destroying them. Nothing persists to storage.
+  const [conversations, setConversations] = useState<ChatConversation[]>(() => [createConversation(providerKey)]);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [mode, setMode] = useState<PromptMode>("ask");
   const [prompt, setPrompt] = useState("");
-  const [conversation, setConversation] = useState<ChatConversation>(() => createConversation());
   const [streamError, setStreamError] = useState<AiError | null>(null);
-  const [stopFn, setStopFn] = useState<(() => Promise<void>) | null>(null);
-  const [assistantId, setAssistantId] = useState<string | null>(null);
   const [resolving, setResolving] = useState(false);
-  const modeRef = useRef(mode);
-  modeRef.current = mode;
-  const conversationRef = useRef(conversation);
-  conversationRef.current = conversation;
-  const contextsRef = useRef(contexts);
-  contextsRef.current = contexts;
-  const stagingRef = useRef(staging);
-  stagingRef.current = staging;
+  // One active run token: every send fences the previous run, and every
+  // terminal/reset/unmount path retires it. Stale callbacks check the token
+  // before touching messages, proposals, or busy state.
+  const runTokenRef = useRef(0);
+  const cancelRequestedRef = useRef(false);
+  const settledTokenRef = useRef(-1);
+  const stopRef = useRef<(() => Promise<void>) | null>(null);
+  const busyRef = useRef(false);
+  const ownedTokenRef = useRef(-1);
+  const [ownedBusy, setOwnedBusy] = useState(false);
+  const onProposalRef = useRef(onProposal);
+  onProposalRef.current = onProposal;
+  const onBusyChangeRef = useRef(onBusyChange);
+  onBusyChangeRef.current = onBusyChange;
+  const conversation = activeId
+    ? (conversations.find((item) => item.id === activeId) ?? conversations[0])
+    : (conversations[0] ?? null);
+  const conversationId = conversation?.id ?? "";
+  const activeIdRef = useRef<string>("");
+  activeIdRef.current = conversationId;
   const transcriptRef = useRef<HTMLDivElement>(null);
+
+  function setBusy(next: boolean, token = runTokenRef.current) {
+    if (!next && token !== ownedTokenRef.current) return;
+    if (next) ownedTokenRef.current = token;
+    if (busyRef.current === next) return;
+    busyRef.current = next;
+    setOwnedBusy(next);
+    onBusyChangeRef.current?.(next);
+  }
+
+  function applyToConversation(id: string, update: (prev: ChatConversation) => ChatConversation) {
+    setConversations((prev) => prev.map((item) => (item.id === id ? update(item) : item)));
+  }
+
+  function fenceRun() {
+    const ownedToken = ownedTokenRef.current;
+    runTokenRef.current += 1;
+    cancelRequestedRef.current = false;
+    const stop = stopRef.current;
+    stopRef.current = null;
+    if (stop) void cancelPromptSafe(stop).finally(() => setBusy(false, ownedToken));
+    setConversations((previous) => previous.map((item) => ({
+      ...item,
+      messages: item.messages.map((message) => message.state === "streaming"
+        ? { ...message, state: "cancelled" as const } : message),
+    })));
+    setResolving(false);
+  }
+
+  function moveToProvider(nextKey: string) {
+    fenceRun();
+    providerKeyRef.current = nextKey;
+    if (conversation && conversation.messages.length === 0) {
+      applyToConversation(conversation.id, (previous) => ({ ...previous, providerKey: nextKey }));
+    } else {
+      const next = createConversation(nextKey);
+      setConversations((previous) => [...previous, next]);
+      setActiveId(next.id);
+    }
+    setStreamError(null);
+  }
+
+  function changeProvider(next: AiProviderConfig) {
+    if (JSON.stringify(provider) === JSON.stringify(next)) return;
+    moveToProvider(JSON.stringify(next));
+    if (onProvider) onProvider(next);
+    else setInternal(next);
+  }
+
+  useEffect(() => {
+    if (providerKeyRef.current === providerKey) return;
+    moveToProvider(providerKey);
+  }, [providerKey]);
+
+  // Unmount cleanup cancels owned runs so late callbacks settle fenced.
+  useEffect(() => {
+    return () => {
+      runTokenRef.current += 1;
+      const stop = stopRef.current;
+      stopRef.current = null;
+      if (stop) void cancelPromptSafe(stop).finally(() => onBusyChangeRef.current?.(false));
+    };
+  }, []);
 
   useEffect(() => {
     saveAiProfile({
@@ -116,96 +212,167 @@ export default function AiPanel({ contexts, staging, ensureStaging, provider: co
     if (node && typeof node.scrollTo === "function") {
       node.scrollTo({ top: node.scrollHeight });
     }
-  }, [conversation.messages.length]);
+  }, [conversation?.messages.length]);
 
-  const running = isBusy(conversation.messages) || resolving;
+  const running = (conversation ? isBusy(conversation.messages) : false) || resolving || ownedBusy;
+  const differentProvider = conversation?.providerKey !== providerKey;
   const anthropicBlocked = provider.kind === "anthropic" && !(provider.anthropic?.enabled ?? false);
-  const canSend = !running && prompt.trim().length > 0 && !anthropicBlocked;
+  const canSend = !running && !disabled && !differentProvider && contexts.length > 0 && prompt.trim().length > 0 && !anthropicBlocked;
 
-  async function resolveStaging(): Promise<StagingTarget> {
-    if (stagingRef.current) return stagingRef.current;
-    if (ensureStaging) {
-      const current = contextsRef.current;
-      if (current.length === 0) {
-        throw { code: "staging_unresolved", copy_id: "(未解決)" } satisfies AiError;
-      }
-      return ensureStaging(current);
-    }
+  async function resolveStaging(wanted: PromptContext[]): Promise<StagingTarget> {
+    if (ensureStaging) return ensureStaging(wanted);
+    if (staging) return staging;
     throw { code: "staging_unresolved", copy_id: "(未解決)" } satisfies AiError;
   }
 
-  function handleEvent(event: AiStreamEvent, assistant: string) {
+  function handleEvent(
+    event: AiStreamEvent,
+    token: number,
+    targetConversationId: string,
+    assistant: string,
+    capturedMode: PromptMode,
+  ) {
+    if (token !== runTokenRef.current) return;
+    if (settledTokenRef.current === token) return;
+    if (cancelRequestedRef.current) {
+      if (event.type === "chunk" || event.type === "started") return;
+      settledTokenRef.current = token;
+      applyToConversation(targetConversationId, (previous) => ({
+        ...previous, messages: cancelAssistant(previous.messages, assistant),
+      }));
+      stopRef.current = null;
+      setBusy(false);
+      return;
+    }
     switch (event.type) {
       case "started":
         break;
       case "chunk":
-        setConversation((prev) => ({
+        applyToConversation(targetConversationId, (prev) => ({
           ...prev,
           messages: appendStreamingText(prev.messages, assistant, event.payload.text),
         }));
         break;
       case "done":
-        setConversation((prev) => ({
+        settledTokenRef.current = token;
+        applyToConversation(targetConversationId, (prev) => ({
           ...prev,
           messages: finalizeAssistant(prev.messages, assistant, event.payload.proposal, event.payload.sent),
         }));
-        onProposal?.(event.payload.proposal, event.payload.sent, modeRef.current);
-        setStopFn(null);
-        setAssistantId(null);
+        // Stale runs never publish: only the still-active conversation
+        // forwards its proposal to review.
+        if (targetConversationId === activeIdRef.current) {
+          onProposalRef.current?.(event.payload.proposal, event.payload.sent, capturedMode);
+        }
+        if (stopRef.current) stopRef.current = null;
+        setBusy(false);
         break;
       case "error":
-        setConversation((prev) => ({ ...prev, messages: failAssistant(prev.messages, assistant, event.payload.error) }));
-        setStopFn(null);
-        setAssistantId(null);
+        settledTokenRef.current = token;
+        applyToConversation(targetConversationId, (prev) => ({
+          ...prev,
+          messages: failAssistant(prev.messages, assistant, event.payload.error),
+        }));
+        if (stopRef.current) stopRef.current = null;
+        setBusy(false);
         break;
       case "cancelled":
-        setConversation((prev) => ({ ...prev, messages: cancelAssistant(prev.messages, assistant) }));
-        setStopFn(null);
-        setAssistantId(null);
+        settledTokenRef.current = token;
+        applyToConversation(targetConversationId, (prev) => ({
+          ...prev,
+          messages: cancelAssistant(prev.messages, assistant),
+        }));
+        if (stopRef.current) stopRef.current = null;
+        setBusy(false);
         break;
     }
   }
 
-  async function sendWith(promptText: string, promptMode: PromptMode, promptContexts: PromptContext[], history: { role: "user" | "assistant"; text: string }[]) {
+  async function sendWith(
+    promptText: string,
+    promptMode: PromptMode,
+    promptContexts: PromptContext[],
+    history: { role: "user" | "assistant"; text: string }[],
+  ) {
     const trimmed = truncatePrompt(promptText).trim();
-    if (trimmed === "") return;
+    if (trimmed === "" || promptContexts.length === 0) {
+      setStreamError({ code: "staging_unresolved", copy_id: "(未解決)" });
+      return;
+    }
     if (provider.kind === "acp" && provider.acp?.preset === "custom" && isClaudeCommand(provider.acp.argv?.command ?? "")) {
       setStreamError({ code: "claude_code_refused", command: (provider.acp.argv?.command ?? "").trim() });
       return;
     }
-    setResolving(true);
+    const token = runTokenRef.current + 1;
+    runTokenRef.current = token;
+    cancelRequestedRef.current = false;
+    settledTokenRef.current = -1;
+    const capturedMode = promptMode;
+    const capturedContexts = promptContexts.map((context) => ({ ...context, ranges: [...context.ranges] }));
+    const capturedProvider = provider;
+    const targetConversationId = conversationId;
+    const userMessage = createUserMessage(trimmed, capturedMode, capturedContexts);
+    const assistant = { ...createStreamingAssistant(), mode: capturedMode };
     setStreamError(null);
+    setResolving(true);
+    setBusy(true);
     let resolved: StagingTarget;
     try {
-      resolved = await resolveStaging();
+      resolved = await resolveStaging(capturedContexts);
     } catch (cause) {
-      setResolving(false);
-      setStreamError(
+      if (token !== runTokenRef.current) { setBusy(false, token); return; }
+      const failure: AiError =
         typeof cause === "object" && cause !== null && "code" in cause
           ? (cause as AiError)
-          : { code: "connection_failed", detail: describeInvokeError(cause) },
-      );
+          : { code: "connection_failed", detail: describeInvokeError(cause) };
+      setStreamError(failure);
+      setResolving(false);
+      setBusy(false);
       return;
     }
-    const userMessage = createUserMessage(trimmed, promptMode, promptContexts);
-    const assistant = createStreamingAssistant();
-    setConversation((prev) => ({ ...prev, messages: [...prev.messages, userMessage, assistant] }));
-    setAssistantId(assistant.id);
+    // Cancel arrived while staging was pending: record the cancelled turn
+    // locally and never start the run.
+    if (token !== runTokenRef.current) { setBusy(false, token); return; }
+    if (cancelRequestedRef.current) {
+      const cancelledAssistant = { ...assistant, state: "cancelled" as const };
+      applyToConversation(targetConversationId, (prev) => ({
+        ...prev,
+        messages: [...prev.messages, userMessage, cancelledAssistant],
+      }));
+      setResolving(false);
+      setBusy(false);
+      return;
+    }
+    applyToConversation(targetConversationId, (prev) => ({
+      ...prev,
+      messages: [...prev.messages, userMessage, assistant],
+    }));
     setResolving(false);
     const request: AiPromptRequest = {
-      provider,
-      mode: promptMode,
+      provider: capturedProvider,
+      mode: capturedMode,
       prompt: trimmed,
-      contexts: promptContexts,
+      contexts: capturedContexts,
       staging: resolved,
       sessionId: null,
       history,
     };
     try {
-      const session = await startPrompt(request, (event) => handleEvent(event, assistant.id));
-      setStopFn(() => session.stop);
+      const session = await startPrompt(request, (event) =>
+        handleEvent(event, token, targetConversationId, assistant.id, capturedMode),
+      );
+      // Done arrived before startPrompt returned: cancel the late handle and
+      // never publish a stop for a settled run, so no spinner leaks.
+      if (token !== runTokenRef.current || settledTokenRef.current === token || cancelRequestedRef.current) {
+        await cancelPromptSafe(session.stop);
+        setBusy(false, token);
+        return;
+      }
+      stopRef.current = session.stop;
     } catch (cause) {
-      setConversation((prev) => ({
+      if (token !== runTokenRef.current) { setBusy(false, token); return; }
+      settledTokenRef.current = token;
+      applyToConversation(targetConversationId, (prev) => ({
         ...prev,
         messages: failAssistant(
           prev.messages,
@@ -220,58 +387,98 @@ export default function AiPanel({ contexts, staging, ensureStaging, provider: co
           ? (cause as AiError)
           : { code: "connection_failed", detail: describeInvokeError(cause) },
       );
-      setAssistantId(null);
+      setBusy(false);
     }
   }
 
   async function handleSend() {
-    if (running) return;
+    if (running || busyRef.current || disabled || differentProvider) return;
+    if (!conversation) return;
     const history = toHistoryPayload(conversation.messages);
-    await sendWith(prompt, mode, contextsRef.current, history);
+    const sentPrompt = prompt;
     setPrompt("");
+    await sendWith(sentPrompt, mode, contexts, history);
   }
 
   async function handleCancel() {
-    if (stopFn) await cancelPromptSafe(stopFn);
+    cancelRequestedRef.current = true;
+    const stop = stopRef.current;
+    if (stop) await cancelPromptSafe(stop);
+    // No stop yet (staging/start pending): the pending path settles itself
+    // as cancelled via the token/flag checks above.
   }
 
   async function handleRetry() {
-    if (running) return;
+    if (running || busyRef.current || disabled || differentProvider || !conversation) return;
     const last = lastUserPrompt(conversation.messages);
     if (!last) return;
-    setConversation((prev) => ({ ...prev, messages: dropTrailingFailedExchange(prev.messages) }));
+    applyToConversation(conversation.id, (prev) => ({
+      ...prev,
+      messages: dropTrailingFailedExchange(prev.messages),
+    }));
     const history = retryHistory(conversation.messages);
-    await sendWith(last.prompt, last.mode, last.contexts.length > 0 ? last.contexts : contextsRef.current, history);
+    await sendWith(last.prompt, last.mode, last.contexts, history);
   }
 
   function handleNewConversation() {
-    if (running && stopFn) void cancelPromptSafe(stopFn);
-    setConversation(createConversation());
+    fenceRun();
+    const next = createConversation(providerKey);
+    setConversations((prev) => [...prev, next]);
+    setActiveId(next.id);
     setStreamError(null);
-    setStopFn(null);
-    setAssistantId(null);
     setPrompt("");
   }
 
+  function handleSelectConversation(id: string) {
+    if (id === conversationId) return;
+    fenceRun();
+    setActiveId(id);
+    setStreamError(null);
+  }
+
+  if (!conversation) return null;
+
   return (
-    <div aria-label="エージェントチャット" className="flex min-h-0 flex-col gap-2">
+    <div aria-label="Agent チャット" className="flex h-full min-h-0 flex-col gap-2">
       <div className="flex items-center gap-1">
-        <h2 id="ai-panel-title" className="min-w-0 flex-1 truncate text-sm font-semibold">エージェント</h2>
+        <h2 id="ai-panel-title" className="min-w-0 flex-1 truncate text-sm font-semibold">Agent チャット</h2>
         <Button variant="outline" size="sm" aria-label="新しい会話" title="新しい会話" onClick={handleNewConversation}>
           新規
         </Button>
       </div>
+      {conversations.length > 1 && (
+        <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          会話
+          <select
+            aria-label="会話の選択"
+            className="min-w-0 flex-1 rounded-md border border-border bg-card px-1.5 py-1 text-xs text-foreground"
+            value={conversationId}
+            onChange={(event) => handleSelectConversation(event.target.value)}
+          >
+            {conversations.map((item, index) => (
+              <option key={item.id} value={item.id}>
+                会話 {index + 1}{isBusy(item.messages) ? "（生成中）" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <div className="flex flex-wrap gap-1" aria-label="送信対象">
         {contexts.length === 0 ? (
           <span className="text-[11px] text-muted-foreground">送信対象がありません。</span>
         ) : (
           contexts.map((context) => (
             <span key={context.documentId} className="inline-flex max-w-full items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px]">
-              <span className="truncate font-mono">{summarizeContext(context)}</span>
+              <span
+                className="truncate"
+                title={`rev ${context.revision}`}
+              >
+                {labelFor(contextLabels, context.documentId)}
+              </span>
               {onRemoveContext && (
                 <button
                   type="button"
-                  aria-label={`${context.documentId}を外す`}
+                  aria-label={`${labelFor(contextLabels, context.documentId)}を外す`}
                   title="外す"
                   className="rounded px-1 hover:bg-muted"
                   onClick={() => onRemoveContext(context.documentId)}
@@ -282,29 +489,28 @@ export default function AiPanel({ contexts, staging, ensureStaging, provider: co
             </span>
           ))
         )}
-        <span className="inline-flex items-center rounded-full border border-border px-2 py-0.5 font-mono text-[11px]">
-          {staging ? staging.copyId : "未解決→送信時に自動登録"}
-        </span>
       </div>
-      <div ref={transcriptRef} aria-live="polite" aria-label="会話" className="min-h-40 flex-1 space-y-2 overflow-y-auto rounded-lg border border-border p-2">
+      <div ref={transcriptRef} aria-live="polite" aria-label="会話" className="min-h-0 flex-1 space-y-4 overflow-y-auto py-2">
         {conversation.messages.length === 0 && (
-          <p className="text-[11px] text-muted-foreground">質問や生成指示を下に入力して送信します。履歴は HTTP 接続先にも明示して送ります。</p>
+          <p className="text-[11px] text-muted-foreground">質問や生成指示を下に入力して送信します。</p>
         )}
         {conversation.messages.map((message) =>
           message.role === "user" ? (
-            <div key={message.id} className="rounded-lg bg-muted p-2 text-xs">
+            <div key={message.id} className="border-l-2 border-primary/50 pl-3 text-xs">
               <p className="font-medium">あなた・{MODE_LABELS[message.mode ?? mode]}</p>
-              <p className="mt-1 whitespace-pre-wrap">{message.text}</p>
+              <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap">{message.text}</p>
             </div>
           ) : (
-            <div key={message.id} className="rounded-lg border border-border p-2 text-xs">
+            <div key={message.id} className="text-xs">
               <p className="font-medium">
                 AI{message.state === "streaming" ? "・生成中…" : message.state === "cancelled" ? "・取消済み" : message.state === "error" ? "・失敗" : ""}
               </p>
-              {message.text && <p className="mt-1 whitespace-pre-wrap">{message.text}</p>}
-              {message.proposal && (
+              {message.text && (message.state === "done"
+                ? <div className="marxen-chat-body mt-2"><MarkdownPreview text={message.text} label="AI の回答" testId={`chat-response-${message.id}`} /></div>
+                : <p className="mt-1 whitespace-pre-wrap">{message.text}</p>)}
+              {message.proposal && message.mode !== "ask" && (
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  基準: {message.proposal.baseContexts.map((ref) => `${ref.documentId} rev ${ref.revision}`).join(", ")}（Markdownは変更しません）
+                  変更は差分を確認して適用できます。
                 </p>
               )}
               {message.state === "error" && message.error && (
@@ -317,7 +523,7 @@ export default function AiPanel({ contexts, staging, ensureStaging, provider: co
         {streamError && (
           <p role="alert" className="text-xs font-medium text-red-600">{describeAiError(streamError)}</p>
         )}
-        {assistantId && (
+        {running && (
           <p className="text-[11px] text-muted-foreground">応答を生成しています…</p>
         )}
       </div>
@@ -337,7 +543,7 @@ export default function AiPanel({ contexts, staging, ensureStaging, provider: co
         </div>
         <textarea
           aria-label="プロンプト"
-          className="block w-full rounded-lg border border-border bg-card px-2 py-1.5 text-xs"
+          className="block max-h-40 w-full overflow-y-auto rounded-lg border border-border bg-card px-2 py-1.5 text-xs"
           rows={3}
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
@@ -353,14 +559,15 @@ export default function AiPanel({ contexts, staging, ensureStaging, provider: co
             </Button>
           )}
           {!running && (
-            <Button variant="outline" size="sm" aria-label="再試行" title="直前の入力を再送します" onClick={() => void handleRetry()} disabled={!lastUserPrompt(conversation.messages)}>
+            <Button variant="outline" size="sm" aria-label="再試行" title="直前の入力を再送します" onClick={() => void handleRetry()} disabled={disabled || differentProvider || !lastUserPrompt(conversation.messages)}>
               再試行
             </Button>
           )}
         </div>
+        {disabled && <p className="text-[11px] text-muted-foreground">他の応答を生成しています。</p>}
+        {differentProvider && <p className="text-[11px] text-muted-foreground">接続先が異なる会話です。続けるには新しい会話を作成してください。</p>}
         {anthropicBlocked && <p className="text-[11px] text-muted-foreground">Anthropic を有効化すると送信できます。</p>}
-        <AiProviderSettings provider={provider} onProvider={setProvider} openToken={openSettingsToken} />
-        <p className="text-[11px] text-muted-foreground">回答は提案テキストです。反映は差分レビューを経ます。</p>
+        <AiProviderSettings provider={provider} onProvider={changeProvider} openToken={openSettingsToken} />
       </div>
     </div>
   );

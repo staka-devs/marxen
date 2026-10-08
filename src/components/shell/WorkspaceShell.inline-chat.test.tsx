@@ -134,13 +134,14 @@ async function openDocAndAi() {
   await screen.findByTestId("ai-sidebar");
 }
 
-it("opens inline chat with Ctrl+I on the paragraph target and reviews the proposal", async () => {
+it("opens inline chat with Ctrl+Shift+I on the paragraph target and reviews the proposal", async () => {
   mockStream();
   await openDocAndAi();
-  fireEvent.keyDown(window, { key: "i", ctrlKey: true });
+  fireEvent.keyDown(window, { key: "i", ctrlKey: true, shiftKey: true });
   const inline = await screen.findByTestId("inline-chat");
   expect(inline).toHaveTextContent(/段落/);
-  expect(inline).toHaveTextContent(/doc_a rev 0/);
+  expect(inline).toHaveTextContent("a.md");
+  expect(inline).not.toHaveTextContent(/doc_a/);
   const inlineBox = within(inline);
   fireEvent.change(inlineBox.getByLabelText("インライン指示"), { target: { value: "短く" } });
   fireEvent.click(inlineBox.getByRole("button", { name: "インライン送信" }));
@@ -160,8 +161,56 @@ it("opens inline chat with Ctrl+I on the paragraph target and reviews the propos
   expect(request.contexts[0]).toMatchObject({ documentId: "doc_a", revision: 0 });
   // Inline target (paragraph [0,3)) stays separate from the agent selection scope.
   expect(request.contexts[0].ranges).toEqual([{ start: 0, end: 3 }]);
+  expect(request.contexts[0].text).toBe("# A");
   expect(await screen.findByTestId("ai-proposal")).toHaveTextContent("短い案");
   fireEvent.click(inlineBox.getByRole("button", { name: "差分を確認" }));
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_diff", expect.objectContaining({ copyId: expect.any(String) })));
   expect(await screen.findByText(/変更あり/)).toBeVisible();
+});
+
+it("ignores plain Ctrl+I so native Vim input keeps the key", async () => {
+  mockStream();
+  await openDocAndAi();
+  fireEvent.keyDown(window, { key: "i", ctrlKey: true });
+  expect(screen.queryByTestId("inline-chat")).not.toBeInTheDocument();
+});
+
+it("captures the inline shortcut before the editor sends it to Neovim", async () => {
+  mockStream();
+  await openDocAndAi();
+  const editor = screen.getByTestId("editor-primary").querySelector(".cm-content")!;
+  mockedInvoke.mockClear();
+  fireEvent.keyDown(editor, { key: "i", ctrlKey: true, shiftKey: true });
+  expect(await screen.findByTestId("inline-chat")).toBeVisible();
+  expect(mockedInvoke.mock.calls.some(([name]) => name === "input_with_copy" || name === "nvim_input")).toBe(false);
+});
+
+it("preserves the Agent transcript across hide and show", async () => {
+  let agentHandler: ((event: AiStreamEvent) => void) | null = null;
+  mockedStartPrompt.mockImplementation(async (_request, onEvent) => {
+    agentHandler = onEvent;
+    return { runId: "run_hide", stop: vi.fn() };
+  });
+  await openDocAndAi();
+  const sidebar = screen.getByTestId("ai-sidebar");
+  fireEvent.change(within(sidebar).getByLabelText("プロンプト"), { target: { value: "覚えて" } });
+  fireEvent.click(within(sidebar).getByRole("button", { name: "送信" }));
+  await waitFor(() => expect(agentHandler).not.toBeNull());
+  expect(mockedStartPrompt.mock.calls[0][0].contexts[0]).toMatchObject({
+    ranges: [{ start: 0, end: 4 }], text: "# A\n",
+  });
+  agentHandler!({ type: "started", payload: { runId: "run_hide" } });
+  agentHandler!({
+    type: "done",
+    payload: {
+      runId: "run_hide",
+      proposal: { text: "保持される回答", baseContexts: [{ documentId: "doc_a", revision: 0 }] },
+      sent: [{ documentId: "doc_a", revision: 0, ranges: [{ start: 0, end: 0 }], chars: 4 }],
+    },
+  });
+  expect(await within(within(sidebar).getByLabelText("会話")).findByText("保持される回答")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "AI 支援" }));
+  expect(screen.getByTestId("ai-sidebar").className).toContain("hidden");
+  fireEvent.click(screen.getByRole("button", { name: "AI 支援" }));
+  expect(screen.getAllByText("保持される回答").length).toBeGreaterThanOrEqual(1);
 });

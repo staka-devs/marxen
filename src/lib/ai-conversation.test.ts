@@ -34,8 +34,12 @@ describe("ai conversation", () => {
       { role: "user", text: "1件目" },
       { role: "assistant", text: "1件目の回答" },
     ]);
-    const many = Array.from({ length: 40 }, (_, index) => createUserMessage(`q${index}`, "ask", []));
+    const many = Array.from({ length: 40 }, (_, index) => [
+      createUserMessage(`q${index}`, "ask", []),
+      { ...createStreamingAssistant(), text: `a${index}`, state: "done" as const },
+    ]).flat();
     expect(toHistoryPayload(many)).toHaveLength(32);
+    expect(toHistoryPayload(many)[0]).toEqual({ role: "user", text: "q24" });
   });
 
   it("drops cancelled exchanges so the next request stays clean", () => {
@@ -46,11 +50,11 @@ describe("ai conversation", () => {
     expect(isBusy(messages)).toBe(true);
     messages = cancelAssistant(messages, assistant.id);
     expect(isBusy(messages)).toBe(false);
-    expect(toHistoryPayload(messages)).toEqual([{ role: "user", text: "質問" }]);
+    expect(toHistoryPayload(messages)).toEqual([]);
     const cleaned = dropTrailingFailedExchange(messages);
-    expect(cleaned).toHaveLength(1);
+    expect(cleaned).toHaveLength(0);
     // Retry resends the same prompt without duplicating the user turn.
-    expect(lastUserPrompt(cleaned)).toMatchObject({ prompt: "質問", mode: "ask" });
+    expect(lastUserPrompt(messages)).toMatchObject({ prompt: "質問", mode: "ask" });
     expect(retryHistory([user, ...cleaned.slice(1)])).toEqual([]);
   });
 

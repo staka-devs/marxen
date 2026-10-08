@@ -1137,8 +1137,12 @@ pub fn run_mock_script(
     cancel: &AtomicBool,
     emit: &mut (dyn FnMut(AiStreamEvent) + Send),
 ) -> String {
-    let composed =
-        compose_user_message_with_history(request.mode, &request.prompt, &request.contexts, &request.history);
+    let composed = compose_user_message_with_history(
+        request.mode,
+        &request.prompt,
+        &request.contexts,
+        &request.history,
+    );
     emit(AiStreamEvent::Started(StreamStarted {
         run_id: run_id.clone(),
     }));
@@ -2029,17 +2033,34 @@ pub async fn run_http_prompt(
             .header("x-api-key", secret)
             .header("anthropic-version", "2023-06-01"),
     };
-    let response = builder.send().await.map_err(|error| {
-        if error.is_timeout() {
-            AiError::StreamFailed {
-                detail: "時間内に応答がありませんでした".into(),
-            }
-        } else {
-            AiError::ConnectionFailed {
-                detail: format!("接続できません: {error}"),
+    // A silent server must never hold a run until the client timeout: race
+    // the send against the shared cancel flag so cancellation lands while
+    // response headers are still awaited.
+    let send_future = builder.send();
+    tokio::pin!(send_future);
+    let response = loop {
+        tokio::select! {
+            result = &mut send_future => break result.map_err(|error| {
+                if error.is_timeout() {
+                    AiError::StreamFailed {
+                        detail: "時間内に応答がありませんでした".into(),
+                    }
+                } else {
+                    AiError::ConnectionFailed {
+                        detail: format!("接続できません: {error}"),
+                    }
+                }
+            })?,
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                if cancel.load(Ordering::SeqCst) {
+                    emit(AiStreamEvent::Cancelled(StreamCancelled {
+                        run_id: run_id.clone(),
+                    }));
+                    return Ok(());
+                }
             }
         }
-    })?;
+    };
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
         let body = response.text().await.unwrap_or_default();
@@ -2055,13 +2076,22 @@ pub async fn run_http_prompt(
     let mut decoder = SseDecoder::default();
     let mut assembler = ProposalAssembler::new();
     let mut finished = false;
-    while let Some(chunk) = stream.next().await {
-        if cancel.load(Ordering::SeqCst) {
-            emit(AiStreamEvent::Cancelled(StreamCancelled {
-                run_id: run_id.clone(),
-            }));
-            return Ok(());
-        }
+    loop {
+        // Stall-safe read: a server that goes quiet after headers must not
+        // hold the run until the client timeout when cancellation arrives.
+        let next = tokio::select! {
+            next = stream.next() => next,
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                if cancel.load(Ordering::SeqCst) {
+                    emit(AiStreamEvent::Cancelled(StreamCancelled {
+                        run_id: run_id.clone(),
+                    }));
+                    return Ok(());
+                }
+                continue;
+            }
+        };
+        let Some(chunk) = next else { break };
         let bytes = chunk.map_err(|error| AiError::StreamFailed {
             detail: format!("受信に失敗しました: {error}"),
         })?;
@@ -3417,9 +3447,7 @@ mod tests {
     #[test]
     fn history_validation_bounds_turns_and_chars() {
         assert!(validate_history(&[]).is_ok());
-        assert!(
-            validate_history(&[history_message(ChatRole::User, "前回の質問")]).is_ok()
-        );
+        assert!(validate_history(&[history_message(ChatRole::User, "前回の質問")]).is_ok());
         let too_many: Vec<ChatHistoryMessage> = (0..MAX_HISTORY_MESSAGES + 1)
             .map(|i| history_message(ChatRole::User, &format!("q{i}")))
             .collect();
@@ -3479,7 +3507,9 @@ mod tests {
             &[context()],
             &history,
         );
-        let text = prompt["params"]["prompt"][0]["text"].as_str().expect("text");
+        let text = prompt["params"]["prompt"][0]["text"]
+            .as_str()
+            .expect("text");
         assert!(text.contains("前回の質問") && text.contains("前回の回答"));
     }
 
@@ -3508,7 +3538,10 @@ mod tests {
         assert_eq!(messages[0]["content"], "1件目の質問");
         assert_eq!(messages[1]["role"], "assistant");
         assert_eq!(messages[1]["content"], "1件目の回答");
-        assert!(messages[2]["content"].as_str().expect("content").contains("2件目の質問"));
+        assert!(messages[2]["content"]
+            .as_str()
+            .expect("content")
+            .contains("2件目の質問"));
 
         openai.provider = AiProviderConfig {
             kind: AiProviderKind::Anthropic,

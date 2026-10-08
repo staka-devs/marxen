@@ -32,14 +32,15 @@ export interface ChatMessage {
 export interface ChatConversation {
   id: string;
   messages: ChatMessage[];
+  providerKey?: string;
 }
 
 let conversationSeq = 0;
 let messageSeq = 0;
 
-export function createConversation(): ChatConversation {
+export function createConversation(providerKey?: string): ChatConversation {
   conversationSeq += 1;
-  return { id: `conv_${Date.now()}_${conversationSeq}`, messages: [] };
+  return { id: `conv_${Date.now()}_${conversationSeq}`, messages: [], providerKey };
 }
 
 export function createUserMessage(prompt: string, mode: PromptMode, contexts: PromptContext[]): ChatMessage {
@@ -62,11 +63,17 @@ export function createStreamingAssistant(): ChatMessage {
 /** Only completed turns become Rust-validated history, oldest first. */
 export function toHistoryPayload(messages: ChatMessage[]): ChatHistoryMessage[] {
   const history: ChatHistoryMessage[] = [];
-  for (const message of messages) {
-    if (message.state !== "done") continue;
-    const text = message.text.trim();
-    if (text === "") continue;
-    history.push({ role: message.role, text: message.text.slice(0, MAX_PROMPT_CHARS) });
+  for (let index = 0; index + 1 < messages.length; index += 1) {
+    const user = messages[index];
+    const assistant = messages[index + 1];
+    if (user.role !== "user" || assistant.role !== "assistant" ||
+        user.state !== "done" || assistant.state !== "done" ||
+        !user.text.trim() || !assistant.text.trim()) continue;
+    history.push(
+      { role: "user", text: user.text.slice(0, MAX_PROMPT_CHARS) },
+      { role: "assistant", text: assistant.text.slice(0, MAX_PROMPT_CHARS) },
+    );
+    index += 1;
   }
   return history.slice(-MAX_HISTORY_TURNS);
 }
@@ -134,6 +141,7 @@ export function dropTrailingFailedExchange(messages: ChatMessage[]): ChatMessage
   if (!last || last.role !== "assistant") return next;
   if (last.state === "done") return next;
   next.pop();
+  if (next.at(-1)?.role === "user") next.pop();
   return next;
 }
 

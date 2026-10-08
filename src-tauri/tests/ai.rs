@@ -93,6 +93,32 @@ fn read_http_head(stream: &mut std::net::TcpStream) -> String {
     head_text
 }
 
+/// Accept one connection with a real deadline: a client that never connects
+/// (for example a run cancelled before its first byte) must not hang the
+/// server thread's join forever.
+fn accept_bounded(listener: &TcpListener) -> Option<std::net::TcpStream> {
+    listener.set_nonblocking(true).expect("nonblocking");
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                let _ = listener.set_nonblocking(false);
+                // The accepted socket inherits nonblocking mode: restore
+                // blocking I/O before the bounded read/write helpers use it.
+                let _ = stream.set_nonblocking(false);
+                return Some(stream);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if std::time::Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("accept: {error}"),
+        }
+    }
+}
+
 /// Serve staged replies on one connection: each stage is (delay_ms, bytes).
 fn serve(stages: Vec<(u64, Vec<u8>)>) -> MockHttp {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
@@ -102,7 +128,9 @@ fn serve(stages: Vec<(u64, Vec<u8>)>) -> MockHttp {
     );
     let (seen_tx, seen_rx) = std::sync::mpsc::channel();
     let done = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept");
+        let Some(mut stream) = accept_bounded(&listener) else {
+            return;
+        };
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
             .expect("timeout");
@@ -285,12 +313,21 @@ async fn http_errors_map_to_auth_and_connection_failures() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn http_cancel_midstream_stops_without_done() {
     let body = include_str!("../../tests/fixtures/ai_sse_openai.txt").replace("\r\n", "\n");
-    // Deliver the first event, then stall so the client must cancel mid-stream.
-    let split = body.find("\n\n").expect("sse events") + 2;
-    let (first, rest) = body.split_at(split);
+    // Deliver through the first content chunk ("Hello, "), then stall so the
+    // client must cancel mid-stream. The fixture opens with a ping comment
+    // and a role-only delta, neither of which emits a Chunk, so the split
+    // must fall after real content.
+    let mut ends = body.match_indices("\n\n").map(|(index, _)| index + 2);
+    let (_ping, _role, hello) = (
+        ends.next().expect("ping"),
+        ends.next().expect("role"),
+        ends.next().expect("hello"),
+    );
+    let (first, rest) = body.split_at(hello);
+    assert!(first.contains("Hello, "));
     let mut server = serve(vec![
         (0, sse_reply_chunked(first)),
-        (10_000, rest.as_bytes().to_vec()),
+        (3_000, rest.as_bytes().to_vec()),
     ]);
     let request = openai_request(&server.base);
     let run_id = AiRunId("run_cancel".into());
@@ -315,24 +352,96 @@ async fn http_cancel_midstream_stops_without_done() {
         )
         .await
     });
-    // Wait for the first chunk, then cancel.
-    for _ in 0..500 {
-        let has_chunk = events
-            .lock()
-            .expect("events lock")
-            .iter()
-            .any(|event| matches!(event, AiStreamEvent::Chunk(_)));
-        if has_chunk {
-            break;
+    // Wait for the first chunk with a real deadline, then cancel: a blind
+    // yield loop would let a missing chunk slip through and weaken the proof.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let has_chunk = events
+                .lock()
+                .expect("events lock")
+                .iter()
+                .any(|event| matches!(event, AiStreamEvent::Chunk(_)));
+            if has_chunk {
+                break;
+            }
+            tokio::task::yield_now().await;
         }
-        tokio::task::yield_now().await;
-    }
+    })
+    .await
+    .expect("first streamed chunk");
     cancel.store(true, Ordering::SeqCst);
-    driver.await.expect("driver").unwrap();
+    tokio::time::timeout(Duration::from_secs(15), driver)
+        .await
+        .expect("driver settles after cancel")
+        .expect("driver")
+        .unwrap();
     let events = events.lock().expect("events lock").clone();
     let (_, done, cancelled) = events_of(&events);
     assert!(cancelled && !done);
     server.done.take().expect("join").join().expect("server");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn http_cancel_while_silent_server_holds_stream() {
+    // The server accepts and reads the request, then stays silent: without
+    // stall-aware reads the run would hang until the client timeout.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let base = format!(
+        "http://127.0.0.1:{}",
+        listener.local_addr().expect("port").port()
+    );
+    let (seen_tx, seen_rx) = std::sync::mpsc::channel::<()>();
+    // Detached on purpose: the sleeper must not gate the test's join. The
+    // cancellation proof is the driver's prompt settlement, not thread exit.
+    std::thread::spawn(move || {
+        let Some(mut stream) = accept_bounded(&listener) else {
+            return;
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("timeout");
+        read_http_head(&mut stream);
+        let _ = seen_tx.send(());
+        // Silence past any test patience: cancellation must win first.
+        std::thread::sleep(Duration::from_secs(30));
+    });
+    let request = openai_request(&base);
+    let run_id = AiRunId("run_silent_cancel".into());
+    let cancel = Arc::new(AtomicBool::new(false));
+    let events: Arc<Mutex<Vec<AiStreamEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let client = http_client(Duration::from_secs(60)).unwrap();
+    let target = http_target(&request.provider).unwrap();
+    let driver_events = events.clone();
+    let driver_cancel = cancel.clone();
+    let driver = tokio::spawn(async move {
+        let mut emit = |event: AiStreamEvent| {
+            driver_events.lock().expect("events lock").push(event);
+        };
+        run_http_prompt(
+            &client,
+            &target,
+            "mock-secret",
+            &request,
+            &run_id,
+            &driver_cancel,
+            &mut emit,
+        )
+        .await
+    });
+    // The request reached the silent server; now cancel and prove the driver
+    // settles promptly instead of waiting out the 60s client timeout.
+    seen_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("request seen");
+    cancel.store(true, Ordering::SeqCst);
+    tokio::time::timeout(Duration::from_secs(10), driver)
+        .await
+        .expect("cancel wins over the silent server")
+        .expect("driver")
+        .unwrap();
+    let events = events.lock().expect("events lock").clone();
+    let (_, done, cancelled) = events_of(&events);
+    assert!(cancelled && !done, "{events:?}");
 }
 
 fn sse_reply_chunked(first: &str) -> Vec<u8> {
@@ -963,7 +1072,9 @@ fn serve_capture_body(stages: Vec<(u64, Vec<u8>)>) -> (String, std::sync::mpsc::
     );
     let (seen_tx, seen_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept");
+        let Some(mut stream) = accept_bounded(&listener) else {
+            return;
+        };
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
             .expect("timeout");
@@ -1050,8 +1161,14 @@ async fn openai_two_turn_history_reaches_mock_server() {
     assert_eq!(messages[0]["content"], "1件目の質問");
     assert_eq!(messages[1]["role"], "assistant");
     assert_eq!(messages[1]["content"], "1件目の回答");
-    assert!(messages[2]["content"].as_str().expect("content").contains("2件目の質問"));
-    assert!(!sent.contains("mock-secret"), "secrets stay in headers, never in bodies");
+    assert!(messages[2]["content"]
+        .as_str()
+        .expect("content")
+        .contains("2件目の質問"));
+    assert!(
+        !sent.contains("mock-secret"),
+        "secrets stay in headers, never in bodies"
+    );
 }
 
 #[test]
