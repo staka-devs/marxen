@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Bot, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight } from "lucide-react";
 import { CodeMirrorEditor, type EditorSelection, type ExternalCursor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
@@ -70,6 +70,7 @@ import { offsetToLineCol } from "../../lib/utf16";
 import { correspondSource as correspondSnapshotSource, resolveEditRange } from "../../lib/selection-range";
 import { copyYankToClipboard, COPY_LABELS } from "../../lib/clipboard";
 import type { YankCopy } from "../../shared/contracts";
+import { loadEditorPreferences, saveEditorPreferences, normalizeEditorPreferences, type EditorPreferences } from "../../lib/editor-preferences";
 
 export type ViewMode = "live" | "source" | "read" | "split";
 export type NavBasis = "display" | "source";
@@ -176,7 +177,14 @@ export function WorkspaceShell() {
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewMessage, setReviewMessage] = useState<string | null>(null);
   const [reviewStatus, setReviewStatus] = useState<string | null>(null);
-  const [theme, setTheme] = useState<ThemeId>("dark");
+  const [preferences, setPreferences] = useState(loadEditorPreferences);
+  const theme = preferences.theme;
+  const updatePreferences = useCallback((next: EditorPreferences) => {
+    const normalized = normalizeEditorPreferences(next);
+    setPreferences(normalized);
+    if (!saveEditorPreferences(normalized)) setNotice("設定を保存できませんでした。この起動中は変更を保持します。");
+  }, []);
+  const setTheme = (next: ThemeId) => updatePreferences({ ...preferences, theme: next });
   const [quickOpen, setQuickOpen] = useState(false);
   const [palette, setPalette] = useState(false);
   const [settings, setSettings] = useState(false);
@@ -1820,7 +1828,7 @@ export function WorkspaceShell() {
   );
 
   return (
-    <div data-theme={theme} data-testid="workspace-shell" className="flex h-dvh overflow-hidden bg-background text-foreground">
+    <div data-theme={theme} data-testid="workspace-shell" style={{ "--editor-font-size": `${preferences.fontSize}px`, "--editor-line-height": preferences.lineHeight } as CSSProperties} className="flex h-dvh overflow-hidden bg-background text-foreground">
       <nav aria-label="アクティビティ" className="flex w-11 shrink-0 flex-col items-center gap-1 border-r border-border bg-card/50 py-2">
         {(
           [
@@ -2280,6 +2288,8 @@ export function WorkspaceShell() {
                   initialSelection={selections[active.documentId] ?? null}
                   externalCursor={cursorEcho[active.documentId] ?? null}
                   livePreview
+                  preferences={preferences}
+                  vimMode={vimMode}
                   resolveImage={liveResolver}
                   onGuiEdits={(edits) => void applyEdits(active.documentId, edits)}
                   onSelectionChange={(selection) => handleSelection(active.documentId, selection)}
@@ -2299,6 +2309,8 @@ export function WorkspaceShell() {
                   editable={desktop}
                   ariaLabel={`${active.path ?? active.documentId}のMarkdownエディタ`}
                   testId="editor-primary"
+                  preferences={preferences}
+                  vimMode={vimMode}
                   initialSelection={selections[active.documentId] ?? null}
                   externalCursor={cursorEcho[active.documentId] ?? null}
                   onGuiEdits={(edits) => void applyEdits(active.documentId, edits)}
@@ -2386,10 +2398,13 @@ export function WorkspaceShell() {
           onClose={() => setQuickOpen(false)}
         />
         <CommandPalette open={palette} commands={commands} onRun={runCommand} onClose={() => setPalette(false)} />
-        {settings && active && (
+        {settings && (
           <SettingsPanel
             theme={theme}
             onTheme={setTheme}
+            preferences={preferences}
+            onPreferences={updatePreferences}
+            onOpenAiSettings={desktop ? () => { setSettings(false); setShowAi(true); } : undefined}
             configPath={configPath}
             configError={configError}
             onConfigPath={setConfigPath}

@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type CSSProperties } from "react";
 import { Compartment, EditorState } from "@codemirror/state";
-import { EditorView, lineNumbers } from "@codemirror/view";
+import { EditorView, lineNumbers, drawSelection, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 import type { TextEdit } from "../../shared/contracts";
 import { createLivePreview, type LivePreviewCallbacks } from "./livePreview";
 import type { ImageResolver } from "../preview/images";
+import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../lib/editor-preferences";
 
 export interface EditorSelection {
   anchor: number;
@@ -43,6 +44,8 @@ interface Props {
    * it after their HTML mounts, on the widget abort lifecycle.
    */
   resolveImage?: ImageResolver;
+  preferences?: EditorPreferences;
+  vimMode?: string;
 }
 
 /** Common prefix/suffix diff as a single wire range edit. */
@@ -91,11 +94,12 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   return [{ range: { start, end: endBefore }, text: after.slice(start, endAfter) }];
 }
 
-export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage }: Props) {
+export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert" }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const editableRef = useRef(new Compartment());
   const liveRef = useRef(new Compartment());
+  const appearanceRef = useRef(new Compartment());
   const syncing = useRef(false);
   const composing = useRef(false);
   const preComposition = useRef<string | null>(null);
@@ -135,8 +139,8 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
         selection: initialSelection ? { anchor: initialSelection.anchor, head: initialSelection.head } : undefined,
         extensions: [
           markdown(),
-          lineNumbers(),
-          EditorView.lineWrapping,
+          drawSelection({ cursorBlinkRate: 0 }),
+          appearanceRef.current.of([]),
           editableRef.current.of(EditorView.editable.of(editableRefValue.current)),
           liveRef.current.of([]),
           EditorView.contentAttributes.of({ "aria-label": ariaLabel, role: "textbox", tabindex: "0" }),
@@ -224,6 +228,20 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
     view.dispatch({ effects: editableRef.current.reconfigure(EditorView.editable.of(editable)) });
   }, [editable]);
 
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({ effects: appearanceRef.current.reconfigure([
+      ...(preferences.lineNumbers ? [lineNumbers()] : []),
+      ...(preferences.wordWrap ? [EditorView.lineWrapping] : []),
+      ...(preferences.highlightActiveLine ? [highlightActiveLine(), highlightActiveLineGutter()] : []),
+      EditorView.theme({
+        "&": { fontSize: `${preferences.fontSize}px` },
+        ".cm-content": { lineHeight: String(preferences.lineHeight) },
+      }),
+    ]) });
+  }, [preferences.fontSize, preferences.lineHeight, preferences.lineNumbers, preferences.wordWrap, preferences.highlightActiveLine]);
+
   // Live widgets toggle without remounting the editor: reconfiguring the
   // compartment destroys removed widgets (abort + dispose run there).
   useEffect(() => {
@@ -257,5 +275,5 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
     }
   }, [externalCursor]);
 
-  return <div ref={host} data-testid={testId ?? "editor"} aria-label={ariaLabel} className="h-full min-h-0 flex-1 overflow-hidden" />;
+  return <div ref={host} data-testid={testId ?? "editor"} data-vim-mode={vimMode} data-readonly={!editable} style={{ "--editor-font-size": `${preferences.fontSize}px`, "--editor-line-height": preferences.lineHeight } as CSSProperties} aria-label={ariaLabel} className="marxen-editor h-full min-h-0 flex-1 overflow-hidden" />;
 }

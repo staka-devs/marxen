@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { CodeMirrorEditor, type EditorSelection, type ExternalCursor } from "../../../src/components/editor/CodeMirrorEditor";
 import type { TextEdit } from "../../../src/shared/contracts";
+import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../../src/lib/editor-preferences";
 import "../../../src/styles.css";
 
 export const SAMPLE = [
@@ -56,6 +57,8 @@ interface HarnessApi {
   echoCursor: (anchor: number, head: number) => void;
   /** Relative sources the fake image resolver was asked for. */
   imageCalls: () => string[];
+  setPreferences: (preferences: Partial<EditorPreferences>) => void;
+  setVimMode: (mode: string) => void;
 }
 
 declare global {
@@ -69,6 +72,8 @@ function Harness() {
   const [edits, setEdits] = useState<TextEdit[][]>([]);
   const [selection, setSelection] = useState<EditorSelection | null>(null);
   const [cursor, setCursor] = useState<ExternalCursor | null>(null);
+  const [preferences, setPreferences] = useState(DEFAULT_EDITOR_PREFERENCES);
+  const [vimMode, setVimMode] = useState("insert");
   const valueRef = useRef(value);
   valueRef.current = value;
   const editsRef = useRef(edits);
@@ -97,6 +102,8 @@ function Harness() {
       setCursor({ anchor, head, seq: seqRef.current });
     },
     imageCalls: () => [...imageCallsRef.current],
+    setPreferences: (next) => setPreferences((previous) => ({ ...previous, ...next })),
+    setVimMode,
   };
 
   return (
@@ -106,6 +113,8 @@ function Harness() {
         ariaLabel="ライブハーネス"
         testId="harness-editor"
         livePreview
+        preferences={preferences}
+        vimMode={vimMode}
         externalCursor={cursor}
         resolveImage={resolveImage}
         onGuiEdits={(list) => {

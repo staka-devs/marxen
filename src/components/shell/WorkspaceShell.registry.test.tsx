@@ -382,6 +382,7 @@ it("picks the config file natively and applies it with restart", async () => {
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
   await screen.findByText("# A");
   fireEvent.click(screen.getByRole("button", { name: "設定表示切替" }));
+  fireEvent.click(screen.getByRole("button", { name: /^Vim$/ }));
   fireEvent.click(screen.getByRole("button", { name: "設定ファイルを参照する" }));
   await waitFor(() => expect(screen.getByLabelText("Neovim 設定ファイルのパス")).toHaveValue("/cfg/init.lua"));
   fireEvent.click(screen.getByRole("button", { name: "設定を適用して再起動する" }));

@@ -23,6 +23,7 @@ const port = livePort();
 
 export default defineConfig({
   testDir: "./tests/live",
+  outputDir: "./test-results/live",
   use: { baseURL: `http://127.0.0.1:${port}`, trace: "retain-on-failure" },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
