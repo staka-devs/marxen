@@ -1,5 +1,50 @@
 import { expect, test, type Page } from "@playwright/test";
 
+test("browser IME composition sends only the final Unicode range edit", async ({ page, context }) => {
+  await page.goto("/tests/live/harness/live.html");
+  const before = "前😀後\n";
+  await page.evaluate((text) => window.__harness.setValue(text), before);
+  const content = page.locator(".cm-content");
+  await expect(content).toContainText("前😀後");
+  await page.evaluate(() => window.__harness.echoCursor(3, 3));
+  await content.focus();
+  const input = await context.newCDPSession(page);
+  // Chromium generates its actual composition/input events; this checks
+  // the browser engine, independently of native OS IME validation.
+  await input.send("Input.imeSetComposition", { text: "に", selectionStart: 1, selectionEnd: 1 });
+  await expect(content).toContainText("前😀に後");
+  expect(await page.evaluate(() => window.__harness.getEdits())).toEqual([]);
+  expect(await harnessValue(page)).toBe(before);
+  await input.send("Input.imeSetComposition", { text: "にほん", selectionStart: 3, selectionEnd: 3 });
+  await expect(content).toContainText("前😀にほん後");
+  expect(await page.evaluate(() => window.__harness.getEdits())).toEqual([]);
+  await input.send("Input.insertText", { text: "日本語😀" });
+  await expect.poll(() => harnessValue(page)).toBe("前😀日本語😀後\n");
+  expect(await page.evaluate(() => window.__harness.getEdits())).toEqual([
+    [{ range: { start: 3, end: 3 }, text: "日本語😀" }],
+  ]);
+  await input.detach();
+});
+
+test("cancelled browser IME composition sends no edit", async ({ page, context }) => {
+  await page.goto("/tests/live/harness/live.html");
+  const before = "取消😀\n";
+  await page.evaluate((text) => window.__harness.setValue(text), before);
+  const content = page.locator(".cm-content");
+  await expect(content).toContainText("取消😀");
+  await page.evaluate(() => window.__harness.echoCursor(2, 2));
+  await content.focus();
+  const input = await context.newCDPSession(page);
+  await input.send("Input.imeSetComposition", { text: "未確定", selectionStart: 3, selectionEnd: 3 });
+  await expect(content).toContainText("取消未確定😀");
+  expect(await page.evaluate(() => window.__harness.getEdits())).toEqual([]);
+  await input.send("Input.imeSetComposition", { text: "", selectionStart: 0, selectionEnd: 0 });
+  await expect(content).toContainText("取消😀");
+  expect(await harnessValue(page)).toBe(before);
+  expect(await page.evaluate(() => window.__harness.getEdits())).toEqual([]);
+  await input.detach();
+});
+
 // Issue #6 live widgets: real inline preview inside CodeMirror.
 // The harness mounts ONE CodeMirrorEditor with livePreview and no separate
 // preview pane. Meaningful assertions target widgets INSIDE `.cm-content`.

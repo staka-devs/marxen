@@ -219,8 +219,8 @@ export function WorkspaceShell() {
   navRef.current = navBasis;
   const vimModeRef = useRef(vimMode);
   vimModeRef.current = vimMode;
-  // Selection generation per document: every explicit user gesture (pointer or
-  // keyboard selection, explicit jump) bumps it. Async completions (cursor
+  // Selection generation per document: every selection gesture, explicit jump,
+  // and queued edit/key bumps it. Async completions (cursor
   // refreshes, queued-edit collapses) capture it on entry and skip their
   // selection/echo writes when a newer gesture landed meanwhile, so a late
   // refresh can never reset a newer range. In Insert/Replace the exact GUI
@@ -438,6 +438,7 @@ export function WorkspaceShell() {
       }
       const current = docsRef.current[id];
       if (!current || edits.length === 0) return;
+      bumpSelectionGen(id);
       try {
         const snapshot = await registry.applyEdits({ documentId: id, baseRevision: current.revision }, edits);
         mergeSnapshot(snapshot);
@@ -446,7 +447,7 @@ export function WorkspaceShell() {
         else setNotice(workspaceErrorText(cause));
       }
     },
-    [registry, mergeSnapshot, sayStale],
+    [registry, mergeSnapshot, sayStale, bumpSelectionGen],
   );
 
   const routeVimKeys = useCallback(
@@ -457,7 +458,7 @@ export function WorkspaceShell() {
       }
       if (!docsRef.current[id]) return;
       setVimKeys((prev) => (prev + keys).slice(-24));
-      const gen = selectionGenRef.current[id] ?? 0;
+      const gen = bumpSelectionGen(id);
       try {
         // Revision binds at queue execution inside the client, so bursts
         // order against successive acknowledgements.
@@ -469,7 +470,7 @@ export function WorkspaceShell() {
         else setNotice(workspaceErrorText(cause));
       }
     },
-    [registry, mergeSnapshot, refreshModeCursor, sayStale],
+    [registry, mergeSnapshot, refreshModeCursor, sayStale, bumpSelectionGen],
   );
 
   const handleUndo = useCallback(async () => {
@@ -478,14 +479,14 @@ export function WorkspaceShell() {
       return;
     }
     const id = activeRef.current;
-    const gen = selectionGenRef.current[id] ?? 0;
+    const gen = bumpSelectionGen(id);
     try {
       mergeSnapshot(await registry.undo(id));
       await refreshModeCursor(id, gen);
     } catch (cause) {
       setNotice(workspaceErrorText(cause));
     }
-  }, [registry, mergeSnapshot, refreshModeCursor]);
+  }, [registry, mergeSnapshot, refreshModeCursor, bumpSelectionGen]);
 
   const handleRedo = useCallback(async () => {
     if (!registry || !activeRef.current) {
@@ -493,14 +494,14 @@ export function WorkspaceShell() {
       return;
     }
     const id = activeRef.current;
-    const gen = selectionGenRef.current[id] ?? 0;
+    const gen = bumpSelectionGen(id);
     try {
       mergeSnapshot(await registry.redo(id));
       await refreshModeCursor(id, gen);
     } catch (cause) {
       setNotice(workspaceErrorText(cause));
     }
-  }, [registry, mergeSnapshot, refreshModeCursor]);
+  }, [registry, mergeSnapshot, refreshModeCursor, bumpSelectionGen]);
 
   const handleSave = useCallback(async () => {
     if (!registry || !activeRef.current) {
@@ -727,7 +728,7 @@ export function WorkspaceShell() {
       }
       if (!docsRef.current[id]) return;
       setVimKeys((prev) => (prev + key).slice(-24));
-      const gen = selectionGenRef.current[id] ?? 0;
+      const gen = retried ? selectionGenRef.current[id] ?? 0 : bumpSelectionGen(id);
       try {
         const decision = await registry.routeCharKey(id, key, range);
         if (decision.action === "vim") {
@@ -752,7 +753,7 @@ export function WorkspaceShell() {
           sayStale(cause.snapshot);
           // Never retry against unknown source automatically: once, and only
           // when the fresh source still equals the captured source in full.
-          if (!retried) {
+          if (!retried && isSelectionGenCurrent(id, gen)) {
             const fresh = correspondRange(cause.snapshot, range, fullText);
             if (fresh) await routeCharKey(id, key, fresh, cause.snapshot.text, true);
           }
@@ -761,7 +762,7 @@ export function WorkspaceShell() {
         }
       }
     },
-    [registry, mergeSnapshot, refreshModeCursor, sayStale, echoCursor, correspondRange],
+    [registry, mergeSnapshot, refreshModeCursor, sayStale, echoCursor, correspondRange, bumpSelectionGen, isSelectionGenCurrent],
   );
 
   // Captured paste replaces the exact half-open range as one serial edit and
@@ -782,7 +783,7 @@ export function WorkspaceShell() {
       }
       if (!docsRef.current[id]) return;
       if (text === "") return;
-      const gen = selectionGenRef.current[id] ?? 0;
+      const gen = retried ? selectionGenRef.current[id] ?? 0 : bumpSelectionGen(id);
       try {
         const decision = await registry.routeCapturedPaste(id, keyNotation, text, range);
         if (decision.action === "vim") {
@@ -802,7 +803,7 @@ export function WorkspaceShell() {
       } catch (cause) {
         if (cause instanceof StaleResync) {
           sayStale(cause.snapshot);
-          if (!retried) {
+          if (!retried && isSelectionGenCurrent(id, gen)) {
             const fresh = correspondRange(cause.snapshot, range, fullText);
             if (fresh) await routeCapturedPaste(id, keyNotation, text, fresh, cause.snapshot.text, true);
           }
@@ -811,7 +812,7 @@ export function WorkspaceShell() {
         }
       }
     },
-    [registry, mergeSnapshot, refreshModeCursor, sayStale, echoCursor, correspondRange],
+    [registry, mergeSnapshot, refreshModeCursor, sayStale, echoCursor, correspondRange, bumpSelectionGen, isSelectionGenCurrent],
   );
 
   const onEditorKeyDown = useCallback(
@@ -902,7 +903,7 @@ export function WorkspaceShell() {
       // appends after the previously inserted Markdown instead of reusing the
       // original offset. Revisions chain locally: each call builds on the
       // previous result, so the loop never goes stale on itself.
-      const gen = selectionGenRef.current[id] ?? 0;
+      const gen = bumpSelectionGen(id);
       let cursor = { ...range };
       let revision = docsRef.current[id]?.revision ?? 0;
       let previousLength = docsRef.current[id]?.text.length ?? 0;
@@ -939,7 +940,7 @@ export function WorkspaceShell() {
         }
       }
     },
-    [registry, mergeSnapshot, sayStale, echoCursor, isSelectionGenCurrent],
+    [registry, mergeSnapshot, sayStale, echoCursor, isSelectionGenCurrent, bumpSelectionGen],
   );
 
   const onPasteCapture = useCallback(

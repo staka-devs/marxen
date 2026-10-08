@@ -32,6 +32,8 @@ const scenario = {
   deferCursor: false,
   deferredCursorReleases: [] as Array<() => void>,
   cursorResponses: [] as Array<{ anchor: number; head: number }>,
+  deferNextMode: false,
+  deferredModeReleases: [] as Array<() => void>,
   imageBytes: new Map<string, { mime: string; bytes: number[] }>(),
   pasteImageStaleOnce: false,
   pastedImages: [] as Array<{ documentId: string; name: string; range: { start: number; end: number } }>,
@@ -53,6 +55,8 @@ function resetBackend() {
   scenario.deferCursor = false;
   scenario.deferredCursorReleases = [];
   scenario.cursorResponses = [];
+  scenario.deferNextMode = false;
+  scenario.deferredModeReleases = [];
   scenario.imageBytes = new Map();
   scenario.pasteImageStaleOnce = false;
   scenario.pastedImages = [];
@@ -187,6 +191,11 @@ function installBackend() {
         return Promise.resolve([]);
       case "fetch_mode": {
         const doc = docById(a.documentId as string);
+        if (scenario.deferNextMode) {
+          scenario.deferNextMode = false;
+          const answer = { documentId: doc.id, revision: doc.revision, mode: scenario.mode };
+          return new Promise((resolve) => scenario.deferredModeReleases.push(() => resolve(answer)));
+        }
         return Promise.resolve({ documentId: doc.id, revision: doc.revision, mode: scenario.mode });
       }
       case "has_nvim_mapping":
@@ -734,6 +743,29 @@ it("preserves an Insert selection across refresh and replaces it exactly once", 
     ),
   );
   expect(scenario.files.get("メモ/a.md")!.text).toBe("Z12");
+});
+
+it("does not restore an old Insert selection after a newer character was applied", async () => {
+  const text = "ab😀XY\n12";
+  scenario.files.set("メモ/a.md", { id: "doc_a", path: "メモ/a.md", text, revision: 0, dirty: false, history: [text] });
+  await openInsertDocDisplay();
+  const editor = screen.getByTestId("editor-primary");
+  (editor.querySelector(".cm-content") as HTMLElement).focus();
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  scenario.deferNextMode = true;
+  await selectEditorRange(0, 0, 1, 0);
+  await waitFor(() => expect(scenario.deferredModeReleases).toHaveLength(1));
+  fireEvent.keyDown(editor, { key: "Q" });
+  await waitFor(() => expect(scenario.files.get("メモ/a.md")!.text).toBe("Q12"));
+  await waitFor(() => expect(screen.getByTestId("cursor")).toHaveTextContent("カーソル 1:2"));
+  scenario.deferredModeReleases.shift()!();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(screen.getByTestId("cursor")).toHaveTextContent("カーソル 1:2");
+  fireEvent.keyDown(editor, { key: "Z" });
+  await waitFor(() => expect(scenario.files.get("メモ/a.md")!.text).toBe("QZ12"));
+  const edits = mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits");
+  expect(edits).toHaveLength(2);
+  expect(edits[1][1]).toEqual(expect.objectContaining({ edits: [{ range: { start: 1, end: 1 }, text: "Z" }] }));
 });
 
 it("never lets a late older selection response reset a newer range", async () => {
