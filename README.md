@@ -87,6 +87,8 @@ npm run desktop:build -- --bundles nsis
 
 公式 Neovim 0.11.5 archive を固定 SHA-256 で検証し、実行ファイル・DLL・runtime 全体を取り込みます。別 target の取得は `npm run bundle:neovim -- --target <Rust target>`、runtime smoke は対応 OS / CPU で実行します。package は `src-tauri/target/release/bundle/` に生成します。CI の明示 target build は `src-tauri/target/<Rust target>/release/bundle/` に生成します。
 
+展開した package の Neovim 資源は `MARXEN_VERIFY_NVIM_ROOT` にその `neovim` ディレクトリを指定して `npm run verify:neovim` で検証できます。この検証先指定は同梱確認スクリプトだけに適用されます。
+
 CI は Windows x64 (NSIS)、macOS arm64 / x64 (app / DMG)、Linux x64 (deb / AppImage) の native build、3種類の IPC 契約、Rust / TypeScript / unit / E2E を設定します。配布版は未署名です。署名・公証は対応する資格情報のある環境で別途実施します。
 
 実施済みの回帰・Windows 配布確認と、未実施の OS・WebView・日本語 IME・署名の範囲は [Issue #9 統合検証報告](docs/reports/issue-9-integration.md) に記載します。他 OS の package 操作、実 WebView / IME、署名・公証をブラウザや Windows の成功から推定しません。devcontainer の GUI にはホストの表示サーバーが必要です。
