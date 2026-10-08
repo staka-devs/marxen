@@ -1765,21 +1765,19 @@ export function WorkspaceShell() {
     });
     setInlineKind(target.kind);
     setInlineOpen(true);
-    setShowAi(true);
   }, [registry, selections, inlineBusy]);
 
   const inlineAnchor = useCallback(() => {
     const host = document.querySelector<HTMLElement>('[data-testid="editor-primary"] .cm-editor');
     if (!host) return null;
+    const box = host.getBoundingClientRect();
     try {
       const view = EditorView.findFromDOM(host);
-      const range = inlineSnapshot?.ranges[0];
-      const caret = view?.coordsAtPos(Math.min(range?.end ?? 0, view.state.doc.length));
-      if (caret) return caret;
+      const caret = view?.coordsAtPos(view.state.selection.main.head);
+      if (caret) return { ...caret, left: Math.min(caret.left, Math.max(box.left + 12, box.right - 396)) };
     } catch { /* Editor may be rebuilding after a view switch. */ }
-    const box = host.getBoundingClientRect();
     return { left: box.left + 24, top: box.top + 24, bottom: box.top + 48 };
-  }, [inlineSnapshot]);
+  }, []);
 
   const closeInlineChat = useCallback(() => {
     setInlineOpen(false);
@@ -2600,7 +2598,7 @@ export function WorkspaceShell() {
               disabled={agentBusy}
               onBusyChange={setInlineChatBusy}
               onProposal={handleProposal}
-              onReview={() => void fetchReviewDiff()}
+              onReview={() => { setShowAi(true); void fetchReviewDiff(); }}
               onClose={closeInlineChat}
             />
           </div>
