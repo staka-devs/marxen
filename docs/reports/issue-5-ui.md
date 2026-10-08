@@ -18,7 +18,7 @@ AI 提案は隔離コピーと差分レビューを経て承認する。適用�
 | UI 画像 | [1493×1047](issue-5-ui/clean-1493.png)、[1280×800](issue-5-ui/clean-1280.png) を製品 E2E で生成 |
 | Windows 実 WebView2・開発アプリ | フォルダーダイアログからの読み込み、Markdown 表示、タスク変更の保存、実 Neovim Undo 後の保存、`.vimrc` パスの適用と再起動を確認 |
 | Windows 実 WebView2 のマッピング | テスト設定の `nnoremap <F6> gg` を読み込み、Windows SendKeys の F6 入力で 15:1→1:1、改訂不変を確認。ハードウェアによるキー押下ではない |
-| Windows 実日本語 IME | Orca の Windows キー入力で「にほん」→「日本」を変換。OS の Composition 更新中は本文・改訂不変、確定時は改訂が一度進み、一回の Neovim Undo で元の本文に戻る。未確定「か」の Esc 取消も本文・改訂不変 |
+| Windows 実日本語 IME | 原文表示では Orca の Windows キー入力で「にほん」→「日本」を変換。ライブ表示でも「か」を入力。どちらも OS の Composition 更新中は本文・改訂不変、確定時は改訂が一度進み、一回の Neovim Undo で元の本文に戻る。未確定「か」の Esc 取消も両表示で本文・改訂不変 |
 | Windows 実クリップボード | 日本語・絵文字の Ctrl+V は改訂が一度進み、保存後は 333 バイト。一回の Undo・保存で元の 316 バイトと SHA-256 が一致。PNG は 16×12 / 140 バイトを Rust が `images/image.png` へ保存し、相対 Markdown を一度挿入。Rust の画像読込と実体が一致し、本文は一回の Undo・保存で元に戻る。検証後に元のクリップボードを復元 |
 
 Windows の実 IME・クリップボード検証は WebView2 / Edge 154 と同梱 Neovim で行い、OS の入力イベントと Rust 正本を読み戻して判定した。キーは Windows への合成入力であり、ハードウェアによる押下ではない。Chromium の Composition 検証は別の結果として扱う。
