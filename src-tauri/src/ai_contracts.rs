@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// Independent version of the AI IPC schema.
-pub const AI_CONTRACT_VERSION: u32 = 1;
+pub const AI_CONTRACT_VERSION: u32 = 2;
 
 /// OS credential store layout. Secrets are addressed, never transferred.
 pub const SECRET_SERVICE: &str = "dev.staka.marxen";
@@ -121,6 +121,24 @@ pub struct StagingTarget {
     pub copy_id: IsolatedCopyId,
 }
 
+/// One completed turn carried explicitly for multi-turn HTTP conversations.
+/// Bounded and validated by Rust; cancelled or failed turns are never stored
+/// here by the caller. ACP keeps its own session handling and receives the
+/// same turns as prompt preamble text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatRole {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatHistoryMessage {
+    pub role: ChatRole,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AiPromptRequest {
@@ -131,6 +149,10 @@ pub struct AiPromptRequest {
     pub staging: StagingTarget,
     /// Resume an existing ACP session. Required to be absent for HTTP backends.
     pub session_id: Option<AcpSessionId>,
+    /// Explicit multi-turn history (oldest first). Only completed turns;
+    /// bounded and validated by Rust before any side effect.
+    #[serde(default)]
+    pub history: Vec<ChatHistoryMessage>,
 }
 
 /// Which snapshot a proposal was derived from. The editor owner (#8) applies
@@ -257,6 +279,8 @@ pub fn typescript() -> String {
         AcpSessionId::decl(&cfg),
         AiRunId::decl(&cfg),
         StagingTarget::decl(&cfg),
+        ChatRole::decl(&cfg),
+        ChatHistoryMessage::decl(&cfg),
         AiPromptRequest::decl(&cfg),
         ContextRef::decl(&cfg),
         ProposalText::decl(&cfg),

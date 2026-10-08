@@ -15,7 +15,7 @@ import type {
 } from "../shared/ai-contracts";
 
 export const AI_STREAM_EVENT = "ai-stream";
-export const AI_CONTRACT_VERSION = 1;
+export const AI_CONTRACT_VERSION = 2;
 
 export const KIND_LABELS: Record<AiProviderKind, string> = {
   acp: "ACP エージェント",
@@ -72,6 +72,50 @@ export function defaultProviderConfig(kind: AiProviderKind): AiProviderConfig {
     acp: null,
     openai: null,
     anthropic: { enabled: false, endpoint: DEFAULT_ENDPOINTS.anthropic, model: "" },
+  };
+}
+
+export function buildProviderConfig(state: {
+  kind: AiProviderKind;
+  preset: AcpPreset;
+  command: string;
+  argsText: string;
+  endpoint: string;
+  model: string;
+  anthropicEnabled: boolean;
+}): AiProviderConfig {
+  if (state.kind === "acp") {
+    if (state.preset === "custom") {
+      const args = state.argsText
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+      return {
+        kind: "acp",
+        acp: { preset: "custom", argv: { command: state.command.trim(), args } },
+        openai: null,
+        anthropic: null,
+      };
+    }
+    return { kind: "acp", acp: { preset: state.preset, argv: null }, openai: null, anthropic: null };
+  }
+  if (state.kind === "openai_compatible") {
+    return {
+      kind: "openai_compatible",
+      acp: null,
+      openai: { endpoint: state.endpoint.trim(), model: state.model.trim() },
+      anthropic: null,
+    };
+  }
+  return {
+    kind: "anthropic",
+    acp: null,
+    openai: null,
+    anthropic: {
+      enabled: state.anthropicEnabled,
+      endpoint: state.endpoint.trim(),
+      model: state.model.trim(),
+    },
   };
 }
 

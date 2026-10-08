@@ -1,0 +1,146 @@
+// Agent / inline conversation state. UI-only: history sent to Rust is the
+// explicit bounded `history` array on AiPromptRequest, validated there.
+// Cancelled or failed turns never persist into the next request.
+
+import type {
+  AiError,
+  ChatHistoryMessage,
+  ContextSummary,
+  ProposalText,
+  PromptContext,
+  PromptMode,
+} from "../shared/ai-contracts";
+
+export const MAX_HISTORY_TURNS = 32;
+export const MAX_PROMPT_CHARS = 20_000;
+
+export type ChatMessageState = "streaming" | "done" | "error" | "cancelled";
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  state: ChatMessageState;
+  mode?: PromptMode;
+  /** Exact contexts captured for this user turn. */
+  contexts?: PromptContext[];
+  proposal?: ProposalText | null;
+  sent?: ContextSummary[];
+  error?: AiError | null;
+}
+
+export interface ChatConversation {
+  id: string;
+  messages: ChatMessage[];
+}
+
+let conversationSeq = 0;
+let messageSeq = 0;
+
+export function createConversation(): ChatConversation {
+  conversationSeq += 1;
+  return { id: `conv_${Date.now()}_${conversationSeq}`, messages: [] };
+}
+
+export function createUserMessage(prompt: string, mode: PromptMode, contexts: PromptContext[]): ChatMessage {
+  messageSeq += 1;
+  return {
+    id: `msg_${Date.now()}_${messageSeq}`,
+    role: "user",
+    text: prompt,
+    state: "done",
+    mode,
+    contexts: contexts.map((context) => ({ ...context })),
+  };
+}
+
+export function createStreamingAssistant(): ChatMessage {
+  messageSeq += 1;
+  return { id: `msg_${Date.now()}_${messageSeq}`, role: "assistant", text: "", state: "streaming" };
+}
+
+/** Only completed turns become Rust-validated history, oldest first. */
+export function toHistoryPayload(messages: ChatMessage[]): ChatHistoryMessage[] {
+  const history: ChatHistoryMessage[] = [];
+  for (const message of messages) {
+    if (message.state !== "done") continue;
+    const text = message.text.trim();
+    if (text === "") continue;
+    history.push({ role: message.role, text: message.text.slice(0, MAX_PROMPT_CHARS) });
+  }
+  return history.slice(-MAX_HISTORY_TURNS);
+}
+
+export function lastUserPrompt(messages: ChatMessage[]): { prompt: string; mode: PromptMode; contexts: PromptContext[] } | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "user" && message.state === "done") {
+      return { prompt: message.text, mode: message.mode ?? "ask", contexts: message.contexts ?? [] };
+    }
+  }
+  return null;
+}
+
+/** History that precedes the last done user turn: the retry payload. */
+export function retryHistory(messages: ChatMessage[]): ChatHistoryMessage[] {
+  let lastUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === "user" && messages[index].state === "done") {
+      lastUserIndex = index;
+      break;
+    }
+  }
+  if (lastUserIndex < 0) return [];
+  return toHistoryPayload(messages.slice(0, lastUserIndex));
+}
+
+export function appendStreamingText(messages: ChatMessage[], assistantId: string, chunk: string): ChatMessage[] {
+  return messages.map((message) =>
+    message.id === assistantId && message.role === "assistant"
+      ? { ...message, text: message.text + chunk }
+      : message,
+  );
+}
+
+export function finalizeAssistant(
+  messages: ChatMessage[],
+  assistantId: string,
+  proposal: ProposalText,
+  sent: ContextSummary[],
+): ChatMessage[] {
+  return messages.map((message) =>
+    message.id === assistantId
+      ? { ...message, text: proposal.text, state: "done" as const, proposal, sent, error: null }
+      : message,
+  );
+}
+
+export function failAssistant(messages: ChatMessage[], assistantId: string, error: AiError): ChatMessage[] {
+  return messages.map((message) =>
+    message.id === assistantId ? { ...message, state: "error" as const, error } : message,
+  );
+}
+
+export function cancelAssistant(messages: ChatMessage[], assistantId: string): ChatMessage[] {
+  return messages.map((message) =>
+    message.id === assistantId ? { ...message, state: "cancelled" as const } : message,
+  );
+}
+
+/** Drop the trailing failed exchange so cancel/error never leaks into history. */
+export function dropTrailingFailedExchange(messages: ChatMessage[]): ChatMessage[] {
+  const next = [...messages];
+  const last = next[next.length - 1];
+  if (!last || last.role !== "assistant") return next;
+  if (last.state === "done") return next;
+  next.pop();
+  return next;
+}
+
+export function isBusy(messages: ChatMessage[]): boolean {
+  return messages.some((message) => message.role === "assistant" && message.state === "streaming");
+}
+
+export function truncatePrompt(prompt: string): string {
+  return prompt.slice(0, MAX_PROMPT_CHARS);
+}

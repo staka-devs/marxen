@@ -102,6 +102,7 @@ fn acp_request(
             copy_id: copy_id.clone(),
         },
         session_id: None,
+        history: vec![],
     }
 }
 
@@ -600,6 +601,7 @@ fn stale_revision_and_disk_conflict_refuse_until_resync() {
             copy_id: copy.copy_id.clone(),
         },
         session_id: None,
+        history: vec![],
     };
     manager.authorize_prompt(&workspace, &wide).unwrap();
     // Live moves after the copy: stale refuses, disk drift conflicts.
@@ -1173,6 +1175,7 @@ async fn http_delayed_terminal_settles_once_then_releases() {
             copy_id: copy.copy_id.clone(),
         },
         session_id: None,
+        history: vec![],
     };
     manager.authorize_prompt(&workspace, &request).unwrap();
     manager.pin_for_run(&copy.copy_id).unwrap();

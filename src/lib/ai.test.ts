@@ -125,6 +125,7 @@ describe("ai transport", () => {
       contexts: [],
       staging: { copyId: "copy_1" },
       sessionId: null,
+      history: [],
     } as AiPromptRequest;
     const session = await startPrompt(request, (event) => seen.push(event));
     expect(session.runId).toBe("run_9");

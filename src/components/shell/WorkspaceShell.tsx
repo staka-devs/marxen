@@ -3,8 +3,12 @@ import { Bot, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIco
 import { CodeMirrorEditor, type EditorSelection, type ExternalCursor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
 import AiPanel from "../ai-panel";
+import InlineChat from "../ai-inline-chat";
 import ReviewPanel from "../review-panel";
-import type { ContextSummary, PromptMode, ProposalText, PromptContext } from "../../shared/ai-contracts";
+import type { AiProviderConfig, ContextSummary, PromptMode, ProposalText, PromptContext } from "../../shared/ai-contracts";
+import { buildProviderConfig } from "../../lib/ai";
+import { loadAiProfile } from "../../lib/ai-profiles";
+import { resolveInlineTarget } from "../../lib/ai-inline-target";
 import type { ApproveDocOutcome, IsolationDiff } from "../../shared/isolation-contracts";
 import {
   approveIsolatedCopy,
@@ -172,6 +176,11 @@ export function WorkspaceShell() {
   const [staging, setStaging] = useState<{ copyId: string } | null>(null);
   const [stagingBasis, setStagingBasis] = useState<{ documentId: string; revision: number } | null>(null);
   const [stagingBusy, setStagingBusy] = useState(false);
+  const [aiProvider, setAiProvider] = useState<AiProviderConfig>(() => buildProviderConfig(loadAiProfile()));
+  const [aiSettingsToken, setAiSettingsToken] = useState(0);
+  const [inlineOpen, setInlineOpen] = useState(false);
+  const [inlineSnapshot, setInlineSnapshot] = useState<PromptContext | null>(null);
+  const [inlineKind, setInlineKind] = useState<"selection" | "paragraph">("selection");
   const [diffs, setDiffs] = useState<IsolationDiff[]>([]);
   const [outcomes, setOutcomes] = useState<ApproveDocOutcome[]>([]);
   const [reviewBusy, setReviewBusy] = useState(false);
@@ -1599,6 +1608,25 @@ export function WorkspaceShell() {
   // Sending always pairs this registration with onProposal above.
   // Copies stay pinned by Rust until stream settlement; cancel only touches
   // settled copies, and pin refusals surface as actionable io errors.
+  const registeredContextsRef = useRef<PromptContext[]>([]);
+
+  function contextsEqual(left: PromptContext[], right: PromptContext[]): boolean {
+    if (left.length !== right.length) return false;
+    return left.every((context, index) => {
+      const other = right[index];
+      return (
+        context.documentId === other.documentId &&
+        context.revision === other.revision &&
+        context.text === other.text &&
+        context.ranges.length === other.ranges.length &&
+        context.ranges.every((range, rangeIndex) => {
+          const o = other.ranges[rangeIndex];
+          return range.start === o.start && range.end === o.end;
+        })
+      );
+    });
+  }
+
   const registerStaging = useCallback(async () => {
     if (!registry) {
       setNotice(READONLY_MESSAGE);
@@ -1617,6 +1645,7 @@ export function WorkspaceShell() {
       const info = await createIsolatedCopy(contexts);
       setStaging({ copyId: info.copyId });
       setStagingBasis({ documentId: contexts[0].documentId, revision: contexts[0].revision });
+      registeredContextsRef.current = contexts.map((context) => ({ ...context }));
       setDiffs([]);
       setOutcomes([]);
       setAiProposal(null);
@@ -1628,6 +1657,61 @@ export function WorkspaceShell() {
       setStagingBusy(false);
     }
   }, [registry]);
+
+  // Auto-prepare the isolation copy on send: reuse the registered copy when
+  // the exact contexts still match, otherwise replace it. Agent and inline
+  // chats share this slot but carry separate transcripts and exact base
+  // contexts per turn, so each send re-validates before any AI side effect.
+  const ensureStagingFor = useCallback(
+    async (wanted: PromptContext[]): Promise<{ copyId: string }> => {
+      if (!registry) throw new Error(READONLY_MESSAGE);
+      if (wanted.length === 0) throw { code: "staging_unresolved", copy_id: "(未解決)" };
+      const current = stagingRef.current;
+      if (current && contextsEqual(registeredContextsRef.current, wanted)) return { copyId: current };
+      if (current) await cancelIsolatedCopy(current).catch(() => undefined);
+      const info = await createIsolatedCopy(wanted);
+      setStaging({ copyId: info.copyId });
+      setStagingBasis({ documentId: wanted[0].documentId, revision: wanted[0].revision });
+      registeredContextsRef.current = wanted.map((context) => ({ ...context }));
+      setDiffs([]);
+      setOutcomes([]);
+      setReviewMessage(null);
+      setReviewStatus("送信範囲を自動登録しました。");
+      return { copyId: info.copyId };
+    },
+    [registry],
+  );
+
+  const openInlineChat = useCallback(() => {
+    const doc = activeRef.current ? docsRef.current[activeRef.current] : undefined;
+    if (!doc || !registry) {
+      setNotice(READONLY_MESSAGE);
+      return;
+    }
+    const sel = selections[doc.documentId] ?? { anchor: 0, head: 0 };
+    const target = resolveInlineTarget(doc.text, sel.anchor, sel.head);
+    setInlineSnapshot({
+      documentId: doc.documentId,
+      revision: doc.revision,
+      ranges: [{ start: target.start, end: target.end }],
+      text: doc.text,
+    });
+    setInlineKind(target.kind);
+    setInlineOpen(true);
+    setShowAi(true);
+  }, [registry, selections]);
+
+  useEffect(() => {
+    const onInlineKey = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "i") return;
+      const target = event.target as HTMLElement | null;
+      if (target && typeof target.closest === "function" && target.closest('input,textarea,select,[role="dialog"]')) return;
+      event.preventDefault();
+      openInlineChat();
+    };
+    window.addEventListener("keydown", onInlineKey);
+    return () => window.removeEventListener("keydown", onInlineKey);
+  }, [openInlineChat]);
 
   useEffect(() => {
     setAiDismissed(false);
@@ -2400,6 +2484,21 @@ export function WorkspaceShell() {
           onSelect={(path) => void openFile(path)}
           onClose={() => setQuickOpen(false)}
         />
+        {inlineOpen && inlineSnapshot && active && (
+          <div className="absolute bottom-10 right-4 z-30" data-testid="inline-chat-anchor">
+            <InlineChat
+              documentId={inlineSnapshot.documentId}
+              target={{ start: inlineSnapshot.ranges[0]?.start ?? 0, end: inlineSnapshot.ranges[0]?.end ?? 0, kind: inlineKind, excerpt: "" }}
+              context={inlineSnapshot}
+              staging={staging}
+              ensureStaging={ensureStagingFor}
+              provider={aiProvider}
+              onProposal={handleProposal}
+              onReview={() => void fetchReviewDiff()}
+              onClose={() => setInlineOpen(false)}
+            />
+          </div>
+        )}
         <CommandPalette open={palette} commands={commands} onRun={runCommand} onClose={() => setPalette(false)} />
         {settings && (
           <SettingsPanel
@@ -2431,7 +2530,38 @@ export function WorkspaceShell() {
 
       {showAi && desktop && (
         <aside data-testid="ai-sidebar" aria-label="AI サイドバー" className="hidden w-80 shrink-0 overflow-y-auto border-l border-border bg-card/50 p-3 md:block">
-          <AiPanel contexts={aiContexts} staging={staging} onRemoveContext={() => setAiDismissed(true)} onProposal={handleProposal} />
+          <AiPanel
+            contexts={aiContexts}
+            staging={staging}
+            ensureStaging={ensureStagingFor}
+            provider={aiProvider}
+            onProvider={setAiProvider}
+            openSettingsToken={aiSettingsToken}
+            onRemoveContext={() => setAiDismissed(true)}
+            onProposal={handleProposal}
+          />
+          <div className="mt-2">
+            <button
+              type="button"
+              aria-label="接続設定を開く"
+              title="折りたたみの接続設定を展開します（root 設定連携用）"
+              onClick={() => setAiSettingsToken((token) => token + 1)}
+              className="w-full rounded-md border border-border px-3 py-1.5 text-xs"
+            >
+              接続設定を開く
+            </button>
+          </div>
+          <div className="mt-2">
+            <button
+              type="button"
+              aria-label="インライン chat を開く"
+              title="選択または段落を対象に Ctrl+I でも開きます"
+              onClick={openInlineChat}
+              className="w-full rounded-md border border-border px-3 py-1.5 text-xs"
+            >
+              インライン chat を開く (Ctrl+I)
+            </button>
+          </div>
           <div className="mt-3 rounded-lg border border-border bg-card p-3 text-xs">
             <p className="font-medium">送信範囲の登録</p>
             <p className="mt-1 text-muted-foreground">
