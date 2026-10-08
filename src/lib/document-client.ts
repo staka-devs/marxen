@@ -193,11 +193,28 @@ export interface PasteImageArgs {
 }
 
 /**
- * Registry-backed document client. One instance per shell; requests for
- * the same document are serialized. Reads bypass the queue.
+ * Registry-backed document client. One instance per shell; mutating requests
+ * for the same document are serialized. The client tracks the latest
+ * acknowledged revision per document so queued tasks always build requests
+ * against the revision at execution time, never at event time.
  */
 export class RegistryClient {
   private queues = new Map<DocumentId, Promise<unknown>>();
+  private rev = new Map<DocumentId, number>();
+  private cursorStaged = new Map<DocumentId, Array<{ anchor: number; head: number }>>();
+
+  /** Record an authoritative snapshot (newer-or-equal wins). */
+  noteSnapshot(snapshot: DocumentSnapshot): void {
+    const current = this.rev.get(snapshot.documentId);
+    if (current === undefined || snapshot.revision >= current) {
+      this.rev.set(snapshot.documentId, snapshot.revision);
+    }
+  }
+
+  private bump(snapshot: DocumentSnapshot): DocumentSnapshot {
+    this.rev.set(snapshot.documentId, snapshot.revision);
+    return snapshot;
+  }
 
   private enqueue<T>(documentId: DocumentId, task: () => Promise<T>): Promise<T> {
     const tail = this.queues.get(documentId) ?? Promise.resolve();
@@ -226,7 +243,7 @@ export class RegistryClient {
     if (!this.isSaveRequest(request)) return Promise.reject(new Error("invalid request"));
     return this.enqueue(request.documentId, async () => {
       try {
-        return await workspaceApi.applyEdits(request, edits);
+        return this.bump(await workspaceApi.applyEdits(request, edits));
       } catch (cause) {
         if (isStaleError(cause)) await this.resync(request.documentId);
         throw cause;
@@ -234,32 +251,116 @@ export class RegistryClient {
     });
   }
 
-  /** Feed keys through real Neovim (mappings/macros fire), then sync. */
-  vimInput(request: SaveRequest, keys: string): Promise<DocumentSnapshot> {
-    return this.enqueue(request.documentId, async () => {
+  /** Feed keys through real Neovim (mappings/macros fire), then sync.
+   *  The revision binds at queue execution, never at keydown, so rapid
+   *  bursts order against successive acknowledgements. */
+  vimInput(documentId: DocumentId, keys: string): Promise<DocumentSnapshot> {
+    return this.enqueue(documentId, async () => {
+      const revision = this.rev.get(documentId) ?? 0;
       try {
-        return await workspaceApi.input(request, keys);
+        return this.bump(await workspaceApi.input({ documentId, baseRevision: revision }, keys));
       } catch (cause) {
-        if (isStaleError(cause)) await this.resync(request.documentId);
+        if (isStaleError(cause)) await this.resync(documentId);
+        throw cause;
+      }
+    });
+  }
+
+  /**
+   * Mapping-first insert as ONE serial task: the revision is read at
+   * execution time (never at event time), then the pending prefix plus the
+   * key is queried via `has_nvim_mapping`. A claimed key feeds natively; an
+   * unclaimed key becomes a GUI caret insert. Either way the snapshot feeds
+   * back so bursts keep source order with no duplication.
+   */
+  routeInsertKey(
+    documentId: DocumentId,
+    pending: string,
+    key: string,
+    at: number,
+  ): Promise<{ action: "vim"; snapshot: DocumentSnapshot } | { action: "gui"; snapshot: DocumentSnapshot }> {
+    return this.enqueue(documentId, async () => {
+      const revision = this.rev.get(documentId) ?? 0;
+      let mapped = false;
+      try {
+        mapped = await workspaceApi.hasMapping(documentId, "i", pending + key);
+      } catch {
+        // Mapping state unreadable: fall through to the GUI range edit so a
+        // keystroke is never swallowed by the router.
+      }
+      try {
+        if (mapped) {
+          return { action: "vim" as const, snapshot: this.bump(await workspaceApi.input({ documentId, baseRevision: revision }, key)) };
+        }
+        return {
+          action: "gui" as const,
+          snapshot: this.bump(
+            await workspaceApi.applyEdits({ documentId, baseRevision: revision }, [{ range: { start: at, end: at }, text: key }]),
+          ),
+        };
+      } catch (cause) {
+        if (isStaleError(cause)) await this.resync(documentId);
+        throw cause;
+      }
+    });
+  }
+
+  /**
+   * Clipboard paste as ONE serial task: an explicit insert-mode <C-v>
+   * mapping wins and feeds natively, otherwise the clipboard text lands as
+   * a single GUI range insert. The caller prevents default BEFORE awaiting
+   * this so no duplicate default paste can interleave.
+   */
+  routePasteText(
+    documentId: DocumentId,
+    keyNotation: string,
+    text: string,
+    at: number,
+  ): Promise<{ action: "vim"; snapshot: DocumentSnapshot } | { action: "gui"; snapshot: DocumentSnapshot }> {
+    return this.enqueue(documentId, async () => {
+      const revision = this.rev.get(documentId) ?? 0;
+      let mapped = false;
+      try {
+        mapped = await workspaceApi.hasMapping(documentId, "i", keyNotation);
+      } catch {
+        // Mapping state unreadable: land the text rather than swallowing it.
+      }
+      try {
+        if (mapped) {
+          return { action: "vim" as const, snapshot: this.bump(await workspaceApi.input({ documentId, baseRevision: revision }, keyNotation)) };
+        }
+        return {
+          action: "gui" as const,
+          snapshot: this.bump(
+            await workspaceApi.applyEdits({ documentId, baseRevision: revision }, [{ range: { start: at, end: at }, text }]),
+          ),
+        };
+      } catch (cause) {
+        if (isStaleError(cause)) await this.resync(documentId);
         throw cause;
       }
     });
   }
 
   undo(documentId: DocumentId): Promise<DocumentSnapshot> {
-    return this.enqueue(documentId, () => workspaceApi.undo(documentId));
+    return this.enqueue(documentId, async () => this.bump(await workspaceApi.undo(documentId)));
   }
 
   redo(documentId: DocumentId): Promise<DocumentSnapshot> {
-    return this.enqueue(documentId, () => workspaceApi.redo(documentId));
+    return this.enqueue(documentId, async () => this.bump(await workspaceApi.redo(documentId)));
   }
 
   save(request: SaveRequest) {
-    return this.enqueue(request.documentId, () => workspaceApi.saveDocument(request));
+    return this.enqueue(request.documentId, async () => {
+      const result = await workspaceApi.saveDocument(request);
+      const current = this.rev.get(request.documentId);
+      if (current === undefined || result.revision >= current) this.rev.set(request.documentId, result.revision);
+      return result;
+    });
   }
 
   reload(request: SaveRequest) {
-    return this.enqueue(request.documentId, () => workspaceApi.reloadDocument(request));
+    return this.enqueue(request.documentId, async () => this.bump(await workspaceApi.reloadDocument(request)));
   }
 
   rename(request: SaveRequest, path: string): Promise<OpenDocument> {
@@ -275,7 +376,10 @@ export class RegistryClient {
   }
 
   fetchSnapshot(documentId: DocumentId): Promise<DocumentSnapshot> {
-    return workspaceApi.fetchSnapshot(documentId);
+    return workspaceApi.fetchSnapshot(documentId).then((snapshot) => {
+      this.noteSnapshot(snapshot);
+      return snapshot;
+    });
   }
 
   fetchMode(documentId: DocumentId): Promise<{ mode: VimMode; revision: number }> {
@@ -284,6 +388,38 @@ export class RegistryClient {
 
   fetchCursor(documentId: DocumentId): Promise<CursorUpdate> {
     return workspaceApi.fetchCursor(documentId);
+  }
+
+  /**
+   * Stage a GUI selection for serial reporting. Only the latest staged
+   * selection per document is sent, so rapid gestures cannot interleave with
+   * mutations or echo back into a feedback loop. Best-effort: failures stay
+   * silent and the editor keeps its own selection.
+   */
+  stageCursor(documentId: DocumentId, anchor: number, head: number): Promise<CursorUpdate | null> {
+    const staged = this.cursorStaged.get(documentId) ?? [];
+    staged.push({ anchor, head });
+    this.cursorStaged.set(documentId, staged);
+    return this.enqueue(documentId, async () => {
+      const queue = this.cursorStaged.get(documentId) ?? [];
+      const latest = queue[queue.length - 1];
+      this.cursorStaged.set(documentId, []);
+      if (!latest) return null;
+      const revision = this.rev.get(documentId) ?? 0;
+      try {
+        return await workspaceApi.reportCursor({ documentId, revision, anchor: latest.anchor, head: latest.head });
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  /** Immediate cursor move for explicit jumps, at the execution revision. */
+  reportCursorNow(documentId: DocumentId, anchor: number, head: number): Promise<CursorUpdate> {
+    return this.enqueue(documentId, async () => {
+      const revision = this.rev.get(documentId) ?? 0;
+      return workspaceApi.reportCursor({ documentId, revision, anchor, head });
+    });
   }
 
   reportCursor(update: CursorUpdate): Promise<CursorUpdate> {
@@ -304,10 +440,19 @@ export class ReadonlyRegistry {
   private reject(): Promise<never> {
     return Promise.reject(new Error(READONLY_MESSAGE));
   }
+  noteSnapshot(): void {
+    // No revisions are tracked outside Tauri.
+  }
   applyEdits(): Promise<never> {
     return this.reject();
   }
-  vimInput(): Promise<never> {
+  vimInput(_documentId?: string, _keys?: string): Promise<never> {
+    return this.reject();
+  }
+  routeInsertKey(_documentId?: string, _pending?: string, _key?: string, _at?: number): Promise<never> {
+    return this.reject();
+  }
+  routePasteText(): Promise<never> {
     return this.reject();
   }
   undo(): Promise<never> {
@@ -341,6 +486,12 @@ export class ReadonlyRegistry {
     return this.reject();
   }
   reportCursor(): Promise<never> {
+    return this.reject();
+  }
+  stageCursor(): Promise<never> {
+    return this.reject();
+  }
+  reportCursorNow(): Promise<never> {
     return this.reject();
   }
   fetchGrid(): Promise<never> {

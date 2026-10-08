@@ -47,8 +47,8 @@ describe("registry client sends revision-aware requests", () => {
           gates.push(() => resolve(snapshot("doc_1", 1, "x")));
         }),
     );
-    const first = client.vimInput({ documentId: "doc_1", baseRevision: 0 }, "j");
-    const second = client.vimInput({ documentId: "doc_1", baseRevision: 0 }, "k");
+    const first = client.vimInput("doc_1", "j");
+    const second = client.vimInput("doc_1", "k");
     await Promise.resolve();
     await Promise.resolve();
     // The second request must not reach IPC before the first completes.
@@ -59,9 +59,43 @@ describe("registry client sends revision-aware requests", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(mockedInvoke).toHaveBeenCalledTimes(2);
-    expect(mockedInvoke).toHaveBeenNthCalledWith(2, "nvim_input", { documentId: "doc_1", baseRevision: 0, keys: "k" });
+    // The second burst binds the acknowledged revision at execution time.
+    expect(mockedInvoke).toHaveBeenNthCalledWith(2, "nvim_input", { documentId: "doc_1", baseRevision: 1, keys: "k" });
     gates[1]();
     await second;
+  });
+
+  it("binds native burst revisions at queue execution with delayed ACK", async () => {
+    const client = new RegistryClient();
+    client.noteSnapshot(snapshot("doc_1", 0, ""));
+    const releases: Array<() => void> = [];
+    const seen: number[] = [];
+    mockedInvoke.mockImplementation((_command: string, args?: unknown) => {
+      const revision = (args as { baseRevision: number }).baseRevision;
+      seen.push(revision);
+      return new Promise((resolve) => {
+        releases.push(() => resolve(snapshot("doc_1", revision + 1, `r${revision}`)));
+      });
+    });
+    const first = client.vimInput("doc_1", "g");
+    const second = client.vimInput("doc_1", "g");
+    const third = client.vimInput("doc_1", "i");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(seen).toEqual([0]);
+    releases[0]();
+    const r1 = await first;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(seen).toEqual([0, 1]);
+    releases[1]();
+    const r2 = await second;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(seen).toEqual([0, 1, 2]);
+    releases[2]();
+    const r3 = await third;
+    expect([r1.revision, r2.revision, r3.revision]).toEqual([1, 2, 3]);
   });
 
   it("resyncs stale revisions with the fresh snapshot instead of retrying", async () => {
@@ -90,6 +124,99 @@ describe("registry client sends revision-aware requests", () => {
     expect(mockedInvoke).toHaveBeenNthCalledWith(1, "undo_document", { documentId: "doc_9" });
     expect(mockedInvoke).toHaveBeenNthCalledWith(2, "redo_document", { documentId: "doc_9" });
     expect(mockedInvoke).toHaveBeenNthCalledWith(3, "save_document", { documentId: "doc_9", baseRevision: 3 });
+  });
+});
+
+describe("mapping-first insert routing", () => {
+  it("queries the mapping prefix then feeds claimed keys natively, in order", async () => {
+    const client = new RegistryClient();
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === "has_nvim_mapping") return Promise.resolve(true);
+      if (command === "nvim_input") return Promise.resolve(snapshot("doc_1", 1, "x"));
+      throw new Error(`unexpected ${command}`);
+    });
+    const decision = await client.routeInsertKey("doc_1", "", "j", 0);
+    expect(decision).toEqual({ action: "vim", snapshot: snapshot("doc_1", 1, "x") });
+    const order = mockedInvoke.mock.calls.map(([command]) => command);
+    expect(order).toEqual(["has_nvim_mapping", "nvim_input"]);
+    expect(mockedInvoke).toHaveBeenNthCalledWith(1, "has_nvim_mapping", { documentId: "doc_1", mode: "i", lhs: "j" });
+    expect(mockedInvoke).toHaveBeenNthCalledWith(2, "nvim_input", { documentId: "doc_1", baseRevision: 0, keys: "j" });
+  });
+
+  it("sends the pending prefix so multi-key mappings keep priority", async () => {
+    const client = new RegistryClient();
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === "has_nvim_mapping") return Promise.resolve(true);
+      return Promise.resolve(snapshot("doc_1", 2, "x"));
+    });
+    await client.routeInsertKey("doc_1", "j", "j", 0);
+    expect(mockedInvoke).toHaveBeenNthCalledWith(1, "has_nvim_mapping", { documentId: "doc_1", mode: "i", lhs: "jj" });
+  });
+
+  it("applies unclaimed keys as GUI caret inserts with the live revision", async () => {
+    const client = new RegistryClient();
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === "has_nvim_mapping") return Promise.resolve(false);
+      if (command === "apply_gui_edits") return Promise.resolve(snapshot("doc_1", 1, "ax"));
+      throw new Error(`unexpected ${command}`);
+    });
+    const decision = await client.routeInsertKey("doc_1", "", "a", 0);
+    expect(decision).toEqual({ action: "gui", snapshot: snapshot("doc_1", 1, "ax") });
+    expect(mockedInvoke).toHaveBeenCalledWith("apply_gui_edits", {
+      documentId: "doc_1",
+      baseRevision: 0,
+      edits: [{ range: { start: 0, end: 0 }, text: "a" }],
+    });
+    expect(mockedInvoke).not.toHaveBeenCalledWith("nvim_input", expect.anything());
+  });
+
+  it("keeps bursts ordered against execution-time revisions", async () => {
+    const client = new RegistryClient();
+    let revision = 0;
+    mockedInvoke.mockImplementation((command: string, args?: unknown) => {
+      const a = (args ?? {}) as { edits?: Array<{ range: { start: number; end: number }; text: string }> };
+      if (command === "has_nvim_mapping") return Promise.resolve(false);
+      if (command === "apply_gui_edits") {
+        revision += 1;
+        const edit = a.edits![0];
+        return Promise.resolve(snapshot("doc_1", revision, `<${edit.range.start}${edit.text}>`));
+      }
+      throw new Error(`unexpected ${command}`);
+    });
+    const results = await Promise.all([
+      client.routeInsertKey("doc_1", "", "a", 0),
+      client.routeInsertKey("doc_1", "", "b", 1),
+      client.routeInsertKey("doc_1", "", "c", 2),
+    ]);
+    expect(results.map((result) => result.snapshot.revision)).toEqual([1, 2, 3]);
+    const bases = mockedInvoke.mock.calls
+      .filter(([command]) => command === "apply_gui_edits")
+      .map(([, args]) => (args as { baseRevision: number }).baseRevision);
+    expect(bases).toEqual([0, 1, 2]);
+  });
+
+  it("falls back to GUI when the mapping state is unreadable", async () => {
+    const client = new RegistryClient();
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === "has_nvim_mapping") return Promise.reject(new Error("rpc down"));
+      if (command === "apply_gui_edits") return Promise.resolve(snapshot("doc_1", 1, "a"));
+      throw new Error(`unexpected ${command}`);
+    });
+    const decision = await client.routeInsertKey("doc_1", "", "a", 0);
+    expect(decision.action).toBe("gui");
+  });
+
+  it("resyncs instead of duplicating when the base went stale", async () => {
+    const client = new RegistryClient();
+    mockedInvoke.mockResolvedValueOnce(true);
+    mockedInvoke.mockRejectedValueOnce({ code: "contract", error: { code: "stale_revision", expected: 4, received: 3 } });
+    mockedInvoke.mockResolvedValueOnce(snapshot("doc_1", 4, "latest"));
+    const failure = await client.routeInsertKey("doc_1", "", "j", 0).then(
+      () => null,
+      (cause: unknown) => cause,
+    );
+    expect(failure).toBeInstanceOf(StaleResync);
+    expect(mockedInvoke).toHaveBeenCalledWith("fetch_snapshot", { documentId: "doc_1" });
   });
 });
 
@@ -126,6 +253,67 @@ describe("Vim key contract", () => {
   });
 });
 
+describe("clipboard paste respects explicit mappings", () => {
+  it("feeds a mapped Ctrl+V natively without inserting text", async () => {
+    const client = new RegistryClient();
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === "has_nvim_mapping") return Promise.resolve(true);
+      if (command === "nvim_input") return Promise.resolve(snapshot("doc_1", 1, "x"));
+      throw new Error(`unexpected ${command}`);
+    });
+    const decision = await client.routePasteText("doc_1", "<C-v>", "貼付😀\n2行目", 0);
+    expect(decision.action).toBe("vim");
+    expect(mockedInvoke).toHaveBeenNthCalledWith(1, "has_nvim_mapping", { documentId: "doc_1", mode: "i", lhs: "<C-v>" });
+    expect(mockedInvoke).toHaveBeenNthCalledWith(2, "nvim_input", { documentId: "doc_1", baseRevision: 0, keys: "<C-v>" });
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+  });
+
+  it("lands unmapped clipboard text as one serial range insert", async () => {
+    const client = new RegistryClient();
+    mockedInvoke.mockImplementation((command: string, args?: unknown) => {
+      if (command === "has_nvim_mapping") return Promise.resolve(false);
+      if (command === "apply_gui_edits") {
+        const a = args as { baseRevision: number; edits: Array<{ range: { start: number; end: number }; text: string }> };
+        return Promise.resolve(snapshot("doc_1", a.baseRevision + 1, `[${a.edits[0].range.start}]`));
+      }
+      throw new Error(`unexpected ${command}`);
+    });
+    const decision = await client.routePasteText("doc_1", "<C-v>", "日本語😀\n2行目", 5);
+    expect(decision.action).toBe("gui");
+    expect(mockedInvoke).toHaveBeenCalledWith("apply_gui_edits", {
+      documentId: "doc_1",
+      baseRevision: 0,
+      edits: [{ range: { start: 5, end: 5 }, text: "日本語😀\n2行目" }],
+    });
+  });
+});
+
+describe("cursor reporting stays serial without feedback", () => {
+  it("coalesces rapid selections to a single latest report", async () => {
+    const client = new RegistryClient();
+    client.noteSnapshot(snapshot("doc_1", 5, "hello"));
+    mockedInvoke.mockResolvedValue({ documentId: "doc_1", revision: 5, anchor: 4, head: 4 });
+    const first = client.stageCursor("doc_1", 1, 1);
+    const second = client.stageCursor("doc_1", 4, 4);
+    const [r1, r2] = await Promise.all([first, second]);
+    const reports = mockedInvoke.mock.calls.filter(([command]) => command === "report_cursor");
+    expect(reports).toHaveLength(1);
+    expect(reports[0][1]).toMatchObject({ documentId: "doc_1", revision: 5, anchor: 4, head: 4 });
+    // The first task consumes the coalesced latest; the second finds nothing.
+    expect(r1).toMatchObject({ anchor: 4, head: 4 });
+    expect(r2).toBeNull();
+  });
+
+  it("reports jumps at the execution revision", async () => {
+    const client = new RegistryClient();
+    client.noteSnapshot(snapshot("doc_1", 7, "hello world"));
+    mockedInvoke.mockResolvedValue({ documentId: "doc_1", revision: 7, anchor: 0, head: 5 });
+    const cursor = await client.reportCursorNow("doc_1", 0, 5);
+    expect(mockedInvoke).toHaveBeenCalledWith("report_cursor", { documentId: "doc_1", revision: 7, anchor: 0, head: 5 });
+    expect(cursor).toMatchObject({ anchor: 0, head: 5 });
+  });
+});
+
 describe("error shapes", () => {
   it("detects stale contract errors and keeps text on conflicts", () => {
     expect(isStaleError({ code: "contract", error: { code: "stale_revision", expected: 2, received: 1 } })).toBe(true);
@@ -141,7 +329,8 @@ describe("readonly registry never simulates authority", () => {
     await expect(transport.applyEdits()).rejects.toThrow(READONLY_MESSAGE);
     await expect(transport.save()).rejects.toThrow(READONLY_MESSAGE);
     await expect(transport.undo()).rejects.toThrow(READONLY_MESSAGE);
-    await expect(transport.vimInput()).rejects.toThrow(READONLY_MESSAGE);
+    await expect(transport.vimInput("doc_1", "j")).rejects.toThrow(READONLY_MESSAGE);
+    await expect(transport.routeInsertKey("doc_1", "", "a", 0)).rejects.toThrow(READONLY_MESSAGE);
   });
 });
 

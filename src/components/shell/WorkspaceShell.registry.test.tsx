@@ -24,6 +24,8 @@ const scenario = {
   files: new Map<string, BackendDoc>(),
   conflictOnSave: false,
   configErrors: [] as string[],
+  mode: "normal" as string,
+  mappingResult: false as boolean,
 };
 
 function resetBackend() {
@@ -34,6 +36,8 @@ function resetBackend() {
   ]);
   scenario.conflictOnSave = false;
   scenario.configErrors = [];
+  scenario.mode = "normal";
+  scenario.mappingResult = false;
 }
 
 function docById(id: string): BackendDoc {
@@ -154,8 +158,10 @@ function installBackend() {
         return Promise.resolve([]);
       case "fetch_mode": {
         const doc = docById(a.documentId as string);
-        return Promise.resolve({ documentId: doc.id, revision: doc.revision, mode: "normal" });
+        return Promise.resolve({ documentId: doc.id, revision: doc.revision, mode: scenario.mode });
       }
+      case "has_nvim_mapping":
+        return Promise.resolve(scenario.mappingResult);
       case "fetch_cursor": {
         const doc = docById(a.documentId as string);
         return Promise.resolve({ documentId: doc.id, revision: doc.revision, anchor: 0, head: 0 });
@@ -185,8 +191,9 @@ beforeEach(() => {
 
 async function openWorkspace() {
   render(<App />);
+  fireEvent.click(screen.getByRole("button", { name: "パスを入力する" }));
   fireEvent.change(screen.getByLabelText("開くフォルダーの絶対パス"), { target: { value: "/ws" } });
-  fireEvent.click(screen.getByRole("button", { name: "フォルダーを開く" }));
+  fireEvent.click(screen.getByRole("button", { name: "開く" }));
   await screen.findByRole("button", { name: "メモ/a.md" });
 }
 
@@ -210,6 +217,7 @@ it("sends GUI edits with the live revision and native undo reverts them", async 
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
   await screen.findByText("# A");
   // Cursor at document start: line 0 is the "# A" heading, checkbox toggles by prefixing.
+  fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
   fireEvent.click(screen.getByRole("button", { name: "チェックリストを切り替える" }));
   await waitFor(() => expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 1"));
   expect(screen.getByTestId("dirty")).toHaveTextContent("未保存");
@@ -229,6 +237,7 @@ it("resyncs stale revisions from the fresh snapshot", async () => {
   doc.text += "drift\n";
   doc.revision += 1;
   doc.dirty = true;
+  fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
   fireEvent.click(screen.getByRole("button", { name: "チェックリストを切り替える" }));
   await screen.findByText(/再同期/);
   expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 1");
@@ -248,6 +257,7 @@ it("asks save/discard/cancel before closing a dirty tab", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
   await screen.findByText("# A");
+  fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
   fireEvent.click(screen.getByRole("button", { name: "チェックリストを切り替える" }));
   await waitFor(() => expect(screen.getByTestId("dirty")).toHaveTextContent("未保存"));
   const tabs = within(screen.getByTestId("tabs"));
@@ -263,6 +273,7 @@ it("keeps text and shows the conflict UI when save loses", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
   await screen.findByText("# A");
+  fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
   fireEvent.click(screen.getByRole("button", { name: "チェックリストを切り替える" }));
   await waitFor(() => expect(screen.getByTestId("dirty")).toHaveTextContent("未保存"));
   scenario.conflictOnSave = true;
@@ -276,10 +287,12 @@ it("opens the natively picked folder instead of a typed prompt", async () => {
   const { open } = await import("@tauri-apps/plugin-dialog");
   vi.mocked(open).mockResolvedValueOnce("/picked/ws");
   render(<App />);
-  fireEvent.click(screen.getByRole("button", { name: "フォルダーを参照する" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "フォルダーを開く" })[0]);
   await screen.findByRole("button", { name: "メモ/a.md" });
   expect(mockedInvoke).toHaveBeenCalledWith("open_workspace", { path: "/picked/ws" });
-  expect(screen.getByLabelText("開くフォルダーの絶対パス")).toHaveValue("/picked/ws");
+  // Clean chrome shows the root in the explorer; the manual path field stays
+  // collapsed until explicitly requested.
+  expect(screen.getByText("/picked/ws")).toBeVisible();
 });
 
 it("picks the config file natively and applies it with restart", async () => {
@@ -288,7 +301,7 @@ it("picks the config file natively and applies it with restart", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
   await screen.findByText("# A");
-  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.click(screen.getByRole("button", { name: "設定表示切替" }));
   fireEvent.click(screen.getByRole("button", { name: "設定ファイルを参照する" }));
   await waitFor(() => expect(screen.getByLabelText("Neovim 設定ファイルのパス")).toHaveValue("/cfg/init.lua"));
   fireEvent.click(screen.getByRole("button", { name: "設定を適用して再起動する" }));
@@ -312,8 +325,9 @@ it("refreshes the runtime status when documents open", async () => {
   render(<App />);
   releaseFirst({ contractVersion: 1, connection: "disconnected", detail: "empty" });
   expect(await screen.findByText("Neovim 未接続")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "パスを入力する" }));
   fireEvent.change(screen.getByLabelText("開くフォルダーの絶対パス"), { target: { value: "/ws" } });
-  fireEvent.click(screen.getByRole("button", { name: "フォルダーを開く" }));
+  fireEvent.click(screen.getByRole("button", { name: "開く" }));
   await screen.findByRole("button", { name: "メモ/a.md" });
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
   await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Neovim 接続済み"));
@@ -333,6 +347,7 @@ it("keeps display-basis arrows in the editor and routes Vim keys natively", asyn
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
   await screen.findByText("# A");
+  fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
   fireEvent.click(screen.getByRole("button", { name: "表示基準" }));
   const editor = screen.getByTestId("editor-primary");
   fireEvent.keyDown(editor, { key: "ArrowDown" });
@@ -342,4 +357,116 @@ it("keeps display-basis arrows in the editor and routes Vim keys natively", asyn
   await waitFor(() =>
     expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 0, keys: "j" }),
   );
+});
+
+it("routes claimed insert keys natively and unclaimed keys as GUI inserts", async () => {
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await screen.findByText("# A");
+  scenario.mode = "insert";
+  // Refresh the shell's mode snapshot through any mutation.
+  fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await waitFor(() => expect(screen.getByTestId("vim-footer-mode")).toHaveTextContent("挿入"));
+  const editor = screen.getByTestId("editor-primary");
+  scenario.mappingResult = true;
+  fireEvent.keyDown(editor, { key: "j" });
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith("has_nvim_mapping", { documentId: "doc_a", mode: "i", lhs: "j" }),
+  );
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 0, keys: "j" }),
+  );
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+  scenario.mappingResult = false;
+  fireEvent.keyDown(editor, { key: "x" });
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "apply_gui_edits",
+      expect.objectContaining({ documentId: "doc_a", edits: [{ range: { start: 0, end: 0 }, text: "x" }] }),
+    ),
+  );
+});
+
+it("keeps fast insert bursts in source order", async () => {
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await screen.findByText("# A");
+  scenario.mode = "insert";
+  fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await waitFor(() => expect(screen.getByTestId("vim-footer-mode")).toHaveTextContent("挿入"));
+  scenario.mappingResult = false;
+  const editor = screen.getByTestId("editor-primary");
+  fireEvent.keyDown(editor, { key: "a" });
+  fireEvent.keyDown(editor, { key: "b" });
+  fireEvent.keyDown(editor, { key: "c" });
+  await waitFor(() => expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 3"));
+  expect(scenario.files.get("メモ/a.md")!.text.startsWith("abc")).toBe(true);
+});
+
+const readText = vi.fn();
+
+function mockClipboard(text: string) {
+  Object.defineProperty(window.navigator, "clipboard", { value: { readText }, configurable: true });
+  readText.mockResolvedValue(text);
+}
+
+async function openInsertDoc() {
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await screen.findByText("# A");
+  scenario.mode = "insert";
+  fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await waitFor(() => expect(screen.getByTestId("vim-footer-mode")).toHaveTextContent("挿入"));
+}
+
+it("lands unmapped insert paste as one insert without duplicating the DOM paste", async () => {
+  mockClipboard("貼付😀\n2行目");
+  await openInsertDoc();
+  scenario.mappingResult = false;
+  const editor = screen.getByTestId("editor-primary");
+  fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "apply_gui_edits",
+      expect.objectContaining({
+        documentId: "doc_a",
+        edits: [{ range: { start: 0, end: 0 }, text: "貼付😀\n2行目" }],
+      }),
+    ),
+  );
+  // The follow-up DOM paste must not insert a second time.
+  fireEvent.paste(editor);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(1);
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input")).toHaveLength(0);
+  expect(scenario.files.get("メモ/a.md")!.text.startsWith("貼付😀\n2行目")).toBe(true);
+});
+
+it("routes explicitly mapped insert paste natively", async () => {
+  mockClipboard("貼付");
+  await openInsertDoc();
+  scenario.mappingResult = true;
+  const editor = screen.getByTestId("editor-primary");
+  fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 0, keys: "<C-v>" }),
+  );
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+});
+
+it("keeps normal-mode Ctrl+V as native visual-block without a mapping query", async () => {
+  mockClipboard("貼付");
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await screen.findByText("# A");
+  const editor = screen.getByTestId("editor-primary");
+  fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
+  await waitFor(() =>
+    expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 0, keys: "<C-v>" }),
+  );
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "has_nvim_mapping")).toHaveLength(0);
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
 });

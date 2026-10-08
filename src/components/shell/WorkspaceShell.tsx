@@ -1,9 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Files, Settings as SettingsIcon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Bot, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis } from "lucide-react";
 import { CodeMirrorEditor, type EditorSelection, type ExternalCursor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
 import AiPanel from "../ai-panel";
-import type { ContextSummary, ProposalText, PromptContext } from "../../shared/ai-contracts";
+import ReviewPanel from "../review-panel";
+import type { ContextSummary, PromptMode, ProposalText, PromptContext } from "../../shared/ai-contracts";
+import type { ApproveDocOutcome, IsolationDiff } from "../../shared/isolation-contracts";
+import {
+  approveIsolatedCopy,
+  cancelIsolatedCopy,
+  createIsolatedCopy,
+  fetchIsolationDiff,
+  rejectIsolatedCopy,
+  stageProposal,
+  describeWorkspaceError as describeIsolationError,
+} from "../../lib/isolation";
 import { FileTree, buildTree } from "../workspace/FileTree";
 import { Tabs, type TabItem } from "../workspace/Tabs";
 import { QuickOpen } from "../workspace/QuickOpen";
@@ -53,11 +64,13 @@ import {
   serializeVimKey,
   workspaceErrorText,
 } from "../../lib/document-client";
-import { gridLineText, gridLinesFromRedraw } from "../../lib/grid";
+import { applyGridUpdates, createGridState, type NvimGridState } from "../../lib/grid";
+import type { ImageResolver } from "../preview/images";
 import { offsetToLineCol } from "../../lib/utf16";
 
 export type ViewMode = "live" | "source" | "read" | "split";
 export type NavBasis = "display" | "source";
+export type SideView = "explorer" | "search" | "outline";
 
 interface OpenDoc {
   documentId: string;
@@ -145,10 +158,20 @@ export function WorkspaceShell() {
   const [viewMode, setViewMode] = useState<ViewMode>("live");
   const [navBasis, setNavBasis] = useState<NavBasis>("source");
   const [showRaw, setShowRaw] = useState(false);
-  const [showSidebar, setShowSidebar] = useState(true);
+  const [sideView, setSideView] = useState<SideView | null>("explorer");
   const [showAi, setShowAi] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [manualFolder, setManualFolder] = useState(false);
   const [aiDismissed, setAiDismissed] = useState(false);
-  const [aiProposal, setAiProposal] = useState<{ proposal: ProposalText; sent: ContextSummary[] } | null>(null);
+  const [aiProposal, setAiProposal] = useState<{ proposal: ProposalText; sent: ContextSummary[]; mode: PromptMode } | null>(null);
+  const [staging, setStaging] = useState<{ copyId: string } | null>(null);
+  const [stagingBasis, setStagingBasis] = useState<{ documentId: string; revision: number } | null>(null);
+  const [stagingBusy, setStagingBusy] = useState(false);
+  const [diffs, setDiffs] = useState<IsolationDiff[]>([]);
+  const [outcomes, setOutcomes] = useState<ApproveDocOutcome[]>([]);
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewMessage, setReviewMessage] = useState<string | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<string | null>(null);
   const [theme, setTheme] = useState<ThemeId>("dark");
   const [quickOpen, setQuickOpen] = useState(false);
   const [palette, setPalette] = useState(false);
@@ -176,9 +199,8 @@ export function WorkspaceShell() {
   const [newFilePath, setNewFilePath] = useState("");
   const [renameDoc, setRenameDoc] = useState<string | null>(null);
   const [renamePath, setRenamePath] = useState("");
-  const [gridLines, setGridLines] = useState<string[] | null>(null);
+  const [nvimGrid, setNvimGrid] = useState<NvimGridState | null>(null);
   const [gridRev, setGridRev] = useState<number | null>(null);
-  const previewWrap = useRef<HTMLDivElement>(null);
 
   const docsRef = useRef(docs);
   docsRef.current = docs;
@@ -209,13 +231,17 @@ export function WorkspaceShell() {
     setNotice(new StaleResync(snapshot).message);
   }, []);
 
-  const mergeSnapshot = useCallback((snapshot: DocumentSnapshot) => {
-    setDocs((prev) => {
-      const doc = prev[snapshot.documentId];
-      if (!doc || snapshot.revision < doc.revision) return prev;
-      return { ...prev, [snapshot.documentId]: applySnapshot(doc, snapshot) };
-    });
-  }, []);
+  const mergeSnapshot = useCallback(
+    (snapshot: DocumentSnapshot) => {
+      if (registry instanceof RegistryClient) registry.noteSnapshot(snapshot);
+      setDocs((prev) => {
+        const doc = prev[snapshot.documentId];
+        if (!doc || snapshot.revision < doc.revision) return prev;
+        return { ...prev, [snapshot.documentId]: applySnapshot(doc, snapshot) };
+      });
+    },
+    [registry],
+  );
 
   const refreshModeCursor = useCallback(
     async (id: string) => {
@@ -229,6 +255,7 @@ export function WorkspaceShell() {
       try {
         const cursor = await registry.fetchCursor(id);
         setSelections((prev) => ({ ...prev, [id]: { anchor: cursor.anchor, head: cursor.head } }));
+        caretRef.current[id] = cursor.head;
         echoCursor(id, cursor.anchor, cursor.head);
       } catch {
         // Best-effort display only.
@@ -306,6 +333,15 @@ export function WorkspaceShell() {
     [registry, loadEntries, refreshRecovery],
   );
 
+  const pickFolderAndOpen = useCallback(async () => {
+    if (!registry) {
+      setNotice(READONLY_MESSAGE);
+      return;
+    }
+    const picked = await pickFolder();
+    if (picked) await openWorkspaceFolder(picked);
+  }, [registry, openWorkspaceFolder]);
+
   const openFile = useCallback(
     async (path: string) => {
       if (!registry) {
@@ -361,11 +397,12 @@ export function WorkspaceShell() {
         setNotice(READONLY_MESSAGE);
         return;
       }
-      const current = docsRef.current[id];
-      if (!current) return;
+      if (!docsRef.current[id]) return;
       setVimKeys((prev) => (prev + keys).slice(-24));
       try {
-        const snapshot = await registry.vimInput({ documentId: id, baseRevision: current.revision }, keys);
+        // Revision binds at queue execution inside the client, so bursts
+        // order against successive acknowledgements.
+        const snapshot = await registry.vimInput(id, keys);
         mergeSnapshot(snapshot);
         await refreshModeCursor(id);
       } catch (cause) {
@@ -523,12 +560,11 @@ export function WorkspaceShell() {
   const handleSelection = useCallback(
     (id: string, selection: EditorSelection) => {
       setSelections((prev) => ({ ...prev, [id]: selection }));
+      caretRef.current[id] = selection.head;
       if (!registry) return;
-      const current = docsRef.current[id];
-      if (!current) return;
-      registry
-        .reportCursor({ documentId: id, revision: current.revision, anchor: selection.anchor, head: selection.head })
-        .catch(() => undefined);
+      // Serialized and coalesced inside the client: rapid gestures send only
+      // the latest selection and never race mutations or echo back.
+      void registry.stageCursor(id, selection.anchor, selection.head);
     },
     [registry],
   );
@@ -537,10 +573,9 @@ export function WorkspaceShell() {
     async (id: string, anchor: number, head: number) => {
       echoCursor(id, anchor, head);
       if (!registry) return;
-      const current = docsRef.current[id];
-      if (!current) return;
+      if (!docsRef.current[id]) return;
       try {
-        const cursor = await registry.reportCursor({ documentId: id, revision: current.revision, anchor, head });
+        const cursor = await registry.reportCursorNow(id, anchor, head);
         setSelections((prev) => ({ ...prev, [id]: { anchor: cursor.anchor, head: cursor.head } }));
         echoCursor(id, cursor.anchor, cursor.head);
       } catch {
@@ -571,6 +606,110 @@ export function WorkspaceShell() {
   );
 
   // -- Vim key router (shell level; CodeMirror internals untouched) ---------
+  //
+  // Mapping-first order per keystroke, decided BEFORE any async work:
+  // 1. preventDefault + stopPropagation immediately (no DOM insertion can
+  //    interleave, key order is preserved through the serial queue).
+  // 2. Normal/visual/operator/command keys always go native (mappings fire
+  //    inside Neovim; words/textobjects/macros stay source-based).
+  // 3. Insert-mode printable keys go through ONE serial task that queries
+  //    has_nvim_mapping for pending+key: claimed -> nvim_input, else a GUI
+  //    range edit at the tracked caret. Display-basis arrows/Home/End stay
+  //    local; source basis routes them as <Up> etc.
+  const pendingRef = useRef<Record<string, string>>({});
+  // Optimistic caret for GUI insert fallback: advanced synchronously per
+  // keystroke so fast bursts keep source order through the serial queue.
+  // Corrected by real cursor echoes after Vim syncs and pointer moves.
+  const caretRef = useRef<Record<string, number>>({});
+  // Set when our Ctrl+V interception queues the text insert, so the
+  // follow-up DOM paste event cannot insert it a second time.
+  const suppressPasteUntilRef = useRef(0);
+
+  useEffect(() => {
+    if (vimMode !== "insert" && vimMode !== "replace") pendingRef.current = {};
+  }, [vimMode]);
+
+  useEffect(() => {
+    if (activeId) delete pendingRef.current[activeId];
+  }, [activeId]);
+
+  const routeInsertKey = useCallback(
+    async (id: string, key: string, at: number, retried = false): Promise<void> => {
+      if (!registry) {
+        setNotice(READONLY_MESSAGE);
+        return;
+      }
+      if (!docsRef.current[id]) return;
+      const pending = (pendingRef.current[id] ?? "").slice(-16);
+      try {
+        const decision = await registry.routeInsertKey(id, pending, key, at);
+        if (decision.action === "vim") {
+          pendingRef.current[id] = (pending + key).slice(-16);
+        } else {
+          pendingRef.current[id] = "";
+          const next = at + key.length;
+          caretRef.current[id] = next;
+          setSelections((prev) => ({ ...prev, [id]: { anchor: next, head: next } }));
+          echoCursor(id, next, next);
+        }
+        mergeSnapshot(decision.snapshot);
+        if (decision.action === "vim") await refreshModeCursor(id);
+      } catch (cause) {
+        if (cause instanceof StaleResync) {
+          sayStale(cause.snapshot);
+          // The rejected keystroke applied nothing, so exactly one retry
+          // against the fresh revision cannot duplicate it.
+          if (!retried) await routeInsertKey(id, key, at, true);
+        } else {
+          setNotice(workspaceErrorText(cause));
+        }
+      }
+    },
+    [registry, mergeSnapshot, refreshModeCursor, sayStale, echoCursor],
+  );
+
+  // Clipboard text in insert/replace modes: an explicit <C-v> mapping wins
+  // and feeds natively, otherwise the text lands as one serial range insert.
+  const routePasteText = useCallback(
+    async (id: string, at: number, retried = false): Promise<void> => {
+      if (!registry) {
+        setNotice(READONLY_MESSAGE);
+        return;
+      }
+      if (!docsRef.current[id]) return;
+      let text: string;
+      try {
+        text = await navigator.clipboard.readText();
+      } catch {
+        setNotice("クリップボードを読み取れませんでした。");
+        return;
+      }
+      if (text === "") return;
+      try {
+        const decision = await registry.routePasteText(id, "<C-v>", text, at);
+        if (decision.action === "vim") {
+          mergeSnapshot(decision.snapshot);
+          await refreshModeCursor(id);
+          return;
+        }
+        const next = at + text.length;
+        caretRef.current[id] = next;
+        setSelections((prev) => ({ ...prev, [id]: { anchor: next, head: next } }));
+        echoCursor(id, next, next);
+        mergeSnapshot(decision.snapshot);
+      } catch (cause) {
+        if (cause instanceof StaleResync) {
+          sayStale(cause.snapshot);
+          // The rejected paste applied nothing, so exactly one retry
+          // against the fresh revision cannot duplicate it.
+          if (!retried) await routePasteText(id, at, true);
+        } else {
+          setNotice(workspaceErrorText(cause));
+        }
+      }
+    },
+    [registry, mergeSnapshot, refreshModeCursor, sayStale, echoCursor],
+  );
 
   const onEditorKeyDown = useCallback(
     (event: React.KeyboardEvent) => {
@@ -585,12 +724,37 @@ export function WorkspaceShell() {
       const mod = event.ctrlKey || event.metaKey;
       const lower = event.key.toLowerCase();
       if (mod && (lower === "p" || lower === "s")) return;
+      const isInsert = vimModeRef.current === "insert" || vimModeRef.current === "replace";
+      if (isInsert && event.key.toLowerCase() === "v" && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
+        // Insert-mode paste is never an unconditional <C-v>: prevent default
+        // first, then an explicit mapping wins or the text lands serialized.
+        // Normal-mode Ctrl+V keeps flowing below as native visual-block.
+        event.preventDefault();
+        event.stopPropagation();
+        const id = activeRef.current;
+        const current = docsRef.current[id];
+        const sel = selections[id] ?? { anchor: 0, head: 0 };
+        const at = Math.min(caretRef.current[id] ?? sel.head, current?.text.length ?? 0);
+        suppressPasteUntilRef.current = Date.now() + 1500;
+        void routePasteText(id, at);
+        return;
+      }
+      if (isInsert && event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        const id = activeRef.current;
+        const current = docsRef.current[id];
+        const sel = selections[id] ?? { anchor: 0, head: 0 };
+        const at = Math.min(caretRef.current[id] ?? sel.head, current?.text.length ?? 0);
+        caretRef.current[id] = at + event.key.length;
+        void routeInsertKey(id, event.key, at);
+        return;
+      }
       if (navRef.current === "display" && !event.ctrlKey && !event.metaKey && !event.altKey) {
         // Display-basis vertical motion, line start/end, and keyboard
         // selection stay in the editor; word/textobject/macro keys below
         // still route natively in non-insert modes.
         if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-        if ((vimModeRef.current === "insert" || vimModeRef.current === "replace") && event.key.length === 1) return;
       }
       const keys = serializeVimKey({ key: event.key, ctrlKey: event.ctrlKey, metaKey: event.metaKey, altKey: event.altKey, shiftKey: event.shiftKey });
       if (!keys) return;
@@ -598,41 +762,50 @@ export function WorkspaceShell() {
       event.stopPropagation();
       void routeVimKeys(activeRef.current, keys);
     },
-    [desktop, registry, routeVimKeys],
+    [desktop, registry, routeVimKeys, routeInsertKey, routePasteText, selections],
   );
 
-  // -- paste images (shell level; preview pipeline untouched) ----------------
+  // -- paste text/images (shell level; preview pipeline untouched) ---------
 
   const onEditorPaste = useCallback(
     (event: React.ClipboardEvent) => {
       if (!desktop || !registry || !activeRef.current) return;
       const files = Array.from(event.clipboardData?.files ?? []).filter((file) => /^image\/(png|jpeg|gif|webp)$/.test(file.type));
-      if (files.length === 0) return;
-      const id = activeRef.current;
-      const current = docsRef.current[id];
-      if (!current) return;
-      event.preventDefault();
-      const sel = selections[id] ?? { anchor: 0, head: 0 };
-      const at = Math.min(sel.head, current.text.length);
-      void (async () => {
-        for (const file of files) {
-          if (file.size > 20 * 1024 * 1024) {
-            setNotice("対応画像（PNG/JPEG/GIF/WebP、20 MiB 以下）のみ扱えます。");
-            continue;
+      if (files.length > 0) {
+        const id = activeRef.current;
+        const current = docsRef.current[id];
+        if (!current) return;
+        event.preventDefault();
+        const sel = selections[id] ?? { anchor: 0, head: 0 };
+        const at = Math.min(sel.head, current.text.length);
+        void (async () => {
+          for (const file of files) {
+            if (file.size > 20 * 1024 * 1024) {
+              setNotice("対応画像（PNG/JPEG/GIF/WebP、20 MiB 以下）のみ扱えます。");
+              continue;
+            }
+            try {
+              const bytes = new Uint8Array(await file.arrayBuffer());
+              const result = await registry.pasteImage(
+                { request: { documentId: id, baseRevision: docsRef.current[id]?.revision ?? current.revision }, name: file.name, bytes, range: { start: at, end: at } },
+              );
+              mergeSnapshot(result.snapshot);
+              setNotice(`画像を挿入しました（${result.path}）。`);
+            } catch (cause) {
+              if (cause instanceof StaleResync) sayStale(cause.snapshot);
+              else setNotice(workspaceErrorText(cause));
+            }
           }
-          try {
-            const bytes = new Uint8Array(await file.arrayBuffer());
-            const result = await registry.pasteImage(
-              { request: { documentId: id, baseRevision: docsRef.current[id]?.revision ?? current.revision }, name: file.name, bytes, range: { start: at, end: at } },
-            );
-            mergeSnapshot(result.snapshot);
-            setNotice(`画像を挿入しました（${result.path}）。`);
-          } catch (cause) {
-            if (cause instanceof StaleResync) sayStale(cause.snapshot);
-            else setNotice(workspaceErrorText(cause));
-          }
-        }
-      })();
+        })();
+        return;
+      }
+      if (Date.now() < suppressPasteUntilRef.current) {
+        // Our Ctrl+V interception already queued the text insert below.
+        event.preventDefault();
+        return;
+      }
+      // Otherwise (e.g. context-menu paste): allow default; the editor
+      // transaction flows through the GUI range path.
     },
     [desktop, registry, mergeSnapshot, sayStale, selections],
   );
@@ -851,59 +1024,85 @@ export function WorkspaceShell() {
     void refreshModeCursor(activeId);
   }, [desktop, activeId, refreshModeCursor]);
 
+  // Native grid screen retains redraws/highlights without touching text.
+  // Each fetch batch applies incrementally; switching docs or closing the
+  // view resets so rows from another buffer never linger.
   useEffect(() => {
-    if (!desktop || !activeId || !showRaw) return;
+    if (!desktop || !activeId || !showRaw) {
+      setNvimGrid(null);
+      setGridRev(null);
+      return;
+    }
+    let cancelled = false;
+    setNvimGrid(createGridState());
     workspaceApi
       .fetchGrid(activeId, 80, 24)
       .then((grid) => {
-        const lines = gridLinesFromRedraw(grid.updates).map((line) => gridLineText(line));
-        setGridLines(lines);
+        if (cancelled) return;
+        setNvimGrid((prev) => applyGridUpdates(prev ?? createGridState(), grid.updates));
         setGridRev(grid.revision);
       })
       .catch((cause: unknown) => setNotice(workspaceErrorText(cause)));
-  }, [desktop, activeId, showRaw, active?.revision]);
-
-  // -- preview relative images (wrapper-level; preview pipeline untouched) ---
-
-  const imageCache = useRef(new Map<string, string>());
-  useEffect(() => {
-    if (!desktop || !registry || !active) return;
-    const root = previewWrap.current;
-    if (!root) return;
-    const images = Array.from(root.querySelectorAll("img")).filter((img) => {
-      const src = img.getAttribute("src") ?? "";
-      return src !== "" && !/^(https?:|data:|blob:|#)/i.test(src);
-    });
-    let cancelled = false;
-    void (async () => {
-      for (const img of images) {
-        const src = img.getAttribute("src") ?? "";
-        const key = `${active.documentId}:${src}`;
-        const cached = imageCache.current.get(key);
-        if (cached) {
-          img.setAttribute("src", cached);
-          continue;
-        }
-        try {
-          const data = await workspaceApi.loadImage(active.documentId, src);
-          if (cancelled) return;
-          let binary = "";
-          const bytes = data.bytes;
-          for (let i = 0; i < bytes.length; i += 0x8000) {
-            binary += String.fromCharCode(...bytes.slice(i, i + 0x8000));
-          }
-          const url = `data:${data.mime};base64,${btoa(binary)}`;
-          imageCache.current.set(key, url);
-          img.setAttribute("src", url);
-        } catch {
-          // Missing images keep their alt text; no fake content is injected.
-        }
-      }
-    })();
     return () => {
       cancelled = true;
     };
-  }, [desktop, registry, active, active?.text, active?.revision]);
+  }, [desktop, activeId, showRaw, active?.revision]);
+
+  const handleRawGridKeys = useCallback(
+    (keys: string) => {
+      const id = activeRef.current;
+      if (id) void routeVimKeys(id, keys);
+    },
+    [routeVimKeys],
+  );
+
+  const handleRawGridRefresh = useCallback(() => {
+    const id = activeRef.current;
+    if (!id || !desktop) return;
+    setNvimGrid(createGridState());
+    workspaceApi
+      .fetchGrid(id, 80, 24)
+      .then((grid) => {
+        setNvimGrid((prev) => applyGridUpdates(prev ?? createGridState(), grid.updates));
+        setGridRev(grid.revision);
+      })
+      .catch((cause: unknown) => setNotice(workspaceErrorText(cause)));
+  }, [desktop]);
+
+  // Shared local-image hydration (ADR-0063): relative sources resolve through
+  // the Rust workspace loader (containment/symlink/type checked) to data URLs.
+  // Abort-aware and stale-safe; failures keep alt text, never fake content.
+  // No secrets touch localStorage; credentials stay in the OS store.
+  const imageUrlCache = useRef(new Map<string, string>());
+  const resolveImage = useCallback(
+    async (src: string, signal: AbortSignal): Promise<string | null> => {
+      if (!desktop) return null;
+      const id = activeRef.current;
+      const current = id ? docsRef.current[id] : undefined;
+      if (!id || !current) return null;
+      if (signal.aborted) return null;
+      const key = `${id}:${src}`;
+      const cached = imageUrlCache.current.get(key);
+      if (cached) return cached;
+      try {
+        const data = await workspaceApi.loadImage(id, src);
+        if (signal.aborted) return null;
+        if (!/^image\/(png|jpeg|gif|webp)$/.test(data.mime)) return null;
+        let binary = "";
+        const bytes = data.bytes;
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+          binary += String.fromCharCode(...bytes.slice(i, i + 0x8000));
+        }
+        const url = `data:${data.mime};base64,${btoa(binary)}`;
+        imageUrlCache.current.set(key, url);
+        return url;
+      } catch {
+        return null;
+      }
+    },
+    [desktop],
+  );
+  const resolveImageProp: ImageResolver | undefined = desktop ? resolveImage : undefined;
 
   // -- config -----------------------------------------------------------------
 
@@ -997,7 +1196,7 @@ export function WorkspaceShell() {
       else if (id === "edit-redo") void handleRedo();
       else if (id === "palette-quickopen") setQuickOpen(true);
       else if (id === "palette-raw") setShowRaw((value) => !value);
-      else if (id === "palette-raw-refresh") setGridLines(null);
+      else if (id === "palette-raw-refresh") handleRawGridRefresh();
       else if (id === "palette-recovery") void refreshRecovery();
       else if (id === "palette-ai") {
         if (!desktop) setNotice(READONLY_MESSAGE);
@@ -1076,14 +1275,250 @@ export function WorkspaceShell() {
     return [{ documentId: active.documentId, revision: active.revision, ranges: [{ start, end }], text: active.text }];
   }, [desktop, active, selections, aiDismissed]);
 
-  const handleProposal = useCallback((proposal: ProposalText, sent: ContextSummary[]) => {
-    setAiProposal({ proposal, sent });
-    setNotice("AI の提案を受け取りました。適用は差分レビュー (#8) で行います。");
-  }, []);
+  const stagingRef = useRef<string | null>(null);
+  stagingRef.current = staging?.copyId ?? null;
+  const aiContextsRef = useRef<PromptContext[]>([]);
+  aiContextsRef.current = aiContexts;
+
+  const handleProposal = useCallback(
+    async (proposal: ProposalText, sent: ContextSummary[], mode: PromptMode) => {
+      setAiProposal({ proposal, sent, mode });
+      const copyId = stagingRef.current;
+      if (!copyId) {
+        setNotice("AI の提案を受け取りました。差分を確認してください。");
+        return;
+      }
+      if (mode === "ask") {
+        // Questions display only; staging refuses ask.
+        setNotice("AI の提案を受け取りました。差分を確認してください。");
+        setReviewStatus("質問モードは表示のみです。取り込みは行いません。");
+        setReviewBusy(true);
+        try {
+          const fetched = await fetchIsolationDiff(copyId);
+          setDiffs(fetched);
+          setReviewMessage(null);
+        } catch (cause: unknown) {
+          setReviewMessage(describeIsolationError(cause));
+        } finally {
+          setReviewBusy(false);
+        }
+        return;
+      }
+      setNotice("AI の提案を受け取りました。作業コピーに取り込んで差分を確認してください。");
+      setReviewBusy(true);
+      try {
+        const staged = await stageProposal(copyId, proposal, mode);
+        setReviewMessage(null);
+        setReviewStatus(
+          staged.updated.length > 0
+            ? `${staged.updated.length} 文書に取り込みました（${staged.chars}文字）。`
+            : "取り込みましたが変更はありません。",
+        );
+        const fetched = await fetchIsolationDiff(copyId);
+        setDiffs(fetched);
+        if (fetched.some((diff) => diff.drifted)) {
+          setReviewStatus("原文が動いています。範囲を再登録してから承認してください。");
+        }
+      } catch (cause: unknown) {
+        setReviewMessage(describeIsolationError(cause));
+        try {
+          const fetched = await fetchIsolationDiff(copyId);
+          setDiffs(fetched);
+        } catch {
+          // Diff fetch failure already reported via staging error.
+        }
+      } finally {
+        setReviewBusy(false);
+      }
+    },
+    [],
+  );
+
+  // Manual retry for the staged-proposal intake (ReviewPanel button).
+  // Uses the stored proposal + mode so exact scope is preserved.
+  const stageStoredProposal = useCallback(async () => {
+    const copyId = stagingRef.current;
+    const stored = aiProposal;
+    if (!copyId || !stored) return;
+    if (stored.mode === "ask") {
+      setReviewMessage("質問モードは表示のみです。取り込みは行いません。");
+      return;
+    }
+    setReviewBusy(true);
+    try {
+      const staged = await stageProposal(copyId, stored.proposal, stored.mode);
+      setReviewMessage(null);
+      setReviewStatus(
+        staged.updated.length > 0
+          ? `${staged.updated.length} 文書に取り込みました（${staged.chars}文字）。`
+          : "取り込みましたが変更はありません。",
+      );
+      const fetched = await fetchIsolationDiff(copyId);
+      setDiffs(fetched);
+      if (fetched.some((diff) => diff.drifted)) {
+        setReviewStatus("原文が動いています。範囲を再登録してから承認してください。");
+      }
+    } catch (cause: unknown) {
+      setReviewMessage(describeIsolationError(cause));
+    } finally {
+      setReviewBusy(false);
+    }
+  }, [aiProposal]);
+
+  // Register the exact selected snapshot as an isolated staging copy.
+  // Sending always pairs this registration with onProposal above.
+  // Copies stay pinned by Rust until stream settlement; cancel only touches
+  // settled copies, and pin refusals surface as actionable io errors.
+  const registerStaging = useCallback(async () => {
+    if (!registry) {
+      setNotice(READONLY_MESSAGE);
+      return;
+    }
+    const contexts = aiContextsRef.current;
+    if (contexts.length === 0) {
+      setNotice("送信範囲がありません。文書を開いて選択してください。");
+      return;
+    }
+    setStagingBusy(true);
+    try {
+      if (stagingRef.current) {
+        await cancelIsolatedCopy(stagingRef.current).catch(() => undefined);
+      }
+      const info = await createIsolatedCopy(contexts);
+      setStaging({ copyId: info.copyId });
+      setStagingBasis({ documentId: contexts[0].documentId, revision: contexts[0].revision });
+      setDiffs([]);
+      setOutcomes([]);
+      setAiProposal(null);
+      setReviewMessage(null);
+      setReviewStatus("送信範囲を登録しました。");
+    } catch (cause) {
+      setNotice(describeIsolationError(cause));
+    } finally {
+      setStagingBusy(false);
+    }
+  }, [registry]);
 
   useEffect(() => {
     setAiDismissed(false);
   }, [activeId]);
+
+  const fetchReviewDiff = useCallback(async () => {
+    const copyId = stagingRef.current;
+    if (!copyId) return;
+    setReviewBusy(true);
+    try {
+      const fetched = await fetchIsolationDiff(copyId);
+      setDiffs(fetched);
+      setReviewMessage(null);
+      setReviewStatus(fetched.some((diff) => diff.drifted) ? "原文が動いています。範囲を再登録してから承認してください。" : null);
+    } catch (cause) {
+      setReviewMessage(describeIsolationError(cause));
+    } finally {
+      setReviewBusy(false);
+    }
+  }, []);
+
+  const clearStaging = useCallback(() => {
+    setStaging(null);
+    setStagingBasis(null);
+    setDiffs([]);
+    setOutcomes([]);
+    setReviewMessage(null);
+    setReviewStatus(null);
+  }, []);
+
+  const approveStaging = useCallback(async () => {
+    const copyId = stagingRef.current;
+    if (!copyId) return;
+    if (diffs.some((diff) => diff.drifted)) {
+      setReviewMessage("原文が動いています。範囲を再登録してから承認してください。");
+      return;
+    }
+    setReviewBusy(true);
+    try {
+      const result = await approveIsolatedCopy(copyId);
+      setOutcomes(result.outcomes);
+      // Applied buffers moved in Neovim; pull fresh snapshots so the shell
+      // shows the same text, then refresh mode/cursor. Partial application
+      // is never presented as all-or-nothing; failures keep their errors
+      // in outcomes and ask for a fresh copy.
+      if (registry) {
+        for (const outcome of result.outcomes) {
+          if (!outcome.applied) continue;
+          try {
+            mergeSnapshot(await registry.fetchSnapshot(outcome.documentId));
+          } catch {
+            // Snapshot fetch failure leaves text as-is; outcome already
+            // records the applied revision.
+          }
+        }
+        if (activeRef.current) await refreshModeCursor(activeRef.current);
+      }
+      const failed = result.outcomes.filter((outcome) => !outcome.applied);
+      setStaging(null);
+      setStagingBasis(null);
+      setDiffs([]);
+      setAiProposal(null);
+      if (failed.length === 0) {
+        setReviewMessage(null);
+        setReviewStatus("承認して適用しました。");
+        setNotice("承認して適用しました。保存は保存ボタンで行います。");
+      } else {
+        setReviewMessage(
+          `${failed.length} 文書が未適用です: ${failed.map((outcome) => `${outcome.documentId}${outcome.error ? ` (${outcome.error})` : ""}`).join(", ")}。`,
+        );
+        setReviewStatus("失敗時は新規コピーで再同期してください。");
+        setNotice("一部が未適用です。承認結果を確認してください。");
+      }
+    } catch (cause) {
+      setReviewMessage(describeIsolationError(cause));
+      setReviewStatus("再同期して範囲を再登録してください。");
+    } finally {
+      setReviewBusy(false);
+    }
+  }, [diffs, registry, mergeSnapshot, refreshModeCursor]);
+
+  const rejectStaging = useCallback(async () => {
+    const copyId = stagingRef.current;
+    if (!copyId) return;
+    setReviewBusy(true);
+    try {
+      await rejectIsolatedCopy(copyId);
+      clearStaging();
+      setAiProposal(null);
+      setNotice("提案を却下しました。原文とディスクは変更していません。");
+    } catch (cause) {
+      setReviewMessage(describeIsolationError(cause));
+    } finally {
+      setReviewBusy(false);
+    }
+  }, [clearStaging]);
+
+  // Runs settle inside AiPanel.stop before this cleanup discards the copy.
+  const cancelStaging = useCallback(async () => {
+    const copyId = stagingRef.current;
+    if (!copyId) return;
+    setReviewBusy(true);
+    try {
+      await cancelIsolatedCopy(copyId);
+      clearStaging();
+      setAiProposal(null);
+      setNotice("取り消しました。原文とディスクは変更していません。");
+    } catch (cause) {
+      setReviewMessage(describeIsolationError(cause));
+    } finally {
+      setReviewBusy(false);
+    }
+  }, [clearStaging]);
+
+  // Closing the AI sidebar settles by discarding its unused copy.
+  useEffect(() => {
+    if (showAi || !stagingRef.current) return;
+    const copyId = stagingRef.current;
+    clearStaging();
+    void cancelIsolatedCopy(copyId).catch(() => undefined);
+  }, [showAi, clearStaging]);
 
   const createFile = useCallback(async () => {
     if (!registry) {
@@ -1151,28 +1586,37 @@ export function WorkspaceShell() {
   );
 
   return (
-    <div data-theme={theme} data-testid="workspace-shell" className="flex min-h-screen bg-background text-foreground">
-      <nav aria-label="アクティビティ" className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-border bg-card/50 py-3">
-        <button
-          type="button"
-          onClick={() => setShowSidebar((value) => !value)}
-          aria-pressed={showSidebar}
-          aria-label="エクスプローラー表示切替"
-          title="エクスプローラー"
-          className={`rounded-md p-2 hover:bg-muted ${showSidebar ? "text-primary" : "text-muted-foreground"}`}
-        >
-          <Files size={18} aria-hidden="true" />
-        </button>
+    <div data-theme={theme} data-testid="workspace-shell" className="flex h-dvh overflow-hidden bg-background text-foreground">
+      <nav aria-label="アクティビティ" className="flex w-11 shrink-0 flex-col items-center gap-1 border-r border-border bg-card/50 py-2">
+        {(
+          [
+            { id: "explorer", label: "エクスプローラー", icon: <Files size={17} aria-hidden="true" /> },
+            { id: "search", label: "検索", icon: <Search size={17} aria-hidden="true" /> },
+            { id: "outline", label: "アウトライン", icon: <ListTree size={17} aria-hidden="true" /> },
+          ] as Array<{ id: SideView; label: string; icon: ReactNode }>
+        ).map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => setSideView((current) => (current === item.id ? null : item.id))}
+            aria-pressed={sideView === item.id}
+            aria-label={item.label}
+            title={item.label}
+            className={`rounded-md p-2 hover:bg-muted ${sideView === item.id ? "text-primary" : "text-muted-foreground"}`}
+          >
+            {item.icon}
+          </button>
+        ))}
         {desktop && (
           <button
             type="button"
             onClick={() => setShowAi((value) => !value)}
             aria-pressed={showAi}
-            aria-label="AI表示切替"
+            aria-label="AI"
             title="AI 支援"
             className={`rounded-md p-2 hover:bg-muted ${showAi ? "text-primary" : "text-muted-foreground"}`}
           >
-            <Bot size={18} aria-hidden="true" />
+            <Bot size={17} aria-hidden="true" />
           </button>
         )}
         <button
@@ -1182,59 +1626,129 @@ export function WorkspaceShell() {
           title="設定"
           className="rounded-md p-2 text-muted-foreground hover:bg-muted"
         >
-          <SettingsIcon size={18} aria-hidden="true" />
+          <SettingsIcon size={17} aria-hidden="true" />
         </button>
       </nav>
-      {showSidebar && (
-        <aside className="hidden w-64 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border bg-card/50 py-4 md:flex" aria-label="サイドバー">
-          <FileTree nodes={treeNodes} activePath={active?.path ?? null} onOpenFile={(path) => void openFile(path)} />
-          <SearchPanel
-            query={searchQuery}
-            onQuery={setSearchQuery}
-            hits={desktop ? registryHits : localHits}
-            searching={searching}
-            canReplace={desktop}
-            replaceText={replaceText}
-            onReplaceText={setReplaceText}
-            onJump={(hit) => void jumpToHit(hit)}
-            onReplaceOne={(hit) => void replaceOne(hit)}
-            onReplaceAll={() => void replaceAllMatches()}
-          />
-          <Outline
-            text={active?.text ?? ""}
-            onJump={(offset) => {
-              if (active) void jumpToOffset(active.documentId, offset, offset);
-            }}
-          />
+      {sideView && (
+        <aside className="hidden w-60 shrink-0 flex-col overflow-y-auto border-r border-border bg-card/50 py-3 md:flex" aria-label="サイドバー">
+          {sideView === "explorer" && (
+            <div className="flex flex-col gap-2 px-2">
+              <div className="flex items-center gap-1 px-1">
+                <span className="min-w-0 flex-1 truncate text-xs font-semibold tracking-wider text-muted-foreground">エクスプローラー</span>
+                {desktop && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void pickFolderAndOpen()}
+                      aria-label="フォルダーを開く"
+                      title="フォルダーを開く"
+                      className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"
+                    >
+                      <FolderOpen size={15} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setManualFolder((value) => !value)}
+                      aria-expanded={manualFolder}
+                      aria-label="パスを入力する"
+                      title="パスを入力する"
+                      className="rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted"
+                    >
+                      パス
+                    </button>
+                  </>
+                )}
+              </div>
+              {desktop && manualFolder && (
+                <div className="flex gap-1 px-1">
+                  <input
+                    value={folderInput}
+                    onChange={(event) => setFolderInput(event.target.value)}
+                    placeholder="フォルダーの絶対パス…"
+                    aria-label="開くフォルダーの絶対パス"
+                    className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs"
+                  />
+                  <button type="button" onClick={() => void openWorkspaceFolder(folderInput)} className="rounded-md border border-border px-2 py-1.5 text-xs">
+                    開く
+                  </button>
+                </div>
+              )}
+              {desktop && wsRoot && <p className="truncate px-2 text-[11px] text-muted-foreground" title={wsRoot}>{wsRoot}</p>}
+              <FileTree nodes={treeNodes} activePath={active?.path ?? null} onOpenFile={(path) => void openFile(path)} />
+              {desktop && !wsRoot && (
+                <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
+                  <p className="mb-2">フォルダーを開いてください。</p>
+                  <button
+                    type="button"
+                    onClick={() => void pickFolderAndOpen()}
+                    className="w-full rounded-md border border-border px-2 py-1.5"
+                  >
+                    フォルダーを開く
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          {sideView === "search" && (
+            <SearchPanel
+              query={searchQuery}
+              onQuery={setSearchQuery}
+              hits={desktop ? registryHits : localHits}
+              searching={searching}
+              canReplace={desktop}
+              replaceText={replaceText}
+              onReplaceText={setReplaceText}
+              onJump={(hit) => void jumpToHit(hit)}
+              onReplaceOne={(hit) => void replaceOne(hit)}
+              onReplaceAll={() => void replaceAllMatches()}
+            />
+          )}
+          {sideView === "outline" && (
+            <Outline
+              text={active?.text ?? ""}
+              onJump={(offset) => {
+                if (active) void jumpToOffset(active.documentId, offset, offset);
+              }}
+            />
+          )}
         </aside>
       )}
 
       <div className="relative flex min-w-0 flex-1 flex-col">
-        <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
-          <div role="group" aria-label="表示モード" className="flex gap-1">
+        <header className="flex h-10 shrink-0 items-center gap-1 border-b border-border px-2">
+          <span className="min-w-0 flex-1 truncate px-1 text-xs text-muted-foreground" title={active?.path ?? "Marxen"}>
+            {active ? (
+              <>
+                {fileLabel(active.path, active.documentId)}
+                {active.dirty ? " ●" : ""}
+              </>
+            ) : (
+              "Marxen"
+            )}
+          </span>
+          <label className="sr-only" htmlFor="view-mode-select">表示モード</label>
+          <select
+            id="view-mode-select"
+            value={viewMode}
+            onChange={(event) => setViewMode(event.target.value as ViewMode)}
+            aria-label="表示モード"
+            className="h-7 rounded-md border border-border bg-background px-1 text-xs"
+          >
             {(Object.keys(MODE_LABEL) as ViewMode[]).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => setViewMode(mode)}
-                aria-pressed={viewMode === mode}
-                className={`rounded-md px-3 py-1.5 text-sm ${viewMode === mode ? "bg-primary text-primary-foreground" : "border border-border"}`}
-              >
+              <option key={mode} value={mode}>
                 {MODE_LABEL[mode]}
-              </button>
+              </option>
             ))}
-          </div>
-          <button type="button" onClick={() => setShowRaw((value) => !value)} aria-pressed={showRaw} className="rounded-md border border-border px-3 py-1.5 text-sm">
-            原文ビュー
-          </button>
-          <button type="button" onClick={() => setQuickOpen(true)} className="rounded-md border border-border px-3 py-1.5 text-sm">
-            クイックオープン
-          </button>
-          <button type="button" onClick={() => setPalette(true)} className="rounded-md border border-border px-3 py-1.5 text-sm">
-            コマンド
-          </button>
-          <button type="button" onClick={() => setSettings(true)} className="rounded-md border border-border px-3 py-1.5 text-sm">
-            設定
+          </select>
+          <button
+            type="button"
+            onClick={() => void handleSave()}
+            disabled={!desktop}
+            title={desktop ? "保存" : READONLY_MESSAGE}
+            aria-label="保存"
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted disabled:opacity-50"
+          >
+            <Save size={15} aria-hidden="true" />
           </button>
           {desktop && (
             <button
@@ -1242,149 +1756,158 @@ export function WorkspaceShell() {
               onClick={() => setShowAi((value) => !value)}
               aria-pressed={showAi}
               aria-label="AI 支援"
-              className={`rounded-md border border-border px-3 py-1.5 text-sm ${showAi ? "bg-primary text-primary-foreground" : ""}`}
+              title="AI 支援"
+              className={`rounded-md p-1.5 hover:bg-muted ${showAi ? "text-primary" : "text-muted-foreground"}`}
             >
-              AI
+              <Bot size={15} aria-hidden="true" />
             </button>
           )}
-          <div role="group" aria-label="移動基準" className="flex gap-1">
-            {(["display", "source"] as NavBasis[]).map((basis) => (
-              <button
-                key={basis}
-                type="button"
-                onClick={() => setNavBasis(basis)}
-                aria-pressed={navBasis === basis}
-                title={basis === "display" ? "折り返し行の上下・行頭末は表示基準で移動します" : "上下・行頭末・単語・テキストオブジェクト・マクロは実 Neovim の原文基準で動作します"}
-                className={`rounded-md px-2 py-1.5 text-xs ${navBasis === basis ? "bg-primary text-primary-foreground" : "border border-border"}`}
-              >
-                {basis === "display" ? "表示基準" : "原文基準"}
-              </button>
-            ))}
-          </div>
-          <span role="status" className="ml-auto text-xs text-muted-foreground">
-            {runtime ? (runtime.connection === "disconnected" ? "Neovim 未接続" : runtime.connection === "connected" ? "Neovim 接続済み" : runtime.detail) : "接続状態を確認中…"}
-          </span>
+          <button
+            type="button"
+            onClick={() => setMoreOpen((value) => !value)}
+            aria-expanded={moreOpen}
+            aria-label="その他の操作"
+            title="その他の操作"
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"
+          >
+            <Ellipsis size={15} aria-hidden="true" />
+          </button>
         </header>
-
-        {desktop ? (
-          <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2" aria-label="フォルダー">
-            <input
-              value={folderInput}
-              onChange={(event) => setFolderInput(event.target.value)}
-              placeholder="フォルダーの絶対パス…"
-              aria-label="開くフォルダーの絶対パス"
-              className="min-w-40 flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-sm"
-            />
-            <button type="button" onClick={() => void openWorkspaceFolder(folderInput)} className="rounded-md border border-border px-3 py-1.5 text-sm">
-              フォルダーを開く
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                void (async () => {
-                  const picked = await pickFolder();
-                  if (picked) {
-                    setFolderInput(picked);
-                    await openWorkspaceFolder(picked);
+        {moreOpen && (
+          <div role="menu" aria-label="その他の操作" className="absolute inset-x-0 top-10 z-20 mx-auto max-w-lg rounded-lg border border-border bg-card p-3 shadow-lg">
+            <p className="mb-1 text-xs font-semibold text-muted-foreground">書式</p>
+            <GuiToolbar
+                onFormat={(kind: FormatKind) => guiAtSelection((text, start, end) => formatRange(text, start, end, kind))}
+                onCheckbox={() => {
+                  const id = activeRef.current;
+                  if (!id || !registry) {
+                    setNotice(READONLY_MESSAGE);
+                    return;
                   }
-                })()
-              }
-              aria-label="フォルダーを参照する"
-              className="rounded-md border border-border px-3 py-1.5 text-sm"
-            >
-              参照…
-            </button>
-            {wsRoot && <span className="max-w-full truncate text-xs text-muted-foreground">{wsRoot}</span>}
+                  const current = docsRef.current[id];
+                  if (!current) return;
+                  const sel = selections[id] ?? { anchor: 0, head: 0 };
+                  void applyEdits(id, toggleCheckbox(current.text, Math.min(sel.head, current.text.length)));
+                }}
+                onTable={() => {
+                  const id = activeRef.current;
+                  if (!id || !registry) {
+                    setNotice(READONLY_MESSAGE);
+                    return;
+                  }
+                  const current = docsRef.current[id];
+                  if (!current) return;
+                  const sel = selections[id] ?? { anchor: 0, head: 0 };
+                  void applyEdits(id, insertTable(Math.min(sel.head, current.text.length), 2, 2));
+                }}
+                onTableRow={() => {
+                  const id = activeRef.current;
+                  if (!id || !registry) {
+                    setNotice(READONLY_MESSAGE);
+                    return;
+                  }
+                  const current = docsRef.current[id];
+                  if (!current) return;
+                  const sel = selections[id] ?? { anchor: 0, head: 0 };
+                  try {
+                    void applyEdits(id, tableAddRow(current.text, Math.min(sel.head, current.text.length)));
+                  } catch (cause) {
+                    setNotice(workspaceErrorText(cause));
+                  }
+                }}
+                onTableColumn={() => {
+                  const id = activeRef.current;
+                  if (!id || !registry) {
+                    setNotice(READONLY_MESSAGE);
+                    return;
+                  }
+                  const current = docsRef.current[id];
+                  if (!current) return;
+                  const sel = selections[id] ?? { anchor: 0, head: 0 };
+                  try {
+                    void applyEdits(id, tableAddColumn(current.text, Math.min(sel.head, current.text.length)));
+                  } catch (cause) {
+                    setNotice(workspaceErrorText(cause));
+                  }
+                }}
+                onLink={() => guiAtSelection((text, start, end) => insertLink(text, start, end, "https://example.com"))}
+                onImage={() => guiAtSelection((text, start, end) => insertImage(text, start, end, "images/paste.png"))}
+                onUndo={() => void handleUndo()}
+                onRedo={() => void handleRedo()}
+                vimMode={MODE_JA[vimMode] ?? vimMode}
+                disabled={!desktop}
+              />
+            <div role="group" aria-label="移動基準" className="mt-2 flex gap-1">
+              {(["display", "source"] as NavBasis[]).map((basis) => (
+                <button
+                  key={basis}
+                  type="button"
+                  onClick={() => {
+                    setNavBasis(basis);
+                    setMoreOpen(false);
+                  }}
+                  aria-pressed={navBasis === basis}
+                  title={basis === "display" ? "折り返し行の上下・行頭末は表示基準で移動します" : "上下・行頭末・単語・テキストオブジェクト・マクロは実 Neovim の原文基準で動作します"}
+                  className={`rounded-md px-2 py-1 text-xs ${navBasis === basis ? "bg-primary text-primary-foreground" : "border border-border"}`}
+                >
+                  {basis === "display" ? "表示基準" : "原文基準"}
+                </button>
+              ))}
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-1">
+              {(
+                [
+                  ["raw", "原文ビュー"],
+                  ["quick", "クイックオープン"],
+                  ["palette", "コマンドパレット"],
+                  ["new", "新規ファイル"],
+                  ["rename", "名前を変更"],
+                  ["reload", "再読込"],
+                  ["close", "閉じる"],
+                  ["recovery", "復旧一覧"],
+                  ["settings", "設定"],
+                ] as Array<[string, string]>
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreOpen(false);
+                    if (id === "raw") setShowRaw((value) => !value);
+                    else if (id === "quick") setQuickOpen(true);
+                    else if (id === "palette") setPalette(true);
+                    else if (id === "new") {
+                      setNewFilePath("");
+                      setNewFileOpen(true);
+                    } else if (id === "rename" && activeRef.current) {
+                      const current = docsRef.current[activeRef.current];
+                      setRenamePath(current?.path ?? "");
+                      setRenameDoc(activeRef.current);
+                    } else if (id === "reload") void handleReload();
+                    else if (id === "close" && activeRef.current) void closeTab(activeRef.current);
+                    else if (id === "recovery") void refreshRecovery();
+                    else if (id === "settings") setSettings(true);
+                  }}
+                  className="rounded-md border border-border px-2 py-1.5 text-left text-xs hover:bg-muted"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
-        ) : null}
+        )}
 
-        <div className="border-b border-border px-4 pt-2">
+        <div className="border-b border-border px-2 pt-1">
           <Tabs tabs={tabItems} activeId={activeId} onSelect={setActiveId} onClose={(id) => void closeTab(id)} />
         </div>
 
-        <div className="space-y-3 px-4 py-3">
-          <GuiToolbar
-            onFormat={(kind: FormatKind) => guiAtSelection((text, start, end) => formatRange(text, start, end, kind))}
-            onCheckbox={() => {
-              const id = activeRef.current;
-              if (!id || !registry) {
-                setNotice(READONLY_MESSAGE);
-                return;
-              }
-              const current = docsRef.current[id];
-              if (!current) return;
-              const sel = selections[id] ?? { anchor: 0, head: 0 };
-              void applyEdits(id, toggleCheckbox(current.text, Math.min(sel.head, current.text.length)));
-            }}
-            onTable={() => {
-              const id = activeRef.current;
-              if (!id || !registry) {
-                setNotice(READONLY_MESSAGE);
-                return;
-              }
-              const current = docsRef.current[id];
-              if (!current) return;
-              const sel = selections[id] ?? { anchor: 0, head: 0 };
-              void applyEdits(id, insertTable(Math.min(sel.head, current.text.length), 2, 2));
-            }}
-            onTableRow={() => {
-              const id = activeRef.current;
-              if (!id || !registry) {
-                setNotice(READONLY_MESSAGE);
-                return;
-              }
-              const current = docsRef.current[id];
-              if (!current) return;
-              const sel = selections[id] ?? { anchor: 0, head: 0 };
-              try {
-                void applyEdits(id, tableAddRow(current.text, Math.min(sel.head, current.text.length)));
-              } catch (cause) {
-                setNotice(workspaceErrorText(cause));
-              }
-            }}
-            onTableColumn={() => {
-              const id = activeRef.current;
-              if (!id || !registry) {
-                setNotice(READONLY_MESSAGE);
-                return;
-              }
-              const current = docsRef.current[id];
-              if (!current) return;
-              const sel = selections[id] ?? { anchor: 0, head: 0 };
-              try {
-                void applyEdits(id, tableAddColumn(current.text, Math.min(sel.head, current.text.length)));
-              } catch (cause) {
-                setNotice(workspaceErrorText(cause));
-              }
-            }}
-            onLink={() => guiAtSelection((text, start, end) => insertLink(text, start, end, "https://example.com"))}
-            onImage={() => guiAtSelection((text, start, end) => insertImage(text, start, end, "images/paste.png"))}
-            onUndo={() => void handleUndo()}
-            onRedo={() => void handleRedo()}
-            vimMode={MODE_JA[vimMode] ?? vimMode}
-            disabled={!desktop}
-          />
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span data-testid="revision">リビジョン {active?.revision ?? "—"}</span>
-            <span data-testid="dirty">{!active || active.dirty ? (active ? "未保存" : "—") : "保存済み"}</span>
-            {cursorPos && <span data-testid="cursor">カーソル {cursorPos}</span>}
-            {desktop && vimKeys !== "" && <span data-testid="vim-keys">Vim入力 {vimKeys}</span>}
-            <button
-              type="button"
-              onClick={() => void handleSave()}
-              disabled={!desktop}
-              title={desktop ? undefined : READONLY_MESSAGE}
-              className="rounded-md border border-border px-3 py-1 text-xs disabled:opacity-50"
-            >
-              保存
-            </button>
-            {!desktop && <span data-testid="readonly-note">ブラウザ表示は読み取り専用です</span>}
-            {notice && (
-              <span role="alert" className="rounded-md border border-border px-2 py-1">
-                {notice}
-              </span>
-            )}
-          </div>
+        <div className="min-h-0 shrink-0 space-y-2 overflow-y-auto px-2 pt-2 empty:hidden">
+          {notice && (
+            <span role="alert" className="mb-2 block truncate rounded-md border border-border px-2 py-1 text-xs">
+              {notice}
+            </span>
+          )}
           {activeExternal && active && (
             <div role="alert" data-testid="external-banner" className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3 text-xs">
               <span>
@@ -1506,13 +2029,13 @@ export function WorkspaceShell() {
 
         {/* Live stacks editor over its rendered preview (inline live
             renderer); only split lays two panes side by side. */}
-        <main className={`mx-auto grid min-h-0 w-full max-w-5xl flex-1 gap-3 px-4 pb-4 ${viewMode === "split" ? "md:grid-cols-2" : ""}`} aria-label="編集領域">
+        <main className={`grid min-h-0 flex-1 gap-2 overflow-y-auto px-2 pb-2 ${viewMode === "split" ? "md:grid-cols-2" : ""}`} aria-label="編集領域">
           {/* One editor-primary at a time: live owns the inline preview
               pane, source/split own the raw pane. Selections live in shell
               state so scroll/cursor survive mode switches. */}
           {active ? (
             viewMode === "live" ? (
-              <div ref={previewWrap} onKeyDownCapture={onEditorKeyDown} onPaste={onEditorPaste} className="min-h-80">
+              <div onKeyDownCapture={onEditorKeyDown} onPaste={onEditorPaste} className="min-h-0">
                 <CodeMirrorEditor
                   key={`live-${active.documentId}`}
                   value={active.text}
@@ -1522,6 +2045,7 @@ export function WorkspaceShell() {
                   initialSelection={selections[active.documentId] ?? null}
                   externalCursor={cursorEcho[active.documentId] ?? null}
                   livePreview
+                  resolveImage={resolveImageProp}
                   onGuiEdits={(edits) => void applyEdits(active.documentId, edits)}
                   onSelectionChange={(selection) => handleSelection(active.documentId, selection)}
                 />
@@ -1530,7 +2054,7 @@ export function WorkspaceShell() {
               <div
                 onKeyDownCapture={onEditorKeyDown}
                 onPaste={onEditorPaste}
-                className={viewMode === "read" ? "hidden" : "min-h-80"}
+                className={viewMode === "read" ? "hidden" : "min-h-0"}
                 aria-hidden={viewMode === "read"}
               >
                 <CodeMirrorEditor
@@ -1547,17 +2071,17 @@ export function WorkspaceShell() {
               </div>
             )
           ) : (
-            <div className="min-h-80 rounded-lg border border-dashed border-border p-4 text-xs text-muted-foreground">
+            <div className="rounded-md border border-dashed border-border p-4 text-xs text-muted-foreground">
               フォルダーを開き、ツリーから Markdown ファイルを開いてください。
             </div>
           )}
           {viewMode === "read" && active && (
-            <div className="min-h-80" ref={previewWrap}>
-              <MarkdownPreview text={active.text} />
+            <div className="min-h-0">
+              <MarkdownPreview text={active.text} resolveImage={resolveImageProp} />
             </div>
           )}
           {viewMode === "split" && active && (
-            <div className="min-h-80">
+            <div className="min-h-0">
               <CodeMirrorEditor
                 key={`secondary-${active.documentId}`}
                 value={active.text}
@@ -1572,8 +2096,8 @@ export function WorkspaceShell() {
             </div>
           )}
           {viewMode === "source" && (
-            <div className="hidden min-h-80 md:block" aria-label="原文メモ">
-              <p className="rounded-lg border border-dashed border-border p-4 text-xs leading-6 text-muted-foreground">
+            <div className="hidden md:block" aria-label="原文メモ">
+              <p className="rounded-md border border-dashed border-border p-4 text-xs leading-6 text-muted-foreground">
                 原文モードではエディタのみを表示します。{navBasis === "display"
                   ? "表示基準の移動（折り返し行の上下・行頭末）はエディタ既定に従います。"
                   : "上下・行頭末・単語・テキストオブジェクト・マクロは実 Neovim の原文基準で動作します。"}
@@ -1584,17 +2108,28 @@ export function WorkspaceShell() {
         </main>
 
         {showRaw && active && (
-          <div className="px-4 pb-4">
-            <RawGridView text={active.text} lines={gridLines} revision={gridRev ?? active.revision} onRefresh={() => setGridLines(null)} />
+          <div className="shrink-0 px-2 pb-2">
+            <RawGridView
+              text={active.text}
+              revision={gridRev ?? active.revision}
+              onRefresh={handleRawGridRefresh}
+              grid={nvimGrid}
+              onVimKeys={desktop ? handleRawGridKeys : undefined}
+            />
           </div>
         )}
 
-        <footer className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border px-4 py-2 text-xs text-muted-foreground">
-          <span>{active?.path ?? "（未開封）"}</span>
-          {cursorPos && <span>カーソル {cursorPos}</span>}
-          {desktop && active && <span>モード {MODE_JA[vimMode] ?? vimMode}</span>}
-          <span>リビジョン {active?.revision ?? "—"}</span>
-          {active && <span>{active.dirty ? "未保存" : "保存済み"}</span>}
+        <footer className="flex h-[22px] shrink-0 items-center gap-3 overflow-hidden whitespace-nowrap border-t border-border px-2 text-[11px] text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate">{active?.path ?? "（未開封）"}</span>
+          {cursorPos && <span data-testid="cursor">カーソル {cursorPos}</span>}
+          {desktop && active && <span data-testid="vim-footer-mode">{MODE_JA[vimMode] ?? vimMode}</span>}
+          <span data-testid="revision">リビジョン {active?.revision ?? "—"}</span>
+          <span data-testid="dirty">{!active || active.dirty ? (active ? "未保存" : "—") : "保存済み"}</span>
+          {desktop && vimKeys !== "" && <span data-testid="vim-keys">Vim入力 {vimKeys}</span>}
+          {!desktop && <span data-testid="readonly-note">ブラウザ表示は読み取り専用です</span>}
+          <span role="status" className="shrink-0">
+            {runtime ? (runtime.connection === "disconnected" ? "Neovim 未接続" : runtime.connection === "connected" ? "Neovim 接続済み" : runtime.detail) : "接続状態を確認中…"}
+          </span>
         </footer>
 
         <QuickOpen
@@ -1632,7 +2167,39 @@ export function WorkspaceShell() {
 
       {showAi && desktop && (
         <aside data-testid="ai-sidebar" aria-label="AI サイドバー" className="hidden w-80 shrink-0 overflow-y-auto border-l border-border bg-card/50 p-3 md:block">
-          <AiPanel contexts={aiContexts} staging={null} onRemoveContext={() => setAiDismissed(true)} onProposal={handleProposal} />
+          <AiPanel contexts={aiContexts} staging={staging} onRemoveContext={() => setAiDismissed(true)} onProposal={handleProposal} />
+          <div className="mt-3 rounded-lg border border-border bg-card p-3 text-xs">
+            <p className="font-medium">送信範囲の登録</p>
+            <p className="mt-1 text-muted-foreground">
+              {staging && stagingBasis
+                ? `作業コピー ${staging.copyId}（${stagingBasis.documentId} rev ${stagingBasis.revision}）`
+                : "未登録。送信前に正確な範囲を登録します。"}
+            </p>
+            <button
+              type="button"
+              onClick={() => void registerStaging()}
+              disabled={stagingBusy || aiContexts.length === 0}
+              className="mt-2 w-full rounded-md border border-border px-3 py-1.5 disabled:opacity-50"
+            >
+              {stagingBusy ? "登録中…" : staging ? "範囲を再登録" : "送信範囲を登録する"}
+            </button>
+          </div>
+          <div className="mt-3">
+            <ReviewPanel
+              copyId={staging?.copyId ?? null}
+              diffs={diffs}
+              outcomes={outcomes}
+              busy={reviewBusy || stagingBusy}
+              message={reviewMessage}
+              status={reviewStatus}
+              proposalText={aiProposal?.proposal.text ?? null}
+              onFetchDiff={() => void fetchReviewDiff()}
+              onStageProposal={aiProposal && staging ? () => void stageStoredProposal() : null}
+              onApprove={() => void approveStaging()}
+              onReject={() => void rejectStaging()}
+              onCancel={() => void cancelStaging()}
+            />
+          </div>
           {aiDismissed && active && (
             <button type="button" onClick={() => setAiDismissed(false)} className="mt-2 w-full rounded-md border border-border px-3 py-1.5 text-xs">
               現在の選択を送る
@@ -1645,7 +2212,7 @@ export function WorkspaceShell() {
               <p className="mt-1 text-muted-foreground">
                 基準: {aiProposal.proposal.baseContexts.map((ref) => `${ref.documentId} rev ${ref.revision}`).join(", ")}
               </p>
-              <p className="mt-1 text-muted-foreground">適用は差分レビュー (#8) で行います。</p>
+              <p className="mt-1 text-muted-foreground">適用は上の差分レビューで行います。</p>
               <button type="button" onClick={() => setAiProposal(null)} className="mt-2 w-full rounded-md border border-border px-3 py-1.5">
                 却下する
               </button>
