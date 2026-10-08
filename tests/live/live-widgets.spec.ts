@@ -65,6 +65,19 @@ test("task checkbox emits a minimal range edit preserving unrelated bytes", asyn
   expect(after.slice(lineStart, lineEnd)).toBe("- [x] 未完了タスク");
 });
 
+test("rendered list and table use compact document spacing", async ({ page }) => {
+  await page.goto("/tests/live/harness/live.html");
+  await page.evaluate(() => window.__harness.setValue("# 見出し\n\n- [ ] 一つ\n- [ ] 二つ\n\n| 項目 | 状態 |\n| --- | --- |\n| 原文 | 保持 |\n"));
+  const list = page.locator(".marxen-live-widget ul");
+  const table = page.locator(".marxen-live-widget table");
+  await expect(table).toBeVisible();
+  const listBox = await list.boundingBox();
+  const tableBox = await table.boundingBox();
+  expect(listBox).not.toBeNull();
+  expect(tableBox).not.toBeNull();
+  expect(tableBox!.y - (listBox!.y + listBox!.height)).toBeLessThan(90);
+});
+
 test("table cell click selects the source span; typing preserves neighbours", async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto("/tests/live/harness/live.html");
