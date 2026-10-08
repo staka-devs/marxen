@@ -383,6 +383,7 @@ export function WorkspaceShell() {
       try {
         const info = await workspaceApi.openWorkspace(trimmed);
         setWsRoot(info.root);
+        setManualFolder(false);
         await loadEntries();
         const open = await workspaceApi.listDocuments();
         const next: Record<string, OpenDoc> = {};
@@ -2290,6 +2291,7 @@ export function WorkspaceShell() {
                   livePreview
                   preferences={preferences}
                   vimMode={vimMode}
+                  allowTextInput={vimMode === "insert" || vimMode === "replace"}
                   resolveImage={liveResolver}
                   onGuiEdits={(edits) => void applyEdits(active.documentId, edits)}
                   onSelectionChange={(selection) => handleSelection(active.documentId, selection)}
@@ -2311,6 +2313,7 @@ export function WorkspaceShell() {
                   testId="editor-primary"
                   preferences={preferences}
                   vimMode={vimMode}
+                  allowTextInput={vimMode === "insert" || vimMode === "replace"}
                   initialSelection={selections[active.documentId] ?? null}
                   externalCursor={cursorEcho[active.documentId] ?? null}
                   onGuiEdits={(edits) => void applyEdits(active.documentId, edits)}

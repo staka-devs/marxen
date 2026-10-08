@@ -115,6 +115,7 @@ function Harness() {
         livePreview
         preferences={preferences}
         vimMode={vimMode}
+        allowTextInput={vimMode === "insert" || vimMode === "replace"}
         externalCursor={cursor}
         resolveImage={resolveImage}
         onGuiEdits={(list) => {

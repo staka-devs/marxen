@@ -66,6 +66,21 @@ test("cancelled browser IME composition sends no edit", async ({ page, context }
   await input.detach();
 });
 
+test("Normal mode IME cannot commit text into the Vim document", async ({ page, context }) => {
+  await page.goto("/tests/live/harness/live.html");
+  const before = "Vim の本文😀\n";
+  await page.evaluate((text) => { window.__harness.setValue(text); window.__harness.setVimMode("normal"); window.__harness.echoCursor(0, 0); }, before);
+  await page.locator(".cm-content").focus();
+  const input = await context.newCDPSession(page);
+  await input.send("Input.imeSetComposition", { text: "にほんご", selectionStart: 4, selectionEnd: 4 });
+  await input.send("Input.insertText", { text: "日本語" });
+  await expect.poll(() => page.locator(".cm-content").innerText()).toContain("Vim の本文😀");
+  await expect(page.locator(".cm-content")).not.toContainText("日本語");
+  expect(await harnessValue(page)).toBe(before);
+  expect(await page.evaluate(() => window.__harness.getEdits())).toEqual([]);
+  await input.detach();
+});
+
 // Issue #6 live widgets: real inline preview inside CodeMirror.
 // The harness mounts ONE CodeMirrorEditor with livePreview and no separate
 // preview pane. Meaningful assertions target widgets INSIDE `.cm-content`.

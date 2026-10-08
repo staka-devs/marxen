@@ -46,6 +46,7 @@ interface Props {
   resolveImage?: ImageResolver;
   preferences?: EditorPreferences;
   vimMode?: string;
+  allowTextInput?: boolean;
 }
 
 /** Common prefix/suffix diff as a single wire range edit. */
@@ -94,7 +95,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   return [{ range: { start, end: endBefore }, text: after.slice(start, endAfter) }];
 }
 
-export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert" }: Props) {
+export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const editableRef = useRef(new Compartment());
@@ -103,6 +104,10 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
   const syncing = useRef(false);
   const composing = useRef(false);
   const preComposition = useRef<string | null>(null);
+  const preCompositionSelection = useRef<EditorSelection | null>(null);
+  const compositionAllowed = useRef(true);
+  const allowTextInputRef = useRef(allowTextInput);
+  allowTextInputRef.current = allowTextInput;
   const callbacks = useRef({ onGuiEdits, onSelectionChange });
   callbacks.current = { onGuiEdits, onSelectionChange };
   const valueRef = useRef(value);
@@ -178,6 +183,8 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
     const onStart = () => {
       composing.current = true;
       preComposition.current = view.state.doc.toString();
+      preCompositionSelection.current = { anchor: view.state.selection.main.anchor, head: view.state.selection.main.head };
+      compositionAllowed.current = allowTextInputRef.current;
     };
     const onEnd = () => {
       if (!composing.current) return;
@@ -185,6 +192,14 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
       const before = preComposition.current ?? valueRef.current;
       const afterText = view.state.doc.toString();
       preComposition.current = null;
+      if (!compositionAllowed.current && !allowTextInputRef.current) {
+        syncing.current = true;
+        const prior = preCompositionSelection.current;
+        const selection = prior ? { anchor: Math.min(prior.anchor, valueRef.current.length), head: Math.min(prior.head, valueRef.current.length) } : undefined;
+        try { view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: valueRef.current }, selection }); }
+        finally { syncing.current = false; }
+        return;
+      }
       const edits = singleEditFromDiff(before, afterText);
       if (edits) callbacks.current.onGuiEdits?.(edits);
     };
