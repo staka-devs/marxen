@@ -1,0 +1,77 @@
+/* Compact VSCode/Obsidian-style chat surfaces.
+   Owned by the Issue #17 AI-chat work: imported only by ai-panel.tsx and
+   ai-inline-chat.tsx. Every rule is scoped to these two components; shared
+   Button / styles.css / shell / settings / ReviewPanel are untouched. */
+
+.ai-chat-panel .ai-chat-history-select,
+.ai-chat-panel .ai-chat-mode-select {
+  height: 28px;
+  max-width: 100%;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background-color: transparent;
+  color: var(--foreground);
+  font-size: 11px;
+  line-height: 1.2;
+  padding: 0 2px;
+}
+
+.ai-chat-panel .ai-chat-history-select:hover,
+.ai-chat-panel .ai-chat-mode-select:hover {
+  background-color: var(--muted);
+}
+
+.ai-chat-panel .ai-chat-history-select:focus-visible,
+.ai-chat-panel .ai-chat-mode-select:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+/* Unified composer: one quiet box holds mode, input, and actions. */
+.ai-chat-composer-box {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background-color: var(--card);
+}
+
+.ai-chat-composer-box:focus-within {
+  border-color: var(--primary);
+}
+
+.ai-chat-composer-input {
+  background-color: transparent;
+  border: none;
+  resize: none;
+}
+
+.ai-chat-composer-input:focus {
+  outline: none;
+}
+
+/* Visually quiet actions: icon + short label, no heavy chrome. */
+.ai-chat-action {
+  gap: 4px;
+}
+
+.ai-chat-action svg {
+  flex-shrink: 0;
+}
+
+/* Connection settings stay collapsed and muted at the bottom of the pane.
+   The settings component itself is root-owned and unchanged. */
+.ai-chat-settings details {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.ai-chat-settings summary {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  padding: 4px 8px;
+}
+
+.ai-chat-inline-excerpt {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background-color: color-mix(in srgb, var(--muted) 45%, transparent);
+}

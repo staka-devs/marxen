@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Send, Square, X } from "lucide-react";
 import { Button } from "./ui/button";
+import "./ai-chat.css";
 import { MarkdownPreview } from "./preview/MarkdownPreview";
 import { describeAiError, startPrompt } from "../lib/ai";
 import {
@@ -212,57 +214,61 @@ export default function InlineChat({
       role="dialog"
       aria-label="インラインチャット"
       data-testid="inline-chat"
-      className="fixed z-40 max-h-[calc(100dvh-24px)] w-96 max-w-[calc(100vw-24px)] overflow-y-auto rounded-md border border-border bg-card p-3 shadow-lg"
+      className="ai-chat-inline fixed z-40 max-h-[calc(100dvh-24px)] w-80 max-w-[calc(100vw-24px)] overflow-y-auto rounded-md border border-border bg-card px-2.5 py-2 shadow-lg"
       style={anchor ? position : undefined}
       onKeyDown={handleKeyDown}
     >
       <div className="flex items-center gap-1">
-        <p className="min-w-0 flex-1 truncate text-xs font-medium">
+        <p className="min-w-0 flex-1 truncate text-[11px] font-semibold">
           インラインチャット（{target.kind === "selection" ? "選択" : "段落"}）
         </p>
         <button
           type="button"
           aria-label="インラインチャットを閉じる"
           title="閉じる"
-          className="rounded px-1.5 py-0.5 text-xs hover:bg-muted"
+          className="shrink-0 rounded p-1 hover:bg-muted"
           onClick={() => {
             void handleCancel().finally(() => onClose());
           }}
         >
-          ×
+          <X size={13} aria-hidden="true" />
         </button>
       </div>
-      <p className="mt-1 truncate text-[11px] text-muted-foreground" title={`rev ${context.revision}`}>
+      <p className="mt-0.5 truncate text-[11px] text-muted-foreground" title={`rev ${context.revision}`}>
         {documentLabel}
       </p>
       {target.excerpt !== "" && (
-        <p className="mt-1 max-h-20 overflow-y-auto whitespace-pre-wrap rounded-md border border-border p-1.5 text-[11px]">
+        <p className="ai-chat-inline-excerpt mt-1.5 max-h-20 overflow-y-auto whitespace-pre-wrap p-1.5 text-[11px] text-muted-foreground">
           {target.excerpt}
         </p>
       )}
-      <textarea
-        ref={inputRef}
-        aria-label="インライン指示"
-        className="mt-1 block max-h-32 w-full overflow-y-auto rounded-md border border-border bg-card px-2 py-1.5 text-xs"
-        rows={2}
-        value={prompt}
-        onChange={(event) => setPrompt(event.target.value)}
-        placeholder="選択範囲への指示を書きます"
-      />
-      <div className="mt-1 flex gap-1">
-        <Button size="sm" aria-label="インライン送信" onClick={() => void handleSend()} disabled={running || disabled || prompt.trim() === ""}>
-          {running ? "送信中…" : "送信"}
-        </Button>
-        {running && (
-          <Button variant="outline" size="sm" aria-label="インライン取消" onClick={() => void handleCancel()}>
-            取消
+      <div className="ai-chat-composer-box mt-1.5 px-1.5 pb-1.5 pt-1">
+        <textarea
+          ref={inputRef}
+          aria-label="インライン指示"
+          className="ai-chat-composer-input block max-h-32 min-h-10 w-full overflow-y-auto px-1 py-1 text-xs"
+          rows={2}
+          value={prompt}
+          onChange={(event) => setPrompt(event.target.value)}
+          placeholder="選択範囲への指示を書きます"
+        />
+        <div className="mt-1 flex items-center gap-1">
+          <Button size="sm" aria-label="インライン送信" title="インライン送信" onClick={() => void handleSend()} disabled={running || disabled || prompt.trim() === ""} className="ai-chat-action shrink-0">
+            <Send size={13} aria-hidden="true" />
+            {running ? "送信中…" : "送信"}
           </Button>
-        )}
-        {proposal && (
-          <Button variant="outline" size="sm" aria-label="差分を確認" title="提案を作業コピーに取り込み差分を確認します" onClick={onReview}>
-            差分を確認
-          </Button>
-        )}
+          {running && (
+            <Button variant="outline" size="sm" aria-label="インライン取消" title="インライン取消" onClick={() => void handleCancel()} className="ai-chat-action shrink-0">
+              <Square size={12} aria-hidden="true" />
+              取消
+            </Button>
+          )}
+          {proposal && (
+            <Button variant="outline" size="sm" aria-label="差分を確認" title="提案を作業コピーに取り込み差分を確認します" onClick={onReview} className="ai-chat-action shrink-0">
+              差分を確認
+            </Button>
+          )}
+        </div>
       </div>
       {disabled && <p className="mt-1 text-[11px] text-muted-foreground">他の応答を生成しています。</p>}
       <div aria-live="polite" className="mt-1">
