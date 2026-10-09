@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { hydrateLocalImages, decodeImageSrc, isRelativeImageSrc, isSafeResolvedUrl, type ImageResolver } from "./images";
+import { hydrateLocalImages, decodeImageSrc, isRelativeImageSrc, isSafeResolvedUrl, type ImageResolver } from "./preview-images";
 
 describe("isRelativeImageSrc", () => {
   it("detects author-relative sources including Unicode names", () => {

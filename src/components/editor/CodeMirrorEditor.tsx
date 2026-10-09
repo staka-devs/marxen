@@ -4,7 +4,7 @@ import { EditorView, lineNumbers, drawSelection, highlightActiveLine, highlightA
 import { markdown } from "@codemirror/lang-markdown";
 import type { TextEdit } from "../../shared/contracts";
 import { createLivePreview, type LivePreviewCallbacks } from "./livePreview";
-import type { ImageResolver } from "../preview/images";
+import type { ImageResolver } from "../../lib/preview-images";
 import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../lib/editor-preferences";
 
 export interface EditorSelection {

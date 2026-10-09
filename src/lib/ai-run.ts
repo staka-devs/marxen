@@ -36,20 +36,14 @@ export function isClaudeBlockedProvider(provider: AiProviderConfig): string | nu
 }
 
 export interface AiRun {
-  /** Current fencing token; stale callbacks compare against this. */
-  readonly token: number;
   /** Allocate the next run token and clear cancel/settled guards. */
   beginRun(): number;
   isCurrent(token: number): boolean;
   isSettled(token: number): boolean;
   markSettled(token: number): void;
-  resetSettled(): void;
   isCancelRequested(): boolean;
-  requestCancel(): void;
-  clearCancel(): void;
   setStop(stop: (() => Promise<void>) | null): void;
   takeStop(): (() => Promise<void>) | null;
-  peekStop(): (() => Promise<void>) | null;
   /** Broadcast busy ownership; stale `false` for a foreign token is dropped. */
   setBusy(next: boolean, token?: number): void;
   /** Fence the previous run and cancel its owned stop; component state settles itself. */
@@ -67,7 +61,7 @@ export function useAiRun(onBusyChange?: (busy: boolean) => void): AiRun {
   const stopRef = useRef<(() => Promise<void>) | null>(null);
   const busyRef = useRef(false);
   const ownedTokenRef = useRef(-1);
-  const [ownedBusy, setOwnedBusy] = useState(false);
+  const [, setOwnedBusy] = useState(false);
   const onBusyChangeRef = useRef(onBusyChange);
   onBusyChangeRef.current = onBusyChange;
 
@@ -120,25 +114,13 @@ export function useAiRun(onBusyChange?: (busy: boolean) => void): AiRun {
   }, []);
 
   return {
-    get token() {
-      return runTokenRef.current;
-    },
     beginRun,
     isCurrent: (token: number) => token === runTokenRef.current,
     isSettled: (token: number) => settledTokenRef.current === token,
     markSettled: (token: number) => {
       settledTokenRef.current = token;
     },
-    resetSettled: () => {
-      settledTokenRef.current = -1;
-    },
     isCancelRequested: () => cancelRequestedRef.current,
-    requestCancel: () => {
-      cancelRequestedRef.current = true;
-    },
-    clearCancel: () => {
-      cancelRequestedRef.current = false;
-    },
     setStop: (stop: (() => Promise<void>) | null) => {
       stopRef.current = stop;
     },
@@ -147,11 +129,12 @@ export function useAiRun(onBusyChange?: (busy: boolean) => void): AiRun {
       stopRef.current = null;
       return stop;
     },
-    peekStop: () => stopRef.current,
     setBusy,
     fence,
     cancelOwned,
-    ownedBusy,
+    get ownedBusy() {
+      return busyRef.current;
+    },
   };
 }
 

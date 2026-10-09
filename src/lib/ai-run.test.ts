@@ -1,27 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
+import { act, renderHook } from "@testing-library/react";
 import {
   claudeRefusalError,
   isClaudeBlockedProvider,
   keepStartedSession,
   normalizeAiError,
+  useAiRun,
   type AiRun,
 } from "./ai-run";
 import { defaultProviderConfig } from "./ai";
 
 function fakeRun(overrides: Partial<AiRun> = {}): AiRun {
   return {
-    token: 1,
     beginRun: () => 2,
     isCurrent: (token: number) => token === 1,
     isSettled: () => false,
     markSettled: () => undefined,
-    resetSettled: () => undefined,
     isCancelRequested: () => false,
-    requestCancel: () => undefined,
-    clearCancel: () => undefined,
     setStop: () => undefined,
     takeStop: () => null,
-    peekStop: () => null,
     setBusy: () => undefined,
     fence: () => undefined,
     cancelOwned: async () => undefined,
@@ -31,6 +28,24 @@ function fakeRun(overrides: Partial<AiRun> = {}): AiRun {
 }
 
 describe("shared ai run helpers", () => {
+  it("guards a second send synchronously and ignores stale busy releases", () => {
+    const onBusyChange = vi.fn();
+    const { result } = renderHook(() => useAiRun(onBusyChange));
+    act(() => {
+      const sendingRun = result.current;
+      const oldToken = sendingRun.beginRun();
+      sendingRun.setBusy(true, oldToken);
+      expect(sendingRun.ownedBusy).toBe(true);
+      const nextToken = sendingRun.beginRun();
+      sendingRun.setBusy(true, nextToken);
+      sendingRun.setBusy(false, oldToken);
+      expect(sendingRun.ownedBusy).toBe(true);
+      sendingRun.setBusy(false, nextToken);
+      expect(sendingRun.ownedBusy).toBe(false);
+    });
+    expect(onBusyChange.mock.calls).toEqual([[true], [false]]);
+  });
+
   it("normalizes unknown failures to connection errors without losing AiError codes", () => {
     expect(normalizeAiError({ code: "session_busy" })).toEqual({ code: "session_busy" });
     expect(normalizeAiError(new Error("boom"))).toEqual({ code: "connection_failed", detail: "boom" });

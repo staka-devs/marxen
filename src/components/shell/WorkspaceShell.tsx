@@ -73,7 +73,7 @@ import {
   workspaceErrorText,
 } from "../../lib/document-client";
 import { applyGridUpdates, createGridState, type NvimGridState } from "../../lib/grid";
-import type { ImageResolver } from "../preview/images";
+import type { ImageResolver } from "../../lib/preview-images";
 import { offsetToLineCol } from "../../lib/utf16";
 import { correspondSource as correspondSnapshotSource, resolveEditRange } from "../../lib/selection-range";
 import { bytesToDataUrl, copyYankToClipboard, COPY_LABELS } from "../../lib/clipboard";

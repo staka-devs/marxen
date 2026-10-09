@@ -22,7 +22,7 @@ import { visit } from "unist-util-visit";
 import type { Element, Properties, Root } from "hast";
 import type { Root as MdastRoot } from "mdast";
 import type { VFile } from "vfile";
-import { escapeHtml } from "../preview";
+import { escapeHtml } from "./html";
 import { alertKind, mdastText } from "./mdast";
 import { highlightCode } from "./shiki";
 import { CLOBBER_PREFIX, marxenSanitizeSchema } from "./sanitize-schema";

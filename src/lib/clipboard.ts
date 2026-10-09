@@ -10,13 +10,13 @@ import type { Root, RootContent } from "hast";
 import type { CopyFormat, YankCopy } from "../shared/contracts";
 import { renderMarkdownDocument } from "./render/pipeline";
 import { marxenSanitizeSchema } from "./render/sanitize-schema";
-import { decodeImageSrc, isRelativeImageSrc } from "../components/preview/images";
+import { decodeImageSrc, isRelativeImageSrc } from "./preview-images";
 import { htmlToRtf } from "./clipboard-rtf";
 import { visit } from "unist-util-visit";
 import { validateMathContent } from "./render/validate";
 import { workspaceApi } from "./workspace";
 
-/** Encode raw image bytes as a `data:` URL without blocking on large files. */
+/** Encode image bytes in chunks to avoid exceeding the argument limit. */
 export function bytesToDataUrl(mime: string, bytes: ArrayLike<number>): string {
   let binary = "";
   const list = Array.from(bytes);
