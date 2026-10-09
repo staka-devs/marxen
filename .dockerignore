@@ -4,3 +4,7 @@ src-tauri/target
 .cache
 dist
 src-tauri/resources/neovim
+.local
+.worktrees
+test-results
+playwright-report

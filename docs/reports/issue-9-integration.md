@@ -15,6 +15,7 @@
 | 製品 E2E | Chromium 12 件成功 |
 | ライブ編集器 E2E | Chromium 17 件成功 |
 | 実 Neovim smoke | 同梱資源と配布物の両方で、版・Markdown runtime・日本語・絵文字 buffer が成功 |
+| Docker devcontainer build | 未完了。OS 依存パッケージの展開中に Docker のビルド接続が切断された。Linux コンテナーの回帰は未実施 |
 
 資格情報ストアのテストは opt-in で、既定の Rust テストでは実ストアを操作しない。専用 entry を使った Windows の保存・再取得・削除は別途確認済み。利用者の API 資格情報は使っていない。
 
@@ -54,7 +55,9 @@ GUI の AI 回答・提案・取消はローカル検証用 ACP プロセスを�
 
 ## OS ごとの確認範囲
 
-CI は Windows x64 (NSIS)、macOS arm64 / x64 (app / DMG)、Linux x64 (deb / AppImage) で native テスト・IPC・E2E・package build を実行する。対象コミットの最新結果と成果物は [PR #10 の checks](https://github.com/staka-devs/marxen/pull/10/checks) を参照する。古いコミットの結果を現在の確認結果に流用しない。
+CI は Windows x64 (NSIS)、macOS arm64 / x64 (app / DMG)、Linux x64 (deb / AppImage) で native テスト・IPC・E2E・package build を実行する設定。`7faaba1` の [実行](https://github.com/staka-devs/marxen/actions/runs/37860020737) は 4 target ともステップ開始前に停止した。GitHub の注釈はアカウントの支払い失敗または利用上限の制限を示し、テストログと配布成果物は生成されていない。ローカル Windows の成功と区別する。
+
+対象コミットの最新結果と成果物は [PR #10 の checks](https://github.com/staka-devs/marxen/pull/10/checks) を参照する。古いコミットの結果を現在の確認結果に流用しない。
 
 以下は未確認。
 
@@ -62,6 +65,6 @@ CI は Windows x64 (NSIS)、macOS arm64 / x64 (app / DMG)、Linux x64 (deb / App
 - Windows 実 WebView2 での地図・3D 描画。Chromium では確認済み。
 - 認証済み Codex / OpenCode / HTTP provider への生成要求。実 OpenCode 接続は initialize / session/new まで。
 - メールアプリへの画像入りリッチテキスト貼り付け。
-- NSIS による実インストール・アンインストール、署名・公証、Docker devcontainer build。
+- NSIS による実インストール・アンインストール、署名・公証、Docker devcontainer build の完了。
 
 ブラウザ E2E、headless Neovim、package build の成功から実 GUI / IME の成功を推定しない。

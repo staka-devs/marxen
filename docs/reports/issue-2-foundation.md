@@ -13,4 +13,4 @@ Windows x64、Node 22.23.2、Rust 1.99.0 MSVC で Rust / Tauri、React / TypeScr
 
 全体の件数、配布物のハッシュ、各 OS の確認範囲は [統合検証報告](issue-9-integration.md) を参照する。ブラウザ E2E と headless Neovim は、OS 固有の実 WebView / IME の代替ではない。
 
-devcontainer の Docker build、署名・公証、Windows インストーラーによる実インストールは未実施。
+devcontainer の Docker build は未完了。署名・公証、Windows インストーラーによる実インストールは未実施。
