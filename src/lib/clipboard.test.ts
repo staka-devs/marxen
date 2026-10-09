@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
-import { markdownToPlainText, prepareClipboard } from "./clipboard";
+import { invoke } from "@tauri-apps/api/core";
+import { bytesToDataUrl, copyYankToClipboard, markdownToPlainText, prepareClipboard } from "./clipboard";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -48,4 +49,14 @@ it("retains formula text, hyperlink destinations and ordered list numbers in RTF
   expect(payload.rtf).toContain("3.\\tab third");
   expect(payload.rtf).toContain("4.\\tab fourth");
   expect(payload.rtf).toContain("\\bullet\\tab bullet");
+});
+
+it("encodes image bytes once and loads them through the workspace loader", async () => {
+  expect(bytesToDataUrl("image/png", [72, 105])).toBe(`data:image/png;base64,${btoa("Hi")}`);
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "load_relative_image") return { mime: "image/png", bytes: [72, 105] };
+    return undefined;
+  });
+  await copyYankToClipboard({ format: "text", text: "plain" }, "doc_01");
+  expect(invoke).toHaveBeenCalledWith("write_clipboard", expect.objectContaining({ text: expect.any(String) }));
 });

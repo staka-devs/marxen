@@ -1,7 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "./ui/button";
 import { MarkdownPreview } from "./preview/MarkdownPreview";
-import { cancelPromptSafe, describeAiError, describeInvokeError, isClaudeCommand, startPrompt } from "../lib/ai";
+import { describeAiError, startPrompt } from "../lib/ai";
+import {
+  claudeRefusalError,
+  isClaudeBlockedProvider,
+  keepStartedSession,
+  normalizeAiError,
+  useAiRun,
+} from "../lib/ai-run";
+import { truncatePrompt } from "../lib/ai-conversation";
 import type {
   AiError,
   AiPromptRequest,
@@ -50,19 +58,13 @@ export default function InlineChat({
   const [proposal, setProposal] = useState<ProposalText | null>(null);
   const [error, setError] = useState<AiError | null>(null);
   const [cancelled, setCancelled] = useState(false);
-  const runTokenRef = useRef(0);
-  const cancelRequestedRef = useRef(false);
-  const settledTokenRef = useRef(-1);
-  const stopRef = useRef<(() => Promise<void>) | null>(null);
+  const run = useAiRun(onBusyChange);
+  const setBusy = run.setBusy;
   const onProposalRef = useRef(onProposal);
   onProposalRef.current = onProposal;
-  const onBusyChangeRef = useRef(onBusyChange);
-  onBusyChangeRef.current = onBusyChange;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const busyRef = useRef(false);
-  const ownedTokenRef = useRef(-1);
   const dialogRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: 16, top: 64 });
 
@@ -93,36 +95,19 @@ export default function InlineChat({
     inputRef.current?.focus();
   }, []);
 
-  // Unmount cleanup cancels the owned run so late callbacks settle fenced.
-  // Closing without an explicit cancel still cancels through this path when
-  // the shell unmounts the composer.
-  useEffect(() => {
-    return () => {
-      runTokenRef.current += 1;
-      const stop = stopRef.current;
-      stopRef.current = null;
-      if (stop) void cancelPromptSafe(stop).finally(() => onBusyChangeRef.current?.(false));
-    };
-  }, []);
-
-  function setBusy(next: boolean, token = runTokenRef.current) {
-    if (!next && token !== ownedTokenRef.current) return;
-    if (next) ownedTokenRef.current = token;
-    busyRef.current = next;
-    onBusyChangeRef.current?.(next);
-  }
+  // Unmount cleanup (cancel the owned run so late callbacks settle fenced)
+  // lives in the shared hook: closing without an explicit cancel still
+  // cancels through that path when the shell unmounts the composer.
 
   async function handleSend() {
-    const trimmed = prompt.trim().slice(0, 20_000);
-    if (trimmed === "" || running || busyRef.current || disabled) return;
-    if (provider.kind === "acp" && provider.acp?.preset === "custom" && isClaudeCommand(provider.acp.argv?.command ?? "")) {
-      setError({ code: "claude_code_refused", command: (provider.acp.argv?.command ?? "").trim() });
+    const trimmed = truncatePrompt(prompt.trim());
+    if (trimmed === "" || running || run.ownedBusy || disabled) return;
+    const blockedCommand = isClaudeBlockedProvider(provider);
+    if (blockedCommand !== null) {
+      setError(claudeRefusalError(blockedCommand));
       return;
     }
-    const token = runTokenRef.current + 1;
-    runTokenRef.current = token;
-    cancelRequestedRef.current = false;
-    settledTokenRef.current = -1;
+    const token = run.beginRun();
     const capturedContext = { ...context, ranges: [...context.ranges] };
     const capturedProvider = provider;
     setRunning(true);
@@ -135,18 +120,14 @@ export default function InlineChat({
     try {
       resolved = await ensureStaging([capturedContext]);
     } catch (cause) {
-      if (token !== runTokenRef.current) { setBusy(false, token); return; }
+      if (!run.isCurrent(token)) { setBusy(false, token); return; }
       setRunning(false);
       setBusy(false);
-      setError(
-        typeof cause === "object" && cause !== null && "code" in cause
-          ? (cause as AiError)
-          : { code: "connection_failed", detail: describeInvokeError(cause) },
-      );
+      setError(normalizeAiError(cause));
       return;
     }
-    if (token !== runTokenRef.current) { setBusy(false, token); return; }
-    if (cancelRequestedRef.current) {
+    if (!run.isCurrent(token)) { setBusy(false, token); return; }
+    if (run.isCancelRequested()) {
       setRunning(false);
       setBusy(false);
       setCancelled(true);
@@ -163,15 +144,15 @@ export default function InlineChat({
     };
     try {
       const session = await startPrompt(request, (event) => {
-        if (token !== runTokenRef.current) return;
-        if (settledTokenRef.current === token) return;
-        if (cancelRequestedRef.current) {
+        if (!run.isCurrent(token)) return;
+        if (run.isSettled(token)) return;
+        if (run.isCancelRequested()) {
           if (event.type === "chunk" || event.type === "started") return;
-          settledTokenRef.current = token;
+          run.markSettled(token);
           setCancelled(true);
           setRunning(false);
           setBusy(false);
-          stopRef.current = null;
+          run.takeStop();
           return;
         }
         switch (event.type) {
@@ -179,54 +160,43 @@ export default function InlineChat({
             setOutput((previous) => previous + event.payload.text);
             break;
           case "done":
-            settledTokenRef.current = token;
+            run.markSettled(token);
             setProposal(event.payload.proposal);
             onProposalRef.current(event.payload.proposal, event.payload.sent, "rewrite");
             setRunning(false);
             setBusy(false);
-            stopRef.current = null;
+            run.takeStop();
             break;
           case "error":
-            settledTokenRef.current = token;
+            run.markSettled(token);
             setError(event.payload.error);
             setRunning(false);
             setBusy(false);
-            stopRef.current = null;
+            run.takeStop();
             break;
           case "cancelled":
-            settledTokenRef.current = token;
+            run.markSettled(token);
             setCancelled(true);
             setRunning(false);
             setBusy(false);
-            stopRef.current = null;
+            run.takeStop();
             break;
           case "started":
             break;
         }
       });
-      if (token !== runTokenRef.current || settledTokenRef.current === token || cancelRequestedRef.current) {
-        await cancelPromptSafe(session.stop);
-        setBusy(false, token);
-        return;
-      }
-      stopRef.current = session.stop;
+      if (!(await keepStartedSession(run, token, session.stop))) return;
     } catch (cause) {
-      if (token !== runTokenRef.current) { setBusy(false, token); return; }
-      settledTokenRef.current = token;
+      if (!run.isCurrent(token)) { setBusy(false, token); return; }
+      run.markSettled(token);
       setRunning(false);
       setBusy(false);
-      setError(
-        typeof cause === "object" && cause !== null && "code" in cause
-          ? (cause as AiError)
-          : { code: "connection_failed", detail: describeInvokeError(cause) },
-      );
+      setError(normalizeAiError(cause));
     }
   }
 
   async function handleCancel() {
-    cancelRequestedRef.current = true;
-    const stop = stopRef.current;
-    if (stop) await cancelPromptSafe(stop);
+    await run.cancelOwned();
   }
 
   function handleKeyDown(event: React.KeyboardEvent) {

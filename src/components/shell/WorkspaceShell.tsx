@@ -76,7 +76,7 @@ import { applyGridUpdates, createGridState, type NvimGridState } from "../../lib
 import type { ImageResolver } from "../preview/images";
 import { offsetToLineCol } from "../../lib/utf16";
 import { correspondSource as correspondSnapshotSource, resolveEditRange } from "../../lib/selection-range";
-import { copyYankToClipboard, COPY_LABELS } from "../../lib/clipboard";
+import { bytesToDataUrl, copyYankToClipboard, COPY_LABELS } from "../../lib/clipboard";
 import type { YankCopy } from "../../shared/contracts";
 import { loadEditorPreferences, saveEditorPreferences, normalizeEditorPreferences, type EditorPreferences } from "../../lib/editor-preferences";
 
@@ -1401,12 +1401,7 @@ export function WorkspaceShell() {
           // flight: only the resolver's own document may consume them.
           if (activeRef.current !== documentId) return null;
           if (!/^image\/(png|jpeg|gif|webp)$/.test(data.mime)) return null;
-          let binary = "";
-          const bytes = data.bytes;
-          for (let i = 0; i < bytes.length; i += 0x8000) {
-            binary += String.fromCharCode(...bytes.slice(i, i + 0x8000));
-          }
-          const url = `data:${data.mime};base64,${btoa(binary)}`;
+          const url = bytesToDataUrl(data.mime, data.bytes);
           imageUrlCache.current.set(key, url);
           return url;
         } catch {
@@ -1415,14 +1410,14 @@ export function WorkspaceShell() {
       },
     [desktop],
   );
-  const liveResolver = useMemo(
+  // Live, read, and split previews share one resolver for the active document:
+  // the bodies were identical, and the preview keys already isolate documents.
+  const previewResolver = useMemo(
     () => (desktop && active ? makeImageResolver(active.documentId) : undefined),
     [desktop, active, makeImageResolver],
   );
-  const readResolver = useMemo(
-    () => (desktop && active ? makeImageResolver(active.documentId) : undefined),
-    [desktop, active, makeImageResolver],
-  );
+  const liveResolver = previewResolver;
+  const readResolver = previewResolver;
 
   // -- config -----------------------------------------------------------------
 
@@ -1619,6 +1614,25 @@ export function WorkspaceShell() {
   const aiContextsRef = useRef<PromptContext[]>([]);
   aiContextsRef.current = aiContexts;
 
+  // Shared non-ask intake: stage the proposal, report counts, and refresh
+  // diffs with drift detection. Callers keep their own busy/error handling
+  // because push intake retries diff fetch on failure while manual retry does
+  // not. Throws on staging/diff failure.
+  async function stageNonAskCopy(copyId: string, proposal: ProposalText, mode: PromptMode) {
+    const staged = await stageProposal(copyId, proposal, mode);
+    setReviewMessage(null);
+    setReviewStatus(
+      staged.updated.length > 0
+        ? `${staged.updated.length} 文書に取り込みました（${staged.chars}文字）。`
+        : "取り込みましたが変更はありません。",
+    );
+    const fetched = await fetchIsolationDiff(copyId);
+    setDiffs(fetched);
+    if (fetched.some((diff) => diff.drifted)) {
+      setReviewStatus("文書が更新されています。選択範囲を指定し直してください。");
+    }
+  }
+
   const handleProposal = useCallback(
     async (proposal: ProposalText, sent: ContextSummary[], mode: PromptMode) => {
       setAiProposal({ proposal, sent, mode });
@@ -1646,18 +1660,7 @@ export function WorkspaceShell() {
       setNotice("AI の変更案を受け取りました。差分を確認してください。");
       setReviewBusy(true);
       try {
-        const staged = await stageProposal(copyId, proposal, mode);
-        setReviewMessage(null);
-        setReviewStatus(
-          staged.updated.length > 0
-            ? `${staged.updated.length} 文書に取り込みました（${staged.chars}文字）。`
-            : "取り込みましたが変更はありません。",
-        );
-        const fetched = await fetchIsolationDiff(copyId);
-        setDiffs(fetched);
-        if (fetched.some((diff) => diff.drifted)) {
-          setReviewStatus("文書が更新されています。選択範囲を指定し直してください。");
-        }
+        await stageNonAskCopy(copyId, proposal, mode);
       } catch (cause: unknown) {
         setReviewMessage(describeIsolationError(cause));
         try {
@@ -1685,18 +1688,7 @@ export function WorkspaceShell() {
     }
     setReviewBusy(true);
     try {
-      const staged = await stageProposal(copyId, stored.proposal, stored.mode);
-      setReviewMessage(null);
-      setReviewStatus(
-        staged.updated.length > 0
-          ? `${staged.updated.length} 文書に取り込みました（${staged.chars}文字）。`
-          : "取り込みましたが変更はありません。",
-      );
-      const fetched = await fetchIsolationDiff(copyId);
-      setDiffs(fetched);
-      if (fetched.some((diff) => diff.drifted)) {
-        setReviewStatus("文書が更新されています。選択範囲を指定し直してください。");
-      }
+      await stageNonAskCopy(copyId, stored.proposal, stored.mode);
     } catch (cause: unknown) {
       setReviewMessage(describeIsolationError(cause));
     } finally {
