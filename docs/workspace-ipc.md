@@ -1,7 +1,8 @@
 # ワークスペースと文書 IPC
 
-`src/lib/workspace.ts` の `workspaceApi` と `listenWorkspaceEvents` を使用する。
-型は Rust の `contracts.rs` から `src/shared/contracts.ts` へ生成する。
+画面は composition root から注入された `src/application/ports.ts` の文書・ワークスペース操作とイベント購読を使用する。
+Tauri の `invoke` / `listen` は `src/infrastructure/tauri/workspace-api.ts` が扱い、編集キュー・revision・再同期は application が所有する。
+型は Rust の `src-tauri/src/contracts/mod.rs` から `src/contracts/contracts.ts` へ生成する。
 ブラウザ表示には実ファイル・Neovim の代替を用意しない。
 
 ## 基本契約
