@@ -28,11 +28,11 @@ Agent とインラインチャットの実行・取消・遅延イベント処�
 ## 検証
 
 - `npm run typecheck`: 成功。
-- `npm test -- --maxWorkers=4`: 38 ファイル / 236 件成功。既存の送信、取消、遅延開始、unmount、履歴・接続先変更のテストを含む。
+- UI 整理を含む `8150fa1` の `npm test -- --maxWorkers=2`: 38 ファイル / 239 件成功。既存の送信、取消、遅延開始、unmount、履歴・接続先変更に加え、チャット操作と完了レビューの回帰を含む。
 - `npm run test:bundling`: 3 件成功。
 - `npm run build`: 成功。
 - 不使用 renderer の専用テストは削除した。製品 renderer の GFM、HTML sanitize、壊れた入力の検証は `render/pipeline.test.ts` で維持。
-- 実 WebView / OS IME の結果、全 E2E・Rust・package の結果は [統合検証](issue-9-integration.md) と手動 CI の報告を参照。ブラウザ・jsdom の成功を実 WebView の成功に代用しない。
+- 実 WebView / OS IME の結果、全 E2E・Rust・package の結果は [統合検証](issue-9-integration.md) と [手動 CI](manual-ci.md) を参照。ブラウザ・jsdom の成功を実 WebView の成功に代用しない。
 
 ## 残る設計上の制約
 

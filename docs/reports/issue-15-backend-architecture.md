@@ -22,7 +22,7 @@
 | 文書の保存 / [storage](../../src-tauri/src/storage.rs) | GUI 保存の `save` と `marxen:save-requested` 通知処理は同じ `save_locked` → `storage::atomic_write` へ入る。保存は disk fingerprint を再確認し、Neovim の acknowledgement 後に dirty と recovery を清算する。 | GUI と `:w` の二重の本番保存経路はない。storage は OS / fs アダプターとして機能するが、DocumentActor が concrete module を直接呼ぶ。既存の save / Undo / recovery の動作は変更していない。 |
 | [Workspace](../../src-tauri/src/workspace.rs) | BTreeMap の DocumentActor 登録、`open_text_file` の disk 読出しと fingerprint 競合確認、一覧・検索・画像・recovery・poll を具体的に扱う。Tauri 型は使わない。 | アプリケーション側の組立てとファイルシステム操作を兼ねる。厳密な層分離や SRP の単一責務とは言えない。今回、登録・保存契約を再設計する根拠はなく、具体的な責務集中を残す。 |
 | [AI transport](../../src-tauri/src/ai.rs) / OS 資格情報 | `run_acp_prompt` は argv で子プロセスを起動し、`run_http_prompt` は reqwest の stream を処理する。`AgentKeyring` に OsKeyring / MemoryKeyring の実装があり、`resolve_http_request` が HTTP 接続先と資格情報を pin より前に解決する。 | transport、validation、SSE / NDJSON parser、registry、keyring が一つのモジュールに残る。AgentKeyring は実装とテストの差替えに利用される既存の小さい interface。transport の全面的な DIP / SRP は未達。 |
-| [IsolationManager](../../src-tauri/src/isolation.rs) | `create_copy` は文書の snapshot と登録範囲だけを使う。`authorize_prompt` は文書・revision・excerpt・範囲の完全一致を検証する。`approve` は全 actor を native preflight してから範囲適用し、部分失敗 / native Undo rollback の結果を返す。 | コピー管理、パスガード、diff / proposal、承認処理、契約型と fs の責務が集中している。Workspace / DocumentActor / storage に直接依存する。範囲認可・原本文書の権威・pin 契約を保つ具体的なアプリケーション境界とする。 |
+| [IsolationManager](../../src-tauri/src/isolation.rs) | `create_copy` は文書の snapshot と登録範囲だけを使う。`authorize_prompt` は文書・revision・excerpt・範囲の完全一致を検証する。`approve` は全 actor を native preflight してから範囲適用し、部分失敗 / native Undo rollback の結果を返す。 | コピー管理、パスガード、diff / proposal、承認処理、契約型と fs の責務が集中している。Workspace / DocumentActor / storage に直接依存する。範囲認可・実 Neovim 正本・pin 契約を保つ具体的なアプリケーション境界とする。 |
 | Tauri / [lib](../../src-tauri/src/lib.rs) / [ipc](../../src-tauri/src/ipc.rs) | lib が plugin / state / resource directory / invoke handler とイベント poll を構成する。IPC が Tauri State・AppHandle・ロック・画面通知を扱う。 | composition と adapter の配置は妥当。旧 `ai::*` / `isolation::*` 経路は互換 re-export で IPC を参照するので、ソース依存の向きが完全に内側へ統一されたわけではない。 |
 
 ## 原則別の結論
@@ -30,7 +30,14 @@
 - **Clean Architecture:** 副作用のない validation、OS / RPC 実装、デスクトップ接続の境界は確認できる。アプリケーションは具体的な Neovim / storage / fs / reqwest に依存し、互換 facade は外側を参照するため、依存規則の全面準拠とは言えない。
 - **YAGNI:** 使用されない staging resolver interface とテスト用実装を除去した。本番 caller のない AI 側の重複パスガードも除去し、隔離側の逸脱拒否を維持した。新しい port、汎用 DI、plugin framework、別の文書正本を導入していない。
 - **DRY:** 隔離実行の準備は本番 IPC と ACP 終了テストで同じ入口を使う。保存は同じ production flow。本番 caller のない AI パスガードを除去して、production の isolation ガードに確認を集約した。残る重複として actor の初期化 / configure の Neovim 設定と複数の ID 検証がある。初期化の差異やエラー契約を確認せず機械的に統合しない。
-- **SOLID:** actor の状態所有、隔離準備、IPC アダプターの責務を改善した。SRP / DIP の未達は上表の通り。provider は明示的な enum / match で扱い、単一実装の将来拡張だけを理由に OCP の framework を作らない。今回 LSP / ISP の全面準拠を立証するものではない。
+
+| SOLID の原則 | 判定・根拠 |
+| --- | --- |
+| SRP | IPC の画面接続と隔離実行の準備を分離した。ただし DocumentActor、Workspace、AI transport、IsolationManager は上表の複数の責務を持つため、全面的には未達 |
+| OCP | provider は明示的な enum / match で扱い、接続先追加には validation と adapter の分岐変更が必要。全面的には未達。未要求の plugin framework は追加しない |
+| LSP | `AgentKeyring` の Memory / OS 実装は資格情報長の検証、未登録時の `None`、未登録の削除成功という同じ契約を持つ。mock の呼出しとエラー処理は回帰確認したが、今回の既定テストは全 OS の実ストアを操作せず、全面的な置換可能性の実証にはならない |
+| ISP | 資格情報 interface は get / set / delete / has の利用する操作に限定。文書・AI・隔離の IPC 型を分離。一方 Workspace / DocumentActor の具体的な大きい API を利用側が参照するため、全面的な interface 分離は未達 |
+| DIP | 資格情報は既存の `AgentKeyring` を介して差し替えられる。文書・隔離ユースケースは具体的な Neovim / storage / fs に依存し、互換 facade は外側の IPC を参照するため、全面的には未達 |
 
 ## 維持する契約
 
@@ -55,6 +62,8 @@ Windows x64 の native Rust、既定の `desktop` feature、`CARGO_BUILD_JOBS=1`
 
 新しい 2 件の隔離テストは、範囲を広げた要求・異なる Workspace・存在しない staging が pin を残さないこと、成功後の承認・却下・取消が実際の pin 解放まで拒否されることを確認する。既存の native Neovim による範囲適用・Undo・disk/revision 競合・部分 rollback・遅延した子プロセス・HTTP 終了・panic 時の回収テストも通過した。
 
-## 未実施の検証
+## 統合検証と未確認の範囲
 
-この変更に対する Rust 全 suite、Clippy、3 種類の TypeScript 契約出力比較、配布 package はこの対象検証には含めていない。認証済みの実 AI 接続と OS 資格情報ストア、Windows の実 WebView / IME、macOS / Linux の native テスト・実 WebView / IME も未実施。native Neovim / mock transport の成功からこれらの成功を推定しない。
+統合した `8eccced` で Windows native Rust 全 162 件、Clippy `-D warnings`、3 種類の TypeScript 契約出力比較、NSIS 生成を確認した。UI ソース `8150fa1` の Rust / Tauri ソースは `8eccced` と同じ。実 Windows WebView2 → Rust → ACP fixture の回答、範囲承認、実 Neovim の Undo も確認した。コマンドと実行対象は [手動 CI](manual-ci.md)、GUI と配布の証拠は [統合検証](issue-9-integration.md) / [UI 検証](issue-17-ui.md) に記載する。
+
+認証済みの実 AI 生成、今回の実 OS 資格情報ストア / IME の再検証、macOS の native 回帰、macOS / Linux の実 WebView / IME は未実施。Linux の native コマンドは開発依存不足で assertion 前に停止した。native Neovim / mock transport の成功からこれらの成功を推定しない。
