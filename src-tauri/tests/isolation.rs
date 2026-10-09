@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 
+/// Open workspace, recovery and staging fixtures in independently owned temporary directories.
 fn setup() -> (TempDir, TempDir, TempDir, Workspace, IsolationManager) {
     let root = tempfile::tempdir().unwrap();
     let recovery = tempfile::tempdir().unwrap();
@@ -32,6 +33,7 @@ fn setup() -> (TempDir, TempDir, TempDir, Workspace, IsolationManager) {
     (root, recovery, staging, workspace, manager)
 }
 
+/// Extract a half-open UTF-16 excerpt after validating both endpoints as UTF-8 boundaries.
 fn slice(text: &str, start: u32, end: u32) -> String {
     let range = Utf16Range {
         start: Utf16Offset(start),
@@ -46,6 +48,7 @@ fn slice(text: &str, start: u32, end: u32) -> String {
     text[s..e].to_owned()
 }
 
+/// Capture exactly the supplied snapshot ranges and concatenate only their selected excerpts.
 fn ctx(snapshot: &DocumentSnapshot, ranges: &[(u32, u32)]) -> PromptContext {
     let text: String = ranges
         .iter()
@@ -65,6 +68,7 @@ fn ctx(snapshot: &DocumentSnapshot, ranges: &[(u32, u32)]) -> PromptContext {
     }
 }
 
+/// Read the current authoritative actor text for the snapshot document identifier.
 fn live_text(workspace: &Workspace, snapshot: &DocumentSnapshot) -> String {
     workspace
         .actor(&snapshot.document_id.0)
@@ -73,6 +77,7 @@ fn live_text(workspace: &Workspace, snapshot: &DocumentSnapshot) -> String {
         .text
 }
 
+/// Build an argv for the Cargo mock ACP child without shell interpolation.
 fn acp_argv(extra: &[&str]) -> AcpArgv {
     AcpArgv {
         command: env!("CARGO_BIN_EXE_mock-acp-agent").into(),
@@ -80,6 +85,7 @@ fn acp_argv(extra: &[&str]) -> AcpArgv {
     }
 }
 
+/// Bind a workspace ACP request to its registered copy and exact selected contexts.
 fn acp_request(
     argv: AcpArgv,
     copy_id: &IsolatedCopyId,
@@ -106,6 +112,7 @@ fn acp_request(
     }
 }
 
+/// Run the mock file-editing subprocess inside the supplied staging fixture and require success.
 fn mock_cli_write(staging_dir: &Path, file: &str, text: &str) {
     let exe = env!("CARGO_BIN_EXE_mock-isolation-agent");
     let status = std::process::Command::new(exe)
@@ -123,6 +130,7 @@ fn mock_cli_write(staging_dir: &Path, file: &str, text: &str) {
 }
 
 #[test]
+/// Require the isolated files to contain selected excerpts without disclosing the rest of the document.
 fn only_selected_excerpts_reach_staging() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace
@@ -144,6 +152,7 @@ fn only_selected_excerpts_reach_staging() {
 }
 
 #[test]
+/// Refuse excerpt text or duplicate scopes that contradict the authoritative snapshot.
 fn forged_excerpts_and_contradictory_duplicates_refused() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "hello").unwrap();
@@ -167,6 +176,7 @@ fn forged_excerpts_and_contradictory_duplicates_refused() {
 }
 
 #[test]
+/// Allow whole-file staging only when the caller explicitly authorizes the complete document range.
 fn full_document_mode_requires_explicit_whole_selection() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "hello").unwrap();
@@ -191,6 +201,7 @@ fn full_document_mode_requires_explicit_whole_selection() {
 }
 
 #[test]
+/// Keep both live buffers and disk bytes unchanged when a staged copy is rejected or cancelled.
 fn rejection_and_cancellation_leave_originals_exact() {
     let (root, _recovery, _staging, mut workspace, mut manager) = setup();
     for action in ["reject", "cancel"] {
@@ -218,6 +229,7 @@ fn rejection_and_cancellation_leave_originals_exact() {
 }
 
 #[test]
+/// Let the mock child edit an authorized staging file and apply it only after explicit approval.
 fn mock_acp_child_edits_full_document_staging_then_approves() {
     let (root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "hello").unwrap();
@@ -274,6 +286,7 @@ fn mock_acp_child_edits_full_document_staging_then_approves() {
 }
 
 #[test]
+/// Reject staged excerpt corruption before it can mutate the original buffer.
 fn corrupted_scoped_staging_refuses_approval() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "keep this\nrest\n").unwrap();
@@ -293,6 +306,7 @@ fn corrupted_scoped_staging_refuses_approval() {
 }
 
 #[test]
+/// Refuse child-created files whose paths were never included in the registered authorization.
 fn unselected_staging_files_never_authorize_edits() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "hello").unwrap();
@@ -309,6 +323,7 @@ fn unselected_staging_files_never_authorize_edits() {
 }
 
 #[test]
+/// Apply a staged HTTP rewrite through the document actor and verify native Undo restores the original.
 fn http_proposal_stages_then_applies_with_undo_evidence() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "hello").unwrap();
@@ -349,6 +364,7 @@ fn http_proposal_stages_then_applies_with_undo_evidence() {
 }
 
 #[test]
+/// Apply workspace patches only inside their authorized ranges as one native Undo step.
 fn workspace_patches_apply_minimally_with_single_undo() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "aaa\nbbb\nccc\n").unwrap();
@@ -390,6 +406,7 @@ fn workspace_patches_apply_minimally_with_single_undo() {
 }
 
 #[test]
+/// Preserve the BOM and unselected CRLF bytes around an approved range edit.
 fn bom_crlf_outside_bytes_survive_scoped_approval() {
     let (root, _recovery, _staging, mut workspace, mut manager) = setup();
     let bytes = "\u{feff}head\r\nkeep\r\ntail\r\n";
@@ -424,6 +441,7 @@ fn bom_crlf_outside_bytes_survive_scoped_approval() {
 }
 
 #[test]
+/// Detect a native buffer change not yet acknowledged by the GUI before applying any proposal.
 fn hidden_vim_drift_refuses_preflight_without_mutation() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc_a = workspace.create("a.md", "aaa").unwrap();
@@ -459,6 +477,7 @@ fn hidden_vim_drift_refuses_preflight_without_mutation() {
 }
 
 #[test]
+/// Expose per-document failures and native Undo rollback when an approval fails after preflight.
 fn apply_phase_failure_reports_partial_outcomes_with_rollback() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc_a = workspace.create("a.md", "aaa").unwrap();
@@ -513,6 +532,7 @@ fn apply_phase_failure_reports_partial_outcomes_with_rollback() {
 }
 
 #[test]
+/// Detect a dead document actor before another document in the same approval can change.
 fn dead_actor_preflights_before_any_mutation() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc_a = workspace.create("a.md", "aaa").unwrap();
@@ -555,6 +575,7 @@ fn dead_actor_preflights_before_any_mutation() {
 }
 
 #[test]
+/// Block staging mutation and approval while a live run owns a pin, then permit them after release.
 fn pinned_copies_refuse_mutation_until_settlement() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "hello").unwrap();
@@ -577,6 +598,7 @@ fn pinned_copies_refuse_mutation_until_settlement() {
 }
 
 #[test]
+/// Require a fresh copy after revision or disk drift before retrying approval.
 fn stale_revision_and_disk_conflict_refuse_until_resync() {
     let (root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "base").unwrap();
@@ -650,6 +672,7 @@ fn stale_revision_and_disk_conflict_refuse_until_resync() {
 }
 
 #[test]
+/// Detect external file modification during preflight and preserve the original buffer.
 fn disk_change_conflicts_before_apply() {
     let (root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "base").unwrap();
@@ -667,6 +690,7 @@ fn disk_change_conflicts_before_apply() {
 }
 
 #[test]
+/// Reject absolute paths from other operating-system syntaxes as well as native rooted paths.
 fn staging_paths_reject_foreign_os_roots() {
     let root = tempfile::tempdir().unwrap();
     for bad in [
@@ -694,6 +718,7 @@ fn staging_paths_reject_foreign_os_roots() {
 }
 
 #[test]
+/// Contain isolated files against traversal, absolute paths and symlink escapes.
 fn traversal_absolute_and_symlink_are_rejected() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "x").unwrap();
@@ -757,6 +782,7 @@ fn traversal_absolute_and_symlink_are_rejected() {
 }
 
 #[test]
+/// Validate the complete prompt scope before acquiring a run pin so rejected requests leave no busy copy.
 fn prepare_prompt_run_rejects_bad_scope_without_pinning() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "hello world").unwrap();
@@ -785,6 +811,7 @@ fn prepare_prompt_run_rejects_bad_scope_without_pinning() {
 }
 
 #[test]
+/// Resolve authorized staging before pinning and hold the pin until the prepared run is released.
 fn prepare_prompt_run_resolves_before_pin_and_retains_until_release() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "hello").unwrap();
@@ -812,6 +839,7 @@ fn prepare_prompt_run_resolves_before_pin_and_retains_until_release() {
 }
 
 #[test]
+/// Refuse missing copy identifiers and requests that expand the copy authorization.
 fn authorize_rejects_unknown_copy_and_scope_widening() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "hello world").unwrap();
@@ -851,6 +879,7 @@ fn authorize_rejects_unknown_copy_and_scope_widening() {
 }
 
 #[test]
+/// Require every requested range, excerpt, document and revision to match the registered scope exactly.
 fn authorize_requires_exact_scope_equality() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "aa bb cc").unwrap();
@@ -888,6 +917,7 @@ fn authorize_requires_exact_scope_equality() {
 }
 
 #[test]
+/// Reject credential or endpoint readiness failures before pinning, using only disposable fixture stores.
 fn startup_readiness_fails_before_pin_without_user_secrets() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "hello").unwrap();
@@ -918,6 +948,7 @@ fn startup_readiness_fails_before_pin_without_user_secrets() {
     // A failing credential store surfaces without pinning either.
     struct FailingStore;
     impl AgentKeyring for FailingStore {
+        /// Inject a credential-read failure without consulting any OS store.
         fn get(
             &self,
             _kind: AiProviderKind,
@@ -926,6 +957,7 @@ fn startup_readiness_fails_before_pin_without_user_secrets() {
                 detail: "injected store failure".into(),
             })
         }
+        /// Inject a credential-write failure without persisting the supplied secret.
         fn set(
             &self,
             _kind: AiProviderKind,
@@ -935,6 +967,7 @@ fn startup_readiness_fails_before_pin_without_user_secrets() {
                 detail: "injected store failure".into(),
             })
         }
+        /// Inject a credential-deletion failure without changing any stored entry.
         fn delete(&self, _kind: AiProviderKind) -> Result<(), marxen_lib::ai_contracts::AiError> {
             Err(marxen_lib::ai_contracts::AiError::CredentialStoreFailed {
                 detail: "injected store failure".into(),
@@ -963,6 +996,7 @@ fn startup_readiness_fails_before_pin_without_user_secrets() {
 }
 
 #[test]
+/// Hold terminal event delivery until run cleanup and pin release have completed.
 fn terminal_delivery_waits_for_settlement_and_release() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "hello").unwrap();
@@ -1040,6 +1074,7 @@ fn terminal_delivery_waits_for_settlement_and_release() {
 }
 
 #[test]
+/// Prevent approval while a child can still write and allow it only after the process is reaped.
 fn delayed_child_write_cannot_approve_until_reaped() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "hello").unwrap();
@@ -1105,6 +1140,7 @@ fn delayed_child_write_cannot_approve_until_reaped() {
 }
 
 #[test]
+/// Require panic cleanup to reap the ACP child before releasing its staging pin.
 fn panicking_driver_reaps_live_child_before_unpin() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "hello").unwrap();
@@ -1150,6 +1186,7 @@ fn panicking_driver_reaps_live_child_before_unpin() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+/// Settle a delayed HTTP terminal result exactly once and release the owned isolation pin.
 async fn http_delayed_terminal_settles_once_then_releases() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "hello").unwrap();
@@ -1275,6 +1312,7 @@ async fn http_delayed_terminal_settles_once_then_releases() {
 }
 
 #[test]
+/// Require isolation and document operations to use the same boundary document identifier type.
 fn document_id_type_is_shared() {
     let id = marxen_lib::contracts::DocumentId("doc_08".into());
     assert_eq!(id.0, "doc_08");

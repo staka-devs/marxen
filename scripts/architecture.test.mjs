@@ -154,6 +154,13 @@ test("TypeScript effect imports and generated contracts are distinguished", () =
   assert.equal(generated.methods, 0);
 });
 
+test("inner TypeScript layers cannot import native filesystem or subprocess effects", () => {
+  const source = 'import fs from "node:fs/promises"; import { spawn } from "child_process";';
+  const inner = inspectTypeScript("src/application/example.ts", source);
+  assert.equal(inner.issues.filter(issue => issue.rule === "effect").length, 2);
+  assert.deepEqual(inspectTypeScript("src/infrastructure/example.ts", source).issues, []);
+});
+
 test("Windows and POSIX paths identify the same five layers", () => {
   assert.equal(layerOf("src\\application\\document.ts"), "application");
   assert.equal(layerOf("src-tauri/src/infrastructure/storage.rs"), "infrastructure");
@@ -177,6 +184,21 @@ test("browser globals are rejected while locally named document values remain va
     const element = document.createElement("div");
     /** Read the supplied snapshot identifier without accessing the browser. */
     const identifier = (document: { id: string }) => document.id;
+  `;
+  withSourceFixture(source, root => {
+    const file = join(root, "src/application/example.ts");
+    const program = ts.createProgram([file], { noEmit: true });
+    const result = inspectTypeScript("src/application/example.ts", source, { root, checker: program.getTypeChecker(), sourceFile: program.getSourceFile(file) });
+    assert.equal(result.issues.filter(issue => issue.rule === "effect").length, 1);
+    assert.equal(result.documented, 1);
+  });
+});
+
+test("browser HTTP calls are detected without rejecting an injected transport named fetch", () => {
+  const source = `
+    fetch("https://example.test");
+    /** Request data through the supplied application transport. */
+    function load(fetch: (path: string) => Promise<string>) { return fetch("a.md"); }
   `;
   withSourceFixture(source, root => {
     const file = join(root, "src/application/example.ts");

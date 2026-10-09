@@ -20,10 +20,12 @@ use marxen_lib::neovim::NeovimSession;
 use marxen_lib::validation::{utf16_to_utf8, utf8_to_utf16};
 use std::time::Duration;
 
+/// Create a stable document identifier namespaced to the Neovim integration fixture.
 fn doc_id(name: &str) -> DocumentId {
     DocumentId(format!("issue3-{name}"))
 }
 
+/// Build a replacement using global UTF-16 endpoints and the supplied literal text.
 fn gui_edit(start: u32, end: u32, text: &str) -> TextEdit {
     TextEdit {
         range: Utf16Range {
@@ -34,15 +36,18 @@ fn gui_edit(start: u32, end: u32, text: &str) -> TextEdit {
     }
 }
 
+/// Count UTF-16 code units and fail if the fixture exceeds the boundary offset width.
 fn utf16_len(text: &str) -> u32 {
     u32::try_from(text.encode_utf16().count()).unwrap()
 }
 
+/// Require the real bundled Neovim executable and runtime before starting an integration check.
 fn require_bundle() {
     marxen_lib::neovim::bundle_paths().expect("run `npm run bundle:neovim` first");
 }
 
 #[test]
+/// Apply Japanese composition-shaped range edits through a real buffer and check UTF-16 positions; no OS IME is driven.
 fn japanese_composition_contract_keeps_offsets() {
     require_bundle();
     // IME composition: preedit inserted as one range edit, then committed by
@@ -92,6 +97,7 @@ fn japanese_composition_contract_keeps_offsets() {
 }
 
 #[test]
+/// Compare emoji UTF-16 positions with native byte columns and rendered cell widths.
 fn emoji_offsets_match_neovim_bytes_and_display() {
     require_bundle();
     let session = NeovimSession::spawn_isolated().unwrap();
@@ -126,6 +132,7 @@ fn emoji_offsets_match_neovim_bytes_and_display() {
 }
 
 #[test]
+/// Require a configured user mapping to execute before any editor fallback behavior.
 fn user_mapping_wins_and_fires() {
     require_bundle();
     let session = NeovimSession::spawn_isolated().unwrap();
@@ -153,6 +160,7 @@ fn user_mapping_wins_and_fires() {
 }
 
 #[test]
+/// Observe actual native mode transitions after input rather than predicting modes from keys.
 fn modes_track_real_nvim() {
     require_bundle();
     let session = NeovimSession::spawn_isolated().unwrap();
@@ -182,6 +190,7 @@ fn modes_track_real_nvim() {
 }
 
 #[test]
+/// Compare display-width coordinates and redraw grid output from the real embedded UI.
 fn display_coordinates_and_raw_grid() {
     require_bundle();
     let session = NeovimSession::spawn_isolated().unwrap();
@@ -245,6 +254,7 @@ fn display_coordinates_and_raw_grid() {
 }
 
 #[test]
+/// Share native Undo between GUI edits and Vim while rejecting edits against an obsolete revision.
 fn gui_edits_share_native_undo_and_reject_stale() {
     require_bundle();
     let actor = DocumentActor::open(doc_id("undo"), "hello".into(), None).unwrap();
@@ -295,6 +305,7 @@ fn gui_edits_share_native_undo_and_reject_stale() {
 }
 
 #[test]
+/// Intercept native write commands and save through the Rust conflict-aware document operation.
 fn w_delegates_to_rust_save_path() {
     require_bundle();
     let dir = tempfile::tempdir().unwrap();
@@ -342,6 +353,7 @@ fn w_delegates_to_rust_save_path() {
 }
 
 #[test]
+/// Expose a failed user configuration instead of silently claiming it was loaded.
 fn config_errors_surface_instead_of_silent_fallback() {
     require_bundle();
     let dir = tempfile::tempdir().unwrap();
@@ -363,6 +375,7 @@ fn config_errors_surface_instead_of_silent_fallback() {
 }
 
 #[test]
+/// Validate cursor requests against the current snapshot without minting a text revision.
 fn cursor_reports_validate_without_bumping_revision() {
     require_bundle();
     let actor = DocumentActor::open(doc_id("cursor"), "a😀日本語".into(), None).unwrap();

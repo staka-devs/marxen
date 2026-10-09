@@ -12,9 +12,9 @@ const ALLOWED = {
   infrastructure: new Set(["infrastructure", "application", "domain", "contracts"]),
   presentation: new Set(["presentation", "application", "domain", "contracts"]),
 };
-const EFFECT_PACKAGES = /^(?:react(?:-dom)?|@tauri-apps\/|@codemirror\/|leaflet$|three$)/;
+const EFFECT_PACKAGES = /^(?:react(?:-dom)?|@tauri-apps\/|@codemirror\/|leaflet$|three$|(?:node:)?(?:fs|child_process|net|http|https|os|readline|process|worker_threads)(?:$|\/))/;
 const RUST_EFFECTS = new Set(["tauri", "tauri_plugin_dialog", "reqwest", "keyring", "arboard", "clipboard_win", "windows_sys", "objc2_app_kit", "objc2_foundation"]);
-const DOM_GLOBALS = new Set(["window", "document", "navigator", "localStorage", "sessionStorage", "FileReader", "MutationObserver", "ResizeObserver", "getComputedStyle", "Document", "HTMLElement", "Element", "Node", "Range", "Selection", "DOMParser", "XMLSerializer", "KeyboardEvent", "MouseEvent"]);
+const DOM_GLOBALS = new Set(["window", "document", "navigator", "localStorage", "sessionStorage", "fetch", "WebSocket", "XMLHttpRequest", "EventSource", "Worker", "ClipboardItem", "FileReader", "MutationObserver", "ResizeObserver", "getComputedStyle", "Document", "HTMLElement", "Element", "Node", "Range", "Selection", "DOMParser", "XMLSerializer", "KeyboardEvent", "MouseEvent"]);
 
 /** Normalize paths so layer checks behave identically on Windows and POSIX hosts. */
 function portable(path) {
