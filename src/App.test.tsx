@@ -1,10 +1,10 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import App from "./App";
-import { readRuntimeStatus } from "./lib/runtime";
-import { READONLY_MESSAGE } from "./lib/document-client";
+import { readRuntimeStatus } from "./infrastructure/tauri/runtime-client";
+import { READONLY_MESSAGE } from "./domain/document-errors";
 
-vi.mock("./lib/runtime", () => ({ readRuntimeStatus: vi.fn() }));
+vi.mock("./infrastructure/tauri/runtime-client", () => ({ readRuntimeStatus: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), isTauri: () => false }));
 beforeEach(() => vi.resetAllMocks());
 

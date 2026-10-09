@@ -10,6 +10,11 @@ import { defineConfig, devices } from "@playwright/test";
 // uses a dedicated Vite optimizer cache (vite.live.config.ts) so live runs
 // never share transform state with the native 1420 server.
 
+/**
+ * Resolve the live harness port, validating the TCP range.
+ *
+ * Defaults to 1426 clear of dev and product-test ports.
+ */
 function livePort(): number {
   const raw = process.env.MARXEN_E2E_LIVE_PORT ?? "1426";
   const port = Number(raw);
