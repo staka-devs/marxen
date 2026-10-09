@@ -54,9 +54,9 @@ jobs:
       - run: npm run test:bundling
       - run: npm run build
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked --features dev-tools
       - run: cargo check --manifest-path src-tauri/Cargo.toml --locked
-      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --features dev-tools --all-targets -- -D warnings
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
       - name: Build unsigned native packages with complete Neovim runtime
