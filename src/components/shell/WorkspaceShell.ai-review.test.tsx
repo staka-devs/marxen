@@ -184,7 +184,7 @@ async function openDocAndAi() {
 async function registerAndSend() {
   // Preparation is automatic on send: no manual registration step.
   const sidebar = screen.getByTestId("ai-sidebar");
-  fireEvent.click(within(sidebar).getByLabelText("選択書き換え"));
+  fireEvent.change(within(sidebar).getByLabelText("モード"), { target: { value: "rewrite" } });
   fireEvent.change(within(sidebar).getByLabelText("プロンプト"), { target: { value: "書いて" } });
   fireEvent.click(within(sidebar).getByRole("button", { name: "送信" }));
   await waitFor(() => expect(handler).not.toBeNull());

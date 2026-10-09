@@ -1,7 +1,9 @@
-/* Compact VSCode/Obsidian-style chat surfaces.
-   Owned by the Issue #17 AI-chat work: imported only by ai-panel.tsx and
-   ai-inline-chat.tsx. Every rule is scoped to these two components; shared
-   Button / styles.css / shell / settings / ReviewPanel are untouched. */
+/* Agent and inline chat share a compact composer and scoped controls. */
+.ai-chat-panel { gap: 0; }
+.ai-chat-header { height: 36px; padding: 0 12px; border-bottom: 1px solid var(--border); }
+.ai-chat-chips { padding: 8px 12px 4px; }
+.ai-chat-panel [aria-label="会話"] { padding: 8px 12px; }
+.ai-chat-composer { padding: 10px 12px 12px; }
 
 .ai-chat-panel .ai-chat-history-select,
 .ai-chat-panel .ai-chat-mode-select {
@@ -57,8 +59,7 @@
   flex-shrink: 0;
 }
 
-/* Connection settings stay collapsed and muted at the bottom of the pane.
-   The settings component itself is root-owned and unchanged. */
+/* Connection settings remain keyboard accessible at the bottom of the pane. */
 .ai-chat-settings details {
   border: 1px solid var(--border);
   border-radius: 6px;
