@@ -9,7 +9,11 @@ import { workspaceErrorText } from "../../domain/document-errors";
  * `loadImage` comes from the composition root (Tauri loader) so this view
  * never imports infrastructure directly; failures show Japanese messages.
  */
-export function ImageViewer({ path, loadImage }: { path: string; loadImage: (path: string) => Promise<ImageData> }) {
+export function ImageViewer({ path, loadImage }: {
+  path: string;
+  /** Load image bytes for display, injected by the composition root. */
+  loadImage: (path: string) => Promise<ImageData>;
+}) {
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [zoom, setZoom] = useState<number | null>(null);
@@ -25,6 +29,7 @@ export function ImageViewer({ path, loadImage }: { path: string; loadImage: (pat
     }).catch(cause => { if (!cancelled) setError(workspaceErrorText(cause)); });
     return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [path, loadImage]);
+  /** Step the zoom level, clamped to 25–400 percent. */
   const changeZoom = (delta: number) => setZoom(value => Math.max(25, Math.min(400, (value ?? 100) + delta)));
   return <section data-testid="image-viewer" aria-label={`${path}の画像ビューアー`} className="flex min-h-0 min-w-0 flex-col overflow-hidden">
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-xs">

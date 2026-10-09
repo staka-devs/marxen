@@ -31,6 +31,7 @@ it("rich text carries sanitized HTML and an undecorated text alternative", async
 it("embeds two relative PNG images into HTML and RTF in document order", async () => {
   // A valid 1x1 PNG; the export embeds its bytes rather than filesystem URLs.
   const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=";
+  /** Fake image loader embedding the fixture PNG for assertions. */
   const resolve = vi.fn(async (_path: string) => `data:image/png;base64,${png}`);
   const payload = await prepareClipboard({ format: "rich", text: "先 😀 ![一](日本.png) 後 ![二](images/two.png)" }, resolve);
   expect(resolve.mock.calls.map((call) => call[0])).toEqual(["日本.png", "images/two.png"]);

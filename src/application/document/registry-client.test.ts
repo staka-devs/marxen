@@ -4,7 +4,8 @@ import {
   ReadonlyRegistry,
   RegistryClient,
 } from "./registry-client";
-import { CompositionGate } from "../../application/document/composition-gate";
+import { workspaceApi } from "../../infrastructure/tauri/workspace-api";
+import { CompositionGate } from "./composition-gate";
 import {
   READONLY_MESSAGE,
   StaleResync,
@@ -14,7 +15,11 @@ import {
 import { serializeVimKey } from "../../domain/vim-keys";
 import type { DocumentSnapshot } from "../../contracts/contracts";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), isTauri: () => true }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  /** Desktop transport flag for registry tests. */
+  isTauri: () => true,
+}));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 
 const mockedInvoke = vi.mocked(invoke);
@@ -26,10 +31,10 @@ const mockedInvoke = vi.mocked(invoke);
 beforeEach(() => vi.resetAllMocks());
 
 it("serializes copy formatting and native writes before accepting the next key", async () => {
-  const client = new RegistryClient();
+  const client = new RegistryClient(workspaceApi);
   let releaseCopy!: () => void;
   mockedInvoke.mockResolvedValue({ snapshot: snapshot("copy", 0, "source", false), copy: { format: "rich", text: "source" }, copyReady: false });
-  const onCopy = vi.fn(() => new Promise<void>((resolve) => { releaseCopy = resolve; }));
+  /** Clipboard presentation hook for yank assertions. */ const onCopy = vi.fn(() => new Promise<void>((resolve) => { releaseCopy = resolve; }));
   const first = client.vimInputWithCopy("copy", "<F8>", onCopy);
   const second = client.vimInputWithCopy("copy", "j", vi.fn());
   await vi.waitFor(() => expect(onCopy).toHaveBeenCalledOnce());
@@ -41,17 +46,17 @@ it("serializes copy formatting and native writes before accepting the next key",
 });
 
 it("rejects a stale copy selector before writing the clipboard", async () => {
-  const client = new RegistryClient();
+  const client = new RegistryClient(workspaceApi);
   mockedInvoke.mockRejectedValueOnce({ code: "contract", error: { code: "stale_revision", expected: 1, received: 0 } });
   mockedInvoke.mockResolvedValueOnce(snapshot("copy", 1, "fresh"));
-  const onCopy = vi.fn();
+  /** Clipboard presentation hook for yank assertions. */ const onCopy = vi.fn();
   await expect(client.vimInputWithCopy("copy", "<F6>", onCopy)).rejects.toBeInstanceOf(StaleResync);
   expect(onCopy).not.toHaveBeenCalled();
 });
 
 it("routes a printable copy selector using the queued native mode after an Insert to Normal burst", async () => {
-  const client = new RegistryClient();
-  const onCopy = vi.fn(async () => {});
+  const client = new RegistryClient(workspaceApi);
+  /** Clipboard presentation hook for yank assertions. */ const onCopy = vi.fn(async () => {});
   const keys: string[] = [];
   mockedInvoke.mockImplementation(async (command, args) => {
     if (command === "fetch_mode") return { mode: "normal", revision: 0 };
@@ -70,7 +75,7 @@ it("routes a printable copy selector using the queued native mode after an Inser
 
 describe("registry client sends revision-aware requests", () => {
   it("passes document IDs and base revisions through unchanged", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     mockedInvoke.mockResolvedValueOnce(snapshot("doc_abc", 4, "hi"));
     const next = await client.applyEdits({ documentId: "doc_abc", baseRevision: 3 }, [
       { range: { start: 2, end: 2 }, text: "!" },
@@ -84,7 +89,7 @@ describe("registry client sends revision-aware requests", () => {
   });
 
   it("serializes Vim key input per document in call order", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     const gates: Array<() => void> = [];
     mockedInvoke.mockImplementation(
       () =>
@@ -111,7 +116,7 @@ describe("registry client sends revision-aware requests", () => {
   });
 
   it("binds native burst revisions at queue execution with delayed ACK", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     client.noteSnapshot(snapshot("doc_1", 0, ""));
     const releases: Array<() => void> = [];
     const seen: number[] = [];
@@ -144,7 +149,7 @@ describe("registry client sends revision-aware requests", () => {
   });
 
   it("resyncs stale revisions with the fresh snapshot instead of retrying", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     mockedInvoke.mockRejectedValueOnce({ code: "contract", error: { code: "stale_revision", expected: 7, received: 5 } });
     mockedInvoke.mockResolvedValueOnce(snapshot("doc_1", 7, "latest"));
     const failure = await client
@@ -159,7 +164,7 @@ describe("registry client sends revision-aware requests", () => {
   });
 
   it("keeps undo/redo/save on the native side with the same document ID", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     mockedInvoke.mockResolvedValueOnce(snapshot("doc_9", 2, "a"));
     mockedInvoke.mockResolvedValueOnce(snapshot("doc_9", 3, "ab"));
     mockedInvoke.mockResolvedValueOnce({ documentId: "doc_9", revision: 3, dirty: false });
@@ -187,7 +192,7 @@ describe("execution-mode character routing", () => {
   }
 
   it("queries the mapping prefix then feeds claimed keys natively, in order", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     installModeAware((command: string) => {
       if (command === "has_nvim_mapping") return Promise.resolve(true);
       if (command === "nvim_input") return Promise.resolve(snapshot("doc_1", 1, "x"));
@@ -202,7 +207,7 @@ describe("execution-mode character routing", () => {
   });
 
   it("keeps the queue-owned pending prefix so multi-key mappings keep priority", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     let revision = 0;
     installModeAware(
       (command: string) => {
@@ -222,7 +227,7 @@ describe("execution-mode character routing", () => {
   });
 
   it("replaces the exact selected range for unclaimed keys", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     installModeAware((command: string) => {
       if (command === "has_nvim_mapping") return Promise.resolve(false);
       if (command === "apply_gui_edits") return Promise.resolve(snapshot("doc_1", 1, "ax"));
@@ -239,7 +244,7 @@ describe("execution-mode character routing", () => {
   });
 
   it("feeds keys natively when the actual mode is visual, never appending GUI chars", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     nativeMode = "visual";
     installModeAware((command: string) => {
       if (command === "nvim_input") return Promise.resolve(snapshot("doc_1", 1, "x"));
@@ -253,7 +258,7 @@ describe("execution-mode character routing", () => {
   });
 
   it("feeds keys natively when the actual mode is normal despite an insert hint", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     nativeMode = "normal";
     installModeAware((command: string) => {
       if (command === "nvim_input") return Promise.resolve(snapshot("doc_1", 1, "x"));
@@ -265,7 +270,7 @@ describe("execution-mode character routing", () => {
   });
 
   it("keeps bursts ordered against execution-time revisions", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     let revision = 0;
     installModeAware(
       (command: string, args?: unknown) => {
@@ -293,7 +298,7 @@ describe("execution-mode character routing", () => {
   });
 
   it("fails closed without a GUI edit when the mapping state is unreadable", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     installModeAware((command: string) => {
       if (command === "has_nvim_mapping") return Promise.reject(new Error("rpc down"));
       if (command === "apply_gui_edits") return Promise.resolve(snapshot("doc_1", 1, "a"));
@@ -304,7 +309,7 @@ describe("execution-mode character routing", () => {
   });
 
   it("fails closed without feeding when the mode query is unreadable", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     mockedInvoke.mockImplementation((command: string) => {
       if (command === "fetch_mode") return Promise.reject(new Error("mode down"));
       throw new Error(`unexpected ${command}`);
@@ -315,7 +320,7 @@ describe("execution-mode character routing", () => {
   });
 
   it("resyncs instead of duplicating when the base went stale", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     mockedInvoke.mockImplementationOnce(() => Promise.resolve({ documentId: "doc_1", revision: 0, mode: "insert" }));
     mockedInvoke.mockResolvedValueOnce(true);
     mockedInvoke.mockRejectedValueOnce({ code: "contract", error: { code: "stale_revision", expected: 4, received: 3 } });
@@ -406,7 +411,7 @@ describe("clipboard paste respects explicit mappings", () => {
   }
 
   it("feeds a mapped Ctrl+V natively without inserting text", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     installPaste((command: string) => {
       if (command === "has_nvim_mapping") return Promise.resolve(true);
       if (command === "nvim_input") return Promise.resolve(snapshot("doc_1", 1, "x"));
@@ -420,7 +425,7 @@ describe("clipboard paste respects explicit mappings", () => {
   });
 
   it("replaces the exact selected range for unmapped text", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     installPaste((command: string, args?: unknown) => {
       if (command === "has_nvim_mapping") return Promise.resolve(false);
       if (command === "apply_gui_edits") {
@@ -439,7 +444,7 @@ describe("clipboard paste respects explicit mappings", () => {
   });
 
   it("inserts context-menu captures directly without a mapping query", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     installPaste((command: string, args?: unknown) => {
       if (command === "apply_gui_edits") {
         const a = args as { baseRevision: number };
@@ -457,7 +462,7 @@ describe("clipboard paste respects explicit mappings", () => {
   });
 
   it("fails closed without an insert when a keyboard mapping query is unreadable", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     installPaste((command: string) => {
       if (command === "has_nvim_mapping") return Promise.reject(new Error("rpc down"));
       throw new Error(`unexpected ${command}`);
@@ -470,7 +475,7 @@ describe("clipboard paste respects explicit mappings", () => {
 
 describe("cursor reporting stays serial without feedback", () => {
   it("coalesces rapid selections to a single latest report", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     client.noteSnapshot(snapshot("doc_1", 5, "hello"));
     mockedInvoke.mockResolvedValue({ documentId: "doc_1", revision: 5, anchor: 4, head: 4 });
     const first = client.stageCursor("doc_1", 1, 1);
@@ -485,7 +490,7 @@ describe("cursor reporting stays serial without feedback", () => {
   });
 
   it("reports jumps at the execution revision", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     client.noteSnapshot(snapshot("doc_1", 7, "hello world"));
     mockedInvoke.mockResolvedValue({ documentId: "doc_1", revision: 7, anchor: 0, head: 5 });
     const cursor = await client.reportCursorNow("doc_1", 0, 5);
@@ -494,7 +499,7 @@ describe("cursor reporting stays serial without feedback", () => {
   });
 
   it("preserves a noncollapsed mouse anchor instead of collapsing to head", async () => {
-    const client = new RegistryClient();
+    const client = new RegistryClient(workspaceApi);
     client.noteSnapshot(snapshot("doc_1", 3, "hello world"));
     mockedInvoke.mockResolvedValue({ documentId: "doc_1", revision: 3, anchor: 2, head: 7 });
     const cursor = await client.reportCursorNow("doc_1", 2, 7);
@@ -536,4 +541,5 @@ describe("composition gate commits once", () => {
     expect(gate.isComposing).toBe(false);
   });
 });
+
 

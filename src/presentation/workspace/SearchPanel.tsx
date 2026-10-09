@@ -2,14 +2,19 @@ import type { SearchHitItem } from "../../domain/search-hit";
 
 interface Props {
   query: string;
+  /** Replace the search query. */
   onQuery: (query: string) => void;
   hits: SearchHitItem[];
   searching: boolean;
   canReplace: boolean;
   replaceText: string;
+  /** Replace the replacement text. */
   onReplaceText: (text: string) => void;
+  /** Jump to a search hit opening the document when needed. */
   onJump: (hit: SearchHitItem) => void;
+  /** Replace one hit revision-aware with resync on stale. */
   onReplaceOne: (hit: SearchHitItem) => void;
+  /** Replace all registry hits per file with chained revisions. */
   onReplaceAll: () => void;
 }
 

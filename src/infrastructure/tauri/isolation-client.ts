@@ -17,6 +17,7 @@ import type {
   IsolatedCopyInfo,
   StagedProposal,
 } from "../../contracts/isolation-contracts";
+import type { IsolationGateway } from "../../application/ports";
 
 /**
  * Require the desktop transport for isolation copies.
@@ -95,5 +96,21 @@ export async function cancelIsolatedCopy(copyId: IsolatedCopyId): Promise<void> 
   requireDesktop();
   await invoke("isolation_cancel", { copyId });
 }
+
+/** Isolation gateway adapter satisfying the application port with Tauri IPC. */
+export const isolationGateway: IsolationGateway = {
+  /** Register contexts as an isolated copy. */
+  createCopy: createIsolatedCopy,
+  /** Fetch diffs with drift detection for a copy. */
+  fetchDiff: fetchIsolationDiff,
+  /** Stage a validated proposal into the copy. */
+  stageProposal,
+  /** Approve and apply the staged copy with scoped rollback. */
+  approveCopy: approveIsolatedCopy,
+  /** Reject the staged copy without touching disk. */
+  rejectCopy: rejectIsolatedCopy,
+  /** Cancel the copy after runs settle. */
+  cancelCopy: cancelIsolatedCopy,
+};
 
 export type { ApproveResult, IsolationDiff, IsolatedCopyInfo, StagedProposal };

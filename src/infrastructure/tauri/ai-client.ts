@@ -18,6 +18,7 @@ import type {
 } from "../../contracts/ai-contracts";
 import { AI_STREAM_EVENT } from "../../domain/ai-config";
 import { cancelPromptSafe as cancelPromptSafeCore } from "../../application/ai/ai-run-core";
+import type { AiGateway } from "../../application/ports";
 
 /**
  * Require the desktop transport, throwing a Japanese message in the browser.
@@ -73,6 +74,7 @@ export async function testConnection(config: AiProviderConfig, live: boolean): P
 /** Owned prompt run with its cancellation handle. */
 export interface PromptSession {
   runId: AiRunId;
+  /** Cancel the owned run once and release the listener. */
   stop: () => Promise<void>;
 }
 
@@ -150,3 +152,19 @@ export async function startPrompt(
     },
   };
 }
+
+/** AI gateway adapter satisfying the application port with Tauri IPC. */
+export const aiGateway: AiGateway = {
+  /** Start a streaming prompt with early-event buffering. */
+  startPrompt,
+  /** Best-effort cancel without surfacing cancel errors. */
+  cancelPromptSafe,
+  /** Read credential presence for a provider. */
+  getCredentialState,
+  /** Store a secret in the OS store. */
+  setCredential,
+  /** Delete a secret from the OS store. */
+  deleteCredential,
+  /** Test a provider connection. */
+  testConnection,
+};

@@ -19,6 +19,7 @@ import type { AiGateway, AiProfileStore } from "../application/ports";
 
 export interface AiProviderSettingsProps {
   provider: AiProviderConfig;
+  /** Replace the edited provider configuration. */
   onProvider: (provider: AiProviderConfig) => void;
   /** Increment to expand the collapsed settings from outside (e.g. root Settings). */
   openToken?: number;

@@ -11,6 +11,7 @@ import { describeIsolationError } from "../../domain/isolation-errors";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
+  /** Desktop transport flag for isolation tests. */
   isTauri: vi.fn(() => true),
 }));
 

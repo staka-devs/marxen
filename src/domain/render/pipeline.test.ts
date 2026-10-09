@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseMarkdownBlocks, renderMarkdownDocument } from "./pipeline";
 
+/** Read a shared fixture file for pipeline assertions. */
 const fixture = (name: string) => readFileSync(join(__dirname, "../../../tests/fixtures", name), "utf8");
 
 describe("render pipeline", () => {

@@ -28,6 +28,7 @@ it("shows native workspace errors received during chat preparation", () => {
     .toBe("送信した内容が対象範囲と一致しません");
 });
 
+/** Extract SSE data payloads from a raw event-stream fixture. */
 function sseDataPayloads(raw: string): string[] {
   return raw
     .split("\n")
@@ -109,7 +110,10 @@ describe("ai transport", () => {
 
   it("routes stream events by run id and cancels through IPC", async () => {
     vi.mocked(isTauri).mockReturnValue(true);
-    const captured: { handler?: (event: { payload: AiStreamEvent }) => void } = {};
+    const captured: {
+      /** Captured stream handler for event assertions. */
+      handler?: (event: { payload: AiStreamEvent }) => void;
+    } = {};
     const unlisten = vi.fn();
     vi.mocked(listen).mockImplementation(async (_event, callback) => {
       captured.handler = callback as (event: { payload: AiStreamEvent }) => void;

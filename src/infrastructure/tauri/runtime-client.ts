@@ -5,6 +5,7 @@
 
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { RuntimeStatus } from "../../contracts/contracts";
+import type { RuntimeGateway } from "../../application/ports";
 
 /**
  * Read the native runtime status, or disconnected in the browser demo.
@@ -17,3 +18,9 @@ export async function readRuntimeStatus(): Promise<RuntimeStatus> {
   }
   return invoke<RuntimeStatus>("get_runtime_status");
 }
+
+/** Runtime gateway adapter satisfying the application port with Tauri IPC. */
+export const runtimeGateway: RuntimeGateway = {
+  /** Read the native runtime status, or disconnected in the browser. */
+  readStatus: readRuntimeStatus,
+};

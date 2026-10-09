@@ -14,6 +14,7 @@ import {
 } from "./ai-conversation";
 import type { PromptContext } from "../../contracts/ai-contracts";
 
+/** Build a fixed prompt context fixture for conversation assertions. */
 function context(): PromptContext {
   return { documentId: "doc_01", revision: 7, ranges: [{ start: 1, end: 3 }], text: "a😀日本語" };
 }

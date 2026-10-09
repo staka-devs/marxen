@@ -17,6 +17,7 @@ import { markdownToPlainText, bytesToDataUrl, type ClipboardPayload } from "../.
 import { validateMathContent } from "../../domain/render/validate";
 import { htmlToRtf } from "./rtf";
 import { workspaceApi } from "../tauri/workspace-api";
+import type { ClipboardGateway } from "../../application/ports";
 
 /**
  * Build the clipboard payload for a yank, embedding relative images.
@@ -92,3 +93,11 @@ export async function copyYankToClipboard(copy: YankCopy, documentId: string): P
   });
   await invoke<void>("write_clipboard", payload as unknown as Record<string, unknown>);
 }
+
+
+/** Clipboard gateway adapter satisfying the application port through Rust. */
+export const clipboardGateway: ClipboardGateway = {
+  /** Copy a yank through Rust without browser activation permission. */
+  copyYank: copyYankToClipboard,
+};
+

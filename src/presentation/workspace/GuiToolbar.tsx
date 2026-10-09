@@ -2,14 +2,23 @@ import { Button } from "../ui/button";
 import type { FormatKind } from "../../domain/markdown-gui";
 
 interface Props {
+  /** Wrap or unwrap the selection with a format marker. */
   onFormat: (kind: FormatKind) => void;
+  /** Toggle the checkbox on the current line. */
   onCheckbox: () => void;
+  /** Insert a 2x2 table at the caret. */
   onTable: () => void;
+  /** Insert an empty row into the current table. */
   onTableRow: () => void;
+  /** Append an empty column to the current table. */
   onTableColumn: () => void;
+  /** Wrap the selection as a link. */
   onLink: () => void;
+  /** Insert an image reference at the caret. */
   onImage: () => void;
+  /** Undo through the native stack. */
   onUndo: () => void;
+  /** Redo through the native stack. */
   onRedo: () => void;
   vimMode: string;
   disabled?: boolean;

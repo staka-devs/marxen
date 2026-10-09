@@ -6,13 +6,41 @@ import { invoke } from "@tauri-apps/api/core";
 import { startPrompt } from "../../infrastructure/tauri/ai-client";
 import type { AiStreamEvent } from "../../contracts/ai-contracts";
 
-vi.mock("../../infrastructure/tauri/runtime-client", () => ({ readRuntimeStatus: vi.fn() }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), isTauri: () => true }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
+vi.mock("../../infrastructure/tauri/runtime-client", () => {
+  /** Mocked status reader controllable per test. */
+  const readRuntimeStatus = vi.fn();
+  return {
+    readRuntimeStatus,
+    /** Gateway delegating to the mocked status reader. */
+    runtimeGateway: {
+      /** Status reader delegating to the mock. */
+      readStatus: readRuntimeStatus,
+    },
+  };
+});
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  /** Desktop transport flag for shell tests. */
+  isTauri: () => true,
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  /** Event subscription resolving to a no-op unlisten. */
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("../../infrastructure/tauri/ai-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infrastructure/tauri/ai-client")>();
-  return { ...actual, startPrompt: vi.fn(), cancelPromptSafe: vi.fn() };
+  /** Mocked streaming starter for deterministic run assertions. */
+  const startPrompt = vi.fn();
+  /** Mocked best-effort cancel settling immediately. */
+  const cancelPromptSafe = vi.fn();
+  return {
+    ...actual,
+    startPrompt,
+    cancelPromptSafe,
+    /** Injected AI gateway using the mocked streaming starter. */
+    aiGateway: { ...actual.aiGateway, startPrompt, cancelPromptSafe },
+  };
 });
 
 const mockedInvoke = vi.mocked(invoke);
@@ -33,6 +61,7 @@ const backend = {
   approveStaleOnce: false,
 };
 
+/** Reset the fake native backend to one sample document. */
 function resetBackend() {
   backend.docs = new Map([
     ["メモ/a.md", { id: "doc_a", path: "メモ/a.md", text: "# A\n", revision: 0, dirty: false }],
@@ -42,6 +71,7 @@ function resetBackend() {
   backend.approveStaleOnce = false;
 }
 
+/** Install the fake Tauri backend answering workspace and isolation commands. */
 function installBackend() {
   mockedInvoke.mockImplementation((command: string, args?: unknown) => {
     const a = (args ?? {}) as Record<string, unknown>;
@@ -150,14 +180,14 @@ beforeEach(() => {
 
 let handler: ((event: AiStreamEvent) => void) | null = null;
 
-function mockStream() {
+/** Capture the stream handler returning a fixed run for assertions. */ function mockStream() {
   mockedStartPrompt.mockImplementation(async (_request, onEvent) => {
     handler = onEvent;
     return { runId: "run_1", stop: vi.fn() };
   });
 }
 
-function emitDone() {
+/** Emit a started and done pair carrying the fixed proposal. */ function emitDone() {
   handler!({ type: "started", payload: { runId: "run_1" } });
   handler!({
     type: "done",
@@ -169,7 +199,7 @@ function emitDone() {
   });
 }
 
-async function openDocAndAi() {
+/** Open the sample document and reveal the AI sidebar. */ async function openDocAndAi() {
   render(<App />);
   fireEvent.click(screen.getByRole("button", { name: "パスを入力する" }));
   fireEvent.change(screen.getByLabelText("開くフォルダーの絶対パス"), { target: { value: "/ws" } });
@@ -181,7 +211,7 @@ async function openDocAndAi() {
   await screen.findByTestId("ai-sidebar");
 }
 
-async function registerAndSend() {
+/** Send a rewrite prompt through automatic staging registration. */ async function registerAndSend() {
   // Preparation is automatic on send: no manual registration step.
   const sidebar = screen.getByTestId("ai-sidebar");
   fireEvent.change(within(sidebar).getByLabelText("モード"), { target: { value: "rewrite" } });
@@ -320,5 +350,6 @@ it("refuses stale approval and keeps text for resync", async () => {
   expect(backend.docs.get("メモ/a.md")!.text).toBe("# A\n");
   expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 0");
 });
+
 
 

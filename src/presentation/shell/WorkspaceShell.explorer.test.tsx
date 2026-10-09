@@ -4,17 +4,46 @@ import { invoke } from "@tauri-apps/api/core";
 import App from "../../App";
 import { WORKSPACE_IMAGE_DRAG } from "../../domain/workspace-files";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), isTauri: () => true }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
-vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: () => Promise.resolve(() => {}) }) }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  /** Desktop transport flag for shell tests. */
+  isTauri: () => true,
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  /** Event subscription resolving to a no-op unlisten. */
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+vi.mock("@tauri-apps/api/webview", () => ({
+  /** Webview stub suppressing native drops in shell tests. */
+  getCurrentWebview: () => ({
+    /** Native drop subscription resolving to a no-op unlisten. */
+    onDragDropEvent: () => Promise.resolve(() => {}),
+  }),
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
-vi.mock("../../infrastructure/tauri/runtime-client", () => ({ readRuntimeStatus: () => Promise.resolve({ contractVersion: 1, connection: "connected", detail: "test registry" }) }));
+vi.mock("../../infrastructure/tauri/runtime-client", () => {
+  /** Fixed connected status for registry-backed shell tests. */
+  const readRuntimeStatus = () => Promise.resolve({ contractVersion: 1, connection: "connected", detail: "test registry" });
+  return {
+    readRuntimeStatus,
+    /** Gateway delegating to the fixed connected status. */
+    runtimeGateway: {
+      /** Status reader delegating to the fixed status. */
+      readStatus: readRuntimeStatus,
+    },
+  };
+});
 const mockInvoke = vi.mocked(invoke);
 let text = "😀Markdown"; let revision = 0;
 const image = { mime: "image/png", bytes: [137, 80, 78, 71] };
 beforeEach(() => {
   vi.clearAllMocks(); text = "😀Markdown"; revision = 0;
-  vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: vi.fn(() => "blob:test-image"), revokeObjectURL: vi.fn() }));
+  vi.stubGlobal("URL", Object.assign(URL, {
+    /** Blob URL stub for image viewer tests. */
+    createObjectURL: vi.fn(() => "blob:test-image"),
+    /** Blob URL cleanup stub for image viewer tests. */
+    revokeObjectURL: vi.fn(),
+  }));
   mockInvoke.mockImplementation((command, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     switch (command) {
@@ -45,6 +74,7 @@ beforeEach(() => {
     }
   });
 });
+/** Open the fake workspace through the manual folder input. */
 async function openWorkspace() {
   render(<App />);
   fireEvent.click(screen.getByRole("button", { name: "パスを入力する" }));
@@ -94,7 +124,16 @@ it("routes an explorer image drop to revision-guarded Rust insertion without a G
   fireEvent.click(screen.getByRole("button", { name: "a.md" }));
   await screen.findByTestId("editor-primary");
   await waitFor(() => expect(mockInvoke.mock.calls.some(([name]) => name === "fetch_cursor")).toBe(true));
-  fireEvent.drop(screen.getByTestId("image-drop-zone"), { dataTransfer: { types: [WORKSPACE_IMAGE_DRAG], getData: () => "photo.png", files: [] }, clientX: 0, clientY: 0 });
+  fireEvent.drop(screen.getByTestId("image-drop-zone"), {
+    dataTransfer: {
+      types: [WORKSPACE_IMAGE_DRAG],
+      /** Return the dragged workspace image path. */
+      getData: () => "photo.png",
+      files: [],
+    },
+    clientX: 0,
+    clientY: 0,
+  });
   await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("insert_workspace_image", { documentId: "doc_a", baseRevision: 0, path: "photo.png", range: { start: 2, end: 2 } }));
   await waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("😀![](photo.png)Markdown"));
   expect(mockInvoke.mock.calls.filter(([name]) => name === "insert_workspace_image")).toHaveLength(1);

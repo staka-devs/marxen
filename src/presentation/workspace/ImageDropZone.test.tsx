@@ -21,7 +21,14 @@ it("owns internal DOM drops exactly once and preserves a UTF-16 fallback selecti
   const drop = vi.fn();
   render(<ImageDropZone enabled selection={{ start: 2, end: 4 }} onDrop={drop} onError={vi.fn()}><span>editor</span></ImageDropZone>);
   const event = new Event("drop", { bubbles: true, cancelable: true });
-  Object.defineProperty(event, "dataTransfer", { value: { types: [WORKSPACE_IMAGE_DRAG], getData: () => "assets/a.png", files: [] } });
+  Object.defineProperty(event, "dataTransfer", {
+    value: {
+      types: [WORKSPACE_IMAGE_DRAG],
+      /** Return the dragged workspace image path. */
+      getData: () => "assets/a.png",
+      files: [],
+    },
+  });
   fireEvent(screen.getByTestId("image-drop-zone"), event);
   expect(event.defaultPrevented).toBe(true);
   expect(drop).toHaveBeenCalledExactlyOnceWith({ kind: "workspace", path: "assets/a.png" }, { start: 2, end: 4 });
@@ -31,7 +38,12 @@ it("blocks image insertion during IME preedit and rejects unsupported external f
   const drop = vi.fn(); const error = vi.fn();
   render(<ImageDropZone enabled selection={{ start: 0, end: 0 }} onDrop={drop} onError={error}><span>editor</span></ImageDropZone>);
   const zone = screen.getByTestId("image-drop-zone");
-  const transfer = { types: ["Files"], getData: () => "", files: [new File(["text"], "a.svg")] };
+  const transfer = {
+    types: ["Files"],
+    /** Return empty text so the file branch is exercised. */
+    getData: () => "",
+    files: [new File(["text"], "a.svg")],
+  };
   fireEvent.compositionStart(zone);
   fireEvent.drop(zone, { dataTransfer: transfer });
   expect(drop).not.toHaveBeenCalled();

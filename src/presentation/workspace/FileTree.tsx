@@ -21,6 +21,7 @@ export interface TreeNode {
 export function buildTree(entries: WorkspaceEntry[]): TreeNode[] {
   const roots: TreeNode[] = [];
   const dirs = new Map<string, TreeNode>();
+  /** Ensure the directory node for a path, creating ancestors as needed. */
   const ensureDir = (path: string): TreeNode => {
     const existing = dirs.get(path);
     if (existing) return existing;
@@ -40,6 +41,7 @@ export function buildTree(entries: WorkspaceEntry[]): TreeNode[] {
     if (!parent) roots.push(node);
     else ensureDir(parent).children?.push(node);
   }
+  /** Sort folders before files with Japanese collation, recursively. */
   const sort = (nodes: TreeNode[]) => {
     nodes.sort((a, b) => a.directory === b.directory ? a.name.localeCompare(b.name, "ja") : a.directory ? -1 : 1);
     for (const node of nodes) if (node.children) sort(node.children);
@@ -51,6 +53,7 @@ export function buildTree(entries: WorkspaceEntry[]): TreeNode[] {
 interface Props {
   nodes: TreeNode[];
   activePath: string | null;
+  /** Open the file at a workspace-relative path. */
   onOpenFile: (path: string) => void;
   /** True on desktop where native drops own image drags; HTML5 drag stays browser-only. */
   desktop?: boolean;

@@ -12,6 +12,7 @@ import type {
   DocumentSnapshot,
   GridUpdate,
   ImageData,
+  ModeUpdate,
   NvimConfig,
   OpenDocument,
   PasteResult,
@@ -53,6 +54,8 @@ export interface DocumentGateway {
   noteSnapshot(snapshot: DocumentSnapshot): void;
   /** Apply GUI edits serially, resyncing once on stale. */
   applyEdits(request: SaveRequest, edits: TextEdit[]): Promise<DocumentSnapshot>;
+  /** Feed keys through real Neovim, binding the revision at execution time. */
+  vimInput(documentId: DocumentId, keys: string): Promise<DocumentSnapshot>;
   /** Feed keys natively with copy side effects in queue order. */
   vimInputWithCopy(documentId: DocumentId, keys: string, onCopy: (copy: YankCopy) => Promise<void>): Promise<VimInputResult>;
   /** Route one printable char using the execution-time native mode. */
@@ -97,9 +100,60 @@ export interface DocumentGateway {
   stageCursor(documentId: DocumentId, anchor: number, head: number): Promise<CursorUpdate | null>;
   /** Report an explicit jump at the execution revision. */
   reportCursorNow(documentId: DocumentId, anchor: number, head: number): Promise<CursorUpdate>;
+  /** Report a cursor update directly without queueing. */
+  reportCursor(update: CursorUpdate): Promise<CursorUpdate>;
   /** Fetch a grid screen batch. */
   fetchGrid(documentId: DocumentId, width?: number, height?: number): Promise<GridUpdate>;
   /** Fetch the Neovim config state. */
+  fetchConfig(documentId: DocumentId): Promise<NvimConfig>;
+}
+
+/**
+ * Raw document transport port behind the registry use cases.
+ *
+ * One method per native document command; the registry serializes calls,
+ * binds revisions at execution time, and resyncs on stale rejections. The
+ * Tauri workspace API satisfies this port structurally, so the composition
+ * root injects it directly with no forwarding wrappers.
+ */
+export interface DocumentTransport {
+  /** Apply GUI range edits at the given base revision. */
+  applyEdits(request: SaveRequest, edits: TextEdit[]): Promise<DocumentSnapshot>;
+  /** Feed raw keys through real Neovim. */
+  input(request: SaveRequest, keys: string): Promise<DocumentSnapshot>;
+  /** Feed keys natively and report yank/copy side effects. */
+  inputWithCopy(request: SaveRequest, keys: string): Promise<VimInputResult>;
+  /** Fetch the current Neovim mode for a document. */
+  fetchMode(documentId: DocumentId): Promise<ModeUpdate>;
+  /** Check whether an Insert-mode mapping prefix exists. */
+  hasMapping(documentId: DocumentId, mode: string, lhs: string): Promise<boolean>;
+  /** Fetch the authoritative snapshot for a document ID. */
+  fetchSnapshot(documentId: DocumentId): Promise<DocumentSnapshot>;
+  /** Report a GUI selection to the native cursor tracker. */
+  reportCursor(update: CursorUpdate): Promise<CursorUpdate>;
+  /** Fetch the last known native cursor for a document. */
+  fetchCursor(documentId: DocumentId): Promise<CursorUpdate>;
+  /** Undo through the native undo stack. */
+  undo(documentId: DocumentId): Promise<DocumentSnapshot>;
+  /** Redo through the native undo stack. */
+  redo(documentId: DocumentId): Promise<DocumentSnapshot>;
+  /** Save the document at the given base revision. */
+  saveDocument(request: SaveRequest): Promise<SaveResult>;
+  /** Reload the document from disk at the given base revision. */
+  reloadDocument(request: SaveRequest): Promise<DocumentSnapshot>;
+  /** Rename a Markdown document, keeping its document ID. */
+  renameMarkdown(request: SaveRequest, path: string): Promise<OpenDocument>;
+  /** Apply a Neovim config file and restart the buffer actor. */
+  configure(request: SaveRequest, path: string | null): Promise<NvimConfig>;
+  /** Insert a workspace image reference at the given UTF-16 range. */
+  insertWorkspaceImage(request: SaveRequest, path: string, range: Utf16Range): Promise<DocumentSnapshot>;
+  /** Copy an external image into the workspace and insert a reference. */
+  importExternalImage(request: SaveRequest, path: string, range: Utf16Range): Promise<PasteResult>;
+  /** Paste image bytes, replacing the given UTF-16 range. */
+  pasteImage(request: SaveRequest, name: string, bytes: Uint8Array, range: Utf16Range): Promise<PasteResult>;
+  /** Fetch a Neovim grid screen batch. */
+  fetchGrid(documentId: DocumentId, width?: number, height?: number): Promise<GridUpdate>;
+  /** Fetch the current Neovim config state for a document. */
   fetchConfig(documentId: DocumentId): Promise<NvimConfig>;
 }
 

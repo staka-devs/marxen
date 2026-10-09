@@ -5,6 +5,7 @@
 // Outside Tauri these resolve null and the shell keeps its manual inputs.
 
 import { isDesktop } from "../tauri/workspace-api";
+import type { DialogGateway } from "../../application/ports";
 
 /**
  * Open the native folder picker, returning the selected absolute path.
@@ -31,3 +32,11 @@ export async function pickConfigFile(): Promise<string | null> {
   const selected = await open({ directory: false, multiple: false, title: "Neovim 設定ファイルを選ぶ" });
   return typeof selected === "string" ? selected : null;
 }
+
+/** Dialog gateway adapter satisfying the application port with native pickers. */
+export const dialogGateway: DialogGateway = {
+  /** Native folder picker; null when cancelled or unavailable. */
+  pickFolder,
+  /** Native config-file picker; name validated by the caller. */
+  pickConfigFile,
+};

@@ -6,7 +6,9 @@ interface Props {
   paths: string[];
   label: string;
   testId: string;
+  /** Open the selected file path. */
   onSelect: (path: string) => void;
+  /** Close the dialog without opening. */
   onClose: () => void;
 }
 
@@ -48,4 +50,5 @@ interface Props {
     </div>
   );
 }
+
 

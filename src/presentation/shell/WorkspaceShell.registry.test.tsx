@@ -4,9 +4,27 @@ import App from "../../App";
 import { readRuntimeStatus } from "../../infrastructure/tauri/runtime-client";
 import { invoke } from "@tauri-apps/api/core";
 
-vi.mock("../../infrastructure/tauri/runtime-client", () => ({ readRuntimeStatus: vi.fn() }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), isTauri: () => true }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
+vi.mock("../../infrastructure/tauri/runtime-client", () => {
+  /** Mocked status reader controllable per test. */
+  const readRuntimeStatus = vi.fn();
+  return {
+    readRuntimeStatus,
+    /** Gateway delegating to the mocked status reader. */
+    runtimeGateway: {
+      /** Status reader delegating to the mock. */
+      readStatus: readRuntimeStatus,
+    },
+  };
+});
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  /** Desktop transport flag for shell tests. */
+  isTauri: () => true,
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  /** Event subscription resolving to a no-op unlisten. */
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 const mockedInvoke = vi.mocked(invoke);
@@ -39,7 +57,7 @@ const scenario = {
   pastedImages: [] as Array<{ documentId: string; name: string; range: { start: number; end: number } }>,
 };
 
-function resetBackend() {
+/** Reset the fake native backend to three sample documents. */ function resetBackend() {
   scenario.files = new Map([
     ["メモ/a.md", { id: "doc_a", path: "メモ/a.md", text: "# A\n\n- [ ] task\n", revision: 0, dirty: false, history: ["# A\n\n- [ ] task\n"] }],
     ["メモ/b.md", { id: "doc_b", path: "メモ/b.md", text: "# B\n", revision: 0, dirty: false, history: ["# B\n"] }],
@@ -62,13 +80,13 @@ function resetBackend() {
   scenario.pastedImages = [];
 }
 
-function docById(id: string): BackendDoc {
+/** Find a backend document by ID, rejecting unknown documents. */ function docById(id: string): BackendDoc {
   const doc = [...scenario.files.values()].find((entry) => entry.id === id);
   if (!doc) throw { code: "unknown_document" };
   return doc;
 }
 
-function applyText(text: string, edits: Array<{ range: { start: number; end: number }; text: string }>): string {
+/** Apply range edits tail-first to fake backend text. */ function applyText(text: string, edits: Array<{ range: { start: number; end: number }; text: string }>): string {
   let out = text;
   for (let i = edits.length - 1; i >= 0; i -= 1) {
     const edit = edits[i];
@@ -77,11 +95,11 @@ function applyText(text: string, edits: Array<{ range: { start: number; end: num
   return out;
 }
 
-function snapshotOf(doc: BackendDoc) {
+/** Build a snapshot payload from a backend document. */ function snapshotOf(doc: BackendDoc) {
   return { documentId: doc.id, revision: doc.revision, text: doc.text, dirty: doc.dirty };
 }
 
-function installBackend() {
+/** Install the fake Tauri backend answering workspace commands. */ function installBackend() {
   mockedInvoke.mockImplementation((command: string, args?: unknown) => {
     const a = (args ?? {}) as Record<string, unknown>;
     switch (command) {
@@ -269,6 +287,7 @@ beforeEach(() => {
   vi.mocked(readRuntimeStatus).mockResolvedValue({ contractVersion: 1, connection: "connected", detail: "connected" });
 });
 
+/** Open the fake workspace through the manual folder input. */
 async function openWorkspace() {
   render(<App />);
   fireEvent.click(screen.getByRole("button", { name: "パスを入力する" }));
@@ -581,6 +600,7 @@ it("types immediately after i without waiting for the mode echo", async () => {
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
 });
 
+/** Open a document in insert mode for editing-behavior tests. */
 async function openInsertDoc() {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
@@ -591,9 +611,15 @@ async function openInsertDoc() {
   await waitFor(() => expect(screen.getByTestId("vim-footer-mode")).toHaveTextContent("挿入"));
 }
 
+/**
+ * Fire a synthetic paste event carrying text and optional files.
+ *
+ * Files default to empty so text-only and image pastes share one helper.
+ */
 function pasteEvent(editor: HTMLElement, text: string, files: File[] = []) {
   fireEvent.paste(editor, {
     clipboardData: {
+      /** Return the pasted text for text mimetypes, else empty. */
       getData: (type: string) => (type.startsWith("text") ? text : ""),
       files,
     },
@@ -656,7 +682,13 @@ it("pastes an OS image with empty text exactly once without text insertion", asy
   await openInsertDoc();
   scenario.mappingResult = false;
   const editor = screen.getByTestId("editor-primary");
-  const file = { name: "shot.png", type: "image/png", size: 4, arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer } as unknown as File;
+  const file = {
+    name: "shot.png",
+    type: "image/png",
+    size: 4,
+    /** PNG bytes for single-image paste tests. */
+    arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer,
+  } as unknown as File;
   fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
   pasteEvent(editor, "", [file]);
   await waitFor(() => expect(scenario.pastedImages).toHaveLength(1));
@@ -668,8 +700,20 @@ it("pastes an OS image with empty text exactly once without text insertion", asy
 it("appends each pasted image after the previous insert instead of reusing one offset", async () => {
   await openInsertDoc();
   const editor = screen.getByTestId("editor-primary");
-  const first = { name: "one.png", type: "image/png", size: 4, arrayBuffer: async () => new Uint8Array([1]).buffer } as unknown as File;
-  const second = { name: "two.png", type: "image/png", size: 4, arrayBuffer: async () => new Uint8Array([2]).buffer } as unknown as File;
+  const first = {
+    name: "one.png",
+    type: "image/png",
+    size: 4,
+    /** First bytes for chained multi-image paste tests. */
+    arrayBuffer: async () => new Uint8Array([1]).buffer,
+  } as unknown as File;
+  const second = {
+    name: "two.png",
+    type: "image/png",
+    size: 4,
+    /** Second bytes for chained multi-image paste tests. */
+    arrayBuffer: async () => new Uint8Array([2]).buffer,
+  } as unknown as File;
   fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
   pasteEvent(editor, "", [first, second]);
   await waitFor(() => expect(scenario.pastedImages).toHaveLength(2));
@@ -679,6 +723,7 @@ it("appends each pasted image after the previous insert instead of reusing one o
   expect(secondCall.range.start).toBe(secondCall.range.end);
 });
 
+/** Open a document in display-basis source mode for offset-exact tests. */
 async function openInsertDocDisplay() {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
@@ -877,7 +922,13 @@ it("surfaces a stale image range once without a duplicate file write", async () 
   await openInsertDoc();
   scenario.pasteImageStaleOnce = true;
   const editor = screen.getByTestId("editor-primary");
-  const file = { name: "stale.png", type: "image/png", size: 4, arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer } as unknown as File;
+  const file = {
+    name: "stale.png",
+    type: "image/png",
+    size: 4,
+    /** PNG bytes for stale-range single-write tests. */
+    arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer,
+  } as unknown as File;
   fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
   pasteEvent(editor, "", [file]);
   await waitFor(() =>
@@ -966,4 +1017,6 @@ it("routes display-basis arrows natively in Visual so x-mode mappings fire", asy
     expect(mockedInvoke).toHaveBeenCalledWith("nvim_input_with_copy", { documentId: "doc_a", baseRevision: 0, keys: "<Up>" }),
   );
 });
+
+
 

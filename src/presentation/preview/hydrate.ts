@@ -145,6 +145,7 @@ export function sanitizeSvg(svg: string): string {
         container.innerHTML = "";
       });
       const layer = L.geoJSON(geometry as never, {
+        /** Render point features as small circle markers. */
         pointToLayer: (_feature, latlng) => L.circleMarker(latlng, { radius: 6 }),
       });
       layer.addTo(map);

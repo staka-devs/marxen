@@ -2,6 +2,7 @@ import { outlineFromMarkdown } from "../../domain/workspace-content";
 
 interface Props {
   text: string;
+  /** Jump the editor to a heading offset. */
   onJump: (offset: number) => void;
 }
 
@@ -31,4 +32,5 @@ interface Props {
     </section>
   );
 }
+
 

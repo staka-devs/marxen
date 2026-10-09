@@ -8,6 +8,7 @@ import { bytesToDataUrl } from "../../domain/clipboard-text";
 import { decodeImageSrc } from "../../domain/image-sources";
 import type { ImageResolver } from "../../domain/image-sources";
 import { workspaceApi } from "../tauri/workspace-api";
+import type { ImageLoader } from "../../application/ports";
 
 /** In-memory data-URL cache keyed by `documentId:src`. */
 const cache = new Map<string, string>();
@@ -65,3 +66,13 @@ export function makeImageResolver(
     return url;
   };
 }
+
+
+/** Image loader adapter satisfying the application port with caching. */
+export const imageLoader: ImageLoader = {
+  /** Resolve a relative source to a displayable URL or null. */
+  resolve: resolveImageForDocument,
+  /** Shared resolver factory for the active document. */
+  forDocument: makeImageResolver,
+};
+

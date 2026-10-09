@@ -31,14 +31,20 @@ export interface InlineChatProps {
   target: { start: number; end: number; kind: "selection" | "paragraph"; excerpt: string };
   context: PromptContext;
   staging: StagingTarget | null;
+  /** Register contexts for an isolated staging copy before sending. */
   ensureStaging: (contexts: PromptContext[]) => Promise<StagingTarget>;
   provider: AiProviderConfig;
   /** Fenced while the Agent chat owns a run on the shared staging slot. */
   disabled?: boolean;
+  /** Broadcast busy ownership for the shared staging fence. */
   onBusyChange?: (busy: boolean) => void;
+  /** Forward the completed proposal with its mode for review staging. */
   onProposal: (proposal: ProposalText, sent: ContextSummary[], mode: PromptMode) => void;
+  /** Reveal the staged diff for review. */
   onReview: () => void;
+  /** Close the composer, cancelling the owned run. */
   onClose: () => void;
+  /** Caret anchor for floating placement, if available. */
   anchor?: () => { left: number; top: number; bottom: number } | null;
   /** Streaming transport injected by the composition root. */
   startPrompt?: AiGateway["startPrompt"];
@@ -83,6 +89,7 @@ export default function InlineChat({
   const [position, setPosition] = useState({ left: 16, top: 64 });
 
   useLayoutEffect(() => {
+    /** Clamp the composer inside the viewport at the caret anchor. */
     const place = () => {
       const box = dialogRef.current?.getBoundingClientRect();
       const caret = anchor?.();

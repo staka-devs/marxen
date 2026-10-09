@@ -85,6 +85,7 @@ test("Normal mode IME cannot commit text into the Vim document", async ({ page, 
 // The harness mounts ONE CodeMirrorEditor with livePreview and no separate
 // preview pane. Meaningful assertions target widgets INSIDE `.cm-content`.
 
+/** Read the harness editor value for live-widget assertions. */
 async function harnessValue(page: Page): Promise<string> {
   return page.evaluate(() => window.__harness.getValue());
 }

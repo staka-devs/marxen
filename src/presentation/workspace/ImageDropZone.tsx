@@ -15,7 +15,9 @@ interface Props {
   enabled: boolean;
   hidden?: boolean;
   selection: Utf16Range;
+  /** Route a resolved drop with its editor range. */
   onDrop: (drop: ImageDrop, range: Utf16Range) => void;
+  /** Report drop validation failures for notices. */
   onError: (message: string) => void;
   /** True on desktop where native drops are available; browser stays HTML5-only. */
   desktop?: boolean;
@@ -36,6 +38,7 @@ export function ImageDropZone({ children, enabled, hidden = false, selection, on
   const composing = useRef(false);
   const latest = useRef({ enabled, selection, onDrop, onError });
   latest.current = { enabled, selection, onDrop, onError };
+  /** Resolve a pointer position to a UTF-16 range, falling back to selection. */
   const rangeAt = (x: number, y: number): Utf16Range => {
     const editor = element.current?.querySelector<HTMLElement>(".cm-editor");
     const bounds = editor?.getBoundingClientRect();
@@ -45,6 +48,7 @@ export function ImageDropZone({ children, enabled, hidden = false, selection, on
   // Native file-drop handling suppresses HTML5 drag/drop on Windows.
   // Pointer-driven internal drags stay in the DOM while native imports remain enabled.
   useEffect(() => {
+    /** Route internal pointer drops landing inside the editor bounds. */
     const handlePointerDrop = (event: Event) => {
       if (!latest.current.enabled || composing.current) return;
       const { path, x, y } = (event as CustomEvent<{ path: string; x: number; y: number }>).detail;
@@ -79,6 +83,7 @@ export function ImageDropZone({ children, enabled, hidden = false, selection, on
     }
     return () => { cancelled = true; unlisten?.(); };
   }, [enabled, desktop, subscribeNativeDrop]);
+  /** Check whether a drag carries workspace images or files. */
   const owns = (event: DragEvent) => Array.from(event.dataTransfer.types).some(type => type === WORKSPACE_IMAGE_DRAG || type === "Files");
   return <div ref={element} hidden={hidden} className={hidden ? "hidden" : "min-h-0 min-w-0 h-full"} data-testid="image-drop-zone"
     onCompositionStartCapture={() => { composing.current = true; }}

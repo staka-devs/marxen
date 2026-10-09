@@ -5,6 +5,7 @@
 // presence. Failures (private mode/quota) stay silent and fall back to defaults.
 
 import { defaultProfile, sanitizeAiProfile, type AiProfile } from "../../domain/ai-profile";
+import type { AiProfileStore } from "../../application/ports";
 
 /** Storage key versioning the profile shape. */
 const STORAGE_KEY = "marxen.ai-profile.v1";
@@ -36,3 +37,13 @@ export function saveAiProfile(profile: AiProfile): void {
     // Private mode / quota: profiles simply do not persist.
   }
 }
+
+
+/** AI profile store adapter satisfying the application port with localStorage. */
+export const aiProfileStore: AiProfileStore = {
+  /** Load the sanitized profile or defaults. */
+  load: loadAiProfile,
+  /** Persist a sanitized profile; failures stay silent. */
+  save: saveAiProfile,
+};
+

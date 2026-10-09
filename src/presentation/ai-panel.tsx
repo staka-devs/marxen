@@ -54,6 +54,7 @@ export interface AiPanelProps {
   ensureStaging?: (contexts: PromptContext[]) => Promise<StagingTarget>;
   /** Controlled provider shared with inline chat; uncontrolled when absent. */
   provider?: AiProviderConfig;
+  /** Replace the shared provider configuration. */
   onProvider?: (provider: AiProviderConfig) => void;
   /** Increment to expand the collapsed connection settings (root Settings entry point). */
   openSettingsToken?: number;
@@ -63,7 +64,9 @@ export interface AiPanelProps {
   contextLabels?: Record<string, string>;
   /** Fenced while the other chat owns a run on the shared staging slot. */
   disabled?: boolean;
+  /** Broadcast busy ownership for the shared staging fence. */
   onBusyChange?: (busy: boolean) => void;
+  /** Drop one document from the send scope. */
   onRemoveContext?: (documentId: string) => void;
   /**
    * Called once per completed run with the proposal text and the mode it was

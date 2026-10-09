@@ -10,7 +10,9 @@ export interface TabItem {
 interface Props {
   tabs: TabItem[];
   activeId: string | null;
+  /** Activate the tab by ID. */
   onSelect: (id: string) => void;
+  /** Close the tab by ID. */
   onClose: (id: string) => void;
 }
 
@@ -38,4 +40,5 @@ interface Props {
     </div>
   );
 }
+
 

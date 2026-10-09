@@ -115,16 +115,24 @@ function Harness() {
   }, []);
 
   window.__harness = {
+    /** Replace the editor text. */
     setValue: (text: string) => setValue(text),
+    /** Read the current editor text. */
     getValue: () => valueRef.current,
+    /** Read captured GUI edit batches. */
     getEdits: () => editsRef.current,
+    /** Clear captured edit batches. */
     clearEdits: () => setEdits([]),
+    /** Read the last reported selection. */
     getSelection: () => selectionRef.current,
+    /** Echo a cursor with a harness-owned sequence. */
     echoCursor: (anchor: number, head: number) => {
       seqRef.current += 1;
       setCursor({ anchor, head, seq: seqRef.current });
     },
+    /** List relative sources the fake resolver was asked for. */
     imageCalls: () => [...imageCallsRef.current],
+    /** Merge partial preferences into the harness state. */
     setPreferences: (next) => setPreferences((previous) => ({ ...previous, ...next })),
     setVimMode,
   };

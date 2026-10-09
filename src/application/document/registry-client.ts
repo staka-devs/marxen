@@ -1,14 +1,15 @@
-// Document registry client over the Tauri workspace transport (infrastructure).
+// Revision-aware document use cases over an injected transport (application).
 //
-// Serial, revision-aware requests against the workspace IPC. The real Neovim
-// buffer is the only authority: mutating calls per document serialize through
-// a promise queue so Vim input, GUI edits, undo/redo, save, and configure
-// never interleave. Stale revisions re-read the fresh snapshot and surface it;
-// no frontend history is kept and no revision is ever minted locally.
+// Serial per-document queues against the real Neovim buffer, which stays the
+// only authority: Vim key input, GUI range edits, undo/redo, save, and
+// configure never interleave for one document. Stale revisions re-read the
+// fresh snapshot and surface it; no frontend history is kept and no revision
+// is ever minted locally. The raw Tauri transport arrives through
+// `DocumentTransport` in the constructor, so this module never touches Tauri,
+// DOM, React, or browser globals and never pulls a concrete singleton.
 //
-// When IPC is absent the document is read-only and mutations reject with the
-// shared read-only message. Pure error shapes and key serialization live in
-// the domain; this module only wires them to the Tauri transport.
+// When the transport is absent the read-only variant rejects every mutation
+// with the shared message and never simulates a save.
 
 import type {
   CursorUpdate,
@@ -25,8 +26,8 @@ import type {
   VimInputResult,
   YankCopy,
 } from "../../contracts/contracts";
-import { isStaleError, StaleResync } from "../../domain/document-errors";
-import { isDesktop as isDesktopTransport, workspaceApi } from "./workspace-api";
+import { isStaleError, READONLY_MESSAGE, StaleResync } from "../../domain/document-errors";
+import type { DocumentTransport } from "../ports";
 
 /** Paste-image arguments pairing a save request with bytes and a range. */
 export interface PasteImageArgs {
@@ -37,16 +38,7 @@ export interface PasteImageArgs {
 }
 
 /**
- * Report whether the desktop Tauri transport is available.
- *
- * Delegates to the workspace transport so shells have one desktop check.
- */
-export function isDesktop(): boolean {
-  return isDesktopTransport();
-}
-
-/**
- * Registry-backed document client with per-document serial queues.
+ * Registry-backed document use cases with per-document serial queues.
  *
  * One instance per shell; the client tracks the latest acknowledged revision
  * per document so queued tasks build requests at execution time, never at
@@ -59,6 +51,14 @@ export class RegistryClient {
   private cursorStaged = new Map<DocumentId, Array<{ anchor: number; head: number }>>();
   /** Insert-mode mapping prefix per document, owned inside the serial queue. */
   private pendingPrefix = new Map<DocumentId, string>();
+
+  /**
+   * Create a registry bound to a raw document transport.
+   *
+   * The transport performs one native command per method; this client adds
+   * serialization, execution-time revision binding, and stale resync.
+   */
+  constructor(private transport: DocumentTransport) {}
 
   /**
    * Record an authoritative snapshot, keeping only newer-or-equal revisions.
@@ -109,7 +109,7 @@ export class RegistryClient {
    * shell replaces its view instead of retrying blindly.
    */
   private async resync(documentId: DocumentId): Promise<never> {
-    const snapshot = await workspaceApi.fetchSnapshot(documentId);
+    const snapshot = await this.transport.fetchSnapshot(documentId);
     // Record the fresh revision so exactly one retry builds against it.
     this.noteSnapshot(snapshot);
     throw new StaleResync(snapshot);
@@ -118,7 +118,7 @@ export class RegistryClient {
   /**
    * Narrow an unknown value to a save request with document ID and revision.
    *
-   * Guards queue entry so malformed callers fail visibly before IPC.
+   * Guards queue entry so malformed callers fail visibly before transport.
    */
   private isSaveRequest(value: SaveRequest): value is SaveRequest {
     return typeof value.documentId === "string" && typeof value.baseRevision === "number";
@@ -134,7 +134,7 @@ export class RegistryClient {
     if (!this.isSaveRequest(request)) return Promise.reject(new Error("invalid request"));
     return this.enqueue(request.documentId, async () => {
       try {
-        return this.bump(await workspaceApi.applyEdits(request, edits));
+        return this.bump(await this.transport.applyEdits(request, edits));
       } catch (cause) {
         if (isStaleError(cause)) await this.resync(request.documentId);
         throw cause;
@@ -152,7 +152,7 @@ export class RegistryClient {
     return this.enqueue(documentId, async () => {
       const revision = this.rev.get(documentId) ?? 0;
       try {
-        return this.bump(await workspaceApi.input({ documentId, baseRevision: revision }, keys));
+        return this.bump(await this.transport.input({ documentId, baseRevision: revision }, keys));
       } catch (cause) {
         if (isStaleError(cause)) await this.resync(documentId);
         throw cause;
@@ -174,7 +174,7 @@ export class RegistryClient {
     return this.enqueue(documentId, async () => {
       const revision = this.rev.get(documentId) ?? 0;
       try {
-        const result = await workspaceApi.inputWithCopy({ documentId, baseRevision: revision }, keys);
+        const result = await this.transport.inputWithCopy({ documentId, baseRevision: revision }, keys);
         this.bump(result.snapshot);
         if (result.copy) await onCopy(result.copy);
         return result;
@@ -204,36 +204,36 @@ export class RegistryClient {
       // buffer moved out of band (external/native/AI edit), so refresh and
       // reject instead of mutating offsets that may point elsewhere.
       const known = this.rev.get(documentId) ?? 0;
-      const update = await workspaceApi.fetchMode(documentId);
+      const update = await this.transport.fetchMode(documentId);
       if (update.revision !== known) await this.resync(documentId);
       const revision = this.rev.get(documentId) ?? 0;
       if (update.mode !== "insert" && update.mode !== "replace") {
         this.pendingPrefix.set(documentId, "");
         try {
           if (onCopy) {
-            const result = await workspaceApi.inputWithCopy({ documentId, baseRevision: revision }, key);
+            const result = await this.transport.inputWithCopy({ documentId, baseRevision: revision }, key);
             this.bump(result.snapshot);
             if (result.copy) await onCopy(result.copy);
             return { action: "vim" as const, snapshot: result.snapshot, copyReady: result.copyReady };
           }
-          return { action: "vim" as const, snapshot: this.bump(await workspaceApi.input({ documentId, baseRevision: revision }, key)) };
+          return { action: "vim" as const, snapshot: this.bump(await this.transport.input({ documentId, baseRevision: revision }, key)) };
         } catch (cause) {
           if (isStaleError(cause)) await this.resync(documentId);
           throw cause;
         }
       }
       const pending = this.pendingPrefix.get(documentId) ?? "";
-      const mapped = await workspaceApi.hasMapping(documentId, "i", pending + key);
+      const mapped = await this.transport.hasMapping(documentId, "i", pending + key);
       try {
         if (mapped) {
           this.pendingPrefix.set(documentId, (pending + key).slice(-16));
-          return { action: "vim" as const, snapshot: this.bump(await workspaceApi.input({ documentId, baseRevision: revision }, key)) };
+          return { action: "vim" as const, snapshot: this.bump(await this.transport.input({ documentId, baseRevision: revision }, key)) };
         }
         this.pendingPrefix.set(documentId, "");
         return {
           action: "gui" as const,
           snapshot: this.bump(
-            await workspaceApi.applyEdits({ documentId, baseRevision: revision }, [{ range, text: key }]),
+            await this.transport.applyEdits({ documentId, baseRevision: revision }, [{ range, text: key }]),
           ),
         };
       } catch (cause) {
@@ -262,14 +262,14 @@ export class RegistryClient {
       // buffer moved out of band (external/native/AI edit), so refresh and
       // reject instead of mutating offsets that may point elsewhere.
       const known = this.rev.get(documentId) ?? 0;
-      const update = await workspaceApi.fetchMode(documentId);
+      const update = await this.transport.fetchMode(documentId);
       if (update.revision !== known) await this.resync(documentId);
       const revision = this.rev.get(documentId) ?? 0;
       if (keyNotation !== null && (update.mode === "insert" || update.mode === "replace")) {
-        const mapped = await workspaceApi.hasMapping(documentId, "i", keyNotation);
+        const mapped = await this.transport.hasMapping(documentId, "i", keyNotation);
         if (mapped) {
           try {
-            return { action: "vim" as const, snapshot: this.bump(await workspaceApi.input({ documentId, baseRevision: revision }, keyNotation)) };
+            return { action: "vim" as const, snapshot: this.bump(await this.transport.input({ documentId, baseRevision: revision }, keyNotation)) };
           } catch (cause) {
             if (isStaleError(cause)) await this.resync(documentId);
             throw cause;
@@ -277,7 +277,7 @@ export class RegistryClient {
         }
       } else if (keyNotation !== null) {
         try {
-          return { action: "vim" as const, snapshot: this.bump(await workspaceApi.input({ documentId, baseRevision: revision }, keyNotation)) };
+          return { action: "vim" as const, snapshot: this.bump(await this.transport.input({ documentId, baseRevision: revision }, keyNotation)) };
         } catch (cause) {
           if (isStaleError(cause)) await this.resync(documentId);
           throw cause;
@@ -287,7 +287,7 @@ export class RegistryClient {
         return {
           action: "gui" as const,
           snapshot: this.bump(
-            await workspaceApi.applyEdits({ documentId, baseRevision: revision }, [{ range, text }]),
+            await this.transport.applyEdits({ documentId, baseRevision: revision }, [{ range, text }]),
           ),
         };
       } catch (cause) {
@@ -303,7 +303,7 @@ export class RegistryClient {
    * The revision binds at execution so bursts order against ACKs.
    */
   undo(documentId: DocumentId): Promise<DocumentSnapshot> {
-    return this.enqueue(documentId, async () => this.bump(await workspaceApi.undo(documentId)));
+    return this.enqueue(documentId, async () => this.bump(await this.transport.undo(documentId)));
   }
 
   /**
@@ -312,7 +312,7 @@ export class RegistryClient {
    * Shares the same queue as undo and key input so history never interleaves.
    */
   redo(documentId: DocumentId): Promise<DocumentSnapshot> {
-    return this.enqueue(documentId, async () => this.bump(await workspaceApi.redo(documentId)));
+    return this.enqueue(documentId, async () => this.bump(await this.transport.redo(documentId)));
   }
 
   /**
@@ -323,7 +323,7 @@ export class RegistryClient {
    */
   save(request: SaveRequest) {
     return this.enqueue(request.documentId, async () => {
-      const result = await workspaceApi.saveDocument(request);
+      const result = await this.transport.saveDocument(request);
       const current = this.rev.get(request.documentId);
       if (current === undefined || result.revision >= current) this.rev.set(request.documentId, result.revision);
       return result;
@@ -336,7 +336,7 @@ export class RegistryClient {
    * Used for external-change banners and conflict recovery.
    */
   reload(request: SaveRequest) {
-    return this.enqueue(request.documentId, async () => this.bump(await workspaceApi.reloadDocument(request)));
+    return this.enqueue(request.documentId, async () => this.bump(await this.transport.reloadDocument(request)));
   }
 
   /**
@@ -345,7 +345,7 @@ export class RegistryClient {
    * The returned `OpenDocument` carries the fresh snapshot for the shell.
    */
   rename(request: SaveRequest, path: string): Promise<OpenDocument> {
-    return this.enqueue(request.documentId, () => workspaceApi.renameMarkdown(request, path));
+    return this.enqueue(request.documentId, () => this.transport.renameMarkdown(request, path));
   }
 
   /**
@@ -354,7 +354,7 @@ export class RegistryClient {
    * Serialized per document because configure resets Undo and mode.
    */
   configure(request: SaveRequest, path: string | null): Promise<NvimConfig> {
-    return this.enqueue(request.documentId, () => workspaceApi.configure(request, path));
+    return this.enqueue(request.documentId, () => this.transport.configure(request, path));
   }
 
   /**
@@ -365,7 +365,7 @@ export class RegistryClient {
   insertWorkspaceImage(request: SaveRequest, path: string, range: Utf16Range) {
     return this.enqueue(request.documentId, async () => {
       try {
-        return this.bump(await workspaceApi.insertWorkspaceImage(request, path, range));
+        return this.bump(await this.transport.insertWorkspaceImage(request, path, range));
       } catch (cause) {
         if (isStaleError(cause)) await this.resync(request.documentId);
         throw cause;
@@ -382,7 +382,7 @@ export class RegistryClient {
   importExternalImage(request: SaveRequest, path: string, range: Utf16Range) {
     return this.enqueue(request.documentId, async () => {
       try {
-        const result = await workspaceApi.importExternalImage(request, path, range);
+        const result = await this.transport.importExternalImage(request, path, range);
         this.bump(result.snapshot);
         return result;
       } catch (cause) {
@@ -400,7 +400,7 @@ export class RegistryClient {
    */
   pasteImage(args: PasteImageArgs) {
     return this.enqueue(args.request.documentId, async () => {
-      const result = await workspaceApi.pasteImage(args.request, args.name, args.bytes, args.range);
+      const result = await this.transport.pasteImage(args.request, args.name, args.bytes, args.range);
       this.bump(result.snapshot);
       return result;
     });
@@ -412,7 +412,7 @@ export class RegistryClient {
    * Used for explicit resyncs and replace flows that read before writing.
    */
   fetchSnapshot(documentId: DocumentId): Promise<DocumentSnapshot> {
-    return workspaceApi.fetchSnapshot(documentId).then((snapshot) => {
+    return this.transport.fetchSnapshot(documentId).then((snapshot) => {
       this.noteSnapshot(snapshot);
       return snapshot;
     });
@@ -424,7 +424,7 @@ export class RegistryClient {
    * Best-effort display data; routing re-reads inside the queue.
    */
   fetchMode(documentId: DocumentId): Promise<{ mode: VimMode; revision: number }> {
-    return workspaceApi.fetchMode(documentId).then((update: ModeUpdate) => ({ mode: update.mode, revision: update.revision }));
+    return this.transport.fetchMode(documentId).then((update: ModeUpdate) => ({ mode: update.mode, revision: update.revision }));
   }
 
   /**
@@ -433,7 +433,7 @@ export class RegistryClient {
    * Failures stay with the caller; the editor keeps its own selection.
    */
   fetchCursor(documentId: DocumentId): Promise<CursorUpdate> {
-    return workspaceApi.fetchCursor(documentId);
+    return this.transport.fetchCursor(documentId);
   }
 
   /**
@@ -454,7 +454,7 @@ export class RegistryClient {
       if (!latest) return null;
       const revision = this.rev.get(documentId) ?? 0;
       try {
-        return await workspaceApi.reportCursor({ documentId, revision, anchor: latest.anchor, head: latest.head });
+        return await this.transport.reportCursor({ documentId, revision, anchor: latest.anchor, head: latest.head });
       } catch {
         return null;
       }
@@ -470,7 +470,7 @@ export class RegistryClient {
   reportCursorNow(documentId: DocumentId, anchor: number, head: number): Promise<CursorUpdate> {
     return this.enqueue(documentId, async () => {
       const revision = this.rev.get(documentId) ?? 0;
-      return workspaceApi.reportCursor({ documentId, revision, anchor, head });
+      return this.transport.reportCursor({ documentId, revision, anchor, head });
     });
   }
 
@@ -480,7 +480,7 @@ export class RegistryClient {
    * Rare path for callers that already hold the execution revision.
    */
   reportCursor(update: CursorUpdate): Promise<CursorUpdate> {
-    return workspaceApi.reportCursor(update);
+    return this.transport.reportCursor(update);
   }
 
   /**
@@ -489,7 +489,7 @@ export class RegistryClient {
    * Read-only display data; text mutations never flow through here.
    */
   fetchGrid(documentId: DocumentId, width = 80, height = 24): Promise<GridUpdate> {
-    return workspaceApi.fetchGrid(documentId, width, height);
+    return this.transport.fetchGrid(documentId, width, height);
   }
 
   /**
@@ -498,7 +498,7 @@ export class RegistryClient {
    * Best-effort display data; apply flows go through `configure`.
    */
   fetchConfig(documentId: DocumentId): Promise<NvimConfig> {
-    return workspaceApi.fetchConfig(documentId);
+    return this.transport.fetchConfig(documentId);
   }
 }
 
@@ -511,7 +511,6 @@ export class RegistryClient {
 export class ReadonlyRegistry {
   /** Reject without tracking, preserving the read-only contract. */
   private reject(): Promise<never> {
-    const { READONLY_MESSAGE } = { READONLY_MESSAGE: "ブラウザ表示では編集できません。デスクトップで開いてください。" };
     return Promise.reject(new Error(READONLY_MESSAGE));
   }
   /** No-op snapshot tracking outside Tauri. */
@@ -562,6 +561,14 @@ export class ReadonlyRegistry {
   configure(): Promise<never> {
     return this.reject();
   }
+  /** Reject workspace image insertion in the browser demo. */
+  insertWorkspaceImage(): Promise<never> {
+    return this.reject();
+  }
+  /** Reject external image import in the browser demo. */
+  importExternalImage(): Promise<never> {
+    return this.reject();
+  }
   /** Reject image paste in the browser demo. */
   pasteImage(): Promise<never> {
     return this.reject();
@@ -602,14 +609,3 @@ export class ReadonlyRegistry {
 
 /** Usable document client: serial registry on desktop, read-only in browser. */
 export type DocumentClient = RegistryClient | ReadonlyRegistry;
-
-/**
- * Create the document client for the current transport.
- *
- * Desktop returns a serial `RegistryClient`; the browser demo returns a
- * rejecting `ReadonlyRegistry`. The composition root calls this once and
- * injects the result, so presentation never constructs transports itself.
- */
-export function createClient(): DocumentClient {
-  return isDesktop() ? new RegistryClient() : new ReadonlyRegistry();
-}

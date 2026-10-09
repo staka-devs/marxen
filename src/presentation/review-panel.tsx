@@ -15,10 +15,14 @@ export interface ReviewPanelProps {
   message: string | null;
   status: string | null;
   proposalText: string | null;
+  /** Refetch diffs for the staged copy. */
   onFetchDiff: () => void;
   onStageProposal: (() => void) | null;
+  /** Approve the staged copy, then resync views. */
   onApprove: () => void;
+  /** Reject the staged copy without touching disk. */
   onReject: () => void;
+  /** Cancel the copy after runs settle. */
   onCancel: () => void;
   documentLabels?: Record<string, string>;
 }

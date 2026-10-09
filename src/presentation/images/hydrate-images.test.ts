@@ -44,6 +44,7 @@ describe("isSafeResolvedUrl", () => {
   });
 });
 
+/** Build an attached host element from HTML for hydration tests. */
 function rootWith(html: string): HTMLElement {
   const root = document.createElement("div");
   root.innerHTML = html;
@@ -53,6 +54,7 @@ function rootWith(html: string): HTMLElement {
 
 describe("hydrateLocalImages", () => {
   it("swaps relative sources through the resolver and skips absolute ones", async () => {
+    /** Fake resolver answering one relative source for assertions. */
     const resolveImage: ImageResolver = async (src) => (src === "images/a.png" ? "blob:fake-1" : null);
     const resolve = vi.fn(resolveImage);
     const root = rootWith(

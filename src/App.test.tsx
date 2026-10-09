@@ -4,8 +4,23 @@ import App from "./App";
 import { readRuntimeStatus } from "./infrastructure/tauri/runtime-client";
 import { READONLY_MESSAGE } from "./domain/document-errors";
 
-vi.mock("./infrastructure/tauri/runtime-client", () => ({ readRuntimeStatus: vi.fn() }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), isTauri: () => false }));
+vi.mock("./infrastructure/tauri/runtime-client", () => {
+  /** Mocked status reader controllable per test. */
+  const readRuntimeStatus = vi.fn();
+  return {
+    readRuntimeStatus,
+    /** Gateway delegating to the mocked status reader. */
+    runtimeGateway: {
+      /** Status reader delegating to the mock. */
+      readStatus: readRuntimeStatus,
+    },
+  };
+});
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  /** Browser demo flag for read-only shell tests. */
+  isTauri: () => false,
+}));
 beforeEach(() => vi.resetAllMocks());
 
 it("shows the Japanese workspace shell with disconnected status", async () => {

@@ -6,18 +6,25 @@ import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../domain
 
 interface Props {
   theme: ThemeId;
+  /** Apply a color theme choice. */
   onTheme: (theme: ThemeId) => void;
   preferences?: EditorPreferences;
+  /** Replace the editor preferences. */
   onPreferences?: (preferences: EditorPreferences) => void;
   configPath: string;
   configError: string | null;
+  /** Replace the Neovim config path input. */
   onConfigPath: (path: string) => void;
+  /** Browse for a config file natively, if available. */
   onBrowseConfig?: () => void;
+  /** Apply the config, restarting the native actor. */
   onApplyConfig: () => void;
   applyingConfig: boolean;
   currentConfig: string | null;
   copyKeys?: Record<string, string>;
+  /** Jump to the AI connection settings. */
   onOpenAiSettings?: () => void;
+  /** Close the settings dialog. */
   onClose: () => void;
 }
 const CATEGORIES = [
@@ -38,6 +45,7 @@ const inputClass = "h-7 rounded-sm border border-border bg-card px-2 text-xs out
     dialog.current?.focus();
     return () => { previous?.focus(); };
   }, []);
+  /** Apply one preference change preserving the remaining settings. */
   const change = <K extends keyof EditorPreferences>(key: K, value: EditorPreferences[K]) => onPreferences?.({ ...preferences, [key]: value });
   const nameInvalid = configPath !== "" && !isSupportedConfigName(configPath);
   return <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>

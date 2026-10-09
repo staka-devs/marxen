@@ -12,15 +12,25 @@ import { defaultProviderConfig } from "../../domain/ai-config";
 
 /** Fake fenced run for settling late-handle tests. */ function fakeRun(overrides: Partial<AiRun> = {}): AiRun {
   return {
+    /** Allocate a fixed token for deterministic assertions. */
     beginRun: () => 2,
+    /** Match only token 1 as current. */
     isCurrent: (token: number) => token === 1,
+    /** Never settled unless overridden. */
     isSettled: () => false,
+    /** Discard settlement marks. */
     markSettled: () => undefined,
+    /** Never cancel-requested unless overridden. */
     isCancelRequested: () => false,
+    /** Discard the owned stop handle. */
     setStop: () => undefined,
+    /** Return no stop handle. */
     takeStop: () => null,
+    /** Discard busy broadcasts. */
     setBusy: () => undefined,
+    /** Discard fencing. */
     fence: () => undefined,
+    /** Settle cancellation immediately. */
     cancelOwned: async () => undefined,
     ownedBusy: false,
     ...overrides,
@@ -62,10 +72,16 @@ describe("shared ai run helpers", () => {
   });
 
   it("keeps a fresh start and cancels a stale or cancelled late handle", async () => {
+    /** Owned stop handle recording cancellation. */
     const stop = vi.fn(async () => undefined);
+    /** Busy broadcast recorder. */
     const setBusy = vi.fn();
     const kept = await keepStartedSession(
-      fakeRun({ setStop: () => undefined, setBusy: setBusy as AiRun["setBusy"] }),
+      fakeRun({
+        /** Discard the owned stop handle. */
+        setStop: () => undefined,
+        setBusy: setBusy as AiRun["setBusy"],
+      }),
       1,
       stop,
     );
@@ -74,7 +90,11 @@ describe("shared ai run helpers", () => {
 
     const staleBusy = vi.fn();
     const stale = await keepStartedSession(
-      fakeRun({ isCurrent: () => false, setBusy: staleBusy as AiRun["setBusy"] }),
+      fakeRun({
+        /** Never current for stale-handle assertions. */
+        isCurrent: () => false,
+        setBusy: staleBusy as AiRun["setBusy"],
+      }),
       1,
       stop,
     );
@@ -84,7 +104,11 @@ describe("shared ai run helpers", () => {
 
     const cancelledBusy = vi.fn();
     const cancelled = await keepStartedSession(
-      fakeRun({ isCancelRequested: () => true, setBusy: cancelledBusy as AiRun["setBusy"] }),
+      fakeRun({
+        /** Always cancel-requested for late-handle assertions. */
+        isCancelRequested: () => true,
+        setBusy: cancelledBusy as AiRun["setBusy"],
+      }),
       1,
       stop,
     );

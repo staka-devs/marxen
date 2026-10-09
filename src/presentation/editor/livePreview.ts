@@ -25,6 +25,7 @@ import type { ImageResolver } from "../../domain/image-sources";
 import type { TextEdit } from "../../contracts/contracts";
 
 export interface LivePreviewCallbacks {
+  /** Forward widget commits as wire range edits. */
   onGuiEdits?: (edits: TextEdit[]) => void;
   /** Move the editor cursor into a source span (activates its block). */
   focusSource?: (from: number, to: number) => void;
@@ -98,6 +99,7 @@ interface HostBinding {
   from: number;
   text: string;
   defs: string;
+  /** Read current callbacks without closing over stale props. */
   getCallbacks: () => LivePreviewCallbacks;
 }
 
@@ -353,10 +355,12 @@ class LiveBlockWidget extends WidgetType {
 
 /** Create the live-preview CodeMirror extension with widget activation. */ export function createLivePreview(getCallbacks: () => LivePreviewCallbacks): Extension {
   const field = StateField.define<DecorationSet>({
+    /** Build initial widget decorations for the document. */
     create(state) {
       const sel = state.selection.main;
       return buildDecorations(state.doc.toString(), sel.from, sel.to, extractLinkDefinitions(state.doc.toString()), getCallbacks);
     },
+    /** Rebuild decorations only when text or selection moved. */
     update(decos, tr) {
       const sel = tr.state.selection.main;
       const before = tr.startState.selection.main;
@@ -369,6 +373,7 @@ class LiveBlockWidget extends WidgetType {
         getCallbacks,
       );
     },
+    /** Provide decorations to the editor view. */
     provide: (f) => EditorView.decorations.from(f),
   });
   // Widget-chrome activation at CodeMirror's own event gate. A plain click
@@ -378,6 +383,7 @@ class LiveBlockWidget extends WidgetType {
   // neighbouring newline left behind by the layout shift. Returning true
   // suppresses CodeMirror's default placement for exactly this gesture.
   const activation = EditorView.domEventHandlers({
+    /** Reveal raw source on widget-chrome clicks before layout shifts. */
     mousedown(event, view) {
       if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey) return false;
       const target = event.target as HTMLElement | null;

@@ -104,6 +104,7 @@ export function useAiRun(onBusyChange?: (busy: boolean) => void): AiRun {
     setBusy,
     fence,
     cancelOwned,
+    /** Owned busy flag for spinners gated on this chat's own run. */
     get ownedBusy() {
       return busyRef.current;
     },

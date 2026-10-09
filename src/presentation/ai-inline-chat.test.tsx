@@ -46,7 +46,11 @@ describe("inline chat", () => {
     const onProposal = vi.fn();
     mockStartPrompt.mockImplementation(async (_request, onEvent) => {
       handler = onEvent;
-      return { runId: "inline-cancel", stop: vi.fn(async () => undefined) };
+      return {
+        runId: "inline-cancel",
+        /** Owned stop handle for the cancelled run. */
+        stop: vi.fn(async () => undefined),
+      };
     });
     renderInline({ onProposal });
     fireEvent.change(screen.getByLabelText("インライン指示"), { target: { value: "止める" } });
@@ -60,9 +64,20 @@ describe("inline chat", () => {
   });
 
   it("holds its busy ownership until a pending start is cancelled after unmount", async () => {
-    let resolve!: (value: { runId: string; stop: () => Promise<void> }) => void;
-    const pending = new Promise<{ runId: string; stop: () => Promise<void> }>((done) => { resolve = done; });
+    /** Deferred session resolver coupling run ID with its stop handle. */
+    let resolve!: (value: {
+      runId: string;
+      /** Owned stop handle for the pending session. */
+      stop: () => Promise<void>;
+    }) => void;
+    /** Pending session coupling run ID with its stop handle. */
+    const pending = new Promise<{
+      runId: string;
+      /** Owned stop handle for the pending session. */
+      stop: () => Promise<void>;
+    }>((done) => { resolve = done; });
     mockStartPrompt.mockReturnValue(pending);
+    /** Owned stop handle recording cancellation. */
     const stop = vi.fn(async () => undefined);
     const onBusyChange = vi.fn();
     const { unmount } = renderInline({ onBusyChange });
@@ -114,7 +129,11 @@ describe("inline chat", () => {
     let handler: ((event: AiStreamEvent) => void) | null = null;
     mockStartPrompt.mockImplementation(async (_request, onEvent) => {
       handler = onEvent;
-      return { runId: "run_inline2", stop: vi.fn() };
+      return {
+        runId: "run_inline2",
+        /** Owned stop handle for the asserted run. */
+        stop: vi.fn(),
+      };
     });
     renderInline({ target: { start: 0, end: 3, kind: "paragraph", excerpt: "# A" } });
     fireEvent.change(screen.getByLabelText("インライン指示"), { target: { value: "直して" } });
@@ -128,6 +147,7 @@ describe("inline chat", () => {
 
   it("closes with Escape after requesting cancellation", async () => {
     let handler: ((event: AiStreamEvent) => void) | null = null;
+    /** Owned stop handle recording cancellation. */
     const stop = vi.fn(async () => undefined);
     mockStartPrompt.mockImplementation(async (_request, onEvent) => {
       handler = onEvent;
@@ -152,6 +172,7 @@ describe("inline chat", () => {
     expect(mockStartPrompt).not.toHaveBeenCalled();
   });
 });
+
 
 
 

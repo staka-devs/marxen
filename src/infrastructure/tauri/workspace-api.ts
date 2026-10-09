@@ -6,6 +6,7 @@
 
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { WorkspaceEventSource } from "../../application/ports";
 import type {
   CloseAction,
   CursorUpdate,
@@ -113,6 +114,12 @@ export function listenWorkspaceEvents(callback: (events: WorkspaceEvent[]) => vo
   if (!isTauri()) return Promise.resolve(() => {});
   return listen<WorkspaceEvent[]>("marxen:workspace", (event) => callback(event.payload));
 }
+
+/** Event source adapter satisfying the application port with Tauri events. */
+export const workspaceEventSource: WorkspaceEventSource = {
+  /** Subscribe to pushed events, resolving to an unlisten function. */
+  listen: listenWorkspaceEvents,
+};
 
 /**
  * Report whether the Tauri native transport is available.

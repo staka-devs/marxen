@@ -5,6 +5,7 @@
 // session without pretending they persisted.
 
 import { DEFAULT_EDITOR_PREFERENCES, normalizeEditorPreferences, type EditorPreferences } from "../../domain/editor-preferences";
+import type { EditorPreferencesStore } from "../../application/ports";
 
 /** Storage key versioning the preferences shape. */
 const KEY = "marxen.editor-preferences.v1";
@@ -28,3 +29,13 @@ export function saveEditorPreferences(preferences: EditorPreferences): boolean {
   try { localStorage.setItem(KEY, JSON.stringify(normalizeEditorPreferences(preferences))); return true; }
   catch { return false; }
 }
+
+
+/** Editor preferences store adapter satisfying the application port. */
+export const editorPreferencesStore: EditorPreferencesStore = {
+  /** Load normalized preferences or defaults. */
+  load: loadEditorPreferences,
+  /** Persist normalized preferences, reporting success. */
+  save: saveEditorPreferences,
+};
+

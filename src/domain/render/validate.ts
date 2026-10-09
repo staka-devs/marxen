@@ -136,6 +136,7 @@ export function validateGeoJson(source: string): GeoJsonValidation {
   collectPositions((data as { coordinates?: unknown; features?: unknown; geometries?: unknown }).coordinates ?? data, flat);
   const pairs: number[][] = [];
   if (data && typeof data === "object") {
+    /** Collect lon/lat pairs from nested GeoJSON structures. */
     const visit = (node: unknown): void => {
       if (Array.isArray(node)) {
         if (node.length >= 2 && isFiniteNumber(node[0]) && isFiniteNumber(node[1])) pairs.push([node[0], node[1]]);

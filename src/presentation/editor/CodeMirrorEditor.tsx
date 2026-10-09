@@ -28,7 +28,9 @@ interface Props {
   editable?: boolean;
   ariaLabel: string;
   testId?: string;
+  /** Emit committed document changes as wire range edits. */
   onGuiEdits?: (edits: TextEdit[]) => void;
+  /** Report selection changes for cursor tracking. */
   onSelectionChange?: (selection: EditorSelection) => void;
   initialSelection?: EditorSelection | null;
   externalCursor?: ExternalCursor | null;
@@ -119,10 +121,13 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   // cell commits always read the latest props through this getter.
   const resolveImageRef = useRef(resolveImage);
   resolveImageRef.current = resolveImage;
+  /** Build fresh live-preview callbacks reading latest props through refs. */
   const getLiveCallbacks = useCallback((): LivePreviewCallbacks => {
     return {
+      /** Forward widget edits to the current GUI handler. */
       onGuiEdits: (edits) => callbacks.current.onGuiEdits?.(edits),
       resolveImage: resolveImageRef.current,
+      /** Move the editor cursor into a source span and focus it. */
       focusSource: (from, to) => {
         const view = viewRef.current;
         if (!view) return;
@@ -180,12 +185,14 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
     });
     viewRef.current = view;
     const dom = view.contentDOM;
+    /** Snapshot document and selection when IME composition starts. */
     const onStart = () => {
       composing.current = true;
       preComposition.current = view.state.doc.toString();
       preCompositionSelection.current = { anchor: view.state.selection.main.anchor, head: view.state.selection.main.head };
       compositionAllowed.current = allowTextInputRef.current;
     };
+    /** Commit composition once as a single range edit or revert disallowed input. */
     const onEnd = () => {
       if (!composing.current) return;
       composing.current = false;

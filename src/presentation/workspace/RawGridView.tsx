@@ -7,8 +7,10 @@ interface Props {
   text: string;
   lines?: string[] | null;
   revision?: number;
+  /** Refetch the grid screen resetting rows. */
   onRefresh?: () => void;
   grid?: NvimGridState | null;
+  /** Forward raw grid keys through Vim routing. */
   onVimKeys?: (keys: string) => void;
 }
 

@@ -79,6 +79,7 @@ async function picture(img: HTMLImageElement): Promise<string> {
  * Whitespace-only text in block containers is dropped to avoid blank runs.
  */
 export async function htmlToRtf(root: DocumentFragment): Promise<string> {
+  /** Render one DOM node to an RTF fragment recursively. */
   const walk = async (node: Node): Promise<string> => {
     if (node.nodeType === Node.TEXT_NODE) {
       const value = node.textContent ?? "";

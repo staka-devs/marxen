@@ -8,6 +8,7 @@ import type { AiGateway } from "../application/ports";
 const mockStartPrompt = vi.fn<AiGateway["startPrompt"]>();
 
 vi.mock("./ai-provider-settings", () => ({
+  /** Mocked settings subview for chat tests. */
   default: () => <div>接続設定 mock</div>,
 }));
 beforeEach(() => {
@@ -41,6 +42,7 @@ const labels = { doc_01: "a.md" };
 describe("agent chat", () => {
   it("does not publish a done event that races with cancellation", async () => {
     let handler!: (event: AiStreamEvent) => void;
+    /** Owned stop handle recording cancellation. */
     const stop = vi.fn(async () => undefined);
     const onProposal = vi.fn();
     mockStartPrompt.mockImplementation(async (_request, onEvent) => {
@@ -99,6 +101,7 @@ describe("agent chat", () => {
       handler = onEvent;
       return { runId: "run_1", stop: vi.fn() };
     });
+    /** Staging resolver returning the fixed copy. */
     const ensureStaging = vi.fn(async () => staging);
     render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={null} ensureStaging={ensureStaging} contextLabels={labels} />);
     expect(screen.getByText("a.md")).toBeVisible();
@@ -133,6 +136,7 @@ describe("agent chat", () => {
   });
 
   it("validates exact contexts through ensure even when a staging prop exists", async () => {
+    /** Staging resolver returning the fixed copy. */
     const ensureStaging = vi.fn(async () => staging);
     mockStartPrompt.mockImplementation(async () => {
       return { runId: "run_x", stop: vi.fn() };
@@ -241,6 +245,7 @@ describe("agent chat", () => {
 
   it("cancels while staging is pending and never starts the run", async () => {
     const gate = deferred<StagingTarget>();
+    /** Staging resolver gated on the deferred copy. */
     const ensureStaging = vi.fn(() => gate.promise);
     mockStartPrompt.mockImplementation(async () => {
       return { runId: "run_late", stop: vi.fn() };
@@ -256,6 +261,7 @@ describe("agent chat", () => {
   });
 
   it("cancels the late handle when done arrives before startPrompt returns", async () => {
+    /** Owned stop handle recording cancellation. */
     const stop = vi.fn(async () => undefined);
     const onProposal = vi.fn();
     mockStartPrompt.mockImplementation(async (_request, onEvent) => {
@@ -283,7 +289,12 @@ describe("agent chat", () => {
   });
 
   it("fences the old run on reset so late events never publish", async () => {
-    const gate = deferred<{ runId: string; stop: () => Promise<void> }>();
+    /** Deferred session coupling run ID with its stop handle. */
+    const gate = deferred<{
+      runId: string;
+      /** Owned stop handle for the deferred session. */
+      stop: () => Promise<void>;
+    }>();
     const onProposal = vi.fn();
     mockStartPrompt.mockImplementation(async (_request, onEvent) => {
       const session = await gate.promise;
@@ -303,14 +314,24 @@ describe("agent chat", () => {
     fireEvent.click(screen.getByRole("button", { name: "送信" }));
     await vi.waitFor(() => expect(mockStartPrompt).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("button", { name: "新しい会話" }));
-    gate.resolve({ runId: "run_old", stop: vi.fn(async () => undefined) });
+    gate.resolve({
+      runId: "run_old",
+      /** Owned stop handle for the fenced run. */
+      stop: vi.fn(async () => undefined),
+    });
     await vi.waitFor(() => expect(mockStartPrompt).toHaveBeenCalled());
     expect(screen.queryByText("古い回答")).not.toBeInTheDocument();
     expect(onProposal).not.toHaveBeenCalled();
   });
 
   it("cancels the owned run on unmount", async () => {
-    const gate = deferred<{ runId: string; stop: () => Promise<void> }>();
+    /** Deferred session coupling run ID with its stop handle. */
+    const gate = deferred<{
+      runId: string;
+      /** Owned stop handle for the deferred session. */
+      stop: () => Promise<void>;
+    }>();
+    /** Owned stop handle recording cancellation. */
     const stop = vi.fn(async () => undefined);
     mockStartPrompt.mockImplementation(async () => gate.promise.then(() => ({ runId: "run_u", stop })));
     const { unmount } = render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} contextLabels={labels} />);
@@ -432,6 +453,8 @@ describe("agent chat", () => {
     expect(testConnection).toBeDefined();
   });
 });
+
+
 
 
 

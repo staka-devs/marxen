@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { pickConfigFile, pickFolder } from "./dialog";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), isTauri: () => true }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  /** Desktop transport flag for dialog tests. */
+  isTauri: () => true,
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 describe("native dialogs", () => {

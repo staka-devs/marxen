@@ -9,7 +9,9 @@ export interface PaletteCommand {
 interface Props {
   open: boolean;
   commands: PaletteCommand[];
+  /** Run the chosen command by ID. */
   onRun: (id: string) => void;
+  /** Close the palette without running. */
   onClose: () => void;
 }
 
@@ -48,4 +50,5 @@ interface Props {
     </div>
   );
 }
+
 

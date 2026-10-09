@@ -5,6 +5,7 @@
 // registry. No React or DOM rendering.
 
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import type { DropGateway } from "../../application/ports";
 
 /** Window position of a native drop in physical pixels. */
 export interface NativeDropPosition {
@@ -33,3 +34,9 @@ export function listenNativeDrop(onDrop: (drop: NativeDrop) => void): Promise<Na
     onDrop({ position: event.payload.position, paths: event.payload.paths });
   });
 }
+
+/** Drop gateway adapter satisfying the application port with the webview. */
+export const dropGateway: DropGateway = {
+  /** Subscribe to native drag-drop events. */
+  listen: listenNativeDrop,
+};
