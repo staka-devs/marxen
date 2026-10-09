@@ -1643,7 +1643,6 @@ export function WorkspaceShell() {
       }
       if (mode === "ask") {
         // Questions display only; staging refuses ask.
-        setNotice("AI の回答を受け取りました。");
         setReviewStatus("質問モードは表示のみです。取り込みは行いません。");
         setReviewBusy(true);
         try {
@@ -1657,7 +1656,6 @@ export function WorkspaceShell() {
         }
         return;
       }
-      setNotice("AI の変更案を受け取りました。差分を確認してください。");
       setReviewBusy(true);
       try {
         await stageNonAskCopy(copyId, proposal, mode);
