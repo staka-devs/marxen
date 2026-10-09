@@ -757,6 +757,61 @@ fn traversal_absolute_and_symlink_are_rejected() {
 }
 
 #[test]
+fn prepare_prompt_run_rejects_bad_scope_without_pinning() {
+    let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
+    let doc = workspace.create("a.md", "hello world").unwrap();
+    let contexts = vec![ctx(&doc.snapshot, &[(0, 5)])];
+    let copy = manager.create_copy(&workspace, &contexts).unwrap();
+    let wide = acp_request(
+        acp_argv(&[]),
+        &copy.copy_id,
+        vec![ctx(&doc.snapshot, &[(0, 11)])],
+    );
+    assert!(manager.prepare_prompt_run(&workspace, &wide).is_err());
+    // A failed preparation leaves the copy available for rejection.
+    let dir = manager.resolve(&copy.copy_id).unwrap();
+    manager.reject(&copy.copy_id).unwrap();
+    assert!(!dir.exists());
+
+    let copy = manager.create_copy(&workspace, &contexts).unwrap();
+    let exact = acp_request(acp_argv(&[]), &copy.copy_id, contexts);
+    let other_root = tempfile::tempdir().unwrap();
+    let other_recovery = tempfile::tempdir().unwrap();
+    let other_workspace = Workspace::open(other_root.path(), other_recovery.path()).unwrap();
+    assert!(manager
+        .prepare_prompt_run(&other_workspace, &exact)
+        .is_err());
+    manager.cancel(&copy.copy_id).unwrap();
+}
+
+#[test]
+fn prepare_prompt_run_resolves_before_pin_and_retains_until_release() {
+    let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
+    let doc = workspace.create("a.md", "hello").unwrap();
+    let contexts = vec![ctx(&doc.snapshot, &[(0, 5)])];
+    let copy = manager.create_copy(&workspace, &contexts).unwrap();
+    let request = acp_request(acp_argv(&[]), &copy.copy_id, contexts.clone());
+    let dir = manager.prepare_prompt_run(&workspace, &request).unwrap();
+    assert_eq!(dir, manager.resolve(&copy.copy_id).unwrap());
+    assert!(manager.reject(&copy.copy_id).is_err());
+    assert!(manager.cancel(&copy.copy_id).is_err());
+    assert!(manager.approve(&workspace, &copy.copy_id).is_err());
+    manager.unpin_for_run(&copy.copy_id);
+    manager.reject(&copy.copy_id).unwrap();
+
+    let copy = manager.create_copy(&workspace, &contexts).unwrap();
+    let request = acp_request(acp_argv(&[]), &copy.copy_id, contexts);
+    let dir = manager.resolve(&copy.copy_id).unwrap();
+    // A vanished staging directory must fail before acquiring a pin.
+    fs::remove_dir_all(&dir).unwrap();
+    assert!(matches!(
+        manager.prepare_prompt_run(&workspace, &request),
+        Err(WorkspaceError::NotFound)
+    ));
+    manager.cancel(&copy.copy_id).unwrap();
+}
+
+#[test]
 fn authorize_rejects_unknown_copy_and_scope_widening() {
     let (_root, _recovery, _staging, mut workspace, mut manager) = setup();
     let doc = workspace.create("a.md", "hello world").unwrap();
@@ -919,9 +974,7 @@ fn terminal_delivery_waits_for_settlement_and_release() {
         "--write-text=hello cli",
     ]);
     let request = acp_request(argv.clone(), &copy.copy_id, contexts);
-    manager.authorize_prompt(&workspace, &request).unwrap();
-    manager.pin_for_run(&copy.copy_id).unwrap();
-    let staging_dir = manager.resolve(&copy.copy_id).unwrap();
+    let staging_dir = manager.prepare_prompt_run(&workspace, &request).unwrap();
     let registry = Arc::new(RunRegistry::new());
     let (run_id, cancel) = registry.register();
     let params = AcpRunParams {
@@ -1001,9 +1054,7 @@ fn delayed_child_write_cannot_approve_until_reaped() {
         "--write-after-response-ms=1200",
     ]);
     let request = acp_request(argv.clone(), &copy.copy_id, contexts);
-    manager.authorize_prompt(&workspace, &request).unwrap();
-    manager.pin_for_run(&copy.copy_id).unwrap();
-    let staging_dir = manager.resolve(&copy.copy_id).unwrap();
+    let staging_dir = manager.prepare_prompt_run(&workspace, &request).unwrap();
     let registry = Arc::new(RunRegistry::new());
     let (run_id, cancel) = registry.register();
     let driver_registry = registry.clone();
