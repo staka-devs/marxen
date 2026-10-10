@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// Build a fixed revision context containing emoji and Japanese text for wire and streaming checks.
 fn context() -> PromptContext {
     PromptContext {
         document_id: DocumentId("doc_07".into()),
@@ -24,6 +25,7 @@ fn context() -> PromptContext {
     }
 }
 
+/// Build a rewrite request pointed at the supplied loopback OpenAI-compatible endpoint.
 fn openai_request(base: &str) -> AiPromptRequest {
     AiPromptRequest {
         provider: AiProviderConfig {
@@ -46,6 +48,7 @@ fn openai_request(base: &str) -> AiPromptRequest {
     }
 }
 
+/// Reuse the rewrite fixture with an explicitly enabled Anthropic Messages endpoint.
 fn anthropic_request(base: &str) -> AiPromptRequest {
     let mut request = openai_request(base);
     request.provider = AiProviderConfig {
@@ -67,6 +70,7 @@ struct MockHttp {
     done: Option<std::thread::JoinHandle<()>>,
 }
 
+/// Read bounded HTTP headers and drain the declared body before the mock server replies.
 fn read_http_head(stream: &mut std::net::TcpStream) -> String {
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
@@ -153,6 +157,7 @@ fn serve(stages: Vec<(u64, Vec<u8>)>) -> MockHttp {
     }
 }
 
+/// Encode a complete HTTP event-stream response using the UTF-8 byte length of its body.
 fn sse_reply(body: &str) -> Vec<u8> {
     format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -162,6 +167,7 @@ fn sse_reply(body: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+/// Encode the supplied HTTP status and JSON body for transport error mapping tests.
 fn status_reply(status: &str, body: &str) -> Vec<u8> {
     format!(
         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -171,6 +177,7 @@ fn status_reply(status: &str, body: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+/// Combine streamed chunks and report whether done or cancellation terminal events arrived.
 fn events_of(events: &[AiStreamEvent]) -> (String, bool, bool) {
     let mut text = String::new();
     let mut done = false;
@@ -187,6 +194,7 @@ fn events_of(events: &[AiStreamEvent]) -> (String, bool, bool) {
 }
 
 #[tokio::test]
+/// Check streamed Unicode output and sent-context metadata against a loopback Chat Completions server.
 async fn openai_streams_mock_sse_with_sent_echo() {
     let body = include_str!("../../tests/fixtures/ai_sse_openai.txt").replace("\r\n", "\n");
     let mut server = serve(vec![(0, sse_reply(&body))]);
@@ -232,6 +240,7 @@ async fn openai_streams_mock_sse_with_sent_echo() {
 }
 
 #[tokio::test]
+/// Check Messages streaming output and the required API version header without external credentials.
 async fn anthropic_streams_mock_sse_with_version_header() {
     let body = include_str!("../../tests/fixtures/ai_sse_anthropic.txt").replace("\r\n", "\n");
     let mut server = serve(vec![(0, sse_reply(&body))]);
@@ -267,6 +276,7 @@ async fn anthropic_streams_mock_sse_with_version_header() {
 }
 
 #[tokio::test]
+/// Distinguish rejected credentials from HTTP connection failures using controlled server responses.
 async fn http_errors_map_to_auth_and_connection_failures() {
     let mut server = serve(vec![(
         0,
@@ -312,6 +322,7 @@ async fn http_errors_map_to_auth_and_connection_failures() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// Require cancellation after a chunk to suppress successful completion and further streamed output.
 async fn http_cancel_midstream_stops_without_done() {
     let body = include_str!("../../tests/fixtures/ai_sse_openai.txt").replace("\r\n", "\n");
     // Deliver through the first content chunk ("Hello, "), then stall so the
@@ -383,6 +394,7 @@ async fn http_cancel_midstream_stops_without_done() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// Require cancellation to finish promptly even when the peer keeps an event stream silent.
 async fn http_cancel_while_silent_server_holds_stream() {
     // The server accepts and reads the request, then stays silent: without
     // stall-aware reads the run would hang until the client timeout.
@@ -445,6 +457,7 @@ async fn http_cancel_while_silent_server_holds_stream() {
     assert!(cancelled && !done, "{events:?}");
 }
 
+/// Start a chunked HTTP event stream that can remain open without declaring a final body length.
 fn sse_reply_chunked(first: &str) -> Vec<u8> {
     format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{}",
@@ -454,6 +467,7 @@ fn sse_reply_chunked(first: &str) -> Vec<u8> {
 }
 
 #[tokio::test]
+/// Exercise the live connection-test path exclusively against disposable loopback servers.
 async fn live_tests_use_mock_server_without_real_credentials() {
     let mut server = serve(vec![(0, status_reply("200 OK", r#"{"data": []}"#))]);
     let client = http_client(Duration::from_secs(20)).unwrap();
@@ -478,6 +492,7 @@ async fn live_tests_use_mock_server_without_real_credentials() {
     server.done.take().expect("join").join().expect("server");
 }
 
+/// Build a custom ACP rewrite request with a fixed scope and no resumable session.
 fn acp_request(argv: AcpArgv) -> AiPromptRequest {
     AiPromptRequest {
         provider: AiProviderConfig {
@@ -500,6 +515,7 @@ fn acp_request(argv: AcpArgv) -> AiPromptRequest {
     }
 }
 
+/// Select the Cargo-built mock ACP executable and preserve each additional argument separately.
 fn mock_agent_argv(extra: &[&str]) -> AcpArgv {
     let exe = env!("CARGO_BIN_EXE_mock-acp-agent");
     AcpArgv {
@@ -508,6 +524,7 @@ fn mock_agent_argv(extra: &[&str]) -> AcpArgv {
     }
 }
 
+/// Configure the mock ACP executable to record process-lifecycle flags in the supplied fixture directory.
 fn mock_agent_argv_with_flag_dir(extra: &[&str], flag_dir: &Path) -> AcpArgv {
     let exe = env!("CARGO_BIN_EXE_mock-acp-agent");
     let mut args: Vec<String> = extra.iter().map(|arg| (*arg).to_owned()).collect();
@@ -519,6 +536,7 @@ fn mock_agent_argv_with_flag_dir(extra: &[&str], flag_dir: &Path) -> AcpArgv {
     }
 }
 
+/// Create a process- and time-specific temporary directory for a subprocess fixture.
 fn fresh_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(name);
     let _ = std::fs::remove_dir_all(&dir);
@@ -526,6 +544,7 @@ fn fresh_dir(name: &str) -> PathBuf {
     dir
 }
 
+/// Bind a mock ACP command to its staging directory and bounded run timeout.
 fn acp_params(argv: AcpArgv, dir: &Path, timeout: Duration) -> AcpRunParams {
     AcpRunParams {
         argv,
@@ -535,6 +554,7 @@ fn acp_params(argv: AcpArgv, dir: &Path, timeout: Duration) -> AcpRunParams {
 }
 
 #[test]
+/// Require ACP output and sent metadata to use the isolated working directory through terminal settlement.
 fn acp_full_run_streams_chunks_inside_staging_copy() {
     let staging = std::env::temp_dir().join("marxen-ai-test-staging");
     std::fs::create_dir_all(&staging).expect("staging dir");
@@ -593,6 +613,7 @@ fn acp_full_run_streams_chunks_inside_staging_copy() {
 }
 
 #[test]
+/// Reject an unowned resume identifier rather than reusing another agent session.
 fn acp_resume_ids_are_unknown_by_construction() {
     let staging = std::env::temp_dir().join("marxen-ai-test-resume");
     std::fs::create_dir_all(&staging).expect("staging dir");
@@ -616,6 +637,7 @@ fn acp_resume_ids_are_unknown_by_construction() {
 }
 
 #[test]
+/// Expose executable discovery failure and premature child exit as distinct observable ACP failures.
 fn acp_missing_binary_and_early_exit_are_explicit_errors() {
     let registry = Arc::new(RunRegistry::new());
     let (run_id, cancel) = registry.register();
@@ -672,6 +694,7 @@ fn acp_missing_binary_and_early_exit_are_explicit_errors() {
 }
 
 #[test]
+/// Require a timed-out ACP run to terminate its child and emit a timeout result.
 fn acp_timeout_kills_slow_agents() {
     let staging = std::env::temp_dir().join("marxen-ai-test-timeout");
     std::fs::create_dir_all(&staging).expect("staging dir");
@@ -708,6 +731,7 @@ fn acp_timeout_kills_slow_agents() {
 }
 
 #[test]
+/// Require explicit run cancellation to stop the ACP child without emitting successful completion.
 fn acp_cancel_midrun_kills_the_agent() {
     let staging = std::env::temp_dir().join("marxen-ai-test-cancel");
     std::fs::create_dir_all(&staging).expect("staging dir");
@@ -755,6 +779,7 @@ fn acp_cancel_midrun_kills_the_agent() {
 }
 
 #[test]
+/// Exercise configuration and protocol readiness using fixtures without reading user credentials.
 fn dry_runs_and_handshakes_use_no_real_credentials() {
     let keyring = MemoryKeyring::default();
     let config = AiProviderConfig {
@@ -809,6 +834,7 @@ fn dry_runs_and_handshakes_use_no_real_credentials() {
 }
 
 #[test]
+/// Reject staging paths outside the owned root and copy identifiers absent from the registry.
 fn staging_guard_and_manager_reject_outside_or_unknown_copies() {
     let root = tempfile::tempdir().unwrap();
     let inside = guard_isolation_path(root.path(), Path::new("copy_07")).unwrap();
@@ -819,6 +845,7 @@ fn staging_guard_and_manager_reject_outside_or_unknown_copies() {
     assert!(manager.resolve(&IsolatedCopyId("copy_07".into())).is_err());
 }
 
+/// Execute one bounded mock ACP request and return its collected stream events for protocol assertions.
 fn run_mock_prompt(
     extra: &[&str],
     flag_name: &str,
@@ -850,6 +877,7 @@ fn run_mock_prompt(
 }
 
 #[test]
+/// Check that byte fragmentation and multiple messages in one read preserve the same ACP event sequence.
 fn acp_fragmented_and_coalesced_writes_decode_identically() {
     for (extra, name) in [
         (vec!["--fragment"], "fragment"),
@@ -863,6 +891,7 @@ fn acp_fragmented_and_coalesced_writes_decode_identically() {
 }
 
 #[test]
+/// Require oversized ACP frames to fail within the configured input bound.
 fn acp_rejects_oversized_lines() {
     let staging = fresh_dir("marxen-ai-test-staging-huge");
     std::fs::create_dir_all(staging.join("copy_07")).expect("copy dir");
@@ -912,6 +941,7 @@ fn acp_rejects_oversized_lines() {
 }
 
 #[test]
+/// Check graceful cancellation notification and child shutdown before escalating termination.
 fn acp_graceful_cancel_uses_notification_and_clean_exit() {
     let staging = fresh_dir("marxen-ai-test-staging-graceful");
     std::fs::create_dir_all(staging.join("copy_07")).expect("copy dir");
@@ -970,6 +1000,7 @@ fn acp_graceful_cancel_uses_notification_and_clean_exit() {
 }
 
 #[test]
+/// Check initialization metadata, session creation and notifications through the mock ACP handshake.
 fn acp_handshake_reports_version_session_and_notifications() {
     let staging = fresh_dir("marxen-ai-test-handshake");
     let info = agent_handshake(&mock_agent_argv(&[]), &staging, Duration::from_secs(30)).unwrap();
@@ -982,6 +1013,7 @@ fn acp_handshake_reports_version_session_and_notifications() {
 }
 
 #[test]
+/// Report an unavailable Codex executable as a discovery error without attempting authentication.
 fn codex_adapter_without_install_is_a_clear_missing_binary() {
     if find_on_path("codex-acp").is_some() {
         println!("codex-acp is installed; skipping missing-binary expectation");
@@ -1009,6 +1041,7 @@ fn codex_adapter_without_install_is_a_clear_missing_binary() {
 }
 
 #[test]
+/// Opt in to a real OpenCode handshake only when its executable is explicitly configured; otherwise return.
 fn real_opencode_handshake_when_binary_configured() {
     let bin = match std::env::var("MARXEN_REAL_ACP_BIN") {
         Ok(bin) => bin,
@@ -1096,6 +1129,7 @@ fn serve_capture_body(stages: Vec<(u64, Vec<u8>)>) -> (String, std::sync::mpsc::
 }
 
 #[tokio::test]
+/// Inspect the captured request body to require complete prior turns before the current user message.
 async fn openai_two_turn_history_reaches_mock_server() {
     let body = include_str!("../../tests/fixtures/ai_sse_openai.txt").replace("\r\n", "\n");
     let reply = format!(
@@ -1155,6 +1189,7 @@ async fn openai_two_turn_history_reaches_mock_server() {
 }
 
 #[test]
+/// Reject excessive conversation history during validation before transport or staging can start.
 fn oversized_history_is_rejected_before_any_side_effect() {
     let mut request = openai_request("http://127.0.0.1:9");
     request.history = vec![ChatHistoryMessage {

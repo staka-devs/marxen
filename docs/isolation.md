@@ -22,7 +22,7 @@ staging には選択抜粋のみを書く。範囲指定ファイルは `--- mar
 
 ## コマンド
 
-| TypeScript メソッド (`src/lib/isolation.ts`) | Rust IPC | 引数・結果 |
+| TypeScript メソッド (`src/infrastructure/tauri/isolation-client.ts`) | Rust IPC | 引数・結果 |
 | --- | --- | --- |
 | createIsolatedCopy | isolation_create | contexts (`PromptContext[]`) → `IsolatedCopyInfo` |
 | fetchIsolationDiff | isolation_diff | copyId (`string`) → `IsolationDiff[]` |
@@ -31,7 +31,7 @@ staging には選択抜粋のみを書く。範囲指定ファイルは `--- mar
 | rejectIsolatedCopy | isolation_reject | copyId (`string`) → void |
 | cancelIsolatedCopy | isolation_cancel | copyId (`string`) → void |
 
-型は `src/shared/isolation-contracts.ts` (`IsolatedCopyInfo` / `IsolatedCopyDoc` / `IsolationDiff` / `ApproveResult` / `ApproveDocOutcome` / `StagedProposal`)。エラーは既存 `WorkspaceError` を再利用する。未知コピーは `not_found`、非 Active は `invalid_path`、逸脱・symlink は `outside_workspace`、非 Markdown は `not_markdown`、revision 不一致は `contract(stale_revision)`、ディスク変化は `conflict`、範囲・抜粋・提案の不整合と実行中の承認・削除は `io` (detail 付き)。stale・conflict では最新 snapshot に再同期し、コピーを再作成 (resync) してから承認する。
+型は `src/contracts/isolation-contracts.ts` (`IsolatedCopyInfo` / `IsolatedCopyDoc` / `IsolationDiff` / `ApproveResult` / `ApproveDocOutcome` / `StagedProposal`)。エラーは既存 `WorkspaceError` を再利用する。未知コピーは `not_found`、非 Active は `invalid_path`、逸脱・symlink は `outside_workspace`、非 Markdown は `not_markdown`、revision 不一致は `contract(stale_revision)`、ディスク変化は `conflict`、範囲・抜粋・提案の不整合と実行中の承認・削除は `io` (detail 付き)。stale・conflict では最新 snapshot に再同期し、コピーを再作成 (resync) してから承認する。
 
 ## ReviewPanel props (UI #5 連携)
 
@@ -52,7 +52,7 @@ interface ReviewPanelProps {
 }
 ```
 
-全フロー: `AiPanel` の `onProposal?: (proposal: ProposalText, sent: ContextSummary[]) => void` → `stageProposal(copyId, proposal, mode)` → `ReviewPanel` (差分確認・承認・却下・取消)。差分レビューは専用面 `ReviewPanel` (`src/components/review-panel.tsx`) で行う。
+全フロー: `AiPanel` の `onProposal?: (proposal: ProposalText, sent: ContextSummary[]) => void` → application の staging service → `stageProposal(copyId, proposal, mode)` → `ReviewPanel` (差分確認・承認・却下・取消)。差分レビューは専用面 `ReviewPanel` (`src/presentation/review-panel.tsx`) で行う。画面は注入された isolation port を使い、transport を直接参照しない。
 
 ## UI 連携: 取り込み・pin・完了順序の exact 仕様
 

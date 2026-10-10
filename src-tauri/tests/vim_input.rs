@@ -5,6 +5,7 @@ use marxen_lib::contracts::{
 use marxen_lib::document::DocumentActor;
 use std::time::{Duration, Instant};
 
+/// Feed one native key at the current revision and require input plus mode and cursor polling to remain responsive.
 fn key(actor: &DocumentActor, key: &str) {
     let snapshot = actor.snapshot();
     let start = Instant::now();
@@ -26,6 +27,7 @@ fn key(actor: &DocumentActor, key: &str) {
 }
 
 #[test]
+/// Complete multi-key Vim commands across independent UI input events without dropping their prefixes.
 fn separate_key_events_complete_pending_vim_commands() {
     let actor = DocumentActor::open(
         DocumentId("separate-keys".into()),
@@ -61,6 +63,7 @@ fn separate_key_events_complete_pending_vim_commands() {
 }
 
 #[test]
+/// Keep native input responsive while a mapping, macro or interactive prompt awaits more keys.
 fn partial_macros_mappings_and_prompts_leave_input_available() {
     let actor = DocumentActor::open(
         DocumentId("mapping-keys".into()),
@@ -107,6 +110,7 @@ fn partial_macros_mappings_and_prompts_leave_input_available() {
 }
 
 #[test]
+/// Complete a typed command-line write through the Rust save interceptor.
 fn command_line_keys_save_through_rust() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("日本語.md");
@@ -125,6 +129,7 @@ fn command_line_keys_save_through_rust() {
 }
 
 #[test]
+/// Use native buffer and mapping state when choosing display navigation versus Vim input.
 fn display_key_routing_detects_global_buffer_and_pending_mappings() {
     let actor = DocumentActor::open(
         DocumentId("mapping-routing".into()),
@@ -156,6 +161,7 @@ fn display_key_routing_detects_global_buffer_and_pending_mappings() {
 }
 
 #[test]
+/// Report visual UTF-16 bounds and selection direction from the authoritative native cursor.
 fn native_visual_selection_reports_exact_unicode_scope_and_direction() {
     let actor = DocumentActor::open(
         DocumentId("visual-scope".into()),
@@ -184,6 +190,7 @@ fn native_visual_selection_reports_exact_unicode_scope_and_direction() {
 }
 
 #[test]
+/// Include full selected line endings and refuse to treat rectangular selection as one contiguous rewrite range.
 fn native_line_selection_includes_line_breaks_and_block_is_not_a_contiguous_scope() {
     let actor = DocumentActor::open(
         DocumentId("line-scope".into()),
@@ -217,6 +224,7 @@ fn native_line_selection_includes_line_breaks_and_block_is_not_a_contiguous_scop
 }
 
 #[test]
+/// Revalidate a cached cursor after text changes so it cannot land inside a newly inserted surrogate pair.
 fn pending_cursor_cache_never_splits_a_new_surrogate_pair() {
     let actor =
         DocumentActor::open(DocumentId("cached-scope".into()), "abcd".into(), None).unwrap();
@@ -250,6 +258,7 @@ fn pending_cursor_cache_never_splits_a_new_surrogate_pair() {
 }
 
 #[test]
+/// Round-trip GUI selection through native visual state and delete exactly the selected Unicode range.
 fn gui_visual_ranges_round_trip_and_native_delete_uses_exact_scope() {
     for (exclusive, anchor, head) in [
         (false, 1, 4),
@@ -305,6 +314,7 @@ fn gui_visual_ranges_round_trip_and_native_delete_uses_exact_scope() {
 }
 
 #[test]
+/// Update both native endpoints when the GUI moves an active linewise selection.
 fn gui_line_selection_repositions_both_native_endpoints() {
     let actor = DocumentActor::open(
         DocumentId("gui-line-scope".into()),

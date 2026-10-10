@@ -18,10 +18,14 @@ Rust / Tauri v2、React / TypeScript / Vite / Tailwind / shadcn/ui、CodeMirror 
 | ファイル一覧・画像操作・カーソル・設定 (#12) | Codex | 保存・UI |
 | インラインチャット・Agent 会話履歴 (#13) | OpenCode（Codex がレビュー・統合） | AI・隔離・UI |
 | 編集画面・チャットの UI 整理 (#17) | Codex / OpenCode | UI・チャット |
+| Rust の五層分離・port・メソッド文書 (#18) | Codex | 文書・保存・AI・隔離 |
+| TypeScript の五層分離・Shell 責務・メソッド文書 (#19) | OpenCode（Codex がレビュー・統合） | 編集・チャット・UI |
 
 Orca で Issue ごとの子ワークスペースとブランチを管理し、依存順に統合する。OpenCode は **MuseSpark1.3 Contributor / Xhigh** の実効設定を確認してから起動する。指定モデルが利用できなければ OpenCode の担当は停止して報告し、別モデルへ自動変更しない。Claude Code を起動・委任・接続検証しない。Anthropic Messages API は独立した接続先として利用者の認証設定後に有効化する。
 
 ## 文書契約
+
+製品コードは `domain / application / contracts / infrastructure / presentation` の五層に分ける。副作用のない共有型を `contracts`、純粋な規則を `domain`、ユースケースと利用する port を `application` に置く。OS・通信・保存の実装は `infrastructure`、画面・Tauri コマンドは `presentation` が扱い、composition root から具体実装を注入する。SOLID / YAGNI / DRY を守り、すべての手書きの名前付き関数・メソッド・trait 操作に Rustdoc / JSDoc を付ける。
 
 Rust が Neovim RPC、保存、AI プロセス、HTTP を所有する。文書 ID・リビジョン付き snapshot、edit、save、cursor / mode 更新を共通契約とする。GUI / Neovim / AI の変更を直列化し、古い revision を拒否して再同期する。UTF-8 バイト位置と UTF-16 位置は明示的に変換する。`:w` を Rust 保存経路へ統一する。範囲編集で Markdownを保持し、全体の再シリアライズを避ける。
 

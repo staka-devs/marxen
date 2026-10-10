@@ -5,18 +5,21 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
+/// Open a temporary workspace with a separate disposable recovery root.
 fn setup() -> (TempDir, TempDir, Workspace) {
     let root = tempfile::tempdir().unwrap();
     let recovery = tempfile::tempdir().unwrap();
     let workspace = Workspace::open(root.path(), recovery.path()).unwrap();
     (root, recovery, workspace)
 }
+/// Capture the snapshot identity and revision for a guarded save or workspace action.
 fn request(snapshot: &DocumentSnapshot) -> SaveRequest {
     SaveRequest {
         document_id: snapshot.document_id.clone(),
         base_revision: snapshot.revision,
     }
 }
+/// Apply one GUI edit to the latest actor snapshot using half-open UTF-16 endpoints.
 fn edit(actor: &DocumentActor, start: u32, end: u32, text: &str) -> DocumentSnapshot {
     let s = actor.snapshot();
     actor
@@ -34,6 +37,7 @@ fn edit(actor: &DocumentActor, start: u32, end: u32, text: &str) -> DocumentSnap
         })
         .unwrap()
 }
+/// Construct a half-open global UTF-16 range for an image or text operation.
 fn range(start: u32, end: u32) -> Utf16Range {
     Utf16Range {
         start: Utf16Offset(start),
@@ -42,6 +46,7 @@ fn range(start: u32, end: u32) -> Utf16Range {
 }
 
 #[test]
+/// Preserve BOM, mixed newline styles and final newline state when a document is saved without a relevant edit.
 fn exact_bytes_bom_mixed_newlines_and_final_newline_survive_save() {
     for bytes in [
         b"\xef\xbb\xbf# title\r\ntext\nend".as_slice(),
@@ -61,6 +66,7 @@ fn exact_bytes_bom_mixed_newlines_and_final_newline_survive_save() {
     }
 }
 #[test]
+/// Require a range replacement to leave every byte outside the requested span unchanged.
 fn range_edit_changes_only_requested_bytes() {
     let (root, _recovery, mut w) = setup();
     let bytes = "\u{feff}日本\r\nabc\r\nlast";
@@ -75,6 +81,7 @@ fn range_edit_changes_only_requested_bytes() {
     );
 }
 #[test]
+/// Refuse a save after external replacement or deletion without overwriting the observed disk state.
 fn fingerprint_conflict_and_deletion_never_overwrite_disk() {
     let (root, _recovery, mut w) = setup();
     let doc = w.create("a.md", "abc").unwrap();
@@ -94,6 +101,7 @@ fn fingerprint_conflict_and_deletion_never_overwrite_disk() {
     assert!(!root.path().join("a.md").exists());
 }
 #[test]
+/// Emit each external change once and require an explicit reload before replacing the live buffer.
 fn external_events_are_deduplicated_and_reload_is_explicit() {
     let (root, _recovery, mut w) = setup();
     let doc = w.create("a.md", "one").unwrap();
@@ -125,6 +133,7 @@ fn external_events_are_deduplicated_and_reload_is_explicit() {
     ));
 }
 #[test]
+/// Preserve original disk bytes, dirty live text and recovery data when saving fails.
 fn save_failure_keeps_original_dirty_text_and_recovery() {
     let (root, _recovery, mut w) = setup();
     let doc = w.create("a.md", "original").unwrap();
@@ -145,6 +154,7 @@ fn save_failure_keeps_original_dirty_text_and_recovery() {
     assert!(w.recovery_entries().unwrap().is_empty());
 }
 #[test]
+/// Keep the document open when closing is cancelled or the requested pre-close save fails.
 fn close_cancel_retains_buffer_and_save_failure_prevents_close() {
     let (root, _recovery, mut w) = setup();
     let doc = w.create("a.md", "one").unwrap();
@@ -163,6 +173,7 @@ fn close_cancel_retains_buffer_and_save_failure_prevents_close() {
     assert!(w.recovery_entries().unwrap().is_empty());
 }
 #[test]
+/// Exercise workspace navigation and document lifecycle while retaining safe paths and stable identities.
 fn listing_open_create_rename_and_tabs_are_safe() {
     let (root, _recovery, mut w) = setup();
     fs::create_dir(root.path().join("notes")).unwrap();
@@ -193,6 +204,7 @@ fn listing_open_create_rename_and_tabs_are_safe() {
     assert_eq!(w.list("").unwrap()[0].name, "notes");
 }
 #[test]
+/// Reject rooted and traversal paths, Windows alternate streams and reserved device names.
 fn traversal_absolute_ads_and_reserved_names_are_rejected() {
     let (root, _recovery, mut w) = setup();
     for path in [
@@ -214,6 +226,7 @@ fn traversal_absolute_ads_and_reserved_names_are_rejected() {
         Err(WorkspaceError::InvalidUtf8)
     ));
 }
+/// Create the platform-specific symlink or junction used to exercise workspace containment.
 fn make_link(target: &Path, link: &Path) {
     #[cfg(unix)]
     std::os::unix::fs::symlink(target, link).unwrap();
@@ -234,6 +247,7 @@ fn make_link(target: &Path, link: &Path) {
     }
 }
 #[test]
+/// Refuse file access redirected outside the workspace during both open and save.
 fn external_symlink_or_junction_is_rejected_for_open_and_save() {
     let (root, _recovery, mut w) = setup();
     let outside = tempfile::tempdir().unwrap();
@@ -250,6 +264,7 @@ fn external_symlink_or_junction_is_rejected_for_open_and_save() {
     assert_eq!(fs::read(outside.path().join("a.md")).unwrap(), b"outside");
 }
 #[test]
+/// Search authoritative dirty buffer text and return matches in global UTF-16 coordinates.
 fn search_uses_unsaved_neovim_text_and_utf16_ranges() {
     let (_root, _recovery, mut w) = setup();
     let doc = w.create("a.md", "a😀日本\n日本").unwrap();
@@ -261,6 +276,7 @@ fn search_uses_unsaved_neovim_text_and_utf16_ranges() {
     assert_eq!(found[0].line, 1);
 }
 #[test]
+/// When invoked by the crash fixture, checkpoint an unsaved edit and terminate before normal cleanup.
 fn crash_child() {
     let Ok(root) = std::env::var("MARXEN_CRASH_ROOT") else {
         return;
@@ -277,6 +293,7 @@ fn crash_child() {
     std::process::exit(79);
 }
 #[test]
+/// Restore the last checkpoint after abrupt exit while preserving conflict protection for changed disk bytes.
 fn abrupt_process_exit_restores_checkpoint_and_keeps_disk_conflict() {
     let (root, recovery, w) = setup();
     drop(w);
@@ -311,6 +328,7 @@ fn abrupt_process_exit_restores_checkpoint_and_keeps_disk_conflict() {
     assert_eq!(fs::read(root.path().join("a.md")).unwrap(), b"external");
 }
 #[test]
+/// Keep the last acknowledged buffer revision recoverable when the native process dies.
 fn neovim_exit_preserves_recoverable_last_acknowledged_revision() {
     let (_root, _recovery, mut w) = setup();
     assert!(!w.has_live_documents());
@@ -333,6 +351,7 @@ fn neovim_exit_preserves_recoverable_last_acknowledged_revision() {
         .any(|event| matches!(event, WorkspaceEvent::Error { .. })));
 }
 #[test]
+/// Route native write requests through the same conflict checks and atomic writer as GUI saves.
 fn vim_write_uses_same_conflict_aware_atomic_saver() {
     let (root, _recovery, mut w) = setup();
     let doc = w.create("a.md", "base").unwrap();
@@ -357,6 +376,7 @@ fn vim_write_uses_same_conflict_aware_atomic_saver() {
     assert!(w.actor(&s.document_id.0).unwrap().snapshot().dirty);
 }
 #[test]
+/// Treat a GUI edit batch as one native Undo step and prevent Undo from removing initial loaded text.
 fn gui_batch_is_one_undo_step_and_initial_text_is_undo_floor() {
     let (_root, _recovery, mut w) = setup();
     let doc = w.create("a.md", "abcdef").unwrap();
@@ -389,6 +409,7 @@ fn gui_batch_is_one_undo_step_and_initial_text_is_undo_floor() {
     assert_eq!(actor.undo().unwrap().text, "abcdef");
 }
 #[test]
+/// Create a contained image asset only for a current revision and verify its inserted link can be loaded.
 fn image_paste_is_contained_revision_checked_and_loadable() {
     let (root, _recovery, mut w) = setup();
     fs::create_dir(root.path().join("notes")).unwrap();
@@ -424,6 +445,7 @@ fn image_paste_is_contained_revision_checked_and_loadable() {
         .is_err());
 }
 #[test]
+/// Create files atomically without replacing existing entries and retain their intended permissions.
 fn atomic_create_never_clobbers_and_preserves_permissions() {
     let (root, _recovery, _w) = setup();
     let path = fs::canonicalize(root.path()).unwrap().join("a.md");
@@ -447,6 +469,7 @@ fn atomic_create_never_clobbers_and_preserves_permissions() {
 }
 
 #[test]
+/// Exercise revision guards, native cursor and grid queries, and user-config restart through the live bridge.
 fn live_vim_bridge_checks_revisions_cursor_grid_and_config_restart() {
     let (root, _recovery, mut w) = setup();
     let doc = w.create("a.md", "a😀日本").unwrap();
@@ -479,6 +502,7 @@ fn live_vim_bridge_checks_revisions_cursor_grid_and_config_restart() {
     assert_eq!(actor.cursor().unwrap().revision, changed.revision);
 }
 #[test]
+/// Clear dirty recovery after native Undo restores saved bytes and resolve Unicode image references.
 fn undo_to_saved_bytes_clears_recovery_and_unicode_image_links_load() {
     let (root, _recovery, mut w) = setup();
     let doc = w.create("a.md", "abc").unwrap();
@@ -505,6 +529,7 @@ fn undo_to_saved_bytes_clears_recovery_and_unicode_image_links_load() {
 
 #[cfg(windows)]
 #[test]
+/// Preserve protected Windows access control and named streams across atomic file replacement.
 fn windows_save_preserves_protected_acl_and_named_stream() {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Security::{
@@ -592,6 +617,7 @@ fn windows_save_preserves_protected_acl_and_named_stream() {
 }
 #[cfg(windows)]
 #[test]
+/// Keep original bytes and recoverable edits when Windows refuses replacement of a locked file.
 fn locked_windows_replacement_preserves_original_and_recovery() {
     use std::os::windows::fs::OpenOptionsExt;
     let (root, _recovery, mut w) = setup();
