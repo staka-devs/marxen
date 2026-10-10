@@ -141,3 +141,16 @@ it("routes an explorer image drop to revision-guarded Rust insertion without a G
 });
 
 
+
+it("limits desktop quick-open to supported workspace files and opens its keyboard selection", async () => {
+  await openWorkspace();
+  fireEvent.keyDown(window, { key: "p", ctrlKey: true });
+  const picker = await screen.findByTestId("quick-open");
+  expect(within(picker).getAllByRole("option").map((item) => item.textContent)).toEqual(["a.md", "notes.txt", "photo.png"]);
+  const input = within(picker).getByRole("combobox");
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# literal **text**"));
+  expect(screen.queryByTestId("quick-open")).toBeNull();
+  expect(mockInvoke).toHaveBeenCalledWith("open_text_file", { path: "notes.txt" });
+});

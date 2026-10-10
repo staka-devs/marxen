@@ -387,8 +387,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   /** Collect deduplicated quick-open paths from docs and entries. */ const quickPaths = useMemo(() => {
     const fromEntries = workspace.entries.filter((entry) => !entry.directory && entryKind(entry)).map((entry) => entry.path);
     const fromDocs = Object.values(session.docs).map((doc) => doc.path).filter((path): path is string => path !== null);
-    return Array.from(new Set([...fromDocs, ...fromEntries, ...Object.keys(session.demo)]));
-  }, [workspace.entries, session.docs, session.demo]);
+    return Array.from(new Set([...fromDocs, ...fromEntries, ...(desktop ? [] : Object.keys(session.demo))]));
+  }, [desktop, workspace.entries, session.docs, session.demo]);
 
   /** Format the cursor as 1-based line:column or null. */ const cursorPos = useMemo(() => {
     if (!session.active) return null;
