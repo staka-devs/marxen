@@ -4,18 +4,17 @@
 //! excerpts ever reach staging; rejection/cancellation keep originals exact;
 //! stale revisions and disk changes refuse until resync; pinned copies
 //! refuse mutation until the run settles.
-use marxen_lib::ai::{
-    resolve_http_request, run_acp_prompt, run_mock_script, settle_production_run, AcpRunParams,
-    AgentKeyring, MemoryKeyring, MockScript, RunRegistry, TerminalGate,
-};
-use marxen_lib::ai_contracts::{
+use marxen_lib::application::ai::{credentials::*, runs::*};
+use marxen_lib::application::isolation::IsolationManager;
+use marxen_lib::application::workspace::Workspace;
+use marxen_lib::contracts::ai::{
     AcpArgv, AcpConfig, AcpPreset, AiPromptRequest, AiProviderConfig, AiProviderKind,
     AiStreamEvent, AnthropicConfig, IsolatedCopyId, OpenAiConfig, PromptContext, PromptMode,
     ProposalText,
 };
 use marxen_lib::contracts::{DocumentSnapshot, Revision, Utf16Offset, Utf16Range, WorkspaceError};
-use marxen_lib::isolation::{guard_staging_path, IsolationManager};
-use marxen_lib::workspace::Workspace;
+use marxen_lib::infrastructure::ai::{acp::*, credentials::*};
+use marxen_lib::infrastructure::staging::guard_staging_path;
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -28,8 +27,8 @@ fn setup() -> (TempDir, TempDir, TempDir, Workspace, IsolationManager) {
     let root = tempfile::tempdir().unwrap();
     let recovery = tempfile::tempdir().unwrap();
     let staging = tempfile::tempdir().unwrap();
-    let workspace = Workspace::open(root.path(), recovery.path()).unwrap();
-    let manager = IsolationManager::open(staging.path()).unwrap();
+    let workspace = marxen_lib::open_workspace(root.path(), recovery.path()).unwrap();
+    let manager = marxen_lib::open_isolation(staging.path()).unwrap();
     (root, recovery, staging, workspace, manager)
 }
 
@@ -39,10 +38,10 @@ fn slice(text: &str, start: u32, end: u32) -> String {
         start: Utf16Offset(start),
         end: Utf16Offset(end),
     };
-    let s = marxen_lib::validation::utf16_to_utf8(text, range.start)
+    let s = marxen_lib::domain::validation::utf16_to_utf8(text, range.start)
         .unwrap()
         .0 as usize;
-    let e = marxen_lib::validation::utf16_to_utf8(text, range.end)
+    let e = marxen_lib::domain::validation::utf16_to_utf8(text, range.end)
         .unwrap()
         .0 as usize;
     text[s..e].to_owned()
@@ -104,7 +103,7 @@ fn acp_request(
         mode: PromptMode::Workspace,
         prompt: "修正してください".into(),
         contexts,
-        staging: marxen_lib::ai_contracts::StagingTarget {
+        staging: marxen_lib::contracts::ai::StagingTarget {
             copy_id: copy_id.clone(),
         },
         session_id: None,
@@ -333,7 +332,7 @@ fn http_proposal_stages_then_applies_with_undo_evidence() {
         .unwrap();
     // Mocked HTTP streaming proposal bound to the sent scope.
     let request = acp_request(acp_argv(&[]), &copy.copy_id, vec![scope]);
-    let run_id = marxen_lib::ai_contracts::AiRunId("run_http_1".into());
+    let run_id = marxen_lib::contracts::ai::AiRunId("run_http_1".into());
     let script = MockScript {
         chunks: vec!["hello ".into(), "world".into()],
         fail: None,
@@ -344,7 +343,7 @@ fn http_proposal_stages_then_applies_with_undo_evidence() {
         events.push(event);
     });
     let proposal = match events.last().expect("done") {
-        marxen_lib::ai_contracts::AiStreamEvent::Done(done) => done.proposal.clone(),
+        marxen_lib::contracts::ai::AiStreamEvent::Done(done) => done.proposal.clone(),
         other => panic!("expected done, got {other:?}"),
     };
     assert_eq!(proposal.text, "hello world");
@@ -375,7 +374,7 @@ fn workspace_patches_apply_minimally_with_single_undo() {
     let proposal = ProposalText {
         text: "--- marxen-patch document=DOC range=[0, 4) ---\nAAA\n--- marxen-patch document=DOC range=[8, 12) ---\nCCC\n"
             .replace("DOC", &doc.snapshot.document_id.0),
-        base_contexts: vec![marxen_lib::ai_contracts::ContextRef {
+        base_contexts: vec![marxen_lib::contracts::ai::ContextRef {
             document_id: doc.snapshot.document_id.clone(),
             revision: doc.snapshot.revision,
         }],
@@ -424,7 +423,7 @@ fn bom_crlf_outside_bytes_survive_scoped_approval() {
     assert!(!staged.contains("tail"), "{staged}");
     let proposal = ProposalText {
         text: "KEEP\r\n".into(),
-        base_contexts: vec![marxen_lib::ai_contracts::ContextRef {
+        base_contexts: vec![marxen_lib::contracts::ai::ContextRef {
             document_id: doc.snapshot.document_id.clone(),
             revision: doc.snapshot.revision,
         }],
@@ -619,7 +618,7 @@ fn stale_revision_and_disk_conflict_refuse_until_resync() {
         mode: PromptMode::Workspace,
         prompt: "x".into(),
         contexts: vec![ctx(&doc.snapshot, &[(0, 4)])],
-        staging: marxen_lib::ai_contracts::StagingTarget {
+        staging: marxen_lib::contracts::ai::StagingTarget {
             copy_id: copy.copy_id.clone(),
         },
         session_id: None,
@@ -803,7 +802,8 @@ fn prepare_prompt_run_rejects_bad_scope_without_pinning() {
     let exact = acp_request(acp_argv(&[]), &copy.copy_id, contexts);
     let other_root = tempfile::tempdir().unwrap();
     let other_recovery = tempfile::tempdir().unwrap();
-    let other_workspace = Workspace::open(other_root.path(), other_recovery.path()).unwrap();
+    let other_workspace =
+        marxen_lib::open_workspace(other_root.path(), other_recovery.path()).unwrap();
     assert!(manager
         .prepare_prompt_run(&other_workspace, &exact)
         .is_err());
@@ -939,7 +939,7 @@ fn startup_readiness_fails_before_pin_without_user_secrets() {
     let keyring = MemoryKeyring::default();
     assert!(matches!(
         resolve_http_request(&keyring, &openai()),
-        Err(marxen_lib::ai_contracts::AiError::MissingCredentials { .. })
+        Err(marxen_lib::contracts::ai::AiError::MissingCredentials { .. })
     ));
     // Invalid endpoint is also a readiness failure, not a pinned run.
     let mut bad_endpoint = openai();
@@ -952,8 +952,8 @@ fn startup_readiness_fails_before_pin_without_user_secrets() {
         fn get(
             &self,
             _kind: AiProviderKind,
-        ) -> Result<Option<String>, marxen_lib::ai_contracts::AiError> {
-            Err(marxen_lib::ai_contracts::AiError::CredentialStoreFailed {
+        ) -> Result<Option<String>, marxen_lib::contracts::ai::AiError> {
+            Err(marxen_lib::contracts::ai::AiError::CredentialStoreFailed {
                 detail: "injected store failure".into(),
             })
         }
@@ -962,14 +962,14 @@ fn startup_readiness_fails_before_pin_without_user_secrets() {
             &self,
             _kind: AiProviderKind,
             _secret: &str,
-        ) -> Result<(), marxen_lib::ai_contracts::AiError> {
-            Err(marxen_lib::ai_contracts::AiError::CredentialStoreFailed {
+        ) -> Result<(), marxen_lib::contracts::ai::AiError> {
+            Err(marxen_lib::contracts::ai::AiError::CredentialStoreFailed {
                 detail: "injected store failure".into(),
             })
         }
         /// Inject a credential-deletion failure without changing any stored entry.
-        fn delete(&self, _kind: AiProviderKind) -> Result<(), marxen_lib::ai_contracts::AiError> {
-            Err(marxen_lib::ai_contracts::AiError::CredentialStoreFailed {
+        fn delete(&self, _kind: AiProviderKind) -> Result<(), marxen_lib::contracts::ai::AiError> {
+            Err(marxen_lib::contracts::ai::AiError::CredentialStoreFailed {
                 detail: "injected store failure".into(),
             })
         }
@@ -1159,12 +1159,15 @@ fn panicking_driver_reaps_live_child_before_unpin() {
         .spawn()
         .expect("spawn slow mock");
     let child_id = child.id();
-    registry.set_child(&run_id, child);
+    registry.set_child(
+        &run_id,
+        Box::new(marxen_lib::infrastructure::ai::acp::NativeProcess(child)),
+    );
     // The driver panics with the child still writing-capable. Production
     // settlement reaps first, then unpins, then delivers one terminal.
     let outcome: std::thread::Result<(
         TerminalGate,
-        Result<(), marxen_lib::ai_contracts::AiError>,
+        Result<(), marxen_lib::contracts::ai::AiError>,
     )> = std::panic::catch_unwind(|| panic!("injected driver panic"));
     assert!(outcome.is_err());
     let terminal = settle_production_run(
@@ -1259,7 +1262,7 @@ async fn http_delayed_terminal_settles_once_then_releases() {
         mode: PromptMode::Rewrite,
         prompt: "書き換えてください".into(),
         contexts,
-        staging: marxen_lib::ai_contracts::StagingTarget {
+        staging: marxen_lib::contracts::ai::StagingTarget {
             copy_id: copy.copy_id.clone(),
         },
         session_id: None,
@@ -1273,12 +1276,13 @@ async fn http_delayed_terminal_settles_once_then_releases() {
         .unwrap();
     // Same production readiness helper the IPC path calls before pinning.
     let (target, secret) = resolve_http_request(&keyring, &request.provider).unwrap();
-    let client = marxen_lib::ai::http_client(Duration::from_secs(20)).unwrap();
+    let client =
+        marxen_lib::infrastructure::ai::http::http_client(Duration::from_secs(20)).unwrap();
     let registry = Arc::new(RunRegistry::new());
     let (run_id, cancel) = registry.register();
     let mut gate = TerminalGate::new();
     let mut live = Vec::new();
-    let inner = marxen_lib::ai::run_http_prompt(
+    let inner = marxen_lib::infrastructure::ai::http::run_http_prompt(
         &client,
         &target,
         &secret,

@@ -1,4 +1,4 @@
-use marxen_lib::{contracts::*, validation::*};
+use marxen_lib::{contracts::*, domain::validation::*};
 
 /// Build the fixed Unicode snapshot used to compare JSON wire data and range validation.
 fn snapshot() -> DocumentSnapshot {
@@ -223,7 +223,7 @@ fn event_shape_and_runtime_state_are_truthful() {
         event
     );
     assert_eq!(
-        marxen_lib::runtime_status().connection,
+        marxen_lib::presentation::runtime::disconnected_status().connection,
         ConnectionState::Disconnected
     );
 }

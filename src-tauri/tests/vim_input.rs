@@ -1,8 +1,8 @@
+use marxen_lib::application::document::DocumentActor;
 use marxen_lib::contracts::{
     DocumentId, EditRequest, EditSource, Revision, SaveRequest, TextEdit, Utf16Offset, Utf16Range,
     VimMode,
 };
-use marxen_lib::document::DocumentActor;
 use std::time::{Duration, Instant};
 
 /// Feed one native key at the current revision and require input plus mode and cursor polling to remain responsive.
@@ -29,7 +29,7 @@ fn key(actor: &DocumentActor, key: &str) {
 #[test]
 /// Complete multi-key Vim commands across independent UI input events without dropping their prefixes.
 fn separate_key_events_complete_pending_vim_commands() {
-    let actor = DocumentActor::open(
+    let actor = marxen_lib::open_document(
         DocumentId("separate-keys".into()),
         "first\nsecond\nthird".into(),
         None,
@@ -65,7 +65,7 @@ fn separate_key_events_complete_pending_vim_commands() {
 #[test]
 /// Keep native input responsive while a mapping, macro or interactive prompt awaits more keys.
 fn partial_macros_mappings_and_prompts_leave_input_available() {
-    let actor = DocumentActor::open(
+    let actor = marxen_lib::open_document(
         DocumentId("mapping-keys".into()),
         "abc\nsecond".into(),
         None,
@@ -115,7 +115,7 @@ fn command_line_keys_save_through_rust() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("日本語.md");
     std::fs::write(&path, "before").unwrap();
-    let actor = DocumentActor::open(
+    let actor = marxen_lib::open_document(
         DocumentId("save-keys".into()),
         "before".into(),
         Some(path.clone()),
@@ -131,7 +131,7 @@ fn command_line_keys_save_through_rust() {
 #[test]
 /// Use native buffer and mapping state when choosing display navigation versus Vim input.
 fn display_key_routing_detects_global_buffer_and_pending_mappings() {
-    let actor = DocumentActor::open(
+    let actor = marxen_lib::open_document(
         DocumentId("mapping-routing".into()),
         "abc\nsecond".into(),
         None,
@@ -163,7 +163,7 @@ fn display_key_routing_detects_global_buffer_and_pending_mappings() {
 #[test]
 /// Report visual UTF-16 bounds and selection direction from the authoritative native cursor.
 fn native_visual_selection_reports_exact_unicode_scope_and_direction() {
-    let actor = DocumentActor::open(
+    let actor = marxen_lib::open_document(
         DocumentId("visual-scope".into()),
         "a😀日本\nsecond".into(),
         None,
@@ -192,7 +192,7 @@ fn native_visual_selection_reports_exact_unicode_scope_and_direction() {
 #[test]
 /// Include full selected line endings and refuse to treat rectangular selection as one contiguous rewrite range.
 fn native_line_selection_includes_line_breaks_and_block_is_not_a_contiguous_scope() {
-    let actor = DocumentActor::open(
+    let actor = marxen_lib::open_document(
         DocumentId("line-scope".into()),
         "abc\n日😀\nthird".into(),
         None,
@@ -227,7 +227,7 @@ fn native_line_selection_includes_line_breaks_and_block_is_not_a_contiguous_scop
 /// Revalidate a cached cursor after text changes so it cannot land inside a newly inserted surrogate pair.
 fn pending_cursor_cache_never_splits_a_new_surrogate_pair() {
     let actor =
-        DocumentActor::open(DocumentId("cached-scope".into()), "abcd".into(), None).unwrap();
+        marxen_lib::open_document(DocumentId("cached-scope".into()), "abcd".into(), None).unwrap();
     actor
         .set_cursor(marxen_lib::contracts::CursorUpdate {
             document_id: actor.snapshot().document_id,
@@ -253,7 +253,7 @@ fn pending_cursor_cache_never_splits_a_new_surrogate_pair() {
     key(&actor, "g");
     let cursor = actor.cursor().unwrap();
     assert_eq!((cursor.anchor.0, cursor.head.0), (1, 1));
-    marxen_lib::validation::validate_cursor(&actor.snapshot(), &cursor).unwrap();
+    marxen_lib::domain::validation::validate_cursor(&actor.snapshot(), &cursor).unwrap();
     key(&actor, "\u{1b}");
 }
 
@@ -271,7 +271,7 @@ fn gui_visual_ranges_round_trip_and_native_delete_uses_exact_scope() {
         (true, 6, 12),
         (true, 12, 6),
     ] {
-        let actor = DocumentActor::open(
+        let actor = marxen_lib::open_document(
             DocumentId(format!("gui-scope-{exclusive}-{anchor}")),
             "a😀日本\nsecond".into(),
             None,
@@ -295,12 +295,14 @@ fn gui_visual_ranges_round_trip_and_native_delete_uses_exact_scope() {
         assert_eq!(actor.current_mode().unwrap().mode, VimMode::Visual);
         key(&actor, "d");
         let original = "a😀日本\nsecond";
-        let start = marxen_lib::validation::utf16_to_utf8(original, Utf16Offset(anchor.min(head)))
-            .unwrap()
-            .0 as usize;
-        let end = marxen_lib::validation::utf16_to_utf8(original, Utf16Offset(anchor.max(head)))
-            .unwrap()
-            .0 as usize;
+        let start =
+            marxen_lib::domain::validation::utf16_to_utf8(original, Utf16Offset(anchor.min(head)))
+                .unwrap()
+                .0 as usize;
+        let end =
+            marxen_lib::domain::validation::utf16_to_utf8(original, Utf16Offset(anchor.max(head)))
+                .unwrap()
+                .0 as usize;
         assert_eq!(
             actor.snapshot().text,
             format!("{}{}", &original[..start], &original[end..])
@@ -316,7 +318,7 @@ fn gui_visual_ranges_round_trip_and_native_delete_uses_exact_scope() {
 #[test]
 /// Update both native endpoints when the GUI moves an active linewise selection.
 fn gui_line_selection_repositions_both_native_endpoints() {
-    let actor = DocumentActor::open(
+    let actor = marxen_lib::open_document(
         DocumentId("gui-line-scope".into()),
         "abc\n日😀\nthird\nlast".into(),
         None,

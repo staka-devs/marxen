@@ -1,4 +1,4 @@
-// Generated from src-tauri/src/ai_contracts.rs. Run npm run ai-contracts:generate.
+// Generated from src-tauri/src/contracts/ai.rs. Run npm run ai-contracts:generate.
 // Do not edit by hand. AI IPC schema version 2.
 import type { DocumentId, Revision, Utf16Range } from "./contracts";
 export type AiProviderKind = "acp" | "openai_compatible" | "anthropic";

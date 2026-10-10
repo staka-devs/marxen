@@ -1,10 +1,12 @@
 //! Issue #7 integration tests. HTTP backends run against a loopback mock
 //! server; ACP runs against the mock-acp-agent subprocess. No real
 //! credentials, no network beyond 127.0.0.1, no Claude Code anywhere.
-use marxen_lib::ai::*;
-use marxen_lib::ai_contracts::*;
+use marxen_lib::application::ai::{credentials::*, runs::*};
+use marxen_lib::contracts::ai::*;
 use marxen_lib::contracts::{DocumentId, Revision, Utf16Offset, Utf16Range};
-use marxen_lib::isolation::{guard_staging_path as guard_isolation_path, IsolationManager};
+use marxen_lib::domain::ai::*;
+use marxen_lib::infrastructure::ai::{acp::*, credentials::*, discovery::*, http::*};
+use marxen_lib::infrastructure::staging::guard_staging_path as guard_isolation_path;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -841,7 +843,7 @@ fn staging_guard_and_manager_reject_outside_or_unknown_copies() {
     assert!(inside.starts_with(root.path()));
     assert!(guard_isolation_path(root.path(), Path::new("../live/doc.md")).is_err());
     assert!(guard_isolation_path(root.path(), root.path()).is_err());
-    let manager = IsolationManager::open(root.path()).unwrap();
+    let manager = marxen_lib::open_isolation(root.path()).unwrap();
     assert!(manager.resolve(&IsolatedCopyId("copy_07".into())).is_err());
 }
 

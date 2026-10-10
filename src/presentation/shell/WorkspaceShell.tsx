@@ -115,10 +115,6 @@ const MODE_LABEL: Record<ViewMode, string> = {
 };
 
 /**
- * Shell open-document view; see application document helpers for adapters.
- */
-
-/**
  * Workspace shell composing editors, sidebars, AI, and review via injected ports.
  *
  * Owns UI layout and React state; revision, staging, and transport operations

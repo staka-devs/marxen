@@ -1,4 +1,5 @@
-use marxen_lib::{contracts::*, document::DocumentActor, storage, workspace::Workspace};
+use marxen_lib::application::{document::DocumentActor, workspace::Workspace};
+use marxen_lib::contracts::*;
 use std::{fs, path::Path};
 use tempfile::TempDir;
 
@@ -7,7 +8,7 @@ const PNG: &[u8] = include_bytes!("../../tests/fixtures/pixel.png");
 fn setup() -> (TempDir, TempDir, Workspace) {
     let root = tempfile::tempdir().unwrap();
     let recovery = tempfile::tempdir().unwrap();
-    let workspace = Workspace::open(root.path(), recovery.path()).unwrap();
+    let workspace = marxen_lib::open_workspace(root.path(), recovery.path()).unwrap();
     (root, recovery, workspace)
 }
 /// Construct a half-open range whose endpoints are global UTF-16 code-unit offsets.
@@ -62,7 +63,7 @@ fn utf8_text_edits_vim_write_undo_and_recovery_use_real_neovim() {
     assert!(undone.dirty);
     assert_eq!(w.recovery_entries().unwrap().len(), 1);
     drop(w);
-    let mut restored = Workspace::open(root.path(), recovery.path()).unwrap();
+    let mut restored = marxen_lib::open_workspace(root.path(), recovery.path()).unwrap();
     let record = restored.recovery_entries().unwrap().remove(0);
     let doc = restored.restore(&record.document_id.0).unwrap();
     assert_eq!(doc.snapshot.text, opened.snapshot.text);
@@ -207,7 +208,7 @@ fn external_import_is_bounded_contained_and_rejects_stale_before_writes() {
     let large = outside.path().join("large.png");
     fs::File::create(&large)
         .unwrap()
-        .set_len(storage::MAX_IMAGE_BYTES as u64 + 1)
+        .set_len(marxen_lib::domain::storage::MAX_IMAGE_BYTES as u64 + 1)
         .unwrap();
     assert!(w
         .import_external_image(request(&imported.snapshot), &large, range(2, 2))

@@ -1,4 +1,4 @@
-// Generated from src-tauri/src/isolation.rs. Run npm run isolation-contracts:generate.
+// Generated from src-tauri/src/contracts/isolation.rs. Run npm run isolation-contracts:generate.
 // Do not edit by hand. Isolation IPC schema version 2.
 import type { DocumentId, Revision, Utf16Range } from "./contracts";
 import type { IsolatedCopyId } from "./ai-contracts";
