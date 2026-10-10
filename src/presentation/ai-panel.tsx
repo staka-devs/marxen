@@ -2,11 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { History, Plus, RotateCcw, Send, Square, X } from "lucide-react";
 import { Button } from "./ui/button";
 import "./ai-chat.css";
-import AiProviderSettings from "./ai-provider-settings";
+import AiProviderSettings, { describeProviderSummary } from "./ai-provider-settings";
 import { MarkdownPreview } from "./preview/MarkdownPreview";
 import {
   MODE_LABELS,
-  PRESET_LABELS,
   buildProviderConfig,
   describeAiError,
 } from "../domain/ai-config";
@@ -112,30 +111,6 @@ export { buildProviderConfig };
  */
 function labelFor(labels: Record<string, string> | undefined, documentId: string): string {
   return labels?.[documentId] ?? "現在の文書";
-}
-
-/**
- * Describe the active connection neutrally for chips and tooltips.
- *
- * Shows preset or model fragments only; liveness is never invented here and
- * stays with the explicit connection test in the settings subview.
- */
-function panelProviderSummary(provider: AiProviderConfig): string {
-  if (provider.kind === "acp") {
-    if (provider.acp?.preset === "custom") {
-      const command = provider.acp.argv?.command?.trim() ?? "";
-      return command === "" ? "カスタム" : `カスタム • ${command}`;
-    }
-    return PRESET_LABELS[provider.acp?.preset ?? "codex"] ?? "ACP";
-  }
-  if (provider.kind === "openai_compatible") {
-    const model = provider.openai?.model?.trim() ?? "";
-    return model === "" ? "OpenAI互換" : `OpenAI互換 • ${model}`;
-  }
-  const model = provider.anthropic?.model?.trim() ?? "";
-  const enabled = provider.anthropic?.enabled ?? false;
-  if (!enabled) return model === "" ? "Anthropic（無効）" : `Anthropic • ${model}（無効）`;
-  return model === "" ? "Anthropic" : `Anthropic • ${model}`;
 }
 
 /**
@@ -482,7 +457,7 @@ export default function AiPanel({
   }
 
   if (!conversation) return null;
-  const providerSummary = panelProviderSummary(provider);
+  const providerSummary = describeProviderSummary(provider);
 
   return (
     <div aria-label="Agent チャット" className="ai-chat-panel flex h-full min-h-0 flex-col">

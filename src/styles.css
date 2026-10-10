@@ -21,7 +21,7 @@
   --muted: #e9ecf1;
   --muted-foreground: #6b7280;
   --border: #e2e5ea;
-  font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+  font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -65,7 +65,7 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 .marxen-editor .cm-activeLine { background: color-mix(in srgb, var(--primary) 7%, transparent); box-shadow: inset 2px 0 color-mix(in srgb, var(--primary) 55%, transparent); }
 .marxen-editor .cm-activeLineGutter { color: var(--foreground); background: color-mix(in srgb, var(--primary) 8%, transparent); }
 .marxen-editor .cm-scroller { font-family: "Cascadia Code", "Consolas", "Noto Sans Mono", monospace; }
-.marxen-editor[data-live-preview="true"] .cm-scroller { font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; padding-inline: max(32px, calc((100% - 760px) / 2)); }
+.marxen-editor[data-live-preview="true"] .cm-scroller { font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif; padding-inline: max(32px, calc((100% - 760px) / 2)); }
 .marxen-editor .cm-content { padding: 32px 0 80px; }
 .marxen-editor .cm-line { padding-left: 12px; padding-right: 20px; }
 .marxen-editor .cm-gutterElement { min-width: 32px; padding-right: 8px; }
@@ -162,7 +162,7 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 .marxen-chat-body .marxen-md h2 { font-size: 1.15em; }
 .marxen-chat-body .marxen-md h3 { font-size: 1.05em; }
 .marxen-live-widget { padding: 0; white-space: normal; }
-.marxen-live-widget .marxen-live-body { font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; }
+.marxen-live-widget .marxen-live-body { font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
 .marxen-live-widget .marxen-live-body > :first-child { margin-top: 0; }
 .marxen-live-widget .marxen-live-body > :last-child { margin-bottom: 0; }
 .marxen-live-widget .marxen-live-loading { color: var(--muted-foreground); font-size: 0.8em; padding: 0.25em 0; }
@@ -207,3 +207,6 @@ article.marxen-md { padding: 32px max(32px, calc((100% - 760px) / 2)) 80px; }
   article.marxen-md { padding-inline: 24px; }
 }
 .marxen-picker-input:focus-visible { outline: none; }
+
+[data-theme="contrast"] [data-file-icon="folder"],
+[data-theme="contrast"] [data-file-icon="folder-open"] { color: var(--foreground); }
