@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { renderMarkdownDocument, type RenderResult } from "../../lib/render/pipeline";
 import { disposeMarkdownView, hydrateMarkdownView } from "./hydrate";
-import { hydrateLocalImages, type ImageResolver } from "./images";
+import { hydrateLocalImages, type ImageResolver } from "../../lib/preview-images";
 import "leaflet/dist/leaflet.css";
 
 interface Props {

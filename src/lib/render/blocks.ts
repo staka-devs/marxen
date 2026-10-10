@@ -9,7 +9,8 @@ import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import type { Root as MdastRoot, Content as MdastContent } from "mdast";
+import type { Root as MdastRoot } from "mdast";
+import { alertKind, mdastText } from "./mdast";
 
 export interface LiveBlock {
   /** `heading`, `paragraph`, `code`, `math`, `table`, `list`, `blockquote`, `alert:note`, `html`, `thematicBreak`. */
@@ -23,22 +24,6 @@ export interface LiveBlock {
   lang?: string;
   alert?: string;
   title?: string;
-}
-
-function mdastText(node: MdastContent): string {
-  if (node.type === "text" || node.type === "inlineCode") return node.value;
-  if ("children" in node && Array.isArray(node.children)) {
-    return (node.children as MdastContent[]).map(mdastText).join("");
-  }
-  return "";
-}
-
-function alertKind(node: MdastContent): string | null {
-  if (node.type !== "blockquote") return null;
-  const first = node.children[0];
-  if (!first || first.type !== "paragraph") return null;
-  const match = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.exec(mdastText(first).trim());
-  return match ? match[1].toLowerCase() : null;
 }
 
 /**

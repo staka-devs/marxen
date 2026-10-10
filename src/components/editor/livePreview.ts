@@ -20,8 +20,7 @@ import { computeLiveBlocks, extractLinkDefinitions, findTableCellRange, type Liv
 import { renderMarkdownDocument } from "../../lib/render/pipeline";
 import { toggleCheckbox } from "../../lib/markdown-gui";
 import { disposeMarkdownView, hydrateMarkdownView } from "../preview/hydrate";
-import { hydrateLocalImages } from "../preview/images";
-import type { ImageResolver } from "../preview/images";
+import { hydrateLocalImages, type ImageResolver } from "../../lib/preview-images";
 import type { TextEdit } from "../../shared/contracts";
 
 export interface LivePreviewCallbacks {

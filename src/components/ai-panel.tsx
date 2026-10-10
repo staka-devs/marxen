@@ -3,13 +3,18 @@ import { Button } from "./ui/button";
 import AiProviderSettings from "./ai-provider-settings";
 import { MarkdownPreview } from "./preview/MarkdownPreview";
 import {
+  MODE_LABELS,
   buildProviderConfig,
-  cancelPromptSafe,
   describeAiError,
-  describeInvokeError,
-  isClaudeCommand,
   startPrompt,
 } from "../lib/ai";
+import {
+  claudeRefusalError,
+  isClaudeBlockedProvider,
+  keepStartedSession,
+  normalizeAiError,
+  useAiRun,
+} from "../lib/ai-run";
 import { loadAiProfile, saveAiProfile } from "../lib/ai-profiles";
 import {
   appendStreamingText,
@@ -69,12 +74,8 @@ export interface AiPanelProps {
 
 const MODE_ORDER: PromptMode[] = ["ask", "generate", "rewrite", "workspace"];
 
-export const MODE_LABELS: Record<PromptMode, string> = {
-  ask: "質問",
-  generate: "生成",
-  rewrite: "選択書き換え",
-  workspace: "ワークスペース編集",
-};
+// Single-sourced in `lib/ai`; re-exported for existing label imports.
+export { MODE_LABELS };
 
 // Kept for existing imports; the implementation lives in `lib/ai`.
 export { buildProviderConfig };
@@ -109,20 +110,15 @@ export default function AiPanel({
   const [prompt, setPrompt] = useState("");
   const [streamError, setStreamError] = useState<AiError | null>(null);
   const [resolving, setResolving] = useState(false);
-  // One active run token: every send fences the previous run, and every
-  // terminal/reset/unmount path retires it. Stale callbacks check the token
-  // before touching messages, proposals, or busy state.
-  const runTokenRef = useRef(0);
-  const cancelRequestedRef = useRef(false);
-  const settledTokenRef = useRef(-1);
-  const stopRef = useRef<(() => Promise<void>) | null>(null);
-  const busyRef = useRef(false);
-  const ownedTokenRef = useRef(-1);
-  const [ownedBusy, setOwnedBusy] = useState(false);
+  // One active run token owned by the shared hook: every send fences the
+  // previous run, and every terminal/reset/unmount path retires it. Stale
+  // callbacks check the token before touching messages, proposals, or busy
+  // state. Early IPC events stay buffered in `lib/ai`.
+  const run = useAiRun(onBusyChange);
+  const { ownedBusy } = run;
+  const setBusy = run.setBusy;
   const onProposalRef = useRef(onProposal);
   onProposalRef.current = onProposal;
-  const onBusyChangeRef = useRef(onBusyChange);
-  onBusyChangeRef.current = onBusyChange;
   const conversation = activeId
     ? (conversations.find((item) => item.id === activeId) ?? conversations[0])
     : (conversations[0] ?? null);
@@ -131,26 +127,12 @@ export default function AiPanel({
   activeIdRef.current = conversationId;
   const transcriptRef = useRef<HTMLDivElement>(null);
 
-  function setBusy(next: boolean, token = runTokenRef.current) {
-    if (!next && token !== ownedTokenRef.current) return;
-    if (next) ownedTokenRef.current = token;
-    if (busyRef.current === next) return;
-    busyRef.current = next;
-    setOwnedBusy(next);
-    onBusyChangeRef.current?.(next);
-  }
-
   function applyToConversation(id: string, update: (prev: ChatConversation) => ChatConversation) {
     setConversations((prev) => prev.map((item) => (item.id === id ? update(item) : item)));
   }
 
   function fenceRun() {
-    const ownedToken = ownedTokenRef.current;
-    runTokenRef.current += 1;
-    cancelRequestedRef.current = false;
-    const stop = stopRef.current;
-    stopRef.current = null;
-    if (stop) void cancelPromptSafe(stop).finally(() => setBusy(false, ownedToken));
+    run.fence();
     setConversations((previous) => previous.map((item) => ({
       ...item,
       messages: item.messages.map((message) => message.state === "streaming"
@@ -183,16 +165,6 @@ export default function AiPanel({
     if (providerKeyRef.current === providerKey) return;
     moveToProvider(providerKey);
   }, [providerKey]);
-
-  // Unmount cleanup cancels owned runs so late callbacks settle fenced.
-  useEffect(() => {
-    return () => {
-      runTokenRef.current += 1;
-      const stop = stopRef.current;
-      stopRef.current = null;
-      if (stop) void cancelPromptSafe(stop).finally(() => onBusyChangeRef.current?.(false));
-    };
-  }, []);
 
   useEffect(() => {
     saveAiProfile({
@@ -232,15 +204,15 @@ export default function AiPanel({
     assistant: string,
     capturedMode: PromptMode,
   ) {
-    if (token !== runTokenRef.current) return;
-    if (settledTokenRef.current === token) return;
-    if (cancelRequestedRef.current) {
+    if (!run.isCurrent(token)) return;
+    if (run.isSettled(token)) return;
+    if (run.isCancelRequested()) {
       if (event.type === "chunk" || event.type === "started") return;
-      settledTokenRef.current = token;
+      run.markSettled(token);
       applyToConversation(targetConversationId, (previous) => ({
         ...previous, messages: cancelAssistant(previous.messages, assistant),
       }));
-      stopRef.current = null;
+      run.takeStop();
       setBusy(false);
       return;
     }
@@ -254,7 +226,7 @@ export default function AiPanel({
         }));
         break;
       case "done":
-        settledTokenRef.current = token;
+        run.markSettled(token);
         applyToConversation(targetConversationId, (prev) => ({
           ...prev,
           messages: finalizeAssistant(prev.messages, assistant, event.payload.proposal, event.payload.sent),
@@ -264,25 +236,25 @@ export default function AiPanel({
         if (targetConversationId === activeIdRef.current) {
           onProposalRef.current?.(event.payload.proposal, event.payload.sent, capturedMode);
         }
-        if (stopRef.current) stopRef.current = null;
+        run.takeStop();
         setBusy(false);
         break;
       case "error":
-        settledTokenRef.current = token;
+        run.markSettled(token);
         applyToConversation(targetConversationId, (prev) => ({
           ...prev,
           messages: failAssistant(prev.messages, assistant, event.payload.error),
         }));
-        if (stopRef.current) stopRef.current = null;
+        run.takeStop();
         setBusy(false);
         break;
       case "cancelled":
-        settledTokenRef.current = token;
+        run.markSettled(token);
         applyToConversation(targetConversationId, (prev) => ({
           ...prev,
           messages: cancelAssistant(prev.messages, assistant),
         }));
-        if (stopRef.current) stopRef.current = null;
+        run.takeStop();
         setBusy(false);
         break;
     }
@@ -299,14 +271,12 @@ export default function AiPanel({
       setStreamError({ code: "staging_unresolved", copy_id: "(未解決)" });
       return;
     }
-    if (provider.kind === "acp" && provider.acp?.preset === "custom" && isClaudeCommand(provider.acp.argv?.command ?? "")) {
-      setStreamError({ code: "claude_code_refused", command: (provider.acp.argv?.command ?? "").trim() });
+    const blockedCommand = isClaudeBlockedProvider(provider);
+    if (blockedCommand !== null) {
+      setStreamError(claudeRefusalError(blockedCommand));
       return;
     }
-    const token = runTokenRef.current + 1;
-    runTokenRef.current = token;
-    cancelRequestedRef.current = false;
-    settledTokenRef.current = -1;
+    const token = run.beginRun();
     const capturedMode = promptMode;
     const capturedContexts = promptContexts.map((context) => ({ ...context, ranges: [...context.ranges] }));
     const capturedProvider = provider;
@@ -320,11 +290,8 @@ export default function AiPanel({
     try {
       resolved = await resolveStaging(capturedContexts);
     } catch (cause) {
-      if (token !== runTokenRef.current) { setBusy(false, token); return; }
-      const failure: AiError =
-        typeof cause === "object" && cause !== null && "code" in cause
-          ? (cause as AiError)
-          : { code: "connection_failed", detail: describeInvokeError(cause) };
+      if (!run.isCurrent(token)) { setBusy(false, token); return; }
+      const failure: AiError = normalizeAiError(cause);
       setStreamError(failure);
       setResolving(false);
       setBusy(false);
@@ -332,8 +299,8 @@ export default function AiPanel({
     }
     // Cancel arrived while staging was pending: record the cancelled turn
     // locally and never start the run.
-    if (token !== runTokenRef.current) { setBusy(false, token); return; }
-    if (cancelRequestedRef.current) {
+    if (!run.isCurrent(token)) { setBusy(false, token); return; }
+    if (run.isCancelRequested()) {
       const cancelledAssistant = { ...assistant, state: "cancelled" as const };
       applyToConversation(targetConversationId, (prev) => ({
         ...prev,
@@ -363,36 +330,22 @@ export default function AiPanel({
       );
       // Done arrived before startPrompt returned: cancel the late handle and
       // never publish a stop for a settled run, so no spinner leaks.
-      if (token !== runTokenRef.current || settledTokenRef.current === token || cancelRequestedRef.current) {
-        await cancelPromptSafe(session.stop);
-        setBusy(false, token);
-        return;
-      }
-      stopRef.current = session.stop;
+      if (!(await keepStartedSession(run, token, session.stop))) return;
     } catch (cause) {
-      if (token !== runTokenRef.current) { setBusy(false, token); return; }
-      settledTokenRef.current = token;
+      if (!run.isCurrent(token)) { setBusy(false, token); return; }
+      run.markSettled(token);
+      const failure = normalizeAiError(cause);
       applyToConversation(targetConversationId, (prev) => ({
         ...prev,
-        messages: failAssistant(
-          prev.messages,
-          assistant.id,
-          typeof cause === "object" && cause !== null && "code" in cause
-            ? (cause as AiError)
-            : { code: "connection_failed", detail: describeInvokeError(cause) },
-        ),
+        messages: failAssistant(prev.messages, assistant.id, failure),
       }));
-      setStreamError(
-        typeof cause === "object" && cause !== null && "code" in cause
-          ? (cause as AiError)
-          : { code: "connection_failed", detail: describeInvokeError(cause) },
-      );
+      setStreamError(failure);
       setBusy(false);
     }
   }
 
   async function handleSend() {
-    if (running || busyRef.current || disabled || differentProvider) return;
+    if (running || disabled || differentProvider) return;
     if (!conversation) return;
     const history = toHistoryPayload(conversation.messages);
     const sentPrompt = prompt;
@@ -401,15 +354,13 @@ export default function AiPanel({
   }
 
   async function handleCancel() {
-    cancelRequestedRef.current = true;
-    const stop = stopRef.current;
-    if (stop) await cancelPromptSafe(stop);
+    await run.cancelOwned();
     // No stop yet (staging/start pending): the pending path settles itself
     // as cancelled via the token/flag checks above.
   }
 
   async function handleRetry() {
-    if (running || busyRef.current || disabled || differentProvider || !conversation) return;
+    if (running || disabled || differentProvider || !conversation) return;
     const last = lastUserPrompt(conversation.messages);
     if (!last) return;
     applyToConversation(conversation.id, (prev) => ({
