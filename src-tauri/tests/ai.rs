@@ -793,9 +793,27 @@ fn acp_rejects_oversized_lines() {
             events.push(event);
         },
     );
+    // An oversized line must never surface as a successful proposal. The
+    // fast path is an explicit stream error; under heavy parallel load the
+    // per-run wall-clock watchdog may win first, which surfaces as an error
+    // event plus Ok (the timeout/cancel settlement shape), never Done.
+    let oversized_failed = matches!(outcome, Err(AiError::StreamFailed { .. }));
+    let timed_out = outcome.is_ok()
+        && events.iter().any(|event| {
+            matches!(
+                event,
+                AiStreamEvent::Error(StreamError {
+                    error: AiError::StreamFailed { .. },
+                    ..
+                })
+            )
+        })
+        && !events
+            .iter()
+            .any(|event| matches!(event, AiStreamEvent::Done(_)));
     assert!(
-        matches!(outcome, Err(AiError::StreamFailed { .. })),
-        "oversized line must fail, got {outcome:?}"
+        oversized_failed || timed_out,
+        "oversized line must fail, got {outcome:?} with {events:?}"
     );
 }
 

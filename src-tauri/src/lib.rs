@@ -3,6 +3,7 @@ pub mod ai_contracts;
 pub mod contracts;
 pub mod document;
 pub mod ipc;
+pub mod isolation;
 pub mod neovim;
 pub mod storage;
 pub mod validation;
@@ -42,6 +43,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(ipc::ActorState::default())
+        .manage(isolation::IsolationState::default())
         .setup(|app| {
             neovim::configure_resource_dir(app.path().resource_dir()?);
             let state = app.state::<ipc::ActorState>();
@@ -112,6 +114,12 @@ pub fn run() {
             ai::ai_test_connection,
             ai::ai_prompt_stream,
             ai::ai_prompt_cancel,
+            isolation::isolation_create,
+            isolation::isolation_diff,
+            isolation::isolation_stage_proposal,
+            isolation::isolation_approve,
+            isolation::isolation_reject,
+            isolation::isolation_cancel,
             ipc::configure_document
         ])
         .run(tauri::generate_context!())

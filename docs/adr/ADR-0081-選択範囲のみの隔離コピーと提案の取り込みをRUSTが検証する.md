@@ -1,0 +1,35 @@
+# ADR-0081-選択範囲のみの隔離コピーと提案の取り込みをRUSTが検証する
+
+- 状態: 採用
+- 日付: 2026-10-08
+- 関連 Issue: #8、Epic #1
+- 関連: ADR-0080 (隔離コピーと差分承認)、ADR-0001 (実 Neovim 正本)、ADR-0002 (Rust 直列化)
+
+## 背景
+
+全文コピーでは選択外の本文がエージェントに漏れる。HTTP の生成・書き換え出力は提案テキストのままで staging に届かず、レビュー適用の経路がなかった。`validate_prompt_request` は範囲を選択抜粋の長さで検証しており、範囲が原文オフセットである契約と矛盾していた。
+
+## 検討した選択肢
+
+1. 全文を置いて未選択部をマスクする / 選択抜粋のみを置く。マスクでも長さや構造が漏れるため、選択範囲の原文スライスのみを staging に書く。範囲指定ファイルは `--- marxen-scope document=<id> range=[s, e) ---` の節形式とし、全文選択 (`[0, len)` の単一範囲) のみ原文ファイルをそのまま置く。
+2. 範囲と抜粋の照合を JS に任せる / Rust で照合する。JS の自己申告は信用せず、作成時に revision 一致・範囲の昇順非重複・サロゲート境界・抜粋と原文スライス連結の exact 一致を検証する。重複 context の revision 不一致と範囲重複は拒否する。
+3. 提案の取り込み口を作らない / 検証付きで作る。`isolation_stage_proposal` を追加し、質問は表示のみで拒否、単一範囲の書き換え・生成は exact 置換、workspace は `--- marxen-patch document=<id> range=[s, e) ---` の構造化 patch (登録 scope との exact 一致、全文書では有効範囲) のみ受け付ける。不正・未知 ID・stale・範囲外は actionable な error で拒否する。
+4. 送信時検証を transport 毎に分ける / 共通化する。`validate_prompt_request` は構造検証 (順序・件数・長さ) のみとし、権威ある範囲・抜粋・revision の照合は `IsolationManager::authorize_prompt` に集約して ACP と HTTP の両方で副作用の前に実行する。
+
+## 決定
+
+- staging の節と patch ブロックの本文規則を固定する。節はヘッダ + スライス + 改行 1 つの追加で描画し、解析は末尾改行を 1 つ除去して未編集の往復を exact にする。patch ブロックは行指向で、非空本文は必ず 1 つの末尾改行を持ち、提案全体の末尾に残る 1 つの空行は提案終端として除去する。節と一致しない staging は承認も差分適用もしない。
+- `manifest.json` を staging に置かない。エージェント可視のメタデータは相対パス・範囲・コピー ID のみ (節ヘッダ) とし、workspace root の絶対パスは Rust 内部の登録に留める。解決は workspace とコピーの束縛・ containment・symlink・junction・ADS の検査を行い、未知・非 Active を拒否する。
+- 承認は登録 scope 内の置換のみを最小編集 (範囲毎・全文書は前後一致の単一編集) で行い、選択外バイト (BOM・CRLF・空白) を保つ。複数編集は一つの RPC で undojoin し、文書毎に単一 Undo 段とする。未選択の staging 追加ファイルは無視し、適用の根拠にしない。
+
+## 結果・制約
+
+- 選択外本文は staging に存在せず、ACP の cwd からも見えない。鍛造抜粋・矛盾する重複・範囲外の widening は作成・承認・送信の各段階で拒否される。
+- 文書本文に節ヘッダと同形の行がある場合、登録 scope と一致しなければ fail-closed で拒否する (誤適用しない)。
+- patch 本文の末尾空行は 1 つまでしか表現できない。空置換 (範囲削除) は空本文で表す。
+
+## 確認方法
+
+- `cargo test --test isolation` の選択限定・鍛造拒否・全文条件・提案取り込み・最小適用と単一 Undo・BOM/CRLF 保持・未選択ファイル無視。
+- `ai.rs` の構造検証 unit (原文超えオフセットの許容と権威検証への委譲)。
+- 未実施: 各 OS 実 WebView / IME、実 CLI との workspace prompt 送信、署名・公証・配布後の runtime 配置確認。
