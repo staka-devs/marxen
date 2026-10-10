@@ -143,6 +143,141 @@ pub enum ContractError {
     EmptyEdits,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum WorkspaceError {
+    InvalidPath,
+    OutsideWorkspace,
+    NotMarkdown,
+    InvalidUtf8,
+    AlreadyExists,
+    NotFound,
+    NoWorkspace,
+    UnknownDocument,
+    UnsavedChanges { snapshot: DocumentSnapshot },
+    Conflict { path: String },
+    Io { detail: String },
+    Neovim { detail: String },
+    Contract { error: ContractError },
+    InvalidImage,
+}
+
+impl std::fmt::Display for WorkspaceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+impl std::error::Error for WorkspaceError {}
+impl From<std::io::Error> for WorkspaceError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io {
+            detail: error.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceInfo {
+    pub root: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceEntry {
+    pub path: String,
+    pub name: String,
+    pub directory: bool,
+    pub markdown: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenDocument {
+    pub path: Option<String>,
+    pub snapshot: DocumentSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchMatch {
+    pub path: String,
+    pub document_id: Option<DocumentId>,
+    pub revision: Option<Revision>,
+    pub range: Utf16Range,
+    pub line: u32,
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseAction {
+    Save,
+    Discard,
+    Cancel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryEntry {
+    pub document_id: DocumentId,
+    pub path: Option<String>,
+    pub revision: Revision,
+    pub conflict: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    content = "payload",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum WorkspaceEvent {
+    ExternalChange {
+        document_id: DocumentId,
+        path: String,
+        dirty: bool,
+        deleted: bool,
+    },
+    Snapshot(DocumentSnapshot),
+    Saved(SaveResult),
+    Error {
+        document_id: DocumentId,
+        error: WorkspaceError,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageData {
+    pub mime: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PasteResult {
+    pub path: String,
+    pub snapshot: DocumentSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct NvimConfig {
+    pub path: Option<String>,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GridUpdate {
+    pub document_id: DocumentId,
+    pub revision: Revision,
+    #[ts(type = "unknown[]")]
+    pub updates: Vec<serde_json::Value>,
+}
+
 pub fn typescript() -> String {
     let cfg = ts_rs::Config::default();
     let declarations = [
@@ -164,6 +299,18 @@ pub fn typescript() -> String {
         ConnectionState::decl(&cfg),
         RuntimeStatus::decl(&cfg),
         ContractError::decl(&cfg),
+        WorkspaceError::decl(&cfg),
+        WorkspaceInfo::decl(&cfg),
+        WorkspaceEntry::decl(&cfg),
+        OpenDocument::decl(&cfg),
+        SearchMatch::decl(&cfg),
+        CloseAction::decl(&cfg),
+        RecoveryEntry::decl(&cfg),
+        WorkspaceEvent::decl(&cfg),
+        ImageData::decl(&cfg),
+        PasteResult::decl(&cfg),
+        NvimConfig::decl(&cfg),
+        GridUpdate::decl(&cfg),
     ];
     let mut output = "// Generated from src-tauri/src/contracts.rs. Run npm run contracts:generate.\n// Do not edit by hand. Global offsets count UTF-16 code units; ranges are [start, end).\n".to_owned();
     for declaration in declarations {
