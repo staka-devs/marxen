@@ -1,0 +1,10 @@
+{
+  "version": "0.11.5",
+  "releaseUrl": "https://github.com/neovim/neovim/releases/tag/v0.11.5",
+  "targets": {
+    "x86_64-pc-windows-msvc": { "asset": "nvim-win64.zip", "root": "nvim-win64", "sha256": "718e731326e7759cf17bbbb33f38975707a2ac85642614686b818ef5fde38f48", "executable": "bin/nvim.exe" },
+    "aarch64-apple-darwin": { "asset": "nvim-macos-arm64.tar.gz", "root": "nvim-macos-arm64", "sha256": "79143d3b408f7034f90b7cf59af2276de09ef8a4c2f1a28e4c99581b249d3107", "executable": "bin/nvim" },
+    "x86_64-apple-darwin": { "asset": "nvim-macos-x86_64.tar.gz", "root": "nvim-macos-x86_64", "sha256": "6612760a7037ca2518e456908baf5e43101fa79819d18979fc4d4e8441d9dfa5", "executable": "bin/nvim" },
+    "x86_64-unknown-linux-gnu": { "asset": "nvim-linux-x86_64.tar.gz", "root": "nvim-linux-x86_64", "sha256": "b2f91117be5b5ea39edd7297156dc2a4a8df4add6c95a90809a8df19e7ab6f52", "executable": "bin/nvim" }
+  }
+}
