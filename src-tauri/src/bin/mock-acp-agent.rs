@@ -114,7 +114,7 @@ fn flag_value(name: &str) -> Option<String> {
     None
 }
 
-/// Check for an exact standalone flag after argv[0], without interpreting `=value`.
+/// Check for an exact standalone flag after `argv[0]`, without interpreting `=value`.
 fn has_flag(name: &str) -> bool {
     std::env::args().skip(1).any(|arg| arg == name)
 }

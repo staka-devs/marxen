@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import "tailwindcss" source(".");
 
 @theme inline {
   --color-background: var(--background);
@@ -73,9 +73,9 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 .marxen-editor .cm-cursorLayer { animation: none; }
 .marxen-editor-header button[aria-pressed="true"] { background: var(--muted); color: var(--foreground); }
 .marxen-activity button:focus-visible { outline-offset: -4px; }
-.marxen-editor .cm-cursor { border-left: none; width: 0.62em; background: color-mix(in srgb, var(--foreground) 55%, transparent); }
+.marxen-editor .cm-cursor { border-left: none; width: 0.62em; background: color-mix(in srgb, var(--primary) 45%, transparent); outline: 1px solid var(--primary); }
 .marxen-editor[data-vim-mode="insert"] .cm-cursor,
-.marxen-editor[data-vim-mode="command_line"] .cm-cursor { width: 2px; background: var(--primary); }
+.marxen-editor[data-vim-mode="command_line"] .cm-cursor { width: 2px; background: var(--primary); outline: none; }
 .marxen-editor[data-vim-mode="replace"] .cm-cursor { height: 3px !important; margin-top: 1em; background: var(--primary); }
 .marxen-editor .cm-selectionBackground { background: color-mix(in srgb, var(--primary) 23%, transparent) !important; }
 .marxen-editor[data-readonly="true"] .cm-cursorLayer { display: none; }
@@ -163,3 +163,12 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 .marxen-live-widget td, .marxen-live-widget th { cursor: pointer; }
 .marxen-live-widget li.task-list-item > input[type="checkbox"] { cursor: pointer; }
 .marxen-live-widget a { cursor: pointer; }
+
+/* Keep nesting readable without adding chrome around every tree row. */
+.marxen-tree-children { position: relative; }
+.marxen-tree-children::before { content: ""; position: absolute; top: 0; bottom: 0; left: var(--tree-indent); width: 1px; background: var(--border); pointer-events: none; }
+
+.marxen-settings-search:focus-visible { outline: none; }
+
+
+.marxen-settings-search::-webkit-search-cancel-button { display: none; }

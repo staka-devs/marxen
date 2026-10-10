@@ -12,6 +12,7 @@ export interface EditorPreferences {
   fontSize: number;
   lineHeight: number;
   wordWrap: boolean;
+  /** Show source line numbers in Markdown and split editors; live preview omits them. */
   lineNumbers: boolean;
   highlightActiveLine: boolean;
 }
@@ -45,3 +46,4 @@ export function normalizeEditorPreferences(value: unknown): EditorPreferences {
     highlightActiveLine: bool("highlightActiveLine", fallback.highlightActiveLine),
   };
 }
+
