@@ -356,7 +356,7 @@ fn validate_context_against_snapshot(
         previous = Some(range);
     }
     if assembled != context.text {
-        return Err(invalid_scope("送信抜粋が原文の選択範囲と一致しません"));
+        return Err(invalid_scope("送信した内容が対象範囲と一致しません"));
     }
     Ok(())
 }
@@ -882,7 +882,7 @@ impl IsolationManager {
                     previous = Some(range);
                 }
                 if assembled != context.text {
-                    return Err(invalid_scope("送信抜粋が原文の選択範囲と一致しません"));
+                    return Err(invalid_scope("送信した内容が対象範囲と一致しません"));
                 }
                 merged.extend(context.ranges.iter().cloned());
             }

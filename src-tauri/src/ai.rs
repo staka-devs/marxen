@@ -24,6 +24,8 @@ use std::time::{Duration, Instant};
 use tauri::Emitter;
 
 pub const MAX_PROMPT_CHARS: usize = 20_000;
+pub const MAX_HISTORY_MESSAGES: usize = 32;
+pub const MAX_HISTORY_CHARS: usize = 20_000;
 pub const MAX_CONTEXTS: usize = 16;
 pub const MAX_RANGES_PER_CONTEXT: usize = 32;
 pub const MAX_EXCERPT_BYTES: usize = 512_000;
@@ -224,12 +226,29 @@ pub fn validate_provider_config(config: &AiProviderConfig) -> Result<(), AiError
     }
 }
 
+pub fn validate_history(history: &[ChatHistoryMessage]) -> Result<(), AiError> {
+    if history.len() > MAX_HISTORY_MESSAGES {
+        return Err(invalid("履歴は 32 件までです"));
+    }
+    for message in history {
+        let chars = message.text.chars().count();
+        if message.text.trim().is_empty() || chars > MAX_HISTORY_CHARS {
+            return Err(invalid("履歴の1件は 1〜20000 文字です"));
+        }
+        if message.text.bytes().any(|b| b == 0) {
+            return Err(invalid("履歴に NUL 文字は使えません"));
+        }
+    }
+    Ok(())
+}
+
 pub fn validate_prompt_request(request: &AiPromptRequest) -> Result<(), AiError> {
     validate_provider_config(&request.provider)?;
     let prompt_chars = request.prompt.chars().count();
     if request.prompt.trim().is_empty() || prompt_chars > MAX_PROMPT_CHARS {
         return Err(invalid("プロンプトは 1〜20000 文字です"));
     }
+    validate_history(&request.history)?;
     if request.contexts.len() > MAX_CONTEXTS {
         return Err(invalid("送信対象は 16 件までです"));
     }
@@ -285,9 +304,32 @@ fn format_ranges(ranges: &[Utf16Range]) -> String {
 }
 
 /// Deterministic user message. Tests assert this exact shape as "what was sent".
+/// History (completed turns only, oldest first) is rendered explicitly between
+/// the mode instruction and the current contexts so ACP agents see the same
+/// multi-turn scope without session resume.
 pub fn compose_user_message(mode: PromptMode, prompt: &str, contexts: &[PromptContext]) -> String {
+    compose_user_message_with_history(mode, prompt, contexts, &[])
+}
+
+pub fn compose_user_message_with_history(
+    mode: PromptMode,
+    prompt: &str,
+    contexts: &[PromptContext],
+    history: &[ChatHistoryMessage],
+) -> String {
     let mut out = String::from(mode_instruction(mode));
     out.push('\n');
+    for message in history {
+        let role = match message.role {
+            ChatRole::User => "user",
+            ChatRole::Assistant => "assistant",
+        };
+        out.push_str(&format!("--- history {role} ---\n"));
+        out.push_str(&message.text);
+        if !message.text.ends_with('\n') {
+            out.push('\n');
+        }
+    }
     for context in contexts {
         out.push_str(&format!(
             "--- context document={} revision={} ranges={} ---\n",
@@ -775,13 +817,24 @@ pub fn acp_session_prompt(
     prompt: &str,
     contexts: &[PromptContext],
 ) -> serde_json::Value {
+    acp_session_prompt_with_history(id, session_id, mode, prompt, contexts, &[])
+}
+
+pub fn acp_session_prompt_with_history(
+    id: u64,
+    session_id: &str,
+    mode: PromptMode,
+    prompt: &str,
+    contexts: &[PromptContext],
+    history: &[ChatHistoryMessage],
+) -> serde_json::Value {
     serde_json::json!({
         "jsonrpc": "2.0",
         "id": id,
         "method": "session/prompt",
         "params": {
             "sessionId": session_id,
-            "prompt": [{ "type": "text", "text": compose_user_message(mode, prompt, contexts) }]
+            "prompt": [{ "type": "text", "text": compose_user_message_with_history(mode, prompt, contexts, history) }]
         }
     })
 }
@@ -1084,7 +1137,12 @@ pub fn run_mock_script(
     cancel: &AtomicBool,
     emit: &mut (dyn FnMut(AiStreamEvent) + Send),
 ) -> String {
-    let composed = compose_user_message(request.mode, &request.prompt, &request.contexts);
+    let composed = compose_user_message_with_history(
+        request.mode,
+        &request.prompt,
+        &request.contexts,
+        &request.history,
+    );
     emit(AiStreamEvent::Started(StreamStarted {
         run_id: run_id.clone(),
     }));
@@ -1717,12 +1775,13 @@ fn run_acp_conversation(
     tracker.prompt_started(request.session_id.as_ref().map(|id| id.0.as_str()))?;
 
     let prompt_id = conn.fresh_id();
-    let prompt_message = acp_session_prompt(
+    let prompt_message = acp_session_prompt_with_history(
         prompt_id,
         session_id,
         request.mode,
         &request.prompt,
         &request.contexts,
+        &request.history,
     );
     conn.write(&prompt_message)?;
 
@@ -1902,25 +1961,44 @@ pub fn http_client(timeout: Duration) -> Result<reqwest::Client, AiError> {
         })
 }
 
+fn history_messages(history: &[ChatHistoryMessage]) -> Vec<serde_json::Value> {
+    history
+        .iter()
+        .map(|message| {
+            let role = match message.role {
+                ChatRole::User => "user",
+                ChatRole::Assistant => "assistant",
+            };
+            serde_json::json!({ "role": role, "content": message.text })
+        })
+        .collect()
+}
+
 fn openai_body(request: &AiPromptRequest, model: &str) -> serde_json::Value {
+    let mut messages = history_messages(&request.history);
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": compose_user_message_with_history(request.mode, &request.prompt, &request.contexts, &[])
+    }));
     serde_json::json!({
         "model": model,
         "stream": true,
-        "messages": [
-            { "role": "user", "content": compose_user_message(request.mode, &request.prompt, &request.contexts) }
-        ]
+        "messages": messages
     })
 }
 
 fn anthropic_body(request: &AiPromptRequest, model: &str) -> serde_json::Value {
+    let mut messages = history_messages(&request.history);
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": compose_user_message_with_history(request.mode, &request.prompt, &request.contexts, &[])
+    }));
     serde_json::json!({
         "model": model,
         "max_tokens": 2048,
         "stream": true,
         "system": mode_instruction(request.mode),
-        "messages": [
-            { "role": "user", "content": compose_user_message(request.mode, &request.prompt, &request.contexts) }
-        ]
+        "messages": messages
     })
 }
 
@@ -1955,17 +2033,34 @@ pub async fn run_http_prompt(
             .header("x-api-key", secret)
             .header("anthropic-version", "2023-06-01"),
     };
-    let response = builder.send().await.map_err(|error| {
-        if error.is_timeout() {
-            AiError::StreamFailed {
-                detail: "時間内に応答がありませんでした".into(),
-            }
-        } else {
-            AiError::ConnectionFailed {
-                detail: format!("接続できません: {error}"),
+    // A silent server must never hold a run until the client timeout: race
+    // the send against the shared cancel flag so cancellation lands while
+    // response headers are still awaited.
+    let send_future = builder.send();
+    tokio::pin!(send_future);
+    let response = loop {
+        tokio::select! {
+            result = &mut send_future => break result.map_err(|error| {
+                if error.is_timeout() {
+                    AiError::StreamFailed {
+                        detail: "時間内に応答がありませんでした".into(),
+                    }
+                } else {
+                    AiError::ConnectionFailed {
+                        detail: format!("接続できません: {error}"),
+                    }
+                }
+            })?,
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                if cancel.load(Ordering::SeqCst) {
+                    emit(AiStreamEvent::Cancelled(StreamCancelled {
+                        run_id: run_id.clone(),
+                    }));
+                    return Ok(());
+                }
             }
         }
-    })?;
+    };
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
         let body = response.text().await.unwrap_or_default();
@@ -1981,13 +2076,22 @@ pub async fn run_http_prompt(
     let mut decoder = SseDecoder::default();
     let mut assembler = ProposalAssembler::new();
     let mut finished = false;
-    while let Some(chunk) = stream.next().await {
-        if cancel.load(Ordering::SeqCst) {
-            emit(AiStreamEvent::Cancelled(StreamCancelled {
-                run_id: run_id.clone(),
-            }));
-            return Ok(());
-        }
+    loop {
+        // Stall-safe read: a server that goes quiet after headers must not
+        // hold the run until the client timeout when cancellation arrives.
+        let next = tokio::select! {
+            next = stream.next() => next,
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                if cancel.load(Ordering::SeqCst) {
+                    emit(AiStreamEvent::Cancelled(StreamCancelled {
+                        run_id: run_id.clone(),
+                    }));
+                    return Ok(());
+                }
+                continue;
+            }
+        };
+        let Some(chunk) = next else { break };
         let bytes = chunk.map_err(|error| AiError::StreamFailed {
             detail: format!("受信に失敗しました: {error}"),
         })?;
@@ -2608,6 +2712,7 @@ mod tests {
                 copy_id: IsolatedCopyId("copy_01".into()),
             },
             session_id: None,
+            history: vec![],
         }
     }
 
@@ -3330,5 +3435,128 @@ mod tests {
         assert_eq!(value, serde_json::json!({"code": "request_cancelled"}));
         let roundtrip: AiError = serde_json::from_value(value).unwrap();
         assert_eq!(roundtrip, AiError::RequestCancelled);
+    }
+
+    fn history_message(role: ChatRole, text: &str) -> ChatHistoryMessage {
+        ChatHistoryMessage {
+            role,
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn history_validation_bounds_turns_and_chars() {
+        assert!(validate_history(&[]).is_ok());
+        assert!(validate_history(&[history_message(ChatRole::User, "前回の質問")]).is_ok());
+        let too_many: Vec<ChatHistoryMessage> = (0..MAX_HISTORY_MESSAGES + 1)
+            .map(|i| history_message(ChatRole::User, &format!("q{i}")))
+            .collect();
+        assert!(validate_history(&too_many).is_err());
+        assert!(validate_history(&[history_message(ChatRole::User, "   ")]).is_err());
+        let long = "あ".repeat(MAX_HISTORY_CHARS + 1);
+        assert!(validate_history(&[history_message(ChatRole::Assistant, &long)]).is_err());
+        let mut with_nul = String::from("ok");
+        with_nul.push('\0');
+        assert!(validate_history(&[history_message(ChatRole::User, &with_nul)]).is_err());
+    }
+
+    #[test]
+    fn prompt_requests_validate_history_before_side_effects() {
+        let mut request = acp_request();
+        request.history = vec![
+            history_message(ChatRole::User, "1件目"),
+            history_message(ChatRole::Assistant, "1件目の回答"),
+        ];
+        assert!(validate_prompt_request(&request).is_ok());
+        request.history = vec![history_message(ChatRole::User, "   ")];
+        assert!(validate_prompt_request(&request).is_err());
+        // Old payloads without history still deserialize via default.
+        let legacy = serde_json::json!({
+            "provider": serde_json::to_value(&request.provider).unwrap(),
+            "mode": "ask",
+            "prompt": "質問",
+            "contexts": [],
+            "staging": { "copyId": "copy_01" },
+            "sessionId": null
+        });
+        let parsed: AiPromptRequest = serde_json::from_value(legacy).unwrap();
+        assert!(parsed.history.is_empty());
+    }
+
+    #[test]
+    fn acp_composition_carries_history_explicitly() {
+        let history = vec![
+            history_message(ChatRole::User, "前回の質問"),
+            history_message(ChatRole::Assistant, "前回の回答"),
+        ];
+        let with_history =
+            compose_user_message_with_history(PromptMode::Ask, "今回", &[context()], &history);
+        assert!(with_history.contains("--- history user ---\n前回の質問"));
+        assert!(with_history.contains("--- history assistant ---\n前回の回答"));
+        assert!(with_history.contains("--- prompt ---\n今回"));
+        // No-history shape is unchanged for the existing exact-shape test.
+        assert_eq!(
+            compose_user_message(PromptMode::Ask, "これは何ですか", &[context()]),
+            compose_user_message_with_history(PromptMode::Ask, "これは何ですか", &[context()], &[])
+        );
+        let prompt = acp_session_prompt_with_history(
+            3,
+            "sess_1",
+            PromptMode::Ask,
+            "今回",
+            &[context()],
+            &history,
+        );
+        let text = prompt["params"]["prompt"][0]["text"]
+            .as_str()
+            .expect("text");
+        assert!(text.contains("前回の質問") && text.contains("前回の回答"));
+    }
+
+    #[test]
+    fn http_bodies_carry_two_turn_history_as_messages() {
+        let history = vec![
+            history_message(ChatRole::User, "1件目の質問"),
+            history_message(ChatRole::Assistant, "1件目の回答"),
+        ];
+        let mut openai = acp_request();
+        openai.provider = AiProviderConfig {
+            kind: AiProviderKind::OpenaiCompatible,
+            acp: None,
+            openai: Some(OpenAiConfig {
+                endpoint: "https://api.example.com/v1".into(),
+                model: "m".into(),
+            }),
+            anthropic: None,
+        };
+        openai.prompt = "2件目の質問".into();
+        openai.history = history.clone();
+        let body = openai_body(&openai, "m");
+        let messages = body["messages"].as_array().expect("messages");
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"], "1件目の質問");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["content"], "1件目の回答");
+        assert!(messages[2]["content"]
+            .as_str()
+            .expect("content")
+            .contains("2件目の質問"));
+
+        openai.provider = AiProviderConfig {
+            kind: AiProviderKind::Anthropic,
+            acp: None,
+            openai: None,
+            anthropic: Some(AnthropicConfig {
+                enabled: true,
+                endpoint: "https://api.anthropic.example".into(),
+                model: "m".into(),
+            }),
+        };
+        let body = anthropic_body(&openai, "m");
+        let messages = body["messages"].as_array().expect("messages");
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["content"], "1件目の質問");
+        assert_eq!(messages[1]["content"], "1件目の回答");
     }
 }

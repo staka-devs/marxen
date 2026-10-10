@@ -10,9 +10,9 @@ function baseProps() {
     busy: false,
     message: null as string | null,
     status: null as string | null,
-    proposalText: null as string | null,
+    proposalText: "変更の提案" as string | null,
     onFetchDiff: vi.fn(),
-    onStageProposal: null as (() => void) | null,
+    onStageProposal: vi.fn() as (() => void) | null,
     onApprove: vi.fn(),
     onReject: vi.fn(),
     onCancel: vi.fn(),
@@ -20,10 +20,11 @@ function baseProps() {
 }
 
 describe("review panel", () => {
-  it("shows the staging copy and drives approve/reject/cancel", () => {
+  it("shows the proposed change and drives approve/reject/cancel", () => {
     const props = baseProps();
     render(<ReviewPanel {...props} />);
-    expect(screen.getByText("copy_08")).toBeVisible();
+    expect(screen.getByText("変更の提案")).toBeVisible();
+    expect(screen.queryByText("copy_08")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "承認して適用" }));
     fireEvent.click(screen.getByRole("button", { name: "却下" }));
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
@@ -84,13 +85,13 @@ describe("review panel", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "提案を作業コピーに取り込む" }));
     expect(onStageProposal).toHaveBeenCalledOnce();
-    expect(screen.getByText(/doc_08 rev 4/)).toBeVisible();
+    expect(screen.getByText(/doc_08.*適用/)).toBeVisible();
     expect(screen.getByText(/ロールバック済み/)).toBeVisible();
   });
 
   it("disables actions without a copy", () => {
     render(<ReviewPanel {...baseProps()} copyId={null} />);
     expect(screen.getByRole("button", { name: "承認して適用" })).toBeDisabled();
-    expect(screen.getByText(/未作成/)).toBeVisible();
+    expect(screen.queryByText("copy_08")).not.toBeInTheDocument();
   });
 });

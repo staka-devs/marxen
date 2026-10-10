@@ -1,5 +1,4 @@
 import { Button } from "./ui/button";
-import { Card } from "./ui/card";
 import type { ApproveDocOutcome, IsolationDiff } from "../shared/isolation-contracts";
 
 /** Props owned by Issue #8. UI (#5) mounts this next to AiPanel and wires
@@ -19,6 +18,7 @@ export interface ReviewPanelProps {
   onApprove: () => void;
   onReject: () => void;
   onCancel: () => void;
+  documentLabels?: Record<string, string>;
 }
 
 export default function ReviewPanel({
@@ -34,15 +34,17 @@ export default function ReviewPanel({
   onApprove,
   onReject,
   onCancel,
+  documentLabels,
 }: ReviewPanelProps) {
+  const label = (documentId: string) => documentLabels ? documentLabels[documentId] ?? "文書" : documentId;
+  if (!diffs.some((diff) => diff.changed) && outcomes.length === 0 && !message && !onStageProposal) {
+    return null;
+  }
   return (
-    <Card aria-labelledby="review-panel-title">
-      <h2 id="review-panel-title" className="text-base font-semibold">差分レビュー (隔離コピー)</h2>
+    <section aria-labelledby="review-panel-title" className="border-t border-border pt-3">
+      <h2 id="review-panel-title" className="text-xs font-semibold">変更の確認</h2>
       <p className="mt-1 text-xs text-muted-foreground">
-        Markdownへの反映は承認した範囲パッチのみを Neovim 経由で行います。却下・取消はMarkdownとディスクを変更しません。隔離はコピーであり OS サンドボックスではありません。
-      </p>
-      <p className="mt-2 text-xs text-muted-foreground">
-        作業コピー: {copyId ? <span className="font-mono">{copyId}</span> : "未作成"}
+        適用すると編集中の文書が更新されます。ファイルの保存は別操作です。
       </p>
       {proposalText !== null && onStageProposal !== null && (
         <div className="mt-2 rounded-lg border border-border p-2">
@@ -84,7 +86,7 @@ export default function ReviewPanel({
             const unchanged = !outcome.applied && !failed;
             return (
               <li key={outcome.documentId} className="font-mono text-xs">
-                {outcome.documentId} rev {outcome.revision}{" "}
+                {label(outcome.documentId)}{" "}
                 {outcome.applied ? "適用" : unchanged ? "変更なし" : "未適用"}
                 {outcome.rolledBack ? " (ロールバック済み)" : ""}
                 {outcome.error ? ` 失敗: ${outcome.error}` : ""}
@@ -99,7 +101,7 @@ export default function ReviewPanel({
           {diffs.map((diff, index) => (
             <li key={`${diff.documentId}-${index}`} className="rounded-lg border border-border p-2">
               <p className="font-mono text-xs">
-                {diff.documentId} [{diff.range.start}, {diff.range.end}) rev {diff.baseRevision} → {diff.liveRevision}
+                {label(diff.documentId)}
                 {diff.drifted ? " (外部変更あり・要再同期)" : ""} {diff.changed ? "変更あり" : "変更なし"}
               </p>
               <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap text-xs">{diff.unified}</pre>
@@ -107,6 +109,6 @@ export default function ReviewPanel({
           ))}
         </ul>
       )}
-    </Card>
+    </section>
   );
 }
