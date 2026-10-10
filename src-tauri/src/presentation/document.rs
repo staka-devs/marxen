@@ -1,16 +1,27 @@
 //! Folder-scoped IPC. Commands share the ID registry and actor locks.
+use crate::application::workspace::Workspace;
 use crate::contracts::WorkspaceEvent;
-use crate::workspace::Workspace;
 use std::sync::{Arc, Mutex};
-#[cfg(feature = "desktop")]
-pub mod ai;
-#[cfg(feature = "desktop")]
-pub mod isolation;
 
-#[derive(Default)]
 pub struct ActorState {
+    pub services: crate::application::ports::DocumentServices,
+    pub clock: Arc<dyn crate::application::ports::Clock>,
     pub workspace: Arc<Mutex<Option<Workspace>>>,
     pub pending: Arc<Mutex<Vec<WorkspaceEvent>>>,
+}
+impl ActorState {
+    /// Retain injected native dependencies alongside the workspace/event locks.
+    pub fn new(
+        services: crate::application::ports::DocumentServices,
+        clock: Arc<dyn crate::application::ports::Clock>,
+    ) -> Self {
+        Self {
+            services,
+            clock,
+            workspace: Arc::new(Mutex::new(None)),
+            pending: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
 }
 #[cfg(feature = "desktop")]
 pub use desktop::*;
@@ -53,7 +64,12 @@ mod desktop {
         if let Some(workspace) = guard.as_ref() {
             workspace.ensure_clean()?;
         }
-        let workspace = Workspace::open(std::path::Path::new(&path), &recovery)?;
+        let workspace = Workspace::open(
+            std::path::Path::new(&path),
+            &recovery,
+            state.services.clone(),
+            state.clock.clone(),
+        )?;
         let info = workspace.info();
         *guard = Some(workspace);
         state

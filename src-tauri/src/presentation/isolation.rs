@@ -1,11 +1,10 @@
 //! Tauri isolation commands and desktop shared state.
-use crate::ai_contracts::{IsolatedCopyId, PromptContext, PromptMode, ProposalText};
+use crate::application::isolation::IsolationManager;
+use crate::application::workspace::Workspace;
+use crate::contracts::ai::{IsolatedCopyId, PromptContext, PromptMode, ProposalText};
+use crate::contracts::isolation::{ApproveResult, IsolatedCopyInfo, IsolationDiff, StagedProposal};
 use crate::contracts::WorkspaceError;
-use crate::ipc::ActorState;
-use crate::isolation::{
-    ApproveResult, IsolatedCopyInfo, IsolationDiff, IsolationManager, StagedProposal,
-};
-use crate::workspace::Workspace;
+use crate::presentation::document::ActorState;
 
 fn with_both<T>(
     workspace: &ActorState,
@@ -95,14 +94,14 @@ pub fn isolation_cancel(
 
 /// Tauri-shared isolation state (desktop). Single manager keyed by copy id.
 pub struct IsolationState {
-    pub manager: std::sync::Mutex<IsolationManager>,
+    pub manager: std::sync::Arc<std::sync::Mutex<IsolationManager>>,
 }
 
-impl Default for IsolationState {
-    fn default() -> Self {
-        let manager = IsolationManager::open_default().expect("staging dir");
+impl IsolationState {
+    /// Share one injected staging manager across command and background run settlement paths.
+    pub fn new(manager: IsolationManager) -> Self {
         Self {
-            manager: std::sync::Mutex::new(manager),
+            manager: std::sync::Arc::new(std::sync::Mutex::new(manager)),
         }
     }
 }

@@ -8,28 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-/// Which configuration an embedded session boots with.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConfigSource {
-    /// Isolated defaults. Never touches user home.
-    Isolated,
-    /// Explicit user file. Must exist and be one of the supported names.
-    UserFile(PathBuf),
-}
-
-/// Outcome of booting with a [`ConfigSource`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfigReport {
-    pub source: String,
-    /// stderr lines plus `:messages` content at boot, empty when clean.
-    pub errors: Vec<String>,
-}
-
-impl ConfigReport {
-    pub fn has_errors(&self) -> bool {
-        !self.errors.is_empty()
-    }
-}
+pub use crate::application::ports::{ConfigReport, ConfigSource};
 
 /// Supported user config file names (case-sensitive on disk, matched
 /// case-insensitively for Windows `_vimrc` conventions).

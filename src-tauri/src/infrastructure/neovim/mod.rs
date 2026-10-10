@@ -4,17 +4,17 @@
 //! `--embed`, keeps its buffer as the document source of truth, and exposes
 //! the RPC surface the document actor needs: lines/text range edits, modes,
 //! keymaps, display widths, cursor, undo, `:w` interception, UI grid, and
-//! buffer notifications. Pure position math lives in [`coordinates`].
+//! buffer notifications. Pure position math lives in [`crate::domain::coordinates`].
 
+pub mod buffer;
 pub mod config;
-pub mod coordinates;
 pub mod grid;
 pub mod mapping;
 pub mod mode;
 pub mod rpc;
 
+use crate::domain::coordinates::{join_lines, split_lines};
 use config::{argv_for, collect_errors, describe_source, ConfigReport, ConfigSource};
-use coordinates::{join_lines, split_lines};
 use rpc::{EmbedClient, RpcError};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -27,7 +27,9 @@ pub fn configure_resource_dir(directory: PathBuf) {
     let _ = RESOURCE_DIR.set(directory);
 }
 
-pub use coordinates::{display_width, global_utf16_to_line_byte, line_byte_to_global_utf16};
+pub use crate::domain::coordinates::{
+    display_width, global_utf16_to_line_byte, line_byte_to_global_utf16,
+};
 
 /// Resolved bundled binary, runtime, and manifest target.
 #[derive(Debug, Clone)]

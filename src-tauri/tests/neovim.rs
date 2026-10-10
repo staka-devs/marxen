@@ -7,17 +7,19 @@
 //! sharing GUI range edits, `:w` delegation to Rust, config errors,
 //! revision serialization, and cursor reporting.
 
+use marxen_lib::application::document::{ActorError, DocumentActor};
 use marxen_lib::contracts::{
     ContractError, CursorUpdate, DocumentId, EditRequest, EditSource, Revision, SaveRequest,
     TextEdit, Utf16Offset, Utf16Range, VimMode,
 };
-use marxen_lib::document::{ActorError, DocumentActor};
-use marxen_lib::neovim::config::ConfigSource;
-use marxen_lib::neovim::coordinates::{display_width, global_utf16_to_line_byte};
-use marxen_lib::neovim::grid::{attach, detach, grid_line_text, grid_lines_from_redraw};
-use marxen_lib::neovim::mapping::{apply_user_lua, has_mapping};
-use marxen_lib::neovim::NeovimSession;
-use marxen_lib::validation::{utf16_to_utf8, utf8_to_utf16};
+use marxen_lib::domain::coordinates::{display_width, global_utf16_to_line_byte};
+use marxen_lib::domain::validation::{utf16_to_utf8, utf8_to_utf16};
+use marxen_lib::infrastructure::neovim::config::ConfigSource;
+use marxen_lib::infrastructure::neovim::grid::{
+    attach, detach, grid_line_text, grid_lines_from_redraw,
+};
+use marxen_lib::infrastructure::neovim::mapping::{apply_user_lua, has_mapping};
+use marxen_lib::infrastructure::neovim::NeovimSession;
 use std::time::Duration;
 
 /// Create a stable document identifier namespaced to the Neovim integration fixture.
@@ -43,7 +45,7 @@ fn utf16_len(text: &str) -> u32 {
 
 /// Require the real bundled Neovim executable and runtime before starting an integration check.
 fn require_bundle() {
-    marxen_lib::neovim::bundle_paths().expect("run `npm run bundle:neovim` first");
+    marxen_lib::infrastructure::neovim::bundle_paths().expect("run `npm run bundle:neovim` first");
 }
 
 #[test]
@@ -52,7 +54,8 @@ fn japanese_composition_contract_keeps_offsets() {
     require_bundle();
     // IME composition: preedit inserted as one range edit, then committed by
     // replacing the same range. Neovim buffer stays truth throughout.
-    let actor = DocumentActor::open(doc_id("composition"), "こんにちは".into(), None).unwrap();
+    let actor =
+        marxen_lib::open_document(doc_id("composition"), "こんにちは".into(), None).unwrap();
     let base = actor.snapshot();
     assert_eq!(base.revision, Revision(0));
 
@@ -118,7 +121,7 @@ fn emoji_offsets_match_neovim_bytes_and_display() {
     }
 
     // Range edit over the emoji via the actor resolves to the same bytes.
-    let actor = DocumentActor::open(doc_id("emoji"), text.into(), None).unwrap();
+    let actor = marxen_lib::open_document(doc_id("emoji"), text.into(), None).unwrap();
     let base = actor.snapshot();
     let next = actor
         .apply_edits(EditRequest {
@@ -257,7 +260,7 @@ fn display_coordinates_and_raw_grid() {
 /// Share native Undo between GUI edits and Vim while rejecting edits against an obsolete revision.
 fn gui_edits_share_native_undo_and_reject_stale() {
     require_bundle();
-    let actor = DocumentActor::open(doc_id("undo"), "hello".into(), None).unwrap();
+    let actor = marxen_lib::open_document(doc_id("undo"), "hello".into(), None).unwrap();
     let base = actor.snapshot();
     let end = utf16_len("hello");
 
@@ -310,7 +313,7 @@ fn w_delegates_to_rust_save_path() {
     require_bundle();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("marxen-issue3.md");
-    let actor = DocumentActor::open(
+    let actor = marxen_lib::open_document(
         doc_id("save"),
         "# title\n\n本文\n".into(),
         Some(file.clone()),
@@ -378,7 +381,7 @@ fn config_errors_surface_instead_of_silent_fallback() {
 /// Validate cursor requests against the current snapshot without minting a text revision.
 fn cursor_reports_validate_without_bumping_revision() {
     require_bundle();
-    let actor = DocumentActor::open(doc_id("cursor"), "a😀日本語".into(), None).unwrap();
+    let actor = marxen_lib::open_document(doc_id("cursor"), "a😀日本語".into(), None).unwrap();
     let base = actor.snapshot();
 
     // Reversed (anchor > head) selections are valid cursor reports.

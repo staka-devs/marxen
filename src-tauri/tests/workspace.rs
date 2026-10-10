@@ -1,5 +1,5 @@
+use marxen_lib::application::document::DocumentActor;
 use marxen_lib::contracts::*;
-use marxen_lib::document::DocumentActor;
 use marxen_lib::{storage, workspace::Workspace};
 use std::fs;
 use std::path::Path;
@@ -9,7 +9,7 @@ use tempfile::TempDir;
 fn setup() -> (TempDir, TempDir, Workspace) {
     let root = tempfile::tempdir().unwrap();
     let recovery = tempfile::tempdir().unwrap();
-    let workspace = Workspace::open(root.path(), recovery.path()).unwrap();
+    let workspace = marxen_lib::open_workspace(root.path(), recovery.path()).unwrap();
     (root, recovery, workspace)
 }
 /// Capture the snapshot identity and revision for a guarded save or workspace action.
@@ -90,7 +90,7 @@ fn fingerprint_conflict_and_deletion_never_overwrite_disk() {
     fs::write(root.path().join("a.md"), b"def").unwrap();
     assert!(matches!(
         actor.save(request(&changed)),
-        Err(marxen_lib::document::ActorError::Workspace(
+        Err(marxen_lib::application::document::ActorError::Workspace(
             WorkspaceError::Conflict { .. }
         ))
     ));
@@ -282,7 +282,7 @@ fn crash_child() {
         return;
     };
     let recovery = std::env::var("MARXEN_CRASH_RECOVERY").unwrap();
-    let mut w = Workspace::open(Path::new(&root), Path::new(&recovery)).unwrap();
+    let mut w = marxen_lib::open_workspace(Path::new(&root), Path::new(&recovery)).unwrap();
     let doc = w.open_markdown("a.md").unwrap();
     edit(
         w.actor(&doc.snapshot.document_id.0).unwrap(),
@@ -313,7 +313,7 @@ fn abrupt_process_exit_restores_checkpoint_and_keeps_disk_conflict() {
     assert_eq!(status.code(), Some(79));
     assert_eq!(fs::read(root.path().join("a.md")).unwrap(), b"base");
     fs::write(root.path().join("a.md"), "external").unwrap();
-    let mut w = Workspace::open(root.path(), recovery.path()).unwrap();
+    let mut w = marxen_lib::open_workspace(root.path(), recovery.path()).unwrap();
     let records = w.recovery_entries().unwrap();
     assert_eq!(records.len(), 1);
     assert!(records[0].conflict);

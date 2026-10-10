@@ -1,55 +1,81 @@
-pub mod ai;
-pub mod ai_contracts;
-#[cfg(feature = "desktop")]
-pub mod clipboard;
+//! Composition roots wire native adapters into inward application ports.
+pub mod application;
 pub mod contracts;
-pub mod document;
-pub mod ipc;
-pub mod isolation;
-pub mod neovim;
-pub mod storage;
-pub mod validation;
-pub mod workspace;
-
-pub fn runtime_status() -> contracts::RuntimeStatus {
-    contracts::RuntimeStatus {
-        contract_version: 1,
-        connection: contracts::ConnectionState::Disconnected,
-        detail: "ワークスペースの Markdown ファイルを開くと Neovim に接続します。".into(),
+pub mod domain;
+pub mod infrastructure;
+pub mod presentation;
+use application::document::{ActorError, DocumentActor};
+use application::isolation::IsolationManager;
+use application::ports::DocumentServices;
+use application::workspace::Workspace;
+use contracts::{DocumentId, WorkspaceError};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+/// Construct the production buffer and filesystem dependencies once per composition request.
+pub fn document_services() -> DocumentServices {
+    DocumentServices {
+        storage: Arc::new(infrastructure::storage::NativeStorage),
+        buffers: Arc::new(infrastructure::neovim::buffer::NativeBufferFactory),
     }
 }
-
-#[cfg(feature = "desktop")]
-#[tauri::command]
-fn get_runtime_status(state: tauri::State<ipc::ActorState>) -> contracts::RuntimeStatus {
-    let has_document = state.workspace.lock().ok().is_some_and(|guard| {
-        guard
-            .as_ref()
-            .is_some_and(|workspace| workspace.has_live_documents())
-    });
-    // A retained document is not evidence that its process is still running.
-    if has_document {
-        contracts::RuntimeStatus {
-            contract_version: 1,
-            connection: contracts::ConnectionState::Connected,
-            detail: "実 Neovim embed セッションが文書を所有しています。".into(),
-        }
-    } else {
-        runtime_status()
-    }
+/// Open a real authoritative document with isolated configuration and native storage.
+pub fn open_document(
+    id: DocumentId,
+    text: String,
+    path: Option<PathBuf>,
+) -> Result<DocumentActor, ActorError> {
+    DocumentActor::open(id, text, path, document_services())
 }
-
+/// Open a real document with the caller's explicitly selected configuration.
+pub fn open_document_with_config(
+    id: DocumentId,
+    text: String,
+    path: Option<PathBuf>,
+    config: application::ports::ConfigSource,
+) -> Result<DocumentActor, ActorError> {
+    DocumentActor::open_with_config(id, text, path, config, document_services())
+}
+/// Open a native folder registry whose actors share injected buffer and storage adapters.
+pub fn open_workspace(root: &Path, recovery: &Path) -> Result<Workspace, WorkspaceError> {
+    Workspace::open(
+        root,
+        recovery,
+        document_services(),
+        Arc::new(infrastructure::storage::SystemClock),
+    )
+}
+/// Open a native exact-scope staging manager with process-local copy identifiers.
+pub fn open_isolation(root: &Path) -> Result<IsolationManager, WorkspaceError> {
+    IsolationManager::open(
+        root,
+        Arc::new(infrastructure::storage::NativeStorage),
+        Arc::new(infrastructure::storage::SystemClock),
+    )
+}
 #[cfg(feature = "desktop")]
 pub fn run() {
     use tauri::{Emitter, Manager};
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(ipc::ActorState::default())
-        .manage(clipboard::ClipboardState::default())
-        .manage(isolation::IsolationState::default())
+        .manage(presentation::document::ActorState::new(
+            document_services(),
+            std::sync::Arc::new(infrastructure::storage::SystemClock),
+        ))
+        .manage(presentation::clipboard::ClipboardState(
+            std::sync::Arc::new(infrastructure::clipboard::NativeClipboard::default()),
+        ))
+        .manage(presentation::isolation::IsolationState::new(
+            open_isolation(&std::env::temp_dir().join("marxen-staging")).expect("staging dir"),
+        ))
+        .manage(application::ai::service::AiService {
+            keyring: Arc::new(infrastructure::ai::credentials::OsKeyring),
+            transport: Arc::new(infrastructure::ai::transport::NativeAiTransport),
+            spawner: Arc::new(infrastructure::ai::transport::NativeTaskSpawner),
+            runs: Arc::new(application::ai::runs::RunRegistry::new()),
+        })
         .setup(|app| {
-            neovim::configure_resource_dir(app.path().resource_dir()?);
-            let state = app.state::<ipc::ActorState>();
+            infrastructure::neovim::configure_resource_dir(app.path().resource_dir()?);
+            let state = app.state::<presentation::document::ActorState>();
             let workspace = std::sync::Arc::downgrade(&state.workspace);
             let pending = std::sync::Arc::downgrade(&state.pending);
             let handle = app.handle().clone();
@@ -82,57 +108,55 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            get_runtime_status,
-            clipboard::write_clipboard,
-            ipc::open_document,
-            ipc::fetch_snapshot,
-            ipc::apply_gui_edits,
-            ipc::save_document,
-            ipc::fetch_mode,
-            ipc::nvim_input_with_copy,
-            ipc::has_nvim_mapping,
-            ipc::undo_document,
-            ipc::report_cursor,
-            ipc::open_workspace,
-            ipc::list_workspace,
-            ipc::list_documents,
-            ipc::open_markdown,
-            ipc::open_text_file,
-            ipc::load_workspace_image,
-            ipc::insert_workspace_image,
-            ipc::import_external_image,
-            ipc::create_markdown,
-            ipc::rename_markdown,
-            ipc::reload_document,
-            ipc::close_document,
-            ipc::search_workspace,
-            ipc::poll_workspace_events,
-            ipc::list_recovery,
-            ipc::restore_recovery,
-            ipc::discard_recovery,
-            ipc::load_relative_image,
-            ipc::paste_image,
-            ipc::redo_document,
-            ipc::nvim_input,
-            ipc::fetch_cursor,
-            ipc::fetch_grid,
-            ipc::fetch_config,
-            ai::ai_credential_state,
-            ai::ai_set_credential,
-            ai::ai_delete_credential,
-            ai::ai_test_connection,
-            ai::ai_prompt_stream,
-            ai::ai_prompt_cancel,
-            isolation::isolation_create,
-            isolation::isolation_diff,
-            isolation::isolation_stage_proposal,
-            isolation::isolation_approve,
-            isolation::isolation_reject,
-            isolation::isolation_cancel,
-            ipc::configure_document
+            presentation::runtime::get_runtime_status,
+            presentation::clipboard::write_clipboard,
+            presentation::document::open_document,
+            presentation::document::fetch_snapshot,
+            presentation::document::apply_gui_edits,
+            presentation::document::save_document,
+            presentation::document::fetch_mode,
+            presentation::document::nvim_input_with_copy,
+            presentation::document::has_nvim_mapping,
+            presentation::document::undo_document,
+            presentation::document::report_cursor,
+            presentation::document::open_workspace,
+            presentation::document::list_workspace,
+            presentation::document::list_documents,
+            presentation::document::open_markdown,
+            presentation::document::open_text_file,
+            presentation::document::load_workspace_image,
+            presentation::document::insert_workspace_image,
+            presentation::document::import_external_image,
+            presentation::document::create_markdown,
+            presentation::document::rename_markdown,
+            presentation::document::reload_document,
+            presentation::document::close_document,
+            presentation::document::search_workspace,
+            presentation::document::poll_workspace_events,
+            presentation::document::list_recovery,
+            presentation::document::restore_recovery,
+            presentation::document::discard_recovery,
+            presentation::document::load_relative_image,
+            presentation::document::paste_image,
+            presentation::document::redo_document,
+            presentation::document::nvim_input,
+            presentation::document::fetch_cursor,
+            presentation::document::fetch_grid,
+            presentation::document::fetch_config,
+            presentation::ai::ai_credential_state,
+            presentation::ai::ai_set_credential,
+            presentation::ai::ai_delete_credential,
+            presentation::ai::ai_test_connection,
+            presentation::ai::ai_prompt_stream,
+            presentation::ai::ai_prompt_cancel,
+            presentation::isolation::isolation_create,
+            presentation::isolation::isolation_diff,
+            presentation::isolation::isolation_stage_proposal,
+            presentation::isolation::isolation_approve,
+            presentation::isolation::isolation_reject,
+            presentation::isolation::isolation_cancel,
+            presentation::document::configure_document
         ])
         .run(tauri::generate_context!())
         .expect("Marxen desktop runtime failed");
 }
-#[cfg(any(all(feature = "desktop", windows), test))]
-mod clipboard_format;

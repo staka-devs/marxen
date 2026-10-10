@@ -1,4 +1,6 @@
 //! Wire contract v1. Rust owns this definition; export-contracts generates TypeScript.
+pub mod ai;
+pub mod isolation;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use ts_rs::TS;
@@ -170,13 +172,6 @@ impl std::fmt::Display for WorkspaceError {
     }
 }
 impl std::error::Error for WorkspaceError {}
-impl From<std::io::Error> for WorkspaceError {
-    fn from(error: std::io::Error) -> Self {
-        Self::Io {
-            detail: error.to_string(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

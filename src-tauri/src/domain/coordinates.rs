@@ -6,11 +6,11 @@
 //! columns additionally depend on cell width (CJK / emoji are 2 cells).
 //!
 //! All helpers are pure and do not spawn Neovim. The RPC layer in
-//! [`super::rpc`] and the integration tests compare these results against the
+//! the native RPC adapter and the integration tests compare these results against the
 //! real bundled Neovim (`strdisplaywidth`, cursor, grid).
 
 use crate::contracts::{ContractError, Utf16Offset, Utf8ByteOffset};
-use crate::validation::{utf16_to_utf8, utf8_to_utf16};
+use crate::domain::validation::{utf16_to_utf8, utf8_to_utf16};
 use unicode_width::UnicodeWidthStr;
 
 /// Byte offset of the start of every `\n`-split line. Line 0 always starts at 0.

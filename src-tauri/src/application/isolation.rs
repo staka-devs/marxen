@@ -18,113 +18,23 @@
 //! .git/.env, and widened ranges are never applied. Production IPC holds the
 //! workspace mutex across preflight and apply, so no other edit can
 //! interleave between validation and mutation.
+use crate::contracts::isolation::*;
+use crate::domain::isolation::*;
 
-use crate::ai_contracts::{IsolatedCopyId, PromptContext, PromptMode, ProposalText};
+use crate::application::document::DocumentActor;
+use crate::application::workspace::Workspace;
+use crate::contracts::ai::{IsolatedCopyId, PromptContext, PromptMode, ProposalText};
 use crate::contracts::{
     ContractError, DocumentId, DocumentSnapshot, EditRequest, EditSource, Revision, TextEdit,
     Utf16Offset, Utf16Range, WorkspaceError,
 };
-use crate::document::DocumentActor;
-use crate::storage::{self, Fingerprint};
-use crate::workspace::Workspace;
-use serde::{Deserialize, Serialize};
+use crate::domain::storage::{self, Fingerprint};
+
 use std::collections::HashMap;
-use std::fs;
+
+use crate::application::ports::*;
 use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
-use ts_rs::TS;
-
-/// One document captured into an isolated copy, with its registered scopes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct IsolatedCopyDoc {
-    pub document_id: DocumentId,
-    pub revision: Revision,
-    pub path: Option<String>,
-    pub ranges: Vec<Utf16Range>,
-    pub full_document: bool,
-}
-
-/// Created copy handle returned to the AI panel.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct IsolatedCopyInfo {
-    pub copy_id: IsolatedCopyId,
-    pub documents: Vec<IsolatedCopyDoc>,
-}
-
-/// Reviewable diff of one registered scope: base slice vs staged section.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct IsolationDiff {
-    pub document_id: DocumentId,
-    pub path: Option<String>,
-    pub range: Utf16Range,
-    pub base_revision: Revision,
-    pub live_revision: Revision,
-    /// Live buffer moved since the copy; approve will refuse until resync.
-    pub drifted: bool,
-    pub changed: bool,
-    pub unified: String,
-    pub staging_chars: u32,
-    pub live_chars: u32,
-}
-
-/// Per-document outcome of an approval. Apply-phase failures never imply
-/// all-or-nothing: each entry states what happened, including rollback.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ApproveDocOutcome {
-    pub document_id: DocumentId,
-    pub applied: bool,
-    pub revision: Revision,
-    pub error: Option<String>,
-    pub rolled_back: bool,
-    pub rollback_error: Option<String>,
-}
-
-/// Structured approval result across all documents in the copy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ApproveResult {
-    pub copy_id: IsolatedCopyId,
-    pub outcomes: Vec<ApproveDocOutcome>,
-}
-
-/// Result of staging a validated text proposal into a copy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct StagedProposal {
-    pub copy_id: IsolatedCopyId,
-    pub updated: Vec<DocumentId>,
-    pub chars: u32,
-}
-
-pub fn typescript() -> String {
-    let cfg = ts_rs::Config::default();
-    let declarations = [
-        IsolatedCopyDoc::decl(&cfg),
-        IsolatedCopyInfo::decl(&cfg),
-        IsolationDiff::decl(&cfg),
-        ApproveDocOutcome::decl(&cfg),
-        ApproveResult::decl(&cfg),
-        StagedProposal::decl(&cfg),
-    ];
-    let mut output = "// Generated from src-tauri/src/isolation.rs. Run npm run isolation-contracts:generate.\n// Do not edit by hand. Isolation IPC schema version 2.\n".to_owned();
-    output.push_str("import type { DocumentId, Revision, Utf16Range } from \"./contracts\";\n");
-    output.push_str("import type { IsolatedCopyId } from \"./ai-contracts\";\n");
-    for declaration in declarations {
-        output.push_str("export ");
-        output.push_str(&declaration);
-        output.push('\n');
-    }
-    output
-        .lines()
-        .map(str::trim_end)
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n"
-}
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CopyStatus {
@@ -160,6 +70,8 @@ struct IsolatedCopy {
 /// `pins` counts live runs (ACP process or HTTP stream) per copy; pinned
 /// copies refuse approve/reject/cancel until the run settles and releases.
 pub struct IsolationManager {
+    storage: Arc<dyn Storage>,
+    clock: Arc<dyn Clock>,
     staging_root: PathBuf,
     next: u64,
     copies: HashMap<String, IsolatedCopy>,
@@ -179,390 +91,23 @@ impl IsolationManager {
     }
 }
 
-pub fn validate_copy_id_string(id: &str) -> Result<(), WorkspaceError> {
-    if id.is_empty()
-        || id.len() > 128
-        || !id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-    {
-        return Err(WorkspaceError::InvalidPath);
-    }
-    Ok(())
-}
-
-/// Join a relative candidate under root without escapes, devices, or links.
-pub fn guard_staging_path(root: &Path, candidate: &Path) -> Result<PathBuf, WorkspaceError> {
-    if root.as_os_str().is_empty() {
-        return Err(WorkspaceError::InvalidPath);
-    }
-    // Unix Path components do not recognize Windows drive or rooted paths.
-    let portable = candidate.as_os_str().to_string_lossy();
-    let bytes = portable.as_bytes();
-    if portable.starts_with('\\')
-        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
-    {
-        return Err(WorkspaceError::OutsideWorkspace);
-    }
-    let mut normalized = PathBuf::new();
-    for component in candidate.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !normalized.pop() {
-                    return Err(WorkspaceError::OutsideWorkspace);
-                }
-            }
-            Component::Normal(part) => normalized.push(part),
-            Component::RootDir | Component::Prefix(_) => {
-                return Err(WorkspaceError::OutsideWorkspace);
-            }
-        }
-    }
-    if normalized.as_os_str().is_empty() {
-        return Err(WorkspaceError::InvalidPath);
-    }
-    let joined = root.join(&normalized);
-    if !joined.starts_with(root) {
-        return Err(WorkspaceError::OutsideWorkspace);
-    }
-    Ok(joined)
-}
-
-fn check_no_symlink(path: &Path, root: &Path) -> Result<(), WorkspaceError> {
-    // Every existing prefix must be a real directory inside root, never a link.
-    let mut current = root.to_owned();
-    // Validate the root itself once.
-    if fs::symlink_metadata(&current)
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(false)
-    {
-        return Err(WorkspaceError::OutsideWorkspace);
-    }
-    if let Ok(rel) = path.strip_prefix(root) {
-        for part in rel.components() {
-            if let Component::Normal(name) = part {
-                current.push(name);
-                match fs::symlink_metadata(&current) {
-                    Ok(meta) => {
-                        if meta.file_type().is_symlink() {
-                            return Err(WorkspaceError::OutsideWorkspace);
-                        }
-                        if current != path && !meta.is_dir() && meta.is_file() {
-                            // Intermediate file where a directory is expected.
-                            return Err(WorkspaceError::InvalidPath);
-                        }
-                        if fs::canonicalize(&current)
-                            .map(|p| !p.starts_with(root))
-                            .unwrap_or(true)
-                            && meta.is_dir()
-                        {
-                            // Canonical check for junctions/reparse points.
-                            return Err(WorkspaceError::OutsideWorkspace);
-                        }
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        // Missing suffix is fine; remaining components are new.
-                        break;
-                    }
-                    Err(e) => return Err(e.into()),
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn utf16_len(text: &str) -> u32 {
-    u32::try_from(text.encode_utf16().count()).unwrap_or(u32::MAX)
-}
-
-fn utf16_slice(text: &str, range: &Utf16Range) -> Result<String, ContractError> {
-    let start = crate::validation::utf16_to_utf8(text, range.start)?.0 as usize;
-    let end = crate::validation::utf16_to_utf8(text, range.end)?.0 as usize;
-    Ok(text[start..end].to_owned())
-}
-
-/// Reject staging names outside the selected Markdown scope: .git, .env,
-/// reserved transfer files, and non-Markdown writes are never applied.
-fn reject_forbidden_relative(rel: &str) -> Result<(), WorkspaceError> {
-    let path = Path::new(rel);
-    for part in path.components() {
-        let name = match part {
-            Component::Normal(name) => name.to_string_lossy().to_ascii_lowercase(),
-            _ => return Err(WorkspaceError::OutsideWorkspace),
-        };
-        if name == ".git"
-            || name == ".env"
-            || name.starts_with(".marxen-")
-            || name == "credentials"
-            || name == ".credentials"
-        {
-            return Err(WorkspaceError::OutsideWorkspace);
-        }
-    }
-    if !storage::markdown(path) {
-        return Err(WorkspaceError::NotMarkdown);
-    }
-    Ok(())
-}
-
-fn stale(received: Revision, expected: Revision) -> WorkspaceError {
-    WorkspaceError::Contract {
-        error: ContractError::StaleRevision { expected, received },
-    }
-}
-
-fn invalid_scope(detail: &str) -> WorkspaceError {
-    WorkspaceError::Io {
-        detail: detail.to_owned(),
-    }
-}
-
-/// Validate one context against the authoritative snapshot: revision match,
-/// ordered non-overlapping ranges with surrogate-safe boundaries, and an
-/// excerpt that exactly equals the concatenated source slices.
-fn validate_context_against_snapshot(
-    snapshot: &DocumentSnapshot,
-    context: &PromptContext,
-) -> Result<(), WorkspaceError> {
-    if snapshot.revision != context.revision {
-        return Err(stale(context.revision, snapshot.revision));
-    }
-    if context.text.len() > crate::ai::MAX_EXCERPT_BYTES {
-        return Err(WorkspaceError::InvalidPath);
-    }
-    if context.ranges.is_empty() || context.ranges.len() > crate::ai::MAX_RANGES_PER_CONTEXT {
-        return Err(WorkspaceError::InvalidPath);
-    }
-    let mut previous: Option<&Utf16Range> = None;
-    let mut assembled = String::new();
-    for range in &context.ranges {
-        if range.start.0 > range.end.0 {
-            return Err(WorkspaceError::Contract {
-                error: ContractError::ReversedRange,
-            });
-        }
-        if let Some(prev) = previous {
-            if range.start.0 < prev.end.0 || range.start.0 <= prev.start.0 {
-                return Err(WorkspaceError::Contract {
-                    error: ContractError::OverlappingEdits,
-                });
-            }
-        }
-        let slice = utf16_slice(&snapshot.text, range)
-            .map_err(|error| WorkspaceError::Contract { error })?;
-        assembled.push_str(&slice);
-        previous = Some(range);
-    }
-    if assembled != context.text {
-        return Err(invalid_scope("送信した内容が対象範囲と一致しません"));
-    }
-    Ok(())
-}
-
-// ---- Scoped staging file format ----
-//
-// Scoped files carry one section per registered range so the agent only ever
-// sees selected text. Full-document copies (a single explicitly selected
-// [0, len) range) are stored as raw Markdown with no headers.
-// A document line that happens to look like a header can never match the
-// registered scopes, so it fails closed at parse time instead of aliasing.
-
-const SCOPE_MARK: &str = "--- marxen-scope";
-const PATCH_MARK: &str = "--- marxen-patch";
-
-fn scope_header(document_id: &DocumentId, range: &Utf16Range) -> String {
-    format!(
-        "--- marxen-scope document={} range=[{}, {}) ---",
-        document_id.0, range.start.0, range.end.0
-    )
-}
-
-fn parse_range_suffix(text: &str) -> Option<Utf16Range> {
-    let (start, end) = text
-        .strip_prefix("range=[")?
-        .strip_suffix(")")?
-        .split_once(", ")?;
-    Some(Utf16Range {
-        start: Utf16Offset(start.parse().ok()?),
-        end: Utf16Offset(end.parse().ok()?),
-    })
-}
-
-fn parse_scope_header(line: &str) -> Option<(String, Utf16Range)> {
-    let rest = line.strip_prefix(SCOPE_MARK)?.strip_suffix(" ---")?.trim();
-    let (doc_part, range_part) = rest.split_once(' ')?;
-    let document_id = doc_part.strip_prefix("document=")?.to_owned();
-    if document_id.is_empty() {
-        return None;
-    }
-    Some((document_id, parse_range_suffix(range_part)?))
-}
-
-/// Split a scoped file into (document, range, body) sections. Bodies use the
-/// render rule: sections are header + slice + exactly one added newline, so
-/// parsing strips exactly one trailing newline from non-empty bodies.
-fn parse_scoped_file(text: &str) -> Result<Vec<(String, Utf16Range, String)>, String> {
-    let mut sections = Vec::new();
-    let mut current: Option<(String, Utf16Range, Vec<String>)> = None;
-    for (index, line) in text.split('\n').enumerate() {
-        if line.starts_with(SCOPE_MARK) {
-            if let Some((doc, range, body)) = current.take() {
-                sections.push((doc, range, join_body(body)));
-            }
-            let (doc, range) = parse_scope_header(line)
-                .ok_or_else(|| format!("{} 行目の scope 形式が正しくありません", index + 1))?;
-            current = Some((doc, range, Vec::new()));
-        } else if let Some((_, _, body)) = current.as_mut() {
-            body.push(line.to_owned());
-        } else {
-            return Err(format!(
-                "先頭が scope ヘッダーではありません ({} 行目)",
-                index + 1
-            ));
-        }
-    }
-    if let Some((doc, range, body)) = current.take() {
-        // A rendered file always ends with a newline, leaving one empty
-        // trailing line from the final split; drop it before joining.
-        let mut body = body;
-        if body.last().is_some_and(|line| line.is_empty()) {
-            body.pop();
-        }
-        sections.push((doc, range, join_body(body)));
-    }
-    if sections.is_empty() {
-        return Err("scope が一つもありません".into());
-    }
-    Ok(sections)
-}
-
-fn join_body(lines: Vec<String>) -> String {
-    if lines.is_empty() {
-        return String::new();
-    }
-    let mut out = lines.join("\n");
-    out.push('\n');
-    // Render added exactly one newline after the slice; remove it so an
-    // unedited section round-trips to the registered slice exactly.
-    out.strip_suffix('\n').unwrap_or(&out).to_owned()
-}
-
-fn render_scoped_file(document_id: &DocumentId, scopes: &[(Utf16Range, String)]) -> String {
-    let mut out = String::new();
-    for (range, slice) in scopes {
-        out.push_str(&scope_header(document_id, range));
-        out.push('\n');
-        out.push_str(slice);
-        out.push('\n');
-    }
-    out
-}
-
-/// Minimal single range patch turning `base` into `staging`, preserving all
-/// bytes outside the differing span (BOM/CRLF/spacing stay exact). Returns
-/// None when the texts are equal.
-fn minimal_edit(base: &str, staging: &str) -> Option<TextEdit> {
-    if base == staging {
-        return None;
-    }
-    let base_bytes = base.as_bytes();
-    let staging_bytes = staging.as_bytes();
-    let mut prefix = 0usize;
-    while prefix < base_bytes.len()
-        && prefix < staging_bytes.len()
-        && base_bytes[prefix] == staging_bytes[prefix]
-    {
-        prefix += 1;
-    }
-    while prefix > 0 && !base.is_char_boundary(prefix) {
-        prefix -= 1;
-    }
-    let mut suffix = 0usize;
-    while suffix < base_bytes.len() - prefix
-        && suffix < staging_bytes.len() - prefix
-        && base_bytes[base_bytes.len() - 1 - suffix]
-            == staging_bytes[staging_bytes.len() - 1 - suffix]
-    {
-        suffix += 1;
-    }
-    while suffix > 0
-        && (!base.is_char_boundary(base_bytes.len() - suffix)
-            || !staging.is_char_boundary(staging_bytes.len() - suffix))
-    {
-        suffix -= 1;
-    }
-    let start =
-        crate::validation::utf8_to_utf16(base, crate::contracts::Utf8ByteOffset(prefix as u32))
-            .ok()?;
-    let end = crate::validation::utf8_to_utf16(
-        base,
-        crate::contracts::Utf8ByteOffset((base_bytes.len() - suffix) as u32),
-    )
-    .ok()?;
-    Some(TextEdit {
-        range: Utf16Range { start, end },
-        text: staging[prefix..staging_bytes.len() - suffix].to_owned(),
-    })
-}
-
-/// Minimal line diff: common prefix/suffix lines, middle as -/+ block.
-pub fn unified_diff(live_text: &str, staging_text: &str, label: &str) -> String {
-    if live_text == staging_text {
-        return format!("--- live:{label}\n+++ staging:{label}\n (変更なし)\n");
-    }
-    let live_lines: Vec<&str> = live_text.split('\n').collect();
-    let staging_lines: Vec<&str> = staging_text.split('\n').collect();
-    let mut prefix = 0usize;
-    while prefix < live_lines.len()
-        && prefix < staging_lines.len()
-        && live_lines[prefix] == staging_lines[prefix]
-    {
-        prefix += 1;
-    }
-    let mut suffix = 0usize;
-    while suffix < live_lines.len() - prefix
-        && suffix < staging_lines.len() - prefix
-        && live_lines[live_lines.len() - 1 - suffix]
-            == staging_lines[staging_lines.len() - 1 - suffix]
-    {
-        suffix += 1;
-    }
-    let mut out = format!("--- live:{label}\n+++ staging:{label}\n");
-    for (i, line) in live_lines.iter().enumerate() {
-        if i < prefix || i >= live_lines.len() - suffix {
-            continue;
-        }
-        out.push('-');
-        out.push_str(line);
-        out.push('\n');
-    }
-    for (i, line) in staging_lines.iter().enumerate() {
-        if i < prefix || i >= staging_lines.len() - suffix {
-            continue;
-        }
-        out.push('+');
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
-}
-
 impl IsolationManager {
-    pub fn open(staging_root: &Path) -> Result<Self, WorkspaceError> {
-        fs::create_dir_all(staging_root)?;
-        let staging_root = fs::canonicalize(staging_root)?;
-        if !staging_root.is_dir() {
+    pub fn open(
+        staging_root: &Path,
+        storage: Arc<dyn Storage>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, WorkspaceError> {
+        storage.create_dir_all(staging_root)?;
+        let staging_root = storage.canonicalize(staging_root)?;
+        if !storage.metadata(&staging_root).is_ok_and(|m| m.directory) {
             return Err(WorkspaceError::InvalidPath);
         }
-        if fs::symlink_metadata(&staging_root)?
-            .file_type()
-            .is_symlink()
-        {
+        if storage.metadata(&staging_root)?.file_type().is_symlink() {
             return Err(WorkspaceError::OutsideWorkspace);
         }
         Ok(Self {
+            storage,
+            clock,
             staging_root,
             next: 1,
             copies: HashMap::new(),
@@ -572,20 +117,13 @@ impl IsolationManager {
     }
 
     /// Default staging under the OS temp dir (desktop runtime).
-    pub fn open_default() -> Result<Self, WorkspaceError> {
-        let root = std::env::temp_dir().join("marxen-staging");
-        Self::open(&root)
-    }
 
     pub fn staging_root(&self) -> &Path {
         &self.staging_root
     }
 
     fn new_copy_id(&mut self) -> IsolatedCopyId {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
+        let nanos = self.clock.nanos();
         let id = format!("copy_{nanos:x}_{}", self.next);
         self.next += 1;
         IsolatedCopyId(id)
@@ -661,7 +199,7 @@ impl IsolationManager {
         workspace: &Workspace,
         contexts: &[PromptContext],
     ) -> Result<IsolatedCopyInfo, WorkspaceError> {
-        if contexts.is_empty() || contexts.len() > crate::ai::MAX_CONTEXTS {
+        if contexts.is_empty() || contexts.len() > crate::domain::ai::MAX_CONTEXTS {
             return Err(WorkspaceError::InvalidPath);
         }
         // Group by document; contradictory duplicates (different revisions for
@@ -669,7 +207,7 @@ impl IsolationManager {
         let mut order: Vec<String> = Vec::new();
         let mut grouped: HashMap<String, Vec<&PromptContext>> = HashMap::new();
         for context in contexts {
-            crate::validation::validate_document_id(&context.document_id)
+            crate::domain::validation::validate_document_id(&context.document_id)
                 .map_err(|_| WorkspaceError::InvalidPath)?;
             if !grouped.contains_key(&context.document_id.0) {
                 order.push(context.document_id.0.clone());
@@ -682,12 +220,15 @@ impl IsolationManager {
         let workspace_root = workspace.root().to_owned();
         let copy_id = self.new_copy_id();
         validate_copy_id_string(&copy_id.0)?;
-        let staging_dir = guard_staging_path(&self.staging_root, Path::new(&copy_id.0))?;
+        let staging_dir = self
+            .storage
+            .guard_staging_path(&self.staging_root, Path::new(&copy_id.0))?;
         if staging_dir.exists() {
             return Err(WorkspaceError::AlreadyExists);
         }
-        fs::create_dir_all(&staging_dir)?;
-        check_no_symlink(&staging_dir, &self.staging_root)?;
+        self.storage.create_dir_all(&staging_dir)?;
+        self.storage
+            .check_no_symlink(&staging_dir, &self.staging_root)?;
         // Any failure below removes the half-built staging dir so a failed
         // copy never leaves agent-visible residue behind.
         let built: Result<(Vec<CopyBase>, Vec<IsolatedCopyDoc>), WorkspaceError> = (|| {
@@ -729,19 +270,22 @@ impl IsolationManager {
                     reject_forbidden_relative(rel)?;
                 }
                 let base_disk: Option<Fingerprint> = match actor.path().as_ref() {
-                    Some(path) => storage::disk_fingerprint(path)?,
+                    Some(path) => self.storage.disk_fingerprint(path)?,
                     None => None,
                 };
                 let staging_rel = match &relative_path {
                     Some(rel) => rel.clone(),
                     None => format!("{doc_key}.md"),
                 };
-                let staging_file = guard_staging_path(&staging_dir, Path::new(&staging_rel))?;
-                check_no_symlink(&staging_file, &self.staging_root)?;
+                let staging_file = self
+                    .storage
+                    .guard_staging_path(&staging_dir, Path::new(&staging_rel))?;
+                self.storage
+                    .check_no_symlink(&staging_file, &self.staging_root)?;
                 if let Some(parent) = staging_file.parent() {
-                    fs::create_dir_all(parent)?;
+                    self.storage.create_dir_all(parent)?;
                 }
-                if fs::symlink_metadata(&staging_file).is_ok() {
+                if self.storage.metadata(&staging_file).is_ok() {
                     return Err(WorkspaceError::AlreadyExists);
                 }
                 let slices: Vec<(Utf16Range, String)> = merged
@@ -757,8 +301,10 @@ impl IsolationManager {
                 } else {
                     render_scoped_file(&snapshot.document_id, &slices).into_bytes()
                 };
-                fs::write(&staging_file, &staged_bytes)?;
-                check_no_symlink(&staging_file, &self.staging_root)?;
+                self.storage
+                    .write_staging(&staging_file, staged_bytes.as_bytes())?;
+                self.storage
+                    .check_no_symlink(&staging_file, &self.staging_root)?;
                 bases.push(CopyBase {
                     document_id: snapshot.document_id.clone(),
                     revision: snapshot.revision,
@@ -782,7 +328,7 @@ impl IsolationManager {
         let (bases, documents) = match built {
             Ok(staged) => staged,
             Err(error) => {
-                let _ = fs::remove_dir_all(&staging_dir);
+                let _ = self.storage.remove_staging(&staging_dir);
                 return Err(error);
             }
         };
@@ -804,23 +350,27 @@ impl IsolationManager {
     /// inactive IDs. Resolution alone never pins: the run entry point pins.
     pub fn resolve(&self, copy_id: &IsolatedCopyId) -> Result<PathBuf, WorkspaceError> {
         let copy = self.get_active(copy_id)?;
-        let dir = guard_staging_path(&self.staging_root, Path::new(&copy_id.0))?;
+        let dir = self
+            .storage
+            .guard_staging_path(&self.staging_root, Path::new(&copy_id.0))?;
         if dir != copy.staging_dir {
             return Err(WorkspaceError::OutsideWorkspace);
         }
-        check_no_symlink(&dir, &self.staging_root)?;
+        self.storage.check_no_symlink(&dir, &self.staging_root)?;
         // Junction/ADS detours surface here even when names look contained.
-        if fs::canonicalize(&dir)
+        if self
+            .storage
+            .canonicalize(&dir)
             .map(|canonical| canonical != dir)
             .unwrap_or(true)
-            && dir.is_dir()
+            && self.storage.metadata(&dir).is_ok_and(|m| m.directory)
         {
-            let canonical = fs::canonicalize(&dir)?;
+            let canonical = self.storage.canonicalize(&dir)?;
             if !canonical.starts_with(&self.staging_root) {
                 return Err(WorkspaceError::OutsideWorkspace);
             }
         }
-        if !dir.is_dir() {
+        if !self.storage.metadata(&dir).is_ok_and(|m| m.directory) {
             return Err(WorkspaceError::NotFound);
         }
         Ok(dir)
@@ -833,7 +383,7 @@ impl IsolationManager {
     pub fn prepare_prompt_run(
         &mut self,
         workspace: &Workspace,
-        request: &crate::ai_contracts::AiPromptRequest,
+        request: &crate::contracts::ai::AiPromptRequest,
     ) -> Result<PathBuf, WorkspaceError> {
         let dir = self.resolve(&request.staging.copy_id)?;
         self.authorize_prompt(workspace, request)?;
@@ -851,7 +401,7 @@ impl IsolationManager {
     pub fn authorize_prompt(
         &self,
         workspace: &Workspace,
-        request: &crate::ai_contracts::AiPromptRequest,
+        request: &crate::contracts::ai::AiPromptRequest,
     ) -> Result<(), WorkspaceError> {
         let copy = self.get_active(&request.staging.copy_id)?;
         self.check_workspace(copy, workspace)?;
@@ -917,13 +467,18 @@ impl IsolationManager {
         copy: &IsolatedCopy,
         base: &CopyBase,
     ) -> Result<Vec<u8>, WorkspaceError> {
-        let file = guard_staging_path(&copy.staging_dir, Path::new(&base.staging_rel))?;
+        let file = self
+            .storage
+            .guard_staging_path(&copy.staging_dir, Path::new(&base.staging_rel))?;
         if !file.starts_with(&copy.staging_dir) {
             return Err(WorkspaceError::OutsideWorkspace);
         }
-        check_no_symlink(&file, &self.staging_root)?;
-        let bytes = storage::read_disk(&file)?.ok_or(WorkspaceError::NotFound)?;
-        check_no_symlink(&file, &self.staging_root)?;
+        self.storage.check_no_symlink(&file, &self.staging_root)?;
+        let bytes = self
+            .storage
+            .read_disk(&file)?
+            .ok_or(WorkspaceError::NotFound)?;
+        self.storage.check_no_symlink(&file, &self.staging_root)?;
         Ok(bytes)
     }
 
@@ -1094,19 +649,29 @@ impl IsolationManager {
         for (index, scope, body) in staging_writes.iter().rev() {
             let base = &copy.bases[*index];
             if base.full_document {
-                let file = guard_staging_path(&copy.staging_dir, Path::new(&base.staging_rel))?;
-                check_no_symlink(&file, &self.staging_root)?;
-                let current =
-                    String::from_utf8(storage::read_disk(&file)?.ok_or(WorkspaceError::NotFound)?)
-                        .map_err(|_| WorkspaceError::InvalidUtf8)?;
+                let file = self
+                    .storage
+                    .guard_staging_path(&copy.staging_dir, Path::new(&base.staging_rel))?;
+                self.storage.check_no_symlink(&file, &self.staging_root)?;
+                let current = String::from_utf8(
+                    self.storage
+                        .read_disk(&file)?
+                        .ok_or(WorkspaceError::NotFound)?,
+                )
+                .map_err(|_| WorkspaceError::InvalidUtf8)?;
                 let patched = apply_patch_to_text(&current, scope, body)?;
-                fs::write(&file, patched.as_bytes())?;
+                self.storage.write_staging(&file, patched.as_bytes())?;
             } else {
-                let file = guard_staging_path(&copy.staging_dir, Path::new(&base.staging_rel))?;
-                check_no_symlink(&file, &self.staging_root)?;
-                let current =
-                    String::from_utf8(storage::read_disk(&file)?.ok_or(WorkspaceError::NotFound)?)
-                        .map_err(|_| WorkspaceError::InvalidUtf8)?;
+                let file = self
+                    .storage
+                    .guard_staging_path(&copy.staging_dir, Path::new(&base.staging_rel))?;
+                self.storage.check_no_symlink(&file, &self.staging_root)?;
+                let current = String::from_utf8(
+                    self.storage
+                        .read_disk(&file)?
+                        .ok_or(WorkspaceError::NotFound)?,
+                )
+                .map_err(|_| WorkspaceError::InvalidUtf8)?;
                 let mut sections = parse_scoped_file(&current).map_err(|detail| {
                     invalid_scope(&format!("staging の形式が壊れています: {detail}"))
                 })?;
@@ -1120,7 +685,7 @@ impl IsolationManager {
                     .map(|(_, range, text)| (range, text))
                     .collect::<Vec<_>>();
                 let headered = render_scoped_sections(&base.document_id, &rendered);
-                fs::write(&file, headered.as_bytes())?;
+                self.storage.write_staging(&file, headered.as_bytes())?;
             }
             if !updated.contains(&base.document_id) {
                 updated.push(base.document_id.clone());
@@ -1322,7 +887,7 @@ impl IsolationManager {
                     return Err(stale(base.revision, live.revision));
                 }
                 if let Some(path) = actor.path().as_ref() {
-                    let current_disk = storage::disk_fingerprint(path)?;
+                    let current_disk = self.storage.disk_fingerprint(path)?;
                     if current_disk != base.base_disk {
                         return Err(WorkspaceError::Conflict {
                             path: path.display().to_string(),
@@ -1459,7 +1024,7 @@ impl IsolationManager {
             copy.status = status;
             let dir = copy.staging_dir.clone();
             if dir.starts_with(&self.staging_root) && dir != self.staging_root {
-                let _ = fs::remove_dir_all(&dir);
+                let _ = self.storage.remove_staging(&dir);
             }
         }
         self.copies.remove(&copy_id.0);
@@ -1477,7 +1042,7 @@ impl IsolationManager {
         let dir = copy.staging_dir.clone();
         // Guard the removal: only inside our staging root.
         if dir.starts_with(&self.staging_root) && dir != self.staging_root {
-            let _ = fs::remove_dir_all(&dir);
+            let _ = self.storage.remove_staging(&dir);
         }
         self.copies.remove(&copy_id.0);
         Ok(())
@@ -1493,140 +1058,5 @@ impl IsolationManager {
     /// settlement path, so cancel-while-running is refused until reap.
     pub fn cancel(&mut self, copy_id: &IsolatedCopyId) -> Result<(), WorkspaceError> {
         self.forget(copy_id, CopyStatus::Cancelled)
-    }
-}
-
-/// Apply one validated replacement to raw full-document text.
-fn apply_patch_to_text(
-    current: &str,
-    range: &Utf16Range,
-    body: &str,
-) -> Result<String, WorkspaceError> {
-    let start = crate::validation::utf16_to_utf8(current, range.start)
-        .map_err(|error| WorkspaceError::Contract { error })?
-        .0 as usize;
-    let end = crate::validation::utf16_to_utf8(current, range.end)
-        .map_err(|error| WorkspaceError::Contract { error })?
-        .0 as usize;
-    let mut out = String::with_capacity(current.len() + body.len());
-    out.push_str(&current[..start]);
-    out.push_str(body);
-    out.push_str(&current[end..]);
-    Ok(out)
-}
-
-fn render_scoped_sections(document_id: &DocumentId, sections: &[(Utf16Range, String)]) -> String {
-    render_scoped_file(
-        document_id,
-        &sections
-            .iter()
-            .map(|(range, text)| (range.clone(), text.clone()))
-            .collect::<Vec<_>>(),
-    )
-}
-
-#[cfg(feature = "desktop")]
-pub use crate::ipc::isolation::*;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::contracts::{DocumentId, Revision};
-
-    #[test]
-    fn copy_ids_are_valid_handles() {
-        assert!(validate_copy_id_string("copy_01").is_ok());
-        assert!(validate_copy_id_string("").is_err());
-        assert!(validate_copy_id_string("../live").is_err());
-        assert!(validate_copy_id_string("/abs").is_err());
-    }
-
-    #[test]
-    fn staging_guard_rejects_escapes() {
-        let root = Path::new("/staging");
-        assert!(guard_staging_path(root, Path::new("copy_01/notes.md")).is_ok());
-        assert!(guard_staging_path(root, Path::new("../live/doc.md")).is_err());
-        assert!(guard_staging_path(root, Path::new("/etc/passwd")).is_err());
-        assert!(guard_staging_path(Path::new(""), Path::new("copy")).is_err());
-    }
-
-    #[test]
-    fn scoped_sections_round_trip_exactly() {
-        let doc = DocumentId("doc_01".into());
-        let scopes = vec![
-            (
-                Utf16Range {
-                    start: Utf16Offset(0),
-                    end: Utf16Offset(5),
-                },
-                "hello".to_owned(),
-            ),
-            (
-                Utf16Range {
-                    start: Utf16Offset(5),
-                    end: Utf16Offset(5),
-                },
-                String::new(),
-            ),
-            (
-                Utf16Range {
-                    start: Utf16Offset(6),
-                    end: Utf16Offset(9),
-                },
-                "a\nb\n".to_owned(),
-            ),
-        ];
-        let rendered = render_scoped_file(&doc, &scopes);
-        let parsed = parse_scoped_file(&rendered).unwrap();
-        assert_eq!(parsed.len(), 3);
-        for ((parsed_doc, parsed_range, parsed_body), (range, slice)) in
-            parsed.iter().zip(scopes.iter())
-        {
-            assert_eq!(parsed_doc, "doc_01");
-            assert_eq!(parsed_range, range);
-            assert_eq!(parsed_body, slice);
-        }
-    }
-
-    #[test]
-    fn scoped_parse_rejects_header_mismatch() {
-        let bad = "--- marxen-scope document=other range=[0, 1) ---\nx\n";
-        assert!(parse_scoped_file(bad).is_ok());
-        let (doc, _, _) = &parse_scoped_file(bad).unwrap()[0];
-        assert_eq!(doc, "other");
-        assert!(parse_scoped_file("no header here\n").is_err());
-        assert!(parse_scoped_file("").is_err());
-    }
-
-    #[test]
-    fn minimal_edit_preserves_outside_bytes() {
-        assert!(minimal_edit("abc", "abc").is_none());
-        let edit = minimal_edit("\u{feff}a\r\nb\r\n", "\u{feff}a\r\nB\r\n").unwrap();
-        assert_eq!(edit.range.start.0, 4);
-        assert_eq!(edit.text, "B");
-        let edit = minimal_edit("hello", "hello world").unwrap();
-        assert_eq!(edit.range.start.0, 5);
-        assert_eq!(edit.range.end.0, 5);
-        assert_eq!(edit.text, " world");
-    }
-
-    #[test]
-    fn unified_diff_marks_changes() {
-        let same = unified_diff("a\nb\n", "a\nb\n", "a.md");
-        assert!(same.contains("変更なし"));
-        let diff = unified_diff("a\nb\nc\n", "a\nB\nc\n", "a.md");
-        assert!(diff.contains("-b"));
-        assert!(diff.contains("+B"));
-    }
-
-    #[test]
-    fn revision_helper_reports_stale() {
-        let error = stale(Revision(1), Revision(2));
-        assert!(matches!(
-            error,
-            WorkspaceError::Contract {
-                error: ContractError::StaleRevision { .. }
-            }
-        ));
     }
 }

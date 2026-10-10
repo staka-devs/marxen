@@ -6,7 +6,7 @@
 //! variant because the v1 contract has no dedicated select state.
 
 use crate::contracts::VimMode;
-use crate::neovim::rpc::RpcError;
+use crate::infrastructure::neovim::rpc::RpcError;
 use rmpv::Value;
 
 /// Interpret one `nvim_get_mode()` response value (map with `mode` key).

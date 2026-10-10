@@ -1,0 +1,747 @@
+//! ACP subprocess lifecycle and bounded stdio framing.
+use crate::application::ai::credentials::*;
+use crate::application::ai::runs::*;
+use crate::contracts::ai::*;
+use crate::contracts::Utf16Range;
+use crate::domain::ai::*;
+use crate::domain::validation::validate_document_id;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
+use std::time::Instant;
+pub fn find_on_path(command: &str) -> Option<PathBuf> {
+    if command.contains('/') || command.contains('\\') || command.contains(':') {
+        let path = Path::new(command);
+        return path.is_file().then(|| path.to_path_buf());
+    }
+    let probe = |name: &str| {
+        std::env::split_paths(&std::env::var_os("PATH")?).find_map(|dir| {
+            let candidate = dir.join(name);
+            candidate.is_file().then_some(candidate)
+        })
+    };
+    if cfg!(windows) {
+        probe(command).or_else(|| probe(&format!("{command}.exe")))
+    } else {
+        probe(command)
+    }
+}
+
+pub const MAX_ACP_LINE_BYTES: usize = 8_388_608;
+/// Grace period for an agent to answer `session/prompt` after `session/cancel`.
+pub const CANCEL_GRACE: Duration = Duration::from_secs(5);
+/// Maximum silence between prompt-loop iterations before re-checking the
+/// cancel flag. Agents that go quiet (for example while waiting for our
+/// next message) must not delay cancellation past this bound.
+pub const ACP_POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// Grace period for an agent to exit after we close its stdin.
+pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+/// Latest ACP major protocol version this client speaks.
+pub struct NdjsonReader<R: BufRead> {
+    inner: R,
+    buf: Vec<u8>,
+}
+
+impl<R: BufRead> NdjsonReader<R> {
+    pub fn new(inner: R) -> Self {
+        Self {
+            inner,
+            buf: Vec::new(),
+        }
+    }
+
+    /// Read one message. `Ok(None)` only on clean EOF with no pending bytes.
+    pub fn next_value(&mut self) -> Result<Option<serde_json::Value>, AiError> {
+        loop {
+            if let Some(end) = self.buf.iter().position(|byte| *byte == b'\n') {
+                let raw: Vec<u8> = self.buf.drain(..=end).collect();
+                let mut line = &raw[..raw.len() - 1];
+                if line.ends_with(b"\r") {
+                    line = &line[..line.len() - 1];
+                }
+                if line.is_empty() {
+                    continue;
+                }
+                if line.len() > MAX_ACP_LINE_BYTES {
+                    return Err(AiError::StreamFailed {
+                        detail: "ACP の応答が大きすぎます".into(),
+                    });
+                }
+                let text = std::str::from_utf8(line).map_err(|_| AiError::StreamFailed {
+                    detail: "ACP の応答が UTF-8 ではありません".into(),
+                })?;
+                return serde_json::from_str(text)
+                    .map(Some)
+                    .map_err(|_| AiError::StreamFailed {
+                        detail: "ACP の応答を解釈できません".into(),
+                    });
+            }
+            if self.buf.len() > MAX_ACP_LINE_BYTES + 1 {
+                return Err(AiError::StreamFailed {
+                    detail: "ACP の応答が大きすぎます".into(),
+                });
+            }
+            let mut chunk = [0u8; 4096];
+            match self.inner.read(&mut chunk) {
+                Ok(0) => {
+                    if self.buf.is_empty() {
+                        return Ok(None);
+                    }
+                    return Err(AiError::StreamFailed {
+                        detail: "エージェントが途中で標準出力を閉じました".into(),
+                    });
+                }
+                Ok(read) => self.buf.extend_from_slice(&chunk[..read]),
+                Err(_) => {
+                    return Err(AiError::StreamFailed {
+                        detail: "ACP の応答を読み取れません".into(),
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// One classified inbound message.
+pub use crate::application::ai::transport::AcpRunParams;
+
+fn spawn_acp(argv: &AcpArgv, staging_dir: &Path) -> Result<Child, AiError> {
+    // argv goes directly to the OS. No shell, no interpolation.
+    Command::new(&argv.command)
+        .args(&argv.args)
+        .current_dir(staging_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                AiError::MissingBinary {
+                    command: argv.command.clone(),
+                }
+            } else {
+                AiError::SpawnFailed {
+                    detail: format!("エージェントを起動できません: {error}"),
+                }
+            }
+        })
+}
+
+// ---- ACP connection: id routing, permissions, cancel, cleanup ----
+
+/// One line read from the agent's stdout.
+#[derive(Debug)]
+pub enum ConnLine {
+    Value(serde_json::Value),
+    Eof,
+}
+
+#[derive(Debug)]
+pub enum ReadFail {
+    Timeout,
+    Stream(AiError),
+}
+
+/// One live agent subprocess. stdin is written from the driver thread while a
+/// side thread pumps stdout lines through a channel, so cancel and timeout
+/// handling never blocks on a read. Request/response id matching,
+/// notification dispatch, and inbound agent requests all flow through here.
+pub struct AgentConn {
+    stdin: ChildStdin,
+    rx: mpsc::Receiver<Result<ConnLine, AiError>>,
+    next_id: u64,
+}
+
+impl AgentConn {
+    pub fn launch(stdin: ChildStdin, stdout: ChildStdout) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let mut reader = NdjsonReader::new(BufReader::new(stdout));
+        std::thread::spawn(move || loop {
+            match reader.next_value() {
+                Ok(Some(value)) => {
+                    if tx.send(Ok(ConnLine::Value(value))).is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => {
+                    let _ = tx.send(Ok(ConnLine::Eof));
+                    break;
+                }
+                Err(error) => {
+                    let _ = tx.send(Err(error));
+                    break;
+                }
+            }
+        });
+        Self {
+            stdin,
+            rx,
+            next_id: 1,
+        }
+    }
+
+    pub fn fresh_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    pub fn write(&mut self, message: &serde_json::Value) -> Result<(), AiError> {
+        self.stdin
+            .write_all(&encode_acp_message(message))
+            .map_err(|_| AiError::StreamFailed {
+                detail: "エージェントに送信できません".into(),
+            })?;
+        self.stdin.flush().map_err(|_| AiError::StreamFailed {
+            detail: "エージェントに送信できません".into(),
+        })
+    }
+
+    pub fn notify(&mut self, message: &serde_json::Value) -> Result<(), AiError> {
+        self.write(message)
+    }
+
+    pub fn read_next(&self, timeout: Option<Duration>) -> Result<ConnLine, ReadFail> {
+        let received = match timeout {
+            Some(limit) => self.rx.recv_timeout(limit),
+            None => self
+                .rx
+                .recv()
+                .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+        };
+        match received {
+            Ok(Ok(line)) => Ok(line),
+            Ok(Err(error)) => Err(ReadFail::Stream(error)),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(ReadFail::Timeout),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Ok(ConnLine::Eof),
+        }
+    }
+
+    fn answer_agent_request(
+        &mut self,
+        id: &serde_json::Value,
+        method: &str,
+        params: &Value,
+        permission: PermissionAnswer,
+    ) -> Result<(), AiError> {
+        let response = if method == "session/request_permission" {
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": answer_permission(params, permission),
+            })
+        } else {
+            method_not_found(id, method)
+        };
+        self.write(&response)
+    }
+
+    /// Send a prebuilt request (carrying its own `id`) and wait for the
+    /// matching response. Interleaved notifications go to `sink`; inbound
+    /// agent requests are answered inline so they never deadlock the peer.
+    pub fn roundtrip(
+        &mut self,
+        message: serde_json::Value,
+        permission: PermissionAnswer,
+        sink: &mut dyn FnMut(serde_json::Value),
+    ) -> Result<serde_json::Value, AiError> {
+        let id = message
+            .get("id")
+            .cloned()
+            .ok_or_else(|| AiError::StreamFailed {
+                detail: "要求に ID がありません".into(),
+            })?;
+        self.write(&message)?;
+        loop {
+            match self.read_next(None) {
+                Ok(ConnLine::Value(message)) => match classify_incoming(message)? {
+                    AgentIncoming::Response { id: got, body } => {
+                        if got == id {
+                            if let Some(detail) = rpc_error(&body) {
+                                return Err(AiError::StreamFailed {
+                                    detail: format!("エージェントがエラーを返しました: {detail}"),
+                                });
+                            }
+                            return Ok(body);
+                        }
+                        return Err(AiError::StreamFailed {
+                            detail: format!("想定外の応答 ID を受けました: {got}"),
+                        });
+                    }
+                    AgentIncoming::Notification(note) => sink(note),
+                    AgentIncoming::AgentRequest {
+                        id: req_id,
+                        method: req_method,
+                        params: req_params,
+                    } => {
+                        self.answer_agent_request(&req_id, &req_method, &req_params, permission)?;
+                    }
+                },
+                Ok(ConnLine::Eof) => {
+                    return Err(AiError::StreamFailed {
+                        detail: "エージェントが標準出力を閉じました".into(),
+                    });
+                }
+                Err(ReadFail::Timeout) => {
+                    return Err(AiError::StreamFailed {
+                        detail: "応答待ちがタイムアウトしました".into(),
+                    });
+                }
+                Err(ReadFail::Stream(error)) => return Err(error),
+            }
+        }
+    }
+}
+
+fn wait_for_exit(child: &mut Child, grace: Duration) {
+    let start = Instant::now();
+    loop {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        if start.elapsed() >= grace {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Graceful shutdown: dropping the connection closes stdin (the transport's
+/// termination signal), then wait briefly and kill leftovers. Always reaps.
+fn shutdown_agent(conn: AgentConn, mut child: Child, grace: Duration) {
+    drop(conn);
+    wait_for_exit(&mut child, grace);
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Result of initialize + session/new. No prompt is ever sent by this path.
+#[derive(Debug, Clone)]
+pub struct HandshakeInfo {
+    pub protocol_version: u32,
+    pub session_id: String,
+    pub agent_name: Option<String>,
+    pub notifications: usize,
+}
+
+pub fn agent_handshake(
+    argv: &AcpArgv,
+    staging_dir: &Path,
+    timeout: Duration,
+) -> Result<HandshakeInfo, AiError> {
+    validate_argv(argv)?;
+    let mut child = spawn_acp(argv, staging_dir)?;
+    let stdin = child.stdin.take().ok_or_else(|| AiError::SpawnFailed {
+        detail: "エージェントの標準入力を開けません".into(),
+    })?;
+    let stdout = child.stdout.take().ok_or_else(|| AiError::SpawnFailed {
+        detail: "エージェントの標準出力を開けません".into(),
+    })?;
+    let stderr_captured: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    if let Some(mut stderr) = child.stderr.take() {
+        let captured = stderr_captured.clone();
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stderr.read_to_end(&mut buf);
+            *captured.lock().expect("stderr lock") = buf;
+        });
+    }
+    // Local kill handle for the overall timeout (no run registry here).
+    let shared: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(Some(child)));
+    {
+        let shared = Arc::clone(&shared);
+        std::thread::spawn(move || {
+            std::thread::sleep(timeout);
+            if let Some(mut child) = shared.lock().expect("child lock").take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        });
+    }
+    let mut conn = AgentConn::launch(stdin, stdout);
+    let notifications = std::cell::Cell::new(0usize);
+    let mut sink = |_: serde_json::Value| {
+        notifications.set(notifications.get() + 1);
+    };
+    let outcome = (|| {
+        let init_id = conn.fresh_id();
+        let init = conn.roundtrip(acp_initialize(init_id), PermissionAnswer::Deny, &mut sink)?;
+        let version = check_protocol_version(&init)?;
+        let agent_name = init
+            .pointer("/result/agentInfo/name")
+            .and_then(|name| name.as_str())
+            .map(str::to_owned);
+        let new_id = conn.fresh_id();
+        let reply = conn.roundtrip(
+            acp_session_new(new_id, staging_dir),
+            PermissionAnswer::Deny,
+            &mut sink,
+        )?;
+        let session_id = reply
+            .pointer("/result/sessionId")
+            .and_then(|id| id.as_str())
+            .ok_or_else(|| AiError::StreamFailed {
+                detail: "session/new が sessionId を返しませんでした".into(),
+            })?
+            .to_owned();
+        Ok(HandshakeInfo {
+            protocol_version: version,
+            session_id,
+            agent_name,
+            notifications: notifications.get(),
+        })
+    })();
+    // Reap exactly once: take the child back unless the watchdog already did.
+    let child = shared.lock().expect("child lock").take();
+    drop(conn);
+    if let Some(mut child) = child {
+        wait_for_exit(&mut child, SHUTDOWN_GRACE);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    outcome.map_err(|error| with_stderr(error, &stderr_captured))
+}
+
+fn rpc_error(message: &serde_json::Value) -> Option<String> {
+    message.get("error").map(|error| {
+        error
+            .get("message")
+            .and_then(|message| message.as_str())
+            .unwrap_or("agent error")
+            .to_owned()
+    })
+}
+
+fn stderr_excerpt(captured: &Arc<Mutex<Vec<u8>>>) -> String {
+    let bytes = captured.lock().expect("stderr lock").clone();
+    String::from_utf8_lossy(&bytes).chars().take(500).collect()
+}
+
+fn with_stderr(error: AiError, captured: &Arc<Mutex<Vec<u8>>>) -> AiError {
+    let excerpt = stderr_excerpt(captured);
+    if excerpt.trim().is_empty() {
+        return error;
+    }
+    let suffix = format!(" [stderr] {excerpt}");
+    match error {
+        AiError::InvalidConfig { mut detail } => AiError::InvalidConfig {
+            detail: {
+                detail.push_str(&suffix);
+                detail
+            },
+        },
+        AiError::SpawnFailed { mut detail } => AiError::SpawnFailed {
+            detail: {
+                detail.push_str(&suffix);
+                detail
+            },
+        },
+        AiError::ConnectionFailed { mut detail } => AiError::ConnectionFailed {
+            detail: {
+                detail.push_str(&suffix);
+                detail
+            },
+        },
+        AiError::AuthFailed { mut detail } => AiError::AuthFailed {
+            detail: {
+                detail.push_str(&suffix);
+                detail
+            },
+        },
+        AiError::StreamFailed { mut detail } => AiError::StreamFailed {
+            detail: {
+                detail.push_str(&suffix);
+                detail
+            },
+        },
+        other => other,
+    }
+}
+
+fn cancelled_or_timed_out(
+    run_id: &AiRunId,
+    registry: &RunRegistry,
+    emit: &mut (dyn FnMut(AiStreamEvent) + Send),
+) {
+    if registry.was_timed_out(run_id) {
+        emit(AiStreamEvent::Error(StreamError {
+            run_id: Some(run_id.clone()),
+            error: AiError::StreamFailed {
+                detail: "エージェントが時間内に応答しませんでした".into(),
+            },
+        }));
+    } else {
+        emit(AiStreamEvent::Cancelled(StreamCancelled {
+            run_id: run_id.clone(),
+        }));
+    }
+}
+
+pub fn run_acp_prompt(
+    params: &AcpRunParams,
+    request: &AiPromptRequest,
+    run_id: &AiRunId,
+    registry: &Arc<RunRegistry>,
+    cancel: &AtomicBool,
+    emit: &mut (dyn FnMut(AiStreamEvent) + Send),
+) -> Result<(), AiError> {
+    emit(AiStreamEvent::Started(StreamStarted {
+        run_id: run_id.clone(),
+    }));
+    if cancel.load(Ordering::SeqCst) {
+        cancelled_or_timed_out(run_id, registry, emit);
+        return Ok(());
+    }
+    let mut child = spawn_acp(&params.argv, &params.staging_dir)?;
+    // Drain stderr on a side thread so a chatty agent can never block us.
+    let stderr_captured: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    if let Some(mut stderr) = child.stderr.take() {
+        let captured = stderr_captured.clone();
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stderr.read_to_end(&mut buf);
+            *captured.lock().expect("stderr lock") = buf;
+        });
+    }
+    let stdin = child.stdin.take().ok_or_else(|| AiError::SpawnFailed {
+        detail: "エージェントの標準入力を開けません".into(),
+    })?;
+    let stdout = child.stdout.take().ok_or_else(|| AiError::SpawnFailed {
+        detail: "エージェントの標準出力を開けません".into(),
+    })?;
+    let mut conn = AgentConn::launch(stdin, stdout);
+    registry.set_child(run_id, Box::new(NativeProcess(child)));
+
+    // Overall watchdog: kill through the registry so cancel stays uniform.
+    let watchdog_registry = Arc::clone(registry);
+    let watchdog_id = run_id.clone();
+    let watchdog_timeout = params.timeout;
+    std::thread::spawn(move || {
+        std::thread::sleep(watchdog_timeout);
+        watchdog_registry.timeout_cancel(&watchdog_id);
+    });
+
+    let outcome = run_acp_conversation(params, request, run_id, registry, cancel, emit, &mut conn);
+    let outcome = outcome.map_err(|error| with_stderr(error, &stderr_captured));
+    // Reap exactly once on every path. Graceful turns (Done or a cooperating
+    // cancel) shut the agent down by closing stdin; kill paths already reaped
+    // through the registry, and error paths kill here.
+    match &outcome {
+        Ok(()) => {
+            if let Some(child) = registry.take_child(run_id) {
+                drop(conn);
+                let mut child = child;
+                child.finish(SHUTDOWN_GRACE);
+            }
+        }
+        Err(_) => {
+            registry.cancel(run_id);
+        }
+    }
+    registry.remove(run_id);
+    outcome
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_acp_conversation(
+    params: &AcpRunParams,
+    request: &AiPromptRequest,
+    run_id: &AiRunId,
+    registry: &RunRegistry,
+    cancel: &AtomicBool,
+    emit: &mut (dyn FnMut(AiStreamEvent) + Send),
+    conn: &mut AgentConn,
+) -> Result<(), AiError> {
+    let mut tracker = AcpSessionTracker::new();
+    let mut ignore = |_: serde_json::Value| {};
+
+    let init_id = conn.fresh_id();
+    let init = conn.roundtrip(acp_initialize(init_id), PermissionAnswer::Deny, &mut ignore)?;
+    check_protocol_version(&init)?;
+    tracker.initialized();
+
+    let new_id = conn.fresh_id();
+    let reply = conn.roundtrip(
+        acp_session_new(new_id, &params.staging_dir),
+        PermissionAnswer::Deny,
+        &mut ignore,
+    )?;
+    let session_id = reply
+        .pointer("/result/sessionId")
+        .and_then(|id| id.as_str())
+        .ok_or_else(|| AiError::StreamFailed {
+            detail: "session/new が sessionId を返しませんでした".into(),
+        })?;
+    tracker.session_opened(session_id.to_owned());
+
+    // Resume across runs is not implemented in v1: any caller-supplied id is
+    // unknown by construction. The tracker reports that explicitly.
+    tracker.prompt_started(request.session_id.as_ref().map(|id| id.0.as_str()))?;
+
+    let prompt_id = conn.fresh_id();
+    let prompt_message = acp_session_prompt_with_history(
+        prompt_id,
+        session_id,
+        request.mode,
+        &request.prompt,
+        &request.contexts,
+        &request.history,
+    );
+    conn.write(&prompt_message)?;
+
+    let mut assembler = ProposalAssembler::new();
+    let mut cancel_sent = false;
+    loop {
+        if cancel.load(Ordering::SeqCst) && !cancel_sent {
+            if registry.was_timed_out(run_id) {
+                registry.cancel(run_id);
+                emit(AiStreamEvent::Error(StreamError {
+                    run_id: Some(run_id.clone()),
+                    error: AiError::StreamFailed {
+                        detail: "エージェントが時間内に応答しませんでした".into(),
+                    },
+                }));
+                tracker.prompt_finished();
+                return Ok(());
+            }
+            // Official cancel is a notification; the agent answers with the
+            // `cancelled` stop reason. Kill only on grace expiry below.
+            let _ = conn.notify(&acp_session_cancel_notification(session_id));
+            cancel_sent = true;
+        }
+        // Bound every wait so a quiet agent cannot delay cancellation past
+        // ACP_POLL_INTERVAL. Grace expiry kills; plain expiry re-polls.
+        let wait = if cancel_sent {
+            Some(CANCEL_GRACE)
+        } else {
+            Some(ACP_POLL_INTERVAL)
+        };
+        let message = match conn.read_next(wait) {
+            Ok(ConnLine::Value(message)) => message,
+            Ok(ConnLine::Eof) => {
+                if cancel_sent || cancel.load(Ordering::SeqCst) {
+                    cancelled_or_timed_out(run_id, registry, emit);
+                    tracker.prompt_finished();
+                    return Ok(());
+                }
+                return Err(AiError::StreamFailed {
+                    detail: "エージェントが標準出力を閉じました".into(),
+                });
+            }
+            Err(ReadFail::Timeout) => {
+                if cancel_sent {
+                    // Grace expired without the cancelled turn: kill and let
+                    // the EOF path below report the cancellation.
+                    registry.cancel(run_id);
+                }
+                continue;
+            }
+            Err(ReadFail::Stream(_)) if cancel.load(Ordering::SeqCst) => {
+                cancelled_or_timed_out(run_id, registry, emit);
+                tracker.prompt_finished();
+                return Ok(());
+            }
+            Err(ReadFail::Stream(error)) => return Err(error),
+        };
+        match classify_incoming(message)? {
+            AgentIncoming::Response { id: got, body } => {
+                if got != serde_json::json!(prompt_id) {
+                    return Err(AiError::StreamFailed {
+                        detail: format!("想定外の応答 ID を受けました: {got}"),
+                    });
+                }
+                if let Some(detail) = rpc_error(&body) {
+                    return Err(AiError::StreamFailed {
+                        detail: format!("prompt に失敗しました: {detail}"),
+                    });
+                }
+                match parse_stop_reason(&body)? {
+                    StopReason::Cancelled => {
+                        emit(AiStreamEvent::Cancelled(StreamCancelled {
+                            run_id: run_id.clone(),
+                        }));
+                    }
+                    _ if cancel_sent => {
+                        emit(AiStreamEvent::Cancelled(StreamCancelled {
+                            run_id: run_id.clone(),
+                        }));
+                    }
+                    _ => {
+                        emit(AiStreamEvent::Done(StreamDone {
+                            run_id: run_id.clone(),
+                            proposal: assembler.finish(request),
+                            sent: summarize_contexts(request),
+                        }));
+                    }
+                }
+                tracker.prompt_finished();
+                return Ok(());
+            }
+            AgentIncoming::Notification(note) => {
+                if let Some(text) = acp_update_text(&note) {
+                    assembler.push(&text);
+                    emit(AiStreamEvent::Chunk(StreamChunk {
+                        run_id: run_id.clone(),
+                        text,
+                    }));
+                }
+                // Other updates (tool calls, file edits inside the staging
+                // copy) stay in the isolated copy for #8 to diff; only text
+                // is proposed.
+            }
+            AgentIncoming::AgentRequest {
+                id: req_id,
+                method: req_method,
+                params: req_params,
+            } => {
+                // No approval UI exists: deny by default. After our own
+                // cancel, answer with the spec's `cancelled` outcome.
+                let mode = if cancel_sent || cancel.load(Ordering::SeqCst) {
+                    PermissionAnswer::Cancelled
+                } else {
+                    PermissionAnswer::Deny
+                };
+                conn.answer_agent_request(&req_id, &req_method, &req_params, mode)?;
+            }
+        }
+    }
+}
+
+// ---- HTTP SSE drivers (OpenAI-compatible and Anthropic) ----
+
+pub fn handshake_acp(argv: &AcpArgv) -> Result<AiTestResult, AiError> {
+    validate_argv(argv)?;
+    let staging = std::env::temp_dir();
+    match agent_handshake(argv, &staging, HTTP_TEST_TIMEOUT) {
+        Ok(info) => Ok(AiTestResult {
+            ok: true,
+            detail: format!(
+                "ACP ハンドシェイクに成功しました (protocol {}, session {}, 通知 {} 件)",
+                info.protocol_version, info.session_id, info.notifications
+            ),
+        }),
+        Err(error) => Ok(AiTestResult {
+            ok: false,
+            detail: format!("ハンドシェイクに失敗しました: {}", error_detail(&error)),
+        }),
+    }
+}
+
+/// Native process ownership implementing application cancellation and settlement.
+pub struct NativeProcess(pub Child);
+impl ManagedProcess for NativeProcess {
+    /// Kill and synchronously reap the child on cancellation or driver failure.
+    fn terminate(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+    /// Give a completed ACP agent a bounded EOF grace before killing and reaping it.
+    fn finish(&mut self, grace: Duration) {
+        wait_for_exit(&mut self.0, grace);
+    }
+}

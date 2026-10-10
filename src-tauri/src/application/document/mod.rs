@@ -2,8 +2,8 @@
 //!
 //! All GUI / AI range edits enter through [`DocumentActor::apply_edits`]
 //! with an exact `base_revision`. The actor validates against the current
-//! snapshot ([`crate::validation`]), converts global UTF-16 ranges to Neovim
-//! `(row, UTF-8 byte col)` ([`crate::neovim::coordinates`]), applies them tail
+//! snapshot ([`crate::domain::validation`]), converts global UTF-16 ranges to Neovim
+//! `(row, UTF-8 byte col)` ([`crate::domain::coordinates`]), applies them tail
 //! first via `nvim_buf_set_text`, re-reads the buffer, and bumps the revision
 //! exactly once. Stale revisions are rejected so callers resync from the
 //! returned snapshot. `:w` never writes from Lua; [`DocumentActor::save`]
@@ -15,16 +15,16 @@
 //! revision. Native undo history is therefore shared: a GUI range edit is a
 //! normal buffer change that `u` reverts.
 
+use crate::application::ports::*;
 use crate::contracts::{
     ContractError, CopyFormat, CursorUpdate, DocumentEvent, DocumentId, DocumentSnapshot,
     EditRequest, GridUpdate, ModeUpdate, NvimConfig, Revision, SaveRequest, SaveResult,
     Utf16Offset, VimInputResult, VimMode, WorkspaceError, YankCopy,
 };
-use crate::neovim::config::ConfigSource;
-use crate::neovim::coordinates::global_utf16_to_line_byte;
-use crate::neovim::{rpc::RpcError, NeovimSession};
-use crate::storage::{self, Fingerprint, RecoveryRecord};
-use crate::validation::{
+use crate::domain::coordinates::global_utf16_to_line_byte;
+
+use crate::domain::storage::{self, Fingerprint, RecoveryRecord};
+use crate::domain::validation::{
     next_revision, validate_cursor, validate_document_id, validate_edit, validate_save,
 };
 use std::path::PathBuf;
@@ -55,8 +55,8 @@ impl From<ContractError> for ActorError {
     }
 }
 
-impl From<RpcError> for ActorError {
-    fn from(error: RpcError) -> Self {
+impl From<BufferError> for ActorError {
+    fn from(error: BufferError) -> Self {
         Self::Nvim(error.to_string())
     }
 }
@@ -77,7 +77,8 @@ impl From<ActorError> for WorkspaceError {
 
 struct ActorState {
     snapshot: DocumentSnapshot,
-    nvim: NeovimSession,
+    nvim: Box<dyn Buffer>,
+    services: DocumentServices,
     path: Option<PathBuf>,
     root: Option<PathBuf>,
     baseline: Option<Fingerprint>,
@@ -110,8 +111,15 @@ impl DocumentActor {
         document_id: DocumentId,
         initial_text: String,
         path: Option<PathBuf>,
+        services: DocumentServices,
     ) -> Result<Self, ActorError> {
-        Self::open_with_config(document_id, initial_text, path, ConfigSource::Isolated)
+        Self::open_with_config(
+            document_id,
+            initial_text,
+            path,
+            ConfigSource::Isolated,
+            services,
+        )
     }
 
     pub fn open_with_config(
@@ -119,44 +127,17 @@ impl DocumentActor {
         initial_text: String,
         path: Option<PathBuf>,
         config: ConfigSource,
+        services: DocumentServices,
     ) -> Result<Self, ActorError> {
         validate_document_id(&document_id)?;
         let baseline = path
             .as_deref()
-            .map(storage::disk_fingerprint)
+            .map(|path| services.storage.disk_fingerprint(path))
             .transpose()?
             .flatten();
-        let nvim = NeovimSession::spawn_with_config(config).map_err(ActorError::Nvim)?;
-        // Headless embed only processes typed input / mode changes with a UI
-        // attached (verified: `nvim_input("i")` stays Normal without one).
-        // Attach a minimal UI so mappings, insert, and grid all work.
-        crate::neovim::grid::attach(nvim.client(), 80, 24)?;
-        // Name the buffer when a file path is known so `:w` has a target and
-        // `BufWriteCmd` interception fires instead of E32 on unnamed buffers.
-        if let Some(path) = &path {
-            // Best-effort: a duplicate or missing-file name must not fail open.
-            let _ = nvim.set_buf_name(&path.to_string_lossy());
-        }
-        let undo_levels = nvim.client().call(
-            "nvim_get_option_value",
-            vec![rmpv::Value::from("undolevels"), rmpv::Value::Map(vec![])],
-        )?;
-        nvim.command("setlocal undolevels=-1")?;
-        nvim.set_text(&initial_text)?;
-        nvim.client().call(
-            "nvim_set_option_value",
-            vec![
-                rmpv::Value::from("undolevels"),
-                undo_levels,
-                rmpv::Value::Map(vec![]),
-            ],
-        )?;
-        nvim.install_save_intercept()?;
-        nvim.install_yank_observer()?;
-        nvim.command("setlocal buftype=acwrite")?;
-        // Keep undo history anchored at the initial content: one clean change
-        // so the first GUI edit is a single `undo` step back to initial.
-        nvim.command("silent! setlocal nomodified")?;
+        let nvim = services
+            .buffers
+            .open(config, &initial_text, path.as_deref(), true)?;
         let snapshot = DocumentSnapshot {
             document_id,
             revision: Revision(0),
@@ -168,6 +149,7 @@ impl DocumentActor {
             state: Mutex::new(ActorState {
                 snapshot,
                 nvim,
+                services,
                 path,
                 root: None,
                 baseline,
@@ -251,35 +233,7 @@ impl DocumentActor {
             let _ = byte_range;
             positioned.push((start_row, start_col, end_row, end_col, edit.text.clone()));
         }
-        let edits = positioned
-            .into_iter()
-            .rev()
-            .map(|(sr, sc, er, ec, text)| {
-                rmpv::Value::Array(vec![
-                    sr.into(),
-                    sc.into(),
-                    er.into(),
-                    ec.into(),
-                    rmpv::Value::Array(text.split('\n').map(rmpv::Value::from).collect()),
-                ])
-            })
-            .collect();
-        // undojoin must run in the same RPC turn as the following API change.
-        state.nvim.client().call(
-            "nvim_exec_lua",
-            vec![
-                rmpv::Value::from(
-                    r#"
-            local buf, edits = ...
-            for i, e in ipairs(edits) do
-              if i > 1 then vim.cmd('undojoin') end
-              vim.api.nvim_buf_set_text(buf, e[1], e[2], e[3], e[4], e[5])
-            end
-        "#,
-                ),
-                rmpv::Value::Array(vec![state.nvim.buf().clone(), rmpv::Value::Array(edits)]),
-            ],
-        )?;
+        state.nvim.apply_ranges(&positioned)?;
         let text = state.nvim.get_text()?;
         let revision = next_revision(state.snapshot.revision)?;
         let dirty = state.baseline.as_ref() != Some(&storage::fingerprint(text.as_bytes()));
@@ -356,7 +310,7 @@ impl DocumentActor {
             if revision == state.snapshot.revision
                 && state.nvim.mode()? == VimMode::Normal
                 && !state.nvim.input_pending()?
-                && !crate::neovim::mapping::has_mapping(state.nvim.client(), "n", keys)?
+                && !state.nvim.has_mapping("n", keys)?
             {
                 for (name, selector) in state.nvim.copy_keys()? {
                     if state.nvim.same_key(keys, &selector)? {
@@ -474,11 +428,7 @@ impl DocumentActor {
         if state.nvim.input_pending()? {
             return Ok(true);
         }
-        Ok(crate::neovim::mapping::has_mapping(
-            state.nvim.client(),
-            mode,
-            lhs,
-        )?)
+        Ok(state.nvim.has_mapping(mode, lhs)?)
     }
 
     /// Validate a GUI-reported cursor against the current snapshot.
@@ -500,7 +450,7 @@ impl DocumentActor {
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         Self::require_ready(&state)?;
         state.nvim.install_save_intercept()?;
-        state.nvim.command("setlocal buftype=acwrite")?;
+
         Ok(())
     }
 
@@ -511,7 +461,7 @@ impl DocumentActor {
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         Self::require_ready(&state)?;
-        state.nvim.command(cmd)?;
+        state.nvim.command_for_fixture(cmd)?;
         Ok(())
     }
 
@@ -529,14 +479,7 @@ impl DocumentActor {
     pub fn drain_save_requests(&self) -> Vec<String> {
         self.state
             .lock()
-            .map(|state| {
-                state
-                    .nvim
-                    .drain_save_requests()
-                    .into_iter()
-                    .map(|note| note.method)
-                    .collect()
-            })
+            .map(|state| state.nvim.drain_save_requests())
             .unwrap_or_default()
     }
 
@@ -552,7 +495,7 @@ impl DocumentActor {
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         if let Some(path) = &state.path {
-            storage::check_target(Some(&root), path)?;
+            state.services.storage.check_target(Some(&root), path)?;
         }
         state.root = Some(root);
         state.recovery = Some(recovery);
@@ -601,7 +544,7 @@ impl DocumentActor {
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         if let Some(path) = &state.recovery {
-            storage::remove_checkpoint(path)?;
+            state.services.storage.remove_checkpoint(path)?;
         }
         Ok(())
     }
@@ -622,12 +565,19 @@ impl DocumentActor {
             .into());
         }
         let path = state.path.as_ref().ok_or(WorkspaceError::InvalidPath)?;
-        storage::check_target(state.root.as_deref(), path)?;
-        let bytes = storage::read_disk(path)?.ok_or(WorkspaceError::NotFound)?;
+        state
+            .services
+            .storage
+            .check_target(state.root.as_deref(), path)?;
+        let bytes = state
+            .services
+            .storage
+            .read_disk(path)?
+            .ok_or(WorkspaceError::NotFound)?;
         let text = String::from_utf8(bytes.clone()).map_err(|_| WorkspaceError::InvalidUtf8)?;
         let revision = next_revision(state.snapshot.revision)?;
         state.nvim.set_text(&text)?;
-        state.nvim.command("setlocal nomodified")?;
+        state.nvim.clear_modified()?;
         state.snapshot.text = text;
         state.snapshot.revision = revision;
         state.baseline = Some(storage::fingerprint(&bytes));
@@ -647,29 +597,29 @@ impl DocumentActor {
         if source == target {
             return Ok(());
         }
-        storage::check_target(state.root.as_deref(), &source)?;
-        storage::check_target(state.root.as_deref(), &target)?;
-        if storage::disk_fingerprint(&source)? != state.baseline {
+        state
+            .services
+            .storage
+            .check_target(state.root.as_deref(), &source)?;
+        state
+            .services
+            .storage
+            .check_target(state.root.as_deref(), &target)?;
+        if state.services.storage.disk_fingerprint(&source)? != state.baseline {
             return Err(WorkspaceError::Conflict {
                 path: source.display().to_string(),
             }
             .into());
         }
         // Hard-link creation is atomic and refuses an existing destination.
-        std::fs::hard_link(&source, &target).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::AlreadyExists {
-                WorkspaceError::AlreadyExists
-            } else {
-                e.into()
-            }
-        })?;
+        state.services.storage.hard_link(&source, &target)?;
         if let Err(error) = state.nvim.set_buf_name(&target.to_string_lossy()) {
-            let _ = std::fs::remove_file(&target);
+            let _ = state.services.storage.remove_file(&target);
             return Err(error.into());
         }
-        if let Err(error) = std::fs::remove_file(&source) {
+        if let Err(error) = state.services.storage.remove_file(&source) {
             let _ = state.nvim.set_buf_name(&source.to_string_lossy());
-            let _ = std::fs::remove_file(&target);
+            let _ = state.services.storage.remove_file(&target);
             return Err(WorkspaceError::from(error).into());
         }
         state.path = Some(target);
@@ -690,12 +640,12 @@ impl DocumentActor {
         if matches!(mode, VimMode::Visual | VimMode::VisualLine) {
             let (start_row, start_col, end_row, end_col, newline, forward) =
                 state.nvim.visual_selection()?;
-            let start = crate::neovim::coordinates::line_byte_to_global_utf16(
+            let start = crate::domain::coordinates::line_byte_to_global_utf16(
                 &state.snapshot.text,
                 start_row,
                 start_col,
             )?;
-            let mut end = crate::neovim::coordinates::line_byte_to_global_utf16(
+            let mut end = crate::domain::coordinates::line_byte_to_global_utf16(
                 &state.snapshot.text,
                 end_row,
                 end_col,
@@ -707,7 +657,7 @@ impl DocumentActor {
             return Ok(Self::cached_cursor(&state));
         }
         let (row, col) = state.nvim.win_cursor()?;
-        let offset = crate::neovim::coordinates::line_byte_to_global_utf16(
+        let offset = crate::domain::coordinates::line_byte_to_global_utf16(
             &state.snapshot.text,
             (row - 1) as u32,
             col as u32,
@@ -743,8 +693,8 @@ impl DocumentActor {
             // GUI ranges are half-open. Native exclusive regions end after
             // the selected text; inclusive regions end on its last character.
             let previous = |offset: Utf16Offset| -> Result<Utf16Offset, ContractError> {
-                let byte =
-                    crate::validation::utf16_to_utf8(&state.snapshot.text, offset)?.0 as usize;
+                let byte = crate::domain::validation::utf16_to_utf8(&state.snapshot.text, offset)?.0
+                    as usize;
                 let width = state.snapshot.text[..byte]
                     .chars()
                     .next_back()
@@ -753,15 +703,7 @@ impl DocumentActor {
                 Ok(Utf16Offset(offset.0 - width as u32))
             };
             let forward = update.anchor.0 < update.head.0;
-            let exclusive = state
-                .nvim
-                .client()
-                .call(
-                    "nvim_get_option_value",
-                    vec![rmpv::Value::from("selection"), rmpv::Value::Map(vec![])],
-                )?
-                .as_str()
-                == Some("exclusive");
+            let exclusive = state.nvim.selection_exclusive()?;
             let anchor = if forward || (exclusive && mode != VimMode::VisualLine) {
                 update.anchor
             } else {
@@ -774,42 +716,23 @@ impl DocumentActor {
             };
             let (anchor_row, anchor_col) = global_utf16_to_line_byte(&state.snapshot.text, anchor)?;
             let (head_row, head_col) = global_utf16_to_line_byte(&state.snapshot.text, head)?;
-            let kind = if mode == VimMode::VisualLine {
-                "V"
-            } else {
-                "v"
-            };
             if state.gui_virtualedit.is_none() {
-                state.gui_virtualedit = Some(
-                    state
-                        .nvim
-                        .exec_lua("return vim.wo.virtualedit")?
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_owned(),
-                );
+                state.gui_virtualedit = Some(state.nvim.virtualedit()?);
             }
-            state.nvim.exec_lua(&format!(
-                "vim.cmd('normal! ' .. string.char(27)); local ve = vim.wo.virtualedit; if not ve:find('onemore', 1, true) and not ve:find('all', 1, true) then vim.wo.virtualedit = ve == '' and 'onemore' or ve .. ',onemore' end; vim.api.nvim_win_set_cursor(0, {{{}, {}}}); vim.cmd('normal! {}'); vim.api.nvim_win_set_cursor(0, {{{}, {}}})",
-                anchor_row + 1, anchor_col, kind, head_row + 1, head_col,
-            ))?;
+            state.nvim.install_selection(
+                (anchor_row, anchor_col),
+                (head_row, head_col),
+                mode == VimMode::VisualLine,
+            )?;
             state.last_cursor = (update.anchor, update.head);
             return Ok(update);
         }
         if visual {
-            state
-                .nvim
-                .exec_lua("vim.cmd('normal! ' .. string.char(27))")?;
+            state.nvim.exit_visual()?;
             Self::restore_gui_virtualedit(&mut state)?;
         }
         let (row, col) = global_utf16_to_line_byte(&state.snapshot.text, update.head)?;
-        state.nvim.client().call(
-            "nvim_win_set_cursor",
-            vec![
-                rmpv::Value::from(0),
-                rmpv::Value::Array(vec![rmpv::Value::from(row + 1), rmpv::Value::from(col)]),
-            ],
-        )?;
+        state.nvim.set_cursor(row, col)?;
         state.last_cursor = (update.anchor, update.head);
         Ok(update)
     }
@@ -824,11 +747,7 @@ impl DocumentActor {
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         if !state.nvim.mode_state()?.1 {
-            state.nvim.client().call(
-                "nvim_ui_try_resize",
-                vec![rmpv::Value::from(width), rmpv::Value::from(height)],
-            )?;
-            state.nvim.command("redraw!")?;
+            state.nvim.resize_grid(width, height)?;
         }
         Self::sync_locked(&mut state)?;
         Self::service_notifications(&mut state)?;
@@ -855,28 +774,12 @@ impl DocumentActor {
             .clone()
             .map(ConfigSource::UserFile)
             .unwrap_or(ConfigSource::Isolated);
-        let nvim = NeovimSession::spawn_with_config(config).map_err(ActorError::Nvim)?;
-        crate::neovim::grid::attach(nvim.client(), 80, 24)?;
-        let levels = nvim.client().call(
-            "nvim_get_option_value",
-            vec![rmpv::Value::from("undolevels"), rmpv::Value::Map(vec![])],
+        let nvim = state.services.buffers.open(
+            config,
+            &state.snapshot.text,
+            state.path.as_deref(),
+            false,
         )?;
-        nvim.command("setlocal undolevels=-1")?;
-        nvim.set_text(&state.snapshot.text)?;
-        nvim.client().call(
-            "nvim_set_option_value",
-            vec![
-                rmpv::Value::from("undolevels"),
-                levels,
-                rmpv::Value::Map(vec![]),
-            ],
-        )?;
-        if let Some(path) = &state.path {
-            nvim.set_buf_name(&path.to_string_lossy())?;
-        }
-        nvim.install_save_intercept()?;
-        nvim.install_yank_observer()?;
-        nvim.command("setlocal buftype=acwrite")?;
         let (copy_keys, copy_errors) = nvim.copy_config()?;
         let result = NvimConfig {
             path: path.map(|p| p.display().to_string()),
@@ -905,18 +808,12 @@ impl DocumentActor {
 
     fn service_notifications(state: &mut ActorState) -> Result<(), ActorError> {
         for note in state.nvim.drain_notifications() {
-            if note.method == "marxen:yanked" {
-                if let Some(text) = note.params.first().and_then(rmpv::Value::as_str) {
-                    state.ready_yank = Some((state.snapshot.revision, text.to_owned()));
+            match note {
+                BufferNotification::Yank(text) => {
+                    state.ready_yank = Some((state.snapshot.revision, text))
                 }
-            }
-            if note.method == "marxen:save-requested" {
-                state.save_requested = true;
-            }
-            if note.method == "redraw" {
-                if let Ok(value) = serde_json::to_value(&note.params) {
-                    state.grid.push(value);
-                }
+                BufferNotification::SaveRequested => state.save_requested = true,
+                BufferNotification::Redraw(value) => state.grid.push(value),
             }
         }
         // Keep only a bounded backlog; grid() requests a full redraw.
@@ -933,7 +830,7 @@ impl DocumentActor {
 
     fn save_locked(state: &mut ActorState) -> Result<SaveResult, ActorError> {
         let path = state.path.as_ref().ok_or(WorkspaceError::InvalidPath)?;
-        let baseline = storage::atomic_write(
+        let baseline = state.services.storage.atomic_write(
             path,
             state.snapshot.text.as_bytes(),
             state.baseline.as_ref(),
@@ -941,9 +838,9 @@ impl DocumentActor {
         )?;
         state.baseline = Some(baseline);
         // A failed Neovim acknowledgement leaves recovery and dirty status intact.
-        state.nvim.command("setlocal nomodified")?;
+        state.nvim.clear_modified()?;
         if let Some(path) = &state.recovery {
-            storage::remove_checkpoint(path)?;
+            state.services.storage.remove_checkpoint(path)?;
         }
         state.snapshot.dirty = false;
         Ok(SaveResult {
@@ -956,12 +853,12 @@ impl DocumentActor {
     fn checkpoint_locked(state: &ActorState) -> Result<(), ActorError> {
         if !state.snapshot.dirty {
             if let Some(path) = &state.recovery {
-                storage::remove_checkpoint(path)?;
+                state.services.storage.remove_checkpoint(path)?;
             }
             return Ok(());
         }
         if let (Some(root), Some(recovery)) = (&state.root, &state.recovery) {
-            storage::checkpoint(
+            state.services.storage.checkpoint(
                 recovery,
                 &RecoveryRecord {
                     version: 1,
@@ -1009,14 +906,7 @@ impl DocumentActor {
 
     fn restore_gui_virtualedit(state: &mut ActorState) -> Result<(), ActorError> {
         if let Some(original) = state.gui_virtualedit.as_ref() {
-            state.nvim.client().call(
-                "nvim_set_option_value",
-                vec![
-                    rmpv::Value::from("virtualedit"),
-                    rmpv::Value::from(original.as_str()),
-                    rmpv::Value::Map(vec![(rmpv::Value::from("win"), rmpv::Value::from(0))]),
-                ],
-            )?;
+            state.nvim.restore_virtualedit(original)?;
             state.gui_virtualedit = None;
         }
         Ok(())
@@ -1027,9 +917,9 @@ impl DocumentActor {
             let mut offset = Utf16Offset(
                 offset
                     .0
-                    .min(crate::neovim::coordinates::utf16_len(&state.snapshot.text)),
+                    .min(crate::domain::coordinates::utf16_len(&state.snapshot.text)),
             );
-            if crate::validation::utf16_to_utf8(&state.snapshot.text, offset).is_err() {
+            if crate::domain::validation::utf16_to_utf8(&state.snapshot.text, offset).is_err() {
                 offset.0 = offset.0.saturating_sub(1);
             }
             offset

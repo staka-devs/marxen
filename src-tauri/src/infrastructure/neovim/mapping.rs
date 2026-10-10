@@ -6,7 +6,7 @@
 //! `inoremap jj <Esc>` must appear in the keymap and must fire on
 //! `nvim_input("jj")`, escaping Insert to Normal.
 
-use crate::neovim::rpc::{EmbedClient, RpcError};
+use crate::infrastructure::neovim::rpc::{EmbedClient, RpcError};
 use rmpv::Value;
 
 /// One entry of `nvim_get_keymap(mode)`.

@@ -6,7 +6,7 @@
 //! attach a small UI, assert grid text for Japanese/emoji, and compare Rust
 //! display widths against `strdisplaywidth()`.
 
-use crate::neovim::rpc::{EmbedClient, RpcError};
+use crate::infrastructure::neovim::rpc::{EmbedClient, RpcError};
 use rmpv::Value;
 
 /// One `grid_line` event: `grid` id, `row`, `col_start`, ordered cells.

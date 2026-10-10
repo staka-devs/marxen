@@ -1,13 +1,17 @@
 //! Folder-scoped document registry. Every edit/save uses the owned Neovim actor.
+use crate::application::document::DocumentActor;
 use crate::contracts::*;
-use crate::document::DocumentActor;
-use crate::storage::{self, Fingerprint, RecoveryRecord};
+use crate::domain::storage::{self, Fingerprint, RecoveryRecord};
 use std::collections::BTreeMap;
-use std::fs;
+
+use crate::application::ports::*;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
 
 pub struct Workspace {
+    storage: Arc<dyn Storage>,
+    services: DocumentServices,
+    clock: Arc<dyn Clock>,
     root: PathBuf,
     recovery: PathBuf,
     actors: BTreeMap<String, DocumentActor>,
@@ -22,18 +26,27 @@ impl Workspace {
             .any(|actor| actor.is_alive().unwrap_or(false))
     }
 
-    pub fn open(root: &Path, recovery_home: &Path) -> Result<Self, WorkspaceError> {
-        let root = fs::canonicalize(root)?;
-        if !root.is_dir() {
+    pub fn open(
+        root: &Path,
+        recovery_home: &Path,
+        services: DocumentServices,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, WorkspaceError> {
+        let storage = services.storage.clone();
+        let root = storage.canonicalize(root)?;
+        if !storage.metadata(&root).is_ok_and(|m| m.directory) {
             return Err(WorkspaceError::InvalidPath);
         }
         let namespace = storage::fingerprint(root.to_string_lossy().as_bytes()).0;
         let recovery = recovery_home.join(namespace);
-        fs::create_dir_all(&recovery)?;
-        if fs::symlink_metadata(&recovery)?.file_type().is_symlink() {
+        storage.create_dir_all(&recovery)?;
+        if storage.metadata(&recovery)?.file_type().is_symlink() {
             return Err(WorkspaceError::OutsideWorkspace);
         }
         Ok(Self {
+            storage,
+            services,
+            clock,
             root,
             recovery,
             actors: BTreeMap::new(),
@@ -61,14 +74,7 @@ impl Workspace {
             .join(format!("{}.json", storage::fingerprint(id.as_bytes()).0))
     }
     fn new_id(&self) -> String {
-        format!(
-            "doc-{}-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos(),
-            self.actors.len()
-        )
+        format!("doc-{}-{}", self.clock.nanos(), self.actors.len())
     }
     fn description(&self, actor: &DocumentActor) -> Result<OpenDocument, WorkspaceError> {
         Ok(OpenDocument {
@@ -89,13 +95,12 @@ impl Workspace {
     }
 
     pub fn list(&self, path: &str) -> Result<Vec<WorkspaceEntry>, WorkspaceError> {
-        let folder = storage::resolve(&self.root, path)?;
-        if !folder.is_dir() {
+        let folder = self.storage.resolve(&self.root, path)?;
+        if !self.storage.metadata(&folder).is_ok_and(|m| m.directory) {
             return Err(WorkspaceError::InvalidPath);
         }
         let mut entries = Vec::new();
-        for entry in fs::read_dir(folder)? {
-            let entry = entry?;
+        for entry in self.storage.read_dir(&folder)? {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with(".marxen-") || name == ".git" {
                 continue;
@@ -106,7 +111,7 @@ impl Workspace {
             }
             let relative = storage::relative(&self.root, &entry.path())?;
             // Junctions/reparse points must also remain contained.
-            if storage::resolve(&self.root, &relative).is_err() {
+            if self.storage.resolve(&self.root, &relative).is_err() {
                 continue;
             }
             let kind = if meta.is_dir() {
@@ -117,7 +122,9 @@ impl Workspace {
                 }
                 Some(WorkspaceFileKind::Image)
             } else if meta.is_file() && storage::text_family(&entry.path()) {
-                if storage::read_disk(&entry.path())?
+                if self
+                    .storage
+                    .read_disk(&entry.path())?
                     .and_then(|b| storage::utf8_text(b).ok())
                     .is_none()
                 {
@@ -144,7 +151,7 @@ impl Workspace {
     }
 
     pub fn open_markdown(&mut self, path: &str) -> Result<OpenDocument, WorkspaceError> {
-        let target = storage::resolve(&self.root, path)?;
+        let target = self.storage.resolve(&self.root, path)?;
         if !storage::markdown(&target) {
             return Err(WorkspaceError::NotMarkdown);
         }
@@ -152,7 +159,7 @@ impl Workspace {
     }
 
     pub fn open_text_file(&mut self, path: &str) -> Result<OpenDocument, WorkspaceError> {
-        let target = storage::resolve(&self.root, path)?;
+        let target = self.storage.resolve(&self.root, path)?;
         if !storage::text_family(&target) {
             return Err(WorkspaceError::NotText);
         }
@@ -163,11 +170,19 @@ impl Workspace {
         {
             return self.description(actor);
         }
-        let bytes = storage::read_disk(&target)?.ok_or(WorkspaceError::NotFound)?;
+        let bytes = self
+            .storage
+            .read_disk(&target)?
+            .ok_or(WorkspaceError::NotFound)?;
         let baseline = storage::fingerprint(&bytes);
         let text = storage::utf8_text(bytes)?;
         let id = self.new_id();
-        let actor = DocumentActor::open(DocumentId(id.clone()), text, Some(target))?;
+        let actor = DocumentActor::open(
+            DocumentId(id.clone()),
+            text,
+            Some(target),
+            self.services.clone(),
+        )?;
         // Catch external mutation between disk read and actor creation.
         if actor.baseline() != Some(baseline) {
             return Err(WorkspaceError::Conflict { path: path.into() });
@@ -187,7 +202,7 @@ impl Workspace {
         if self.actors.contains_key(&id.0) {
             return Err(WorkspaceError::AlreadyExists);
         }
-        let actor = DocumentActor::open(id.clone(), text, None)?;
+        let actor = DocumentActor::open(id.clone(), text, None, self.services.clone())?;
         actor.attach_storage(self.root.clone(), self.record_path(&id.0))?;
         // Untitled initial content is unsaved and must be recoverable.
         actor.mark_unsaved()?;
@@ -197,14 +212,15 @@ impl Workspace {
     }
 
     pub fn create(&mut self, path: &str, text: &str) -> Result<OpenDocument, WorkspaceError> {
-        let target = storage::resolve(&self.root, path)?;
+        let target = self.storage.resolve(&self.root, path)?;
         if !storage::markdown(&target) {
             return Err(WorkspaceError::NotMarkdown);
         }
-        if storage::read_disk(&target)?.is_some() {
+        if self.storage.read_disk(&target)?.is_some() {
             return Err(WorkspaceError::AlreadyExists);
         }
-        storage::atomic_write(&target, text.as_bytes(), None, Some(&self.root))?;
+        self.storage
+            .atomic_write(&target, text.as_bytes(), None, Some(&self.root))?;
         self.open_markdown(path)
     }
 
@@ -213,7 +229,7 @@ impl Workspace {
         request: SaveRequest,
         path: &str,
     ) -> Result<OpenDocument, WorkspaceError> {
-        let target = storage::resolve(&self.root, path)?;
+        let target = self.storage.resolve(&self.root, path)?;
         if !storage::markdown(&target) {
             return Err(WorkspaceError::NotMarkdown);
         }
@@ -230,7 +246,7 @@ impl Workspace {
         let id = request.document_id.0.clone();
         let actor = self.actor(&id)?;
         let snapshot = actor.sync_from_nvim().unwrap_or_else(|_| actor.snapshot());
-        crate::validation::validate_save(&snapshot, &request)
+        crate::domain::validation::validate_save(&snapshot, &request)
             .map_err(|error| WorkspaceError::Contract { error })?;
         if action == CloseAction::Cancel {
             return Ok(false);
@@ -277,7 +293,7 @@ impl Workspace {
         files.sort();
         let mut matches = Vec::new();
         for path in files {
-            let target = storage::resolve(&self.root, &path)?;
+            let target = self.storage.resolve(&self.root, &path)?;
             let actor = self
                 .actors
                 .values()
@@ -290,14 +306,18 @@ impl Workspace {
                     Some(snapshot.revision),
                 )
             } else {
-                let bytes = storage::read_disk(&target)?.ok_or(WorkspaceError::NotFound)?;
+                let bytes = self
+                    .storage
+                    .read_disk(&target)?
+                    .ok_or(WorkspaceError::NotFound)?;
                 let text = String::from_utf8(bytes).map_err(|_| WorkspaceError::InvalidUtf8)?;
                 (text, None, None)
             };
             for (byte, _) in text.match_indices(query) {
-                let start = crate::validation::utf8_to_utf16(&text, Utf8ByteOffset(byte as u32))
-                    .map_err(|error| WorkspaceError::Contract { error })?;
-                let end = crate::validation::utf8_to_utf16(
+                let start =
+                    crate::domain::validation::utf8_to_utf16(&text, Utf8ByteOffset(byte as u32))
+                        .map_err(|error| WorkspaceError::Contract { error })?;
+                let end = crate::domain::validation::utf8_to_utf16(
                     &text,
                     Utf8ByteOffset((byte + query.len()) as u32),
                 )
@@ -342,8 +362,10 @@ impl Workspace {
                 }
             }
             if let Some(path) = actor.path() {
-                let current = storage::check_target(Some(&self.root), &path)
-                    .and_then(|_| storage::disk_fingerprint(&path));
+                let current = self
+                    .storage
+                    .check_target(Some(&self.root), &path)
+                    .and_then(|_| self.storage.disk_fingerprint(&path));
                 match current {
                     Ok(current) => {
                         // Own Rust saves are acknowledged before disk observation.
@@ -371,12 +393,14 @@ impl Workspace {
 
     fn records(&self) -> Result<Vec<RecoveryRecord>, WorkspaceError> {
         let mut records = Vec::new();
-        for entry in fs::read_dir(&self.recovery)? {
-            let entry = entry?;
+        for entry in self.storage.read_dir(&self.recovery)? {
             if entry.path().extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
             }
-            let bytes = storage::read_disk(&entry.path())?.ok_or(WorkspaceError::NotFound)?;
+            let bytes = self
+                .storage
+                .read_disk(&entry.path())?
+                .ok_or(WorkspaceError::NotFound)?;
             let record: RecoveryRecord =
                 serde_json::from_slice(&bytes).map_err(|e| WorkspaceError::Io {
                     detail: format!("invalid recovery {}: {e}", entry.path().display()),
@@ -384,13 +408,13 @@ impl Workspace {
             if record.version != 1 || record.root != self.root || !record.snapshot.dirty {
                 return Err(WorkspaceError::InvalidPath);
             }
-            crate::validation::validate_document_id(&record.snapshot.document_id)
+            crate::domain::validation::validate_document_id(&record.snapshot.document_id)
                 .map_err(|error| WorkspaceError::Contract { error })?;
             if entry.path() != self.record_path(&record.snapshot.document_id.0) {
                 return Err(WorkspaceError::InvalidPath);
             }
             if let Some(path) = &record.path {
-                let path = storage::resolve(&self.root, path)?;
+                let path = self.storage.resolve(&self.root, path)?;
                 if !storage::text_family(&path) {
                     return Err(WorkspaceError::NotText);
                 }
@@ -408,7 +432,9 @@ impl Workspace {
                     .path
                     .as_ref()
                     .map(|p| {
-                        storage::resolve(&self.root, p).and_then(|p| storage::disk_fingerprint(&p))
+                        self.storage
+                            .resolve(&self.root, p)
+                            .and_then(|p| self.storage.disk_fingerprint(&p))
                     })
                     .transpose()?
                     .flatten();
@@ -434,7 +460,7 @@ impl Workspace {
         let path = record
             .path
             .as_ref()
-            .map(|p| storage::resolve(&self.root, p))
+            .map(|p| self.storage.resolve(&self.root, p))
             .transpose()?;
         if self
             .actors
@@ -447,6 +473,7 @@ impl Workspace {
             record.snapshot.document_id.clone(),
             record.snapshot.text.clone(),
             path,
+            self.services.clone(),
         )?;
         actor.attach_storage(self.root.clone(), self.record_path(id))?;
         actor.restore_record(&record)?;
@@ -460,7 +487,7 @@ impl Workspace {
         if self.actors.contains_key(id) {
             return Err(WorkspaceError::AlreadyExists);
         }
-        storage::remove_checkpoint(&self.record_path(id))
+        self.storage.remove_checkpoint(&self.record_path(id))
     }
 
     pub fn load_image(&self, id: &str, relative: &str) -> Result<ImageData, WorkspaceError> {
@@ -491,8 +518,8 @@ impl Workspace {
                 _ => return Err(WorkspaceError::InvalidPath),
             }
         }
-        let target = storage::resolve(&self.root, &parts.join("/"))?;
-        let bytes = storage::read_image_bytes(&target)?;
+        let target = self.storage.resolve(&self.root, &parts.join("/"))?;
+        let bytes = self.storage.read_image_bytes(&target)?;
         let mime = image_mime(&target, &bytes)?;
         Ok(ImageData {
             mime: mime.into(),
@@ -501,8 +528,8 @@ impl Workspace {
     }
 
     pub fn load_workspace_image(&self, path: &str) -> Result<ImageData, WorkspaceError> {
-        let target = storage::resolve(&self.root, path)?;
-        let bytes = storage::read_image_bytes(&target)?;
+        let target = self.storage.resolve(&self.root, path)?;
+        let bytes = self.storage.read_image_bytes(&target)?;
         Ok(ImageData {
             mime: image_mime(&target, &bytes)?.into(),
             bytes,
@@ -550,7 +577,7 @@ impl Workspace {
         if !path.is_absolute() {
             return Err(WorkspaceError::InvalidPath);
         }
-        let bytes = storage::read_image_bytes(path)?;
+        let bytes = self.storage.read_image_bytes(path)?;
         image_mime(path, &bytes)?;
         let name = path
             .file_name()
@@ -576,7 +603,7 @@ impl Workspace {
             return Err(WorkspaceError::NotMarkdown);
         }
         image_mime(Path::new(name), bytes)?;
-        crate::validation::validate_edit(
+        crate::domain::validation::validate_edit(
             &snapshot,
             &EditRequest {
                 document_id: request.document_id.clone(),
@@ -592,12 +619,12 @@ impl Workspace {
         let parent = document.parent().ok_or(WorkspaceError::InvalidPath)?;
         let folder = parent.join("images");
         let relative_folder = storage::relative(&self.root, &folder)?;
-        storage::resolve(&self.root, &relative_folder)?;
+        self.storage.resolve(&self.root, &relative_folder)?;
         if !folder.exists() {
-            fs::create_dir(&folder)?;
+            self.storage.create_dir(&folder)?;
         }
         let path = format!("{relative_folder}/{name}");
-        let target = storage::resolve(&self.root, &path)?;
+        let target = self.storage.resolve(&self.root, &path)?;
         image_mime(&target, bytes)?;
         let encoded = encode_image_name(name);
         let edits = EditRequest {
@@ -609,12 +636,13 @@ impl Workspace {
                 text: format!("![](images/{encoded})"),
             }],
         };
-        crate::validation::validate_edit(&snapshot, &edits)
+        crate::domain::validation::validate_edit(&snapshot, &edits)
             .map_err(|error| WorkspaceError::Contract { error })?;
-        if storage::read_disk(&target)?.is_some() {
+        if self.storage.read_disk(&target)?.is_some() {
             return Err(WorkspaceError::AlreadyExists);
         }
-        storage::atomic_write(&target, bytes, None, Some(&self.root))?;
+        self.storage
+            .atomic_write(&target, bytes, None, Some(&self.root))?;
         // IPC holds the workspace mutex, so no other GUI edit can interleave.
         match actor.apply_edits(edits) {
             Ok(snapshot) => Ok(PasteResult { path, snapshot }),

@@ -4,55 +4,51 @@
 use std::sync::Mutex;
 
 #[derive(Default)]
-pub struct ClipboardState(Mutex<Option<arboard::Clipboard>>);
+pub struct NativeClipboard(Mutex<Option<arboard::Clipboard>>);
 
-#[tauri::command(async)]
-pub fn write_clipboard(
-    state: tauri::State<'_, ClipboardState>,
-    text: String,
-    html: Option<String>,
-    rtf: Option<String>,
-) -> Result<(), String> {
-    if text
-        .len()
-        .saturating_add(html.as_ref().map_or(0, String::len))
-        .saturating_add(rtf.as_ref().map_or(0, String::len))
-        > 20 * 1024 * 1024
-    {
-        return Err("コピーする内容は 20 MiB 以下にしてください。".into());
-    }
-    let mut guard = state
-        .0
-        .lock()
-        .map_err(|_| "クリップボードのロックに失敗しました。")?;
-    #[cfg(windows)]
-    {
-        // One clipboard transaction publishes RTF first for native document
-        // editors, CF_HTML for web/email targets, and Unicode as a fallback.
-        let _guard = &mut guard;
-        write_windows(&text, html.as_deref(), rtf.as_deref())
+impl crate::application::clipboard::Clipboard for NativeClipboard {
+    fn write(&self, text: String, html: Option<String>, rtf: Option<String>) -> Result<(), String> {
+        if text
+            .len()
+            .saturating_add(html.as_ref().map_or(0, String::len))
+            .saturating_add(rtf.as_ref().map_or(0, String::len))
+            > 20 * 1024 * 1024
+        {
+            return Err("コピーする内容は 20 MiB 以下にしてください。".into());
+        }
+        let mut guard = self
+            .0
+            .lock()
+            .map_err(|_| "クリップボードのロックに失敗しました。")?;
+        #[cfg(windows)]
+        {
+            // One clipboard transaction publishes RTF first for native document
+            // editors, CF_HTML for web/email targets, and Unicode as a fallback.
+            let _guard = &mut guard;
+            write_windows(&text, html.as_deref(), rtf.as_deref())
+                .map_err(|error| format!("クリップボードへコピーできません: {error}"))
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _guard = &mut guard;
+            write_macos(&text, html.as_deref(), rtf.as_deref())
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            let _ = rtf;
+            if guard.is_none() {
+                *guard = Some(
+                    arboard::Clipboard::new()
+                        .map_err(|error| format!("クリップボードを開けません: {error}"))?,
+                );
+            }
+            let clipboard = guard.as_mut().expect("clipboard initialized");
+            match html {
+                Some(html) => clipboard.set_html(html, Some(text)),
+                None => clipboard.set_text(text),
+            }
             .map_err(|error| format!("クリップボードへコピーできません: {error}"))
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _guard = &mut guard;
-        write_macos(&text, html.as_deref(), rtf.as_deref())
-    }
-    #[cfg(not(any(windows, target_os = "macos")))]
-    {
-        let _ = rtf;
-        if guard.is_none() {
-            *guard = Some(
-                arboard::Clipboard::new()
-                    .map_err(|error| format!("クリップボードを開けません: {error}"))?,
-            );
         }
-        let clipboard = guard.as_mut().expect("clipboard initialized");
-        match html {
-            Some(html) => clipboard.set_html(html, Some(text)),
-            None => clipboard.set_text(text),
-        }
-        .map_err(|error| format!("クリップボードへコピーできません: {error}"))
     }
 }
 
@@ -122,7 +118,10 @@ fn write_windows(
         raw::set_without_clear(format.get(), &bytes)?;
     }
     if let (Some(html), Some(format)) = (html, html_format) {
-        raw::set_without_clear(format.get(), &crate::clipboard_format::windows_html(html))?;
+        raw::set_without_clear(
+            format.get(),
+            &crate::domain::clipboard_format::windows_html(html),
+        )?;
     }
     raw::set_string_with(text, NoClear)?;
     Ok(())

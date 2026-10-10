@@ -1,4 +1,4 @@
-use marxen_lib::neovim::{config::ConfigSource, rpc::RpcError, NeovimSession};
+use marxen_lib::infrastructure::neovim::{config::ConfigSource, rpc::RpcError, NeovimSession};
 use std::time::{Duration, Instant};
 
 #[test]
@@ -57,7 +57,7 @@ fn exited_neovim_wakes_pending_rpc_without_waiting_for_timeout() {
 #[test]
 /// Use packaged target metadata to identify the executable platform independently of the Neovim version.
 fn bundle_metadata_identifies_target_instead_of_version() {
-    let bundle = marxen_lib::neovim::bundle_paths().unwrap();
+    let bundle = marxen_lib::infrastructure::neovim::bundle_paths().unwrap();
     let target = if cfg!(windows) {
         "x86_64-pc-windows-msvc"
     } else if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {

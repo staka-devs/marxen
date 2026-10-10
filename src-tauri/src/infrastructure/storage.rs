@@ -1,17 +1,10 @@
 //! Rust-only disk operations. Text is UTF-8 without newline/BOM conversion.
 use crate::contracts::{DocumentSnapshot, WorkspaceError};
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use crate::domain::storage::*;
+
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Fingerprint(pub String);
-
-pub fn fingerprint(bytes: &[u8]) -> Fingerprint {
-    Fingerprint(format!("{:x}", Sha256::digest(bytes)))
-}
 
 pub fn read_disk(path: &Path) -> Result<Option<Vec<u8>>, WorkspaceError> {
     match fs::symlink_metadata(path) {
@@ -73,20 +66,6 @@ pub fn resolve(root: &Path, relative: &str) -> Result<PathBuf, WorkspaceError> {
         }
     }
     Ok(target)
-}
-
-pub fn markdown(path: &Path) -> bool {
-    path.extension()
-        .and_then(|s| s.to_str())
-        .is_some_and(|s| s.eq_ignore_ascii_case("md") || s.eq_ignore_ascii_case("markdown"))
-}
-
-pub fn relative(root: &Path, path: &Path) -> Result<String, WorkspaceError> {
-    path.strip_prefix(root)
-        .map_err(|_| WorkspaceError::OutsideWorkspace)?
-        .to_str()
-        .map(|s| s.replace('\\', "/"))
-        .ok_or(WorkspaceError::InvalidPath)
 }
 
 pub fn check_target(root: Option<&Path>, path: &Path) -> Result<(), WorkspaceError> {
@@ -164,16 +143,6 @@ pub fn sync_directory(path: &Path) -> Result<(), WorkspaceError> {
     #[cfg(not(unix))]
     let _ = path;
     Ok(())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RecoveryRecord {
-    pub version: u32,
-    pub root: PathBuf,
-    pub path: Option<String>,
-    pub baseline: Option<Fingerprint>,
-    pub snapshot: DocumentSnapshot,
 }
 
 pub fn checkpoint(path: &Path, record: &RecoveryRecord) -> Result<(), WorkspaceError> {
@@ -263,8 +232,6 @@ fn replace_windows(temporary: tempfile::NamedTempFile, path: &Path) -> Result<()
     Ok(())
 }
 
-pub const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
-
 /// Bound allocation and read even when a dropped file grows concurrently.
 pub fn read_image_bytes(path: &Path) -> Result<Vec<u8>, WorkspaceError> {
     let meta = fs::symlink_metadata(path)?;
@@ -281,102 +248,113 @@ pub fn read_image_bytes(path: &Path) -> Result<Vec<u8>, WorkspaceError> {
     Ok(bytes)
 }
 
-pub fn image_family(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "webp"
-    )
-}
-
-pub fn text_family(path: &Path) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    markdown(path)
-        || matches!(
-            name.as_str(),
-            "readme"
-                | "license"
-                | "copying"
-                | "makefile"
-                | "dockerfile"
-                | "vimrc"
-                | "_vimrc"
-                | ".vimrc"
-                | ".gitignore"
-                | ".gitattributes"
-                | ".editorconfig"
-                | ".env"
-        )
-        || matches!(
-            path.extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_ascii_lowercase()
-                .as_str(),
-            "txt"
-                | "text"
-                | "log"
-                | "csv"
-                | "tsv"
-                | "json"
-                | "jsonc"
-                | "yaml"
-                | "yml"
-                | "toml"
-                | "ini"
-                | "conf"
-                | "config"
-                | "xml"
-                | "html"
-                | "htm"
-                | "css"
-                | "scss"
-                | "less"
-                | "js"
-                | "jsx"
-                | "ts"
-                | "tsx"
-                | "mjs"
-                | "cjs"
-                | "rs"
-                | "py"
-                | "rb"
-                | "go"
-                | "java"
-                | "c"
-                | "h"
-                | "cpp"
-                | "hpp"
-                | "cs"
-                | "swift"
-                | "kt"
-                | "sh"
-                | "bash"
-                | "zsh"
-                | "ps1"
-                | "sql"
-                | "lua"
-                | "vim"
-                | "tex"
-                | "rst"
-                | "env"
-        )
-}
-
-pub fn utf8_text(bytes: Vec<u8>) -> Result<String, WorkspaceError> {
-    let text = String::from_utf8(bytes).map_err(|_| WorkspaceError::InvalidUtf8)?;
-    if text
-        .chars()
-        .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
-    {
-        return Err(WorkspaceError::InvalidUtf8);
+impl From<std::io::Error> for WorkspaceError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io {
+            detail: error.to_string(),
+        }
     }
-    Ok(text)
+}
+
+use crate::application::ports::{Clock, DirectoryEntry, FileInfo, Storage};
+pub struct NativeStorage;
+pub struct SystemClock;
+impl Clock for SystemClock {
+    /// Supply the native clock component of process-local document and copy identifiers.
+    fn nanos(&self) -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    }
+}
+impl Storage for NativeStorage {
+    fn read_disk(&self, path: &Path) -> Result<Option<Vec<u8>>, WorkspaceError> {
+        read_disk(path)
+    }
+    fn disk_fingerprint(&self, path: &Path) -> Result<Option<Fingerprint>, WorkspaceError> {
+        disk_fingerprint(path)
+    }
+    fn resolve(&self, root: &Path, relative: &str) -> Result<PathBuf, WorkspaceError> {
+        resolve(root, relative)
+    }
+    fn check_target(&self, root: Option<&Path>, path: &Path) -> Result<(), WorkspaceError> {
+        check_target(root, path)
+    }
+    fn atomic_write(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        expected: Option<&Fingerprint>,
+        root: Option<&Path>,
+    ) -> Result<Fingerprint, WorkspaceError> {
+        atomic_write(path, bytes, expected, root)
+    }
+    fn checkpoint(&self, path: &Path, record: &RecoveryRecord) -> Result<(), WorkspaceError> {
+        checkpoint(path, record)
+    }
+    fn remove_checkpoint(&self, path: &Path) -> Result<(), WorkspaceError> {
+        remove_checkpoint(path)
+    }
+    fn read_image_bytes(&self, path: &Path) -> Result<Vec<u8>, WorkspaceError> {
+        read_image_bytes(path)
+    }
+
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, WorkspaceError> {
+        Ok(fs::canonicalize(path)?)
+    }
+    fn create_dir_all(&self, path: &Path) -> Result<(), WorkspaceError> {
+        Ok(fs::create_dir_all(path)?)
+    }
+    fn create_dir(&self, path: &Path) -> Result<(), WorkspaceError> {
+        Ok(fs::create_dir(path)?)
+    }
+    fn metadata(&self, path: &Path) -> Result<FileInfo, WorkspaceError> {
+        let m = fs::symlink_metadata(path)?;
+        Ok(FileInfo {
+            directory: m.is_dir(),
+            regular: m.is_file(),
+            link: m.file_type().is_symlink(),
+        })
+    }
+    fn read_dir(&self, path: &Path) -> Result<Vec<DirectoryEntry>, WorkspaceError> {
+        fs::read_dir(path)?
+            .map(|entry| {
+                let entry = entry?;
+                let m = entry.file_type()?;
+                Ok(DirectoryEntry {
+                    path: entry.path(),
+                    info: FileInfo {
+                        directory: m.is_dir(),
+                        regular: m.is_file(),
+                        link: m.is_symlink(),
+                    },
+                })
+            })
+            .collect()
+    }
+    fn hard_link(&self, source: &Path, target: &Path) -> Result<(), WorkspaceError> {
+        fs::hard_link(source, target).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                WorkspaceError::AlreadyExists
+            } else {
+                e.into()
+            }
+        })
+    }
+    fn remove_file(&self, path: &Path) -> Result<(), WorkspaceError> {
+        Ok(fs::remove_file(path)?)
+    }
+    fn write_staging(&self, path: &Path, bytes: &[u8]) -> Result<(), WorkspaceError> {
+        Ok(fs::write(path, bytes)?)
+    }
+    fn remove_staging(&self, path: &Path) -> Result<(), WorkspaceError> {
+        Ok(fs::remove_dir_all(path)?)
+    }
+    fn guard_staging_path(&self, root: &Path, candidate: &Path) -> Result<PathBuf, WorkspaceError> {
+        super::staging::guard_staging_path(root, candidate)
+    }
+    fn check_no_symlink(&self, path: &Path, root: &Path) -> Result<(), WorkspaceError> {
+        super::staging::check_no_symlink(path, root)
+    }
 }
