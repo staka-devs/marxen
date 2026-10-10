@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import App from "./App";
 import { readRuntimeStatus } from "./lib/runtime";
@@ -52,13 +52,17 @@ it("switches live/source/read/split without losing the document", async () => {
   });
   render(<App />);
   await screen.findByTestId("editor-primary");
+  // The Issue #6 preview renders asynchronously; wait for it in each mode.
+  await within(screen.getByTestId("preview")).findByText("日本語で書く");
   const before = screen.getByTestId("preview").textContent;
   fireEvent.click(screen.getByRole("button", { name: "閲覧" }));
+  await within(screen.getByTestId("preview")).findByText("日本語で書く");
   expect(screen.getByTestId("preview")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "原文" }));
   expect(screen.getByTestId("editor-primary")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "分割" }));
   expect(screen.getByTestId("editor-secondary")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "ライブ" }));
+  await within(screen.getByTestId("preview")).findByText("日本語で書く");
   expect(screen.getByTestId("preview").textContent).toBe(before);
 });
