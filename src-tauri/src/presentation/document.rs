@@ -33,6 +33,7 @@ mod desktop {
     use super::*;
     use crate::contracts::*;
     use tauri::Manager;
+    /// Serialize a workspace use case under the shared registry lock.
     fn with_workspace<T>(
         state: &ActorState,
         call: impl FnOnce(&mut Workspace) -> Result<T, WorkspaceError>,
@@ -42,6 +43,7 @@ mod desktop {
         })?;
         call(guard.as_mut().ok_or(WorkspaceError::NoWorkspace)?)
     }
+    /// Construct the typed document ID and revision boundary for a command.
     fn request(document_id: String, base_revision: u32) -> SaveRequest {
         SaveRequest {
             document_id: DocumentId(document_id),
@@ -49,6 +51,7 @@ mod desktop {
         }
     }
     #[tauri::command(async)]
+    /// Resolve the app recovery directory and replace only a clean workspace registry.
     pub fn open_workspace(
         app: tauri::AppHandle,
         state: tauri::State<'_, ActorState>,
@@ -86,6 +89,7 @@ mod desktop {
         Ok(info)
     }
     #[tauri::command(async)]
+    /// Return supported direct workspace children through the registry use case.
     pub fn list_workspace(
         state: tauri::State<'_, ActorState>,
         path: String,
@@ -93,12 +97,14 @@ mod desktop {
         with_workspace(&state, |w| w.list(&path))
     }
     #[tauri::command(async)]
+    /// Return authoritative descriptors for all registered documents.
     pub fn list_documents(
         state: tauri::State<'_, ActorState>,
     ) -> Result<Vec<OpenDocument>, WorkspaceError> {
         with_workspace(&state, |w| w.documents())
     }
     #[tauri::command(async)]
+    /// Open a contained Markdown document through the shared registry.
     pub fn open_markdown(
         state: tauri::State<'_, ActorState>,
         path: String,
@@ -106,6 +112,7 @@ mod desktop {
         with_workspace(&state, |w| w.open_markdown(&path))
     }
     #[tauri::command(async)]
+    /// Open a supported contained text document through the shared registry.
     pub fn open_text_file(
         state: tauri::State<'_, ActorState>,
         path: String,
@@ -113,6 +120,7 @@ mod desktop {
         with_workspace(&state, |w| w.open_text_file(&path))
     }
     #[tauri::command(async)]
+    /// Return bounded workspace image bytes for the explorer viewer.
     pub fn load_workspace_image(
         state: tauri::State<'_, ActorState>,
         path: String,
@@ -120,6 +128,7 @@ mod desktop {
         with_workspace(&state, |w| w.load_workspace_image(&path))
     }
     #[tauri::command(async)]
+    /// Insert a workspace image reference at the caller's exact revision and UTF-16 range.
     pub fn insert_workspace_image(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -132,6 +141,7 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Import an external image and insert its reference through the revision-checked use case.
     pub fn import_external_image(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -148,6 +158,7 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Create a new contained Markdown document through the workspace registry.
     pub fn create_markdown(
         state: tauri::State<'_, ActorState>,
         path: String,
@@ -156,6 +167,7 @@ mod desktop {
         with_workspace(&state, |w| w.create(&path, &text))
     }
     #[tauri::command(async)]
+    /// Rename a document only at the supplied revision and a safe workspace destination.
     pub fn rename_markdown(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -167,6 +179,7 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Register an untitled authoritative buffer through the active workspace.
     pub fn open_document(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -182,6 +195,7 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Return the authoritative document snapshot from the registry actor.
     pub fn fetch_snapshot(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -189,6 +203,7 @@ mod desktop {
         with_workspace(&state, |w| Ok(w.actor(&document_id)?.sync_from_nvim()?))
     }
     #[tauri::command(async)]
+    /// Validate and apply revision-tagged GUI ranges through the authoritative actor.
     pub fn apply_gui_edits(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -205,6 +220,7 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Save the requested document through the actor's disk conflict contract.
     pub fn save_document(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -216,6 +232,7 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Reload disk text through the requested revision-aware actor operation.
     pub fn reload_document(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -227,6 +244,7 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Apply the explicit close decision before removing the registered actor.
     pub fn close_document(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -238,6 +256,7 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Return supported workspace text matches through the registry search use case.
     pub fn search_workspace(
         state: tauri::State<'_, ActorState>,
         query: String,
@@ -245,6 +264,7 @@ mod desktop {
         with_workspace(&state, |w| w.search(&query))
     }
     #[tauri::command(async)]
+    /// Collect pending document, save and disk-change events in registry order.
     pub fn poll_workspace_events(
         state: tauri::State<'_, ActorState>,
     ) -> Result<Vec<WorkspaceEvent>, WorkspaceError> {
@@ -258,12 +278,14 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Return available workspace recovery descriptors.
     pub fn list_recovery(
         state: tauri::State<'_, ActorState>,
     ) -> Result<Vec<RecoveryEntry>, WorkspaceError> {
         with_workspace(&state, |w| w.recovery_entries())
     }
     #[tauri::command(async)]
+    /// Restore the selected recovery entry through the registry's containment and conflict checks.
     pub fn restore_recovery(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -271,6 +293,7 @@ mod desktop {
         with_workspace(&state, |w| w.restore(&document_id))
     }
     #[tauri::command(async)]
+    /// Dismiss the selected recovery entry without changing live documents.
     pub fn discard_recovery(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -278,6 +301,7 @@ mod desktop {
         with_workspace(&state, |w| w.discard_recovery(&document_id))
     }
     #[tauri::command(async)]
+    /// Resolve bounded document-relative image bytes through the workspace use case.
     pub fn load_relative_image(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -286,6 +310,7 @@ mod desktop {
         with_workspace(&state, |w| w.load_image(&document_id, &path))
     }
     #[tauri::command(async)]
+    /// Import supplied image bytes and replace an exact revision-tagged UTF-16 range.
     pub fn paste_image(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -299,6 +324,7 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Return the actor's native Vim mode and authoritative revision.
     pub fn fetch_mode(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -306,6 +332,7 @@ mod desktop {
         with_workspace(&state, |w| Ok(w.actor(&document_id)?.current_mode()?))
     }
     #[tauri::command(async)]
+    /// Route native keys and return post-yank clipboard side effects in revision order.
     pub fn nvim_input_with_copy(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -318,6 +345,7 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Query a native mode mapping prefix without interpreting it in presentation.
     pub fn has_nvim_mapping(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -329,6 +357,7 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Undo through the requested actor's authoritative native history.
     pub fn undo_document(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -336,6 +365,7 @@ mod desktop {
         with_workspace(&state, |w| Ok(w.actor(&document_id)?.undo()?))
     }
     #[tauri::command(async)]
+    /// Redo through the requested actor's authoritative native history.
     pub fn redo_document(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -343,6 +373,7 @@ mod desktop {
         with_workspace(&state, |w| Ok(w.actor(&document_id)?.redo()?))
     }
     #[tauri::command(async)]
+    /// Feed native Vim key notation at the supplied document revision.
     pub fn nvim_input(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -355,6 +386,7 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Return the actor's current native selection in global UTF-16 coordinates.
     pub fn fetch_cursor(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -362,6 +394,7 @@ mod desktop {
         with_workspace(&state, |w| Ok(w.actor(&document_id)?.cursor()?))
     }
     #[tauri::command(async)]
+    /// Validate and install a GUI selection through the actor's native cursor operation.
     pub fn report_cursor(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -379,6 +412,7 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Return a resized native grid snapshot for the selected document.
     pub fn fetch_grid(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -390,6 +424,7 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Apply explicitly selected native configuration through the revision-aware actor.
     pub fn configure_document(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -404,6 +439,7 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Return the active configuration source and captured boot errors.
     pub fn fetch_config(
         state: tauri::State<'_, ActorState>,
         document_id: String,

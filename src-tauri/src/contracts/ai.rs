@@ -296,7 +296,7 @@ pub fn typescript() -> String {
         AiTestResult::decl(&cfg),
     ];
     let mut output = format!(
-        "// Generated from src-tauri/src/ai_contracts.rs. Run npm run ai-contracts:generate.\n// Do not edit by hand. AI IPC schema version {AI_CONTRACT_VERSION}.\n"
+        "// Generated from src-tauri/src/contracts/ai.rs. Run npm run ai-contracts:generate.\n// Do not edit by hand. AI IPC schema version {AI_CONTRACT_VERSION}.\n"
     );
     output.push_str("import type { DocumentId, Revision, Utf16Range } from \"./contracts\";\n");
     for declaration in declarations {

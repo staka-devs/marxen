@@ -54,6 +54,7 @@ pub fn open_isolation(root: &Path) -> Result<IsolationManager, WorkspaceError> {
     )
 }
 #[cfg(feature = "desktop")]
+/// Compose native adapters, desktop state, events and Tauri command handlers before starting the app.
 pub fn run() {
     use tauri::{Emitter, Manager};
     tauri::Builder::default()

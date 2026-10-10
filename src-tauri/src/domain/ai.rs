@@ -24,7 +24,7 @@ fn invalid(detail: impl Into<String>) -> AiError {
     }
 }
 
-fn validate_handle(id: &str, what: &str) -> Result<(), AiError> {
+pub(crate) fn validate_handle(id: &str, what: &str) -> Result<(), AiError> {
     if id.is_empty()
         || id.len() > 128
         || !id

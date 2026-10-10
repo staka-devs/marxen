@@ -6,6 +6,7 @@ use crate::contracts::isolation::{ApproveResult, IsolatedCopyInfo, IsolationDiff
 use crate::contracts::WorkspaceError;
 use crate::presentation::document::ActorState;
 
+/// Lock workspace before isolation so review operations share the same mutation order as AI scope pins.
 fn with_both<T>(
     workspace: &ActorState,
     isolation: &IsolationState,
@@ -22,6 +23,7 @@ fn with_both<T>(
 }
 
 #[tauri::command(async)]
+/// Capture exact authoritative document scopes into a registered isolated copy.
 pub fn isolation_create(
     workspace_state: tauri::State<'_, ActorState>,
     isolation: tauri::State<'_, IsolationState>,
@@ -33,6 +35,7 @@ pub fn isolation_create(
 }
 
 #[tauri::command(async)]
+/// Compare registered staging scopes with their live authoritative snapshots.
 pub fn isolation_diff(
     workspace_state: tauri::State<'_, ActorState>,
     isolation: tauri::State<'_, IsolationState>,
@@ -43,6 +46,7 @@ pub fn isolation_diff(
 }
 
 #[tauri::command(async)]
+/// Validate and stage a proposal against the copy's registered scopes.
 pub fn isolation_stage_proposal(
     workspace_state: tauri::State<'_, ActorState>,
     isolation: tauri::State<'_, IsolationState>,
@@ -57,6 +61,7 @@ pub fn isolation_stage_proposal(
 }
 
 #[tauri::command(async)]
+/// Apply only approved scoped patches through the authoritative document actors.
 pub fn isolation_approve(
     workspace_state: tauri::State<'_, ActorState>,
     isolation: tauri::State<'_, IsolationState>,
@@ -67,6 +72,7 @@ pub fn isolation_approve(
 }
 
 #[tauri::command(async)]
+/// Discard an unpinned copy without editing live documents.
 pub fn isolation_reject(
     workspace_state: tauri::State<'_, ActorState>,
     isolation: tauri::State<'_, IsolationState>,
@@ -80,6 +86,7 @@ pub fn isolation_reject(
 }
 
 #[tauri::command(async)]
+/// Cancel an unpinned copy after its owning AI run has settled.
 pub fn isolation_cancel(
     workspace_state: tauri::State<'_, ActorState>,
     isolation: tauri::State<'_, IsolationState>,

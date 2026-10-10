@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::time::Instant;
+/// Find an executable on PATH with native platform extensions without starting it.
 pub fn find_on_path(command: &str) -> Option<PathBuf> {
     if command.contains('/') || command.contains('\\') || command.contains(':') {
         let path = Path::new(command);
@@ -37,13 +38,14 @@ pub const CANCEL_GRACE: Duration = Duration::from_secs(5);
 pub const ACP_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// Grace period for an agent to exit after we close its stdin.
 pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
-/// Latest ACP major protocol version this client speaks.
+/// Bounded newline-delimited JSON reader for native ACP stdout.
 pub struct NdjsonReader<R: BufRead> {
     inner: R,
     buf: Vec<u8>,
 }
 
 impl<R: BufRead> NdjsonReader<R> {
+    /// Start an empty bounded newline-delimited JSON decoder over the supplied reader.
     pub fn new(inner: R) -> Self {
         Self {
             inner,
@@ -106,7 +108,8 @@ impl<R: BufRead> NdjsonReader<R> {
 /// One classified inbound message.
 pub use crate::application::ai::transport::AcpRunParams;
 
-fn spawn_acp(argv: &AcpArgv, staging_dir: &Path) -> Result<Child, AiError> {
+/// Spawn the configured ACP argv directly with piped stdio and an isolated working directory.
+pub(super) fn spawn_acp(argv: &AcpArgv, staging_dir: &Path) -> Result<Child, AiError> {
     // argv goes directly to the OS. No shell, no interpolation.
     Command::new(&argv.command)
         .args(&argv.args)
@@ -154,6 +157,7 @@ pub struct AgentConn {
 }
 
 impl AgentConn {
+    /// Create the process connection with independent bounded stdout and stderr readers.
     pub fn launch(stdin: ChildStdin, stdout: ChildStdout) -> Self {
         let (tx, rx) = mpsc::channel();
         let mut reader = NdjsonReader::new(BufReader::new(stdout));
@@ -181,12 +185,14 @@ impl AgentConn {
         }
     }
 
+    /// Allocate the next client JSON-RPC request identifier.
     pub fn fresh_id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         id
     }
 
+    /// Serialize and flush one JSON-RPC message to the child stdin.
     pub fn write(&mut self, message: &serde_json::Value) -> Result<(), AiError> {
         self.stdin
             .write_all(&encode_acp_message(message))
@@ -198,10 +204,12 @@ impl AgentConn {
         })
     }
 
+    /// Send a JSON-RPC notification without allocating a response identifier.
     pub fn notify(&mut self, message: &serde_json::Value) -> Result<(), AiError> {
         self.write(message)
     }
 
+    /// Wait for the next framed message up to the caller's bounded polling interval.
     pub fn read_next(&self, timeout: Option<Duration>) -> Result<ConnLine, ReadFail> {
         let received = match timeout {
             Some(limit) => self.rx.recv_timeout(limit),
@@ -218,6 +226,7 @@ impl AgentConn {
         }
     }
 
+    /// Answer permission requests by default denial and reject unsupported agent requests.
     fn answer_agent_request(
         &mut self,
         id: &serde_json::Value,
@@ -294,6 +303,7 @@ impl AgentConn {
     }
 }
 
+/// Wait for graceful process exit within the supplied deadline.
 fn wait_for_exit(child: &mut Child, grace: Duration) {
     let start = Instant::now();
     loop {
@@ -307,7 +317,6 @@ fn wait_for_exit(child: &mut Child, grace: Duration) {
     }
 }
 
-
 /// Result of initialize + session/new. No prompt is ever sent by this path.
 #[derive(Debug, Clone)]
 pub struct HandshakeInfo {
@@ -317,6 +326,7 @@ pub struct HandshakeInfo {
     pub notifications: usize,
 }
 
+/// Negotiate ACP initialization and session creation before accepting prompts.
 pub fn agent_handshake(
     argv: &AcpArgv,
     staging_dir: &Path,
@@ -395,6 +405,7 @@ pub fn agent_handshake(
     outcome.map_err(|error| with_stderr(error, &stderr_captured))
 }
 
+/// Extract a structured ACP response error with a bounded human-readable detail.
 fn rpc_error(message: &serde_json::Value) -> Option<String> {
     message.get("error").map(|error| {
         error
@@ -405,11 +416,13 @@ fn rpc_error(message: &serde_json::Value) -> Option<String> {
     })
 }
 
+/// Read a bounded tail of captured child stderr for failure diagnostics.
 fn stderr_excerpt(captured: &Arc<Mutex<Vec<u8>>>) -> String {
     let bytes = captured.lock().expect("stderr lock").clone();
     String::from_utf8_lossy(&bytes).chars().take(500).collect()
 }
 
+/// Attach bounded stderr diagnostics without changing the structured error category.
 fn with_stderr(error: AiError, captured: &Arc<Mutex<Vec<u8>>>) -> AiError {
     let excerpt = stderr_excerpt(captured);
     if excerpt.trim().is_empty() {
@@ -451,6 +464,7 @@ fn with_stderr(error: AiError, captured: &Arc<Mutex<Vec<u8>>>) -> AiError {
     }
 }
 
+/// Distinguish explicit cancellation from a registry-recorded timeout.
 fn cancelled_or_timed_out(
     run_id: &AiRunId,
     registry: &RunRegistry,
@@ -470,6 +484,7 @@ fn cancelled_or_timed_out(
     }
 }
 
+/// Run an authorized scoped ACP prompt with cancellation, child ownership and streamed events.
 pub fn run_acp_prompt(
     params: &AcpRunParams,
     request: &AiPromptRequest,
@@ -536,6 +551,7 @@ pub fn run_acp_prompt(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Drive one ACP conversation, deny permissions and enforce deadline and session identity.
 fn run_acp_conversation(
     params: &AcpRunParams,
     request: &AiPromptRequest,
@@ -702,6 +718,7 @@ fn run_acp_conversation(
 
 // ---- HTTP SSE drivers (OpenAI-compatible and Anthropic) ----
 
+/// Probe ACP initialization in a temporary directory and always reap the probe child.
 pub fn handshake_acp(argv: &AcpArgv) -> Result<AiTestResult, AiError> {
     validate_argv(argv)?;
     let staging = std::env::temp_dir();

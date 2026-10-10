@@ -5,6 +5,7 @@ use crate::contracts::ai::*;
 use std::sync::Arc;
 use tauri::Emitter;
 #[tauri::command]
+/// Return credential presence through the AI use case without returning its value.
 pub fn ai_credential_state(
     service: tauri::State<'_, AiService>,
     kind: AiProviderKind,
@@ -12,6 +13,7 @@ pub fn ai_credential_state(
     service.credential_state(kind)
 }
 #[tauri::command]
+/// Pass an explicitly supplied credential to the native-backed AI use case.
 pub fn ai_set_credential(
     service: tauri::State<'_, AiService>,
     kind: AiProviderKind,
@@ -20,6 +22,7 @@ pub fn ai_set_credential(
     service.set_credential(kind, &secret)
 }
 #[tauri::command]
+/// Remove the selected provider credential through the AI use case.
 pub fn ai_delete_credential(
     service: tauri::State<'_, AiService>,
     kind: AiProviderKind,
@@ -27,6 +30,7 @@ pub fn ai_delete_credential(
     service.delete_credential(kind)
 }
 #[tauri::command]
+/// Run the caller's local readiness or explicit live provider probe.
 pub async fn ai_test_connection(
     service: tauri::State<'_, AiService>,
     config: AiProviderConfig,
@@ -35,6 +39,7 @@ pub async fn ai_test_connection(
     service.test_connection(config, live).await
 }
 #[tauri::command]
+/// Bridge application stream events to Tauri and return the registered run identifier.
 pub async fn ai_prompt_stream(
     app: tauri::AppHandle,
     service: tauri::State<'_, AiService>,
@@ -52,6 +57,7 @@ pub async fn ai_prompt_stream(
     )
 }
 #[tauri::command]
+/// Route cancellation to the exact registered AI run.
 pub fn ai_prompt_cancel(
     service: tauri::State<'_, AiService>,
     run_id: AiRunId,

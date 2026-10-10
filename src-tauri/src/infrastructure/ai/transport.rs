@@ -8,12 +8,15 @@ use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 pub struct NativeAiTransport;
 impl AiTransport for NativeAiTransport {
+    /// Resolve the configured executable through the native PATH adapter.
     fn find_binary(&self, command: &str) -> Option<PathBuf> {
         super::acp::find_on_path(command)
     }
+    /// Run the explicit ACP readiness probe through the native subprocess adapter.
     fn handshake(&self, argv: &AcpArgv) -> Result<AiTestResult, AiError> {
         super::acp::handshake_acp(argv)
     }
+    /// Dispatch a connection probe using the validated API root and selected provider credential.
     fn test_http<'a>(
         &'a self,
         target: &'a HttpTarget,
@@ -32,6 +35,7 @@ impl AiTransport for NativeAiTransport {
             }
         })
     }
+    /// Drive a scoped native ACP process with the owning registry's cancellation and settlement state.
     fn run_acp(
         &self,
         params: &AcpRunParams,
@@ -43,6 +47,7 @@ impl AiTransport for NativeAiTransport {
     ) -> Result<(), AiError> {
         super::acp::run_acp_prompt(params, request, run_id, registry, cancel, emit)
     }
+    /// Drive a scoped HTTP stream with a bounded client and the owning cancellation flag.
     fn run_http<'a>(
         &'a self,
         target: &'a HttpTarget,
@@ -63,9 +68,11 @@ impl AiTransport for NativeAiTransport {
 pub struct NativeTaskSpawner;
 #[cfg(feature = "desktop")]
 impl TaskSpawner for NativeTaskSpawner {
+    /// Run a blocking ACP driver on a dedicated native thread.
     fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send>) {
         std::thread::spawn(task);
     }
+    /// Run the owned HTTP future on the desktop runtime.
     fn spawn_async(&self, task: AiFuture<'static, ()>) {
         tauri::async_runtime::spawn(task);
     }

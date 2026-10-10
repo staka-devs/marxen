@@ -3,6 +3,7 @@ use super::acp::find_on_path;
 use crate::application::ai::credentials::*;
 use crate::contracts::ai::*;
 use crate::domain::ai::*;
+/// Check provider configuration, binary or credential presence without starting a process or network request.
 pub fn dry_run_report(
     config: &AiProviderConfig,
     keyring: &dyn AgentKeyring,

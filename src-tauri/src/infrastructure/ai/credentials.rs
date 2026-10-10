@@ -10,6 +10,7 @@ pub struct MemoryKeyring {
 }
 
 impl AgentKeyring for MemoryKeyring {
+    /// Read the selected provider's in-memory credential slot.
     fn get(&self, kind: AiProviderKind) -> Result<Option<String>, AiError> {
         Ok(self
             .inner
@@ -19,6 +20,7 @@ impl AgentKeyring for MemoryKeyring {
             .cloned())
     }
 
+    /// Validate and update one provider's in-memory credential slot.
     fn set(&self, kind: AiProviderKind, secret: &str) -> Result<(), AiError> {
         validate_secret(secret)?;
         self.inner
@@ -28,6 +30,7 @@ impl AgentKeyring for MemoryKeyring {
         Ok(())
     }
 
+    /// Remove only the selected in-memory provider credential.
     fn delete(&self, kind: AiProviderKind) -> Result<(), AiError> {
         self.inner
             .lock()
@@ -40,6 +43,7 @@ impl AgentKeyring for MemoryKeyring {
 /// Real OS backend: Windows Credential Manager, macOS Keychain, Linux Secret Service.
 pub struct OsKeyring;
 
+/// Open the stable application/provider credential slot without reading the secret.
 fn keyring_entry(kind: AiProviderKind) -> Result<keyring::Entry, AiError> {
     keyring::Entry::new(SECRET_SERVICE, credential_account(kind)).map_err(|error| {
         AiError::CredentialStoreFailed {
@@ -49,6 +53,7 @@ fn keyring_entry(kind: AiProviderKind) -> Result<keyring::Entry, AiError> {
 }
 
 impl AgentKeyring for OsKeyring {
+    /// Read the selected OS credential slot, distinguishing absence from store failure.
     fn get(&self, kind: AiProviderKind) -> Result<Option<String>, AiError> {
         let entry = keyring_entry(kind)?;
         match entry.get_password() {
@@ -60,6 +65,7 @@ impl AgentKeyring for OsKeyring {
         }
     }
 
+    /// Validate and write the selected OS credential slot using the stable application namespace.
     fn set(&self, kind: AiProviderKind, secret: &str) -> Result<(), AiError> {
         validate_secret(secret)?;
         keyring_entry(kind)?
@@ -69,6 +75,7 @@ impl AgentKeyring for OsKeyring {
             })
     }
 
+    /// Remove only the selected OS credential, accepting an already absent entry.
     fn delete(&self, kind: AiProviderKind) -> Result<(), AiError> {
         let entry = keyring_entry(kind)?;
         match entry.delete_credential() {

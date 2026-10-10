@@ -16,27 +16,32 @@ pub struct ProposalAssembler {
 }
 
 impl ProposalAssembler {
+    /// Start an empty proposal accumulator.
     pub fn new() -> Self {
         Self {
             text: String::new(),
         }
     }
 
+    /// Append one streamed text chunk in arrival order.
     pub fn push(&mut self, chunk: &str) {
         self.text.push_str(chunk);
     }
 
+    /// Build a scoped proposal from the accumulated text and captured request.
     pub fn finish(self, request: &AiPromptRequest) -> ProposalText {
         proposal_from_text(self.text, request)
     }
 }
 
 impl Default for ProposalAssembler {
+    /// Create the default empty proposal accumulator.
     fn default() -> Self {
         Self::new()
     }
 }
 
+/// Exercise streamed proposal assembly with deterministic chunks, failures and cancellation.
 pub fn run_mock_script(
     request: &AiPromptRequest,
     run_id: &AiRunId,
@@ -109,6 +114,7 @@ pub struct RunRegistry {
 }
 
 impl RunRegistry {
+    /// Create an empty run registry with monotonic run identifiers.
     pub fn new() -> Self {
         Self {
             next: AtomicU64::new(1),
@@ -116,6 +122,7 @@ impl RunRegistry {
         }
     }
 
+    /// Allocate a run identifier and register its shared cancellation flag.
     pub fn register(&self) -> (AiRunId, Arc<AtomicBool>) {
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let run_id = AiRunId(format!("run_{id}"));
@@ -131,6 +138,7 @@ impl RunRegistry {
         (run_id, cancel)
     }
 
+    /// Apply an operation only while the requested run remains registered.
     fn with_entry(&self, id: &AiRunId, f: impl FnOnce(&RunEntry)) -> bool {
         match self.entries.lock().expect("run registry lock").get(&id.0) {
             Some(entry) => {
@@ -141,6 +149,7 @@ impl RunRegistry {
         }
     }
 
+    /// Clone the active run cancellation flag, returning None after removal.
     pub fn cancel_flag(&self, id: &AiRunId) -> Option<Arc<AtomicBool>> {
         self.entries
             .lock()
@@ -160,6 +169,7 @@ impl RunRegistry {
         })
     }
 
+    /// Mark a timeout, signal cancellation and terminate the registered child.
     pub fn timeout_cancel(&self, id: &AiRunId) -> bool {
         self.with_entry(id, |entry| {
             entry.timed_out.store(true, Ordering::SeqCst);
@@ -170,6 +180,7 @@ impl RunRegistry {
         })
     }
 
+    /// Distinguish deadline cancellation from the caller's explicit cancellation.
     pub fn was_timed_out(&self, id: &AiRunId) -> bool {
         self.entries
             .lock()
@@ -179,12 +190,14 @@ impl RunRegistry {
             .unwrap_or(false)
     }
 
+    /// Attach the spawned process to the active run for cancellation and settlement.
     pub fn set_child(&self, id: &AiRunId, child: Box<dyn ManagedProcess>) -> bool {
         self.with_entry(id, |entry| {
             *entry.child.lock().expect("child lock") = Some(child);
         })
     }
 
+    /// Transfer the registered child out of the run for final reaping.
     pub fn take_child(&self, id: &AiRunId) -> Option<Box<dyn ManagedProcess>> {
         self.entries
             .lock()
@@ -193,6 +206,7 @@ impl RunRegistry {
             .and_then(|entry| entry.child.lock().expect("child lock").take())
     }
 
+    /// Remove a fully settled run so late cancellation cannot affect another run.
     pub fn remove(&self, id: &AiRunId) {
         self.entries
             .lock()
@@ -202,6 +216,7 @@ impl RunRegistry {
 }
 
 impl Default for RunRegistry {
+    /// Create the default empty cancellation registry.
     fn default() -> Self {
         Self::new()
     }
@@ -214,6 +229,7 @@ pub struct TerminalGate {
     terminal: Option<AiStreamEvent>,
 }
 
+/// Identify events that must wait until the child and scope pin settle.
 fn is_terminal(event: &AiStreamEvent) -> bool {
     matches!(
         event,
@@ -222,6 +238,7 @@ fn is_terminal(event: &AiStreamEvent) -> bool {
 }
 
 impl TerminalGate {
+    /// Start a terminal gate without a buffered settlement.
     pub fn new() -> Self {
         Self { terminal: None }
     }

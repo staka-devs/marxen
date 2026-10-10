@@ -92,6 +92,7 @@ impl IsolationManager {
 }
 
 impl IsolationManager {
+    /// Create the guarded staging root with injected storage and identifier clock.
     pub fn open(
         staging_root: &Path,
         storage: Arc<dyn StagingStorage>,
@@ -116,12 +117,12 @@ impl IsolationManager {
         })
     }
 
-    /// Default staging under the OS temp dir (desktop runtime).
-
+    /// Borrow the canonical guarded staging root.
     pub fn staging_root(&self) -> &Path {
         &self.staging_root
     }
 
+    /// Allocate a process-local copy identifier without exposing a live document path.
     fn new_copy_id(&mut self) -> IsolatedCopyId {
         let nanos = self.clock.nanos();
         let id = format!("copy_{nanos:x}_{}", self.next);
@@ -129,6 +130,7 @@ impl IsolationManager {
         IsolatedCopyId(id)
     }
 
+    /// Return a registered active copy or reject a consumed or unknown handle.
     fn get_active(&self, copy_id: &IsolatedCopyId) -> Result<&IsolatedCopy, WorkspaceError> {
         validate_copy_id_string(&copy_id.0)?;
         let copy = self
@@ -141,6 +143,7 @@ impl IsolationManager {
         Ok(copy)
     }
 
+    /// Borrow an active copy for a scoped proposal update.
     fn get_active_mut(
         &mut self,
         copy_id: &IsolatedCopyId,
@@ -156,10 +159,12 @@ impl IsolationManager {
         Ok(copy)
     }
 
+    /// Report whether a running provider still owns this copy's settlement pin.
     fn pinned(&self, copy_id: &IsolatedCopyId) -> bool {
         self.pins.get(&copy_id.0).is_some_and(|count| *count > 0)
     }
 
+    /// Reject review mutations while the copy is owned by a running provider.
     fn refuse_if_pinned(&self, copy_id: &IsolatedCopyId) -> Result<(), WorkspaceError> {
         if self.pinned(copy_id) {
             return Err(invalid_scope(
@@ -301,8 +306,7 @@ impl IsolationManager {
                 } else {
                     render_scoped_file(&snapshot.document_id, &slices).into_bytes()
                 };
-                self.storage
-                    .write_staging(&staging_file, &staged_bytes)?;
+                self.storage.write_staging(&staging_file, &staged_bytes)?;
                 self.storage
                     .check_no_symlink(&staging_file, &self.staging_root)?;
                 bases.push(CopyBase {
@@ -462,6 +466,7 @@ impl IsolationManager {
         Ok(())
     }
 
+    /// Read only a guarded registered staging file and reject links before and after access.
     fn read_staging_bytes(
         &self,
         copy: &IsolatedCopy,
@@ -482,6 +487,7 @@ impl IsolationManager {
         Ok(bytes)
     }
 
+    /// Refuse a copy whose captured workspace differs from the active workspace.
     fn check_workspace(
         &self,
         copy: &IsolatedCopy,
@@ -1019,6 +1025,7 @@ impl IsolationManager {
         })
     }
 
+    /// Remove a settled copy and its staging directory after recording the review outcome.
     fn consume(&mut self, copy_id: &IsolatedCopyId, status: CopyStatus) {
         if let Some(copy) = self.copies.get_mut(&copy_id.0) {
             copy.status = status;
@@ -1031,6 +1038,7 @@ impl IsolationManager {
         self.pins.remove(&copy_id.0);
     }
 
+    /// Reject removal while pinned, then discard a guarded copy without editing live documents.
     fn forget(
         &mut self,
         copy_id: &IsolatedCopyId,

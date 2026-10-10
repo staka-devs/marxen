@@ -1,4 +1,5 @@
 use crate::contracts;
+/// Return an explicit disconnected runtime status when no native buffer is active.
 pub fn disconnected_status() -> contracts::RuntimeStatus {
     contracts::RuntimeStatus {
         contract_version: 1,
@@ -9,6 +10,7 @@ pub fn disconnected_status() -> contracts::RuntimeStatus {
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
+/// Report authoritative buffer connectivity through the injected desktop registry.
 pub fn get_runtime_status(
     state: tauri::State<super::document::ActorState>,
 ) -> contracts::RuntimeStatus {

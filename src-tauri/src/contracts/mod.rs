@@ -353,7 +353,7 @@ pub fn typescript() -> String {
         VimInputResult::decl(&cfg),
         GridUpdate::decl(&cfg),
     ];
-    let mut output = "// Generated from src-tauri/src/contracts.rs. Run npm run contracts:generate.\n// Do not edit by hand. Global offsets count UTF-16 code units; ranges are [start, end).\n".to_owned();
+    let mut output = "// Generated from src-tauri/src/contracts/mod.rs. Run npm run contracts:generate.\n// Do not edit by hand. Global offsets count UTF-16 code units; ranges are [start, end).\n".to_owned();
     for declaration in declarations {
         output.push_str("export ");
         output.push_str(&declaration);

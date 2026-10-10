@@ -1,4 +1,5 @@
-use marxen_lib::{contracts::*, document::DocumentActor, storage, workspace::Workspace};
+use marxen_lib::application::{document::DocumentActor, workspace::Workspace};
+use marxen_lib::contracts::*;
 use std::{fs, path::Path};
 use tempfile::TempDir;
 
@@ -207,7 +208,7 @@ fn external_import_is_bounded_contained_and_rejects_stale_before_writes() {
     let large = outside.path().join("large.png");
     fs::File::create(&large)
         .unwrap()
-        .set_len(storage::MAX_IMAGE_BYTES as u64 + 1)
+        .set_len(marxen_lib::domain::storage::MAX_IMAGE_BYTES as u64 + 1)
         .unwrap();
     assert!(w
         .import_external_image(request(&imported.snapshot), &large, range(2, 2))

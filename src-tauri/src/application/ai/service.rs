@@ -10,6 +10,7 @@ pub struct AiService {
     pub spawner: Arc<dyn TaskSpawner>,
     pub runs: Arc<RunRegistry>,
 }
+/// Map workspace authorization failures to AI errors without exposing live paths.
 fn scope_error(request: &AiPromptRequest, error: crate::contracts::WorkspaceError) -> AiError {
     use crate::contracts::WorkspaceError as W;
     match error {
@@ -56,6 +57,7 @@ fn prepare_scoped_run(
         .map_err(|error| scope_error(request, error))
 }
 
+/// Release the staging pin after the owning run has settled.
 fn release_scoped_run(isolation: &Arc<Mutex<IsolationManager>>, copy_id: &IsolatedCopyId) {
     if let Ok(mut manager) = isolation.lock() {
         manager.unpin_for_run(copy_id);
@@ -134,6 +136,7 @@ impl AiService {
             }
         }
     }
+    /// Authorize exact captured scopes, launch the configured provider and settle each run once.
     pub fn prompt_stream(
         &self,
         emit: Arc<dyn Fn(AiStreamEvent) + Send + Sync>,

@@ -10,8 +10,8 @@
 //! writes the file with Rust and only clears `dirty`.
 //!
 //! Vim-side changes (mappings, macros, `u`) bypass `apply_edits`; they are
-//! picked up by [`DocumentActor::sync_from_nvim`] / [`undo`] /
-//! [`input_via_nvim`], which re-read the buffer and mint a new `Neovim`-sourced
+//! picked up by [`DocumentActor::sync_from_nvim`] / [`DocumentActor::undo`] /
+//! [`DocumentActor::input_via_nvim`], which re-read the buffer and mint a new `Neovim`-sourced
 //! revision. Native undo history is therefore shared: a GUI range edit is a
 //! normal buffer change that `u` reverts.
 
@@ -38,6 +38,7 @@ pub enum ActorError {
 }
 
 impl std::fmt::Display for ActorError {
+    /// Format contract, buffer and storage failures while preserving their original diagnostics.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Contract(error) => write!(f, "contract: {error:?}"),
@@ -50,22 +51,26 @@ impl std::fmt::Display for ActorError {
 impl std::error::Error for ActorError {}
 
 impl From<ContractError> for ActorError {
+    /// Wrap a contract failure in the document error boundary.
     fn from(error: ContractError) -> Self {
         Self::Contract(error)
     }
 }
 
 impl From<BufferError> for ActorError {
+    /// Wrap buffer adapter diagnostics in the document error boundary.
     fn from(error: BufferError) -> Self {
         Self::Nvim(error.to_string())
     }
 }
 impl From<WorkspaceError> for ActorError {
+    /// Preserve a workspace failure when crossing the actor boundary.
     fn from(error: WorkspaceError) -> Self {
         Self::Workspace(error)
     }
 }
 impl From<ActorError> for WorkspaceError {
+    /// Map an actor failure back to its structured workspace error.
     fn from(error: ActorError) -> Self {
         match error {
             ActorError::Contract(error) => Self::Contract { error },
@@ -98,6 +103,7 @@ pub struct DocumentActor {
 }
 
 impl DocumentActor {
+    /// Check the buffer process under the document lock.
     pub fn is_alive(&self) -> Result<bool, ActorError> {
         let state = self
             .state
@@ -122,6 +128,7 @@ impl DocumentActor {
         )
     }
 
+    /// Initialize an authoritative buffer and disk baseline using injected adapters and explicit config.
     pub fn open_with_config(
         document_id: DocumentId,
         initial_text: String,
@@ -172,6 +179,7 @@ impl DocumentActor {
             .expect("document actor lock poisoned")
     }
 
+    /// Return the selected native config source without reading user files again.
     pub fn config_source(&self) -> String {
         self.state
             .lock()
@@ -179,6 +187,7 @@ impl DocumentActor {
             .expect("document actor lock poisoned")
     }
 
+    /// Return boot diagnostics captured by the authoritative buffer adapter.
     pub fn config_errors(&self) -> Vec<String> {
         self.state
             .lock()
@@ -260,7 +269,7 @@ impl DocumentActor {
     }
 
     /// Feed keys through real Neovim (mappings/macros fire), then sync.
-    /// Test and Vim-path entry point; GUI edits must use [`apply_edits`].
+    /// Test and Vim-path entry point; GUI edits must use [`Self::apply_edits`].
     pub fn input_via_nvim(&self, keys: &str) -> Result<DocumentSnapshot, ActorError> {
         let mut state = self
             .state
@@ -273,6 +282,7 @@ impl DocumentActor {
         Ok(state.snapshot.clone())
     }
 
+    /// Validate the request revision before routing keys and servicing native notifications.
     pub fn input_checked(
         &self,
         request: SaveRequest,
@@ -354,6 +364,7 @@ impl DocumentActor {
         Ok(state.snapshot.clone())
     }
 
+    /// Redo through native history and publish a fresh authoritative snapshot when text changes.
     pub fn redo(&self) -> Result<DocumentSnapshot, ActorError> {
         let mut state = self
             .state
@@ -394,6 +405,7 @@ impl DocumentActor {
         })
     }
 
+    /// Return native post-yank format bindings under the document lock.
     pub fn copy_keys(&self) -> Result<std::collections::BTreeMap<String, String>, ActorError> {
         let state = self
             .state
@@ -403,6 +415,7 @@ impl DocumentActor {
         Ok(state.nvim.copy_keys()?)
     }
 
+    /// Return copy-binding diagnostics for the active native configuration.
     pub fn copy_key_errors(&self) -> Result<Vec<String>, ActorError> {
         let state = self
             .state
@@ -503,6 +516,7 @@ impl DocumentActor {
         Self::checkpoint_locked(&state)
     }
 
+    /// Return the last acknowledged disk fingerprint for conflict checks.
     pub fn baseline(&self) -> Option<Fingerprint> {
         self.state
             .lock()
@@ -511,6 +525,7 @@ impl DocumentActor {
             .clone()
     }
 
+    /// Invalidate the disk baseline so the current text remains dirty until saved.
     pub fn mark_unsaved(&self) -> Result<(), ActorError> {
         let mut state = self
             .state
@@ -520,6 +535,7 @@ impl DocumentActor {
         Self::checkpoint_locked(&state)
     }
 
+    /// Return the actor's current file path for workspace containment checks.
     pub fn path(&self) -> Option<PathBuf> {
         self.state
             .lock()
@@ -528,6 +544,7 @@ impl DocumentActor {
             .clone()
     }
 
+    /// Restore a recovery snapshot with its recorded path and disk baseline.
     pub fn restore_record(&self, record: &RecoveryRecord) -> Result<(), ActorError> {
         let mut state = self
             .state
@@ -539,6 +556,7 @@ impl DocumentActor {
         Self::checkpoint_locked(&state)
     }
 
+    /// Delete this actor's recovery checkpoint through the injected storage port.
     pub fn discard_recovery(&self) -> Result<(), ActorError> {
         let state = self
             .state
@@ -621,13 +639,14 @@ impl DocumentActor {
         if let Err(error) = state.services.storage.remove_file(&source) {
             let _ = state.nvim.set_buf_name(&source.to_string_lossy());
             let _ = state.services.storage.remove_file(&target);
-            return Err(WorkspaceError::from(error).into());
+            return Err(error.into());
         }
         state.path = Some(target);
         Self::checkpoint_locked(&state)?;
         Ok(())
     }
 
+    /// Translate the native selection to surrogate-safe global UTF-16 offsets.
     pub fn cursor(&self) -> Result<CursorUpdate, ActorError> {
         let mut state = self
             .state
@@ -667,6 +686,7 @@ impl DocumentActor {
         Ok(Self::cached_cursor(&state))
     }
 
+    /// Validate GUI selection revision and install its native anchor and head positions.
     pub fn set_cursor(&self, update: CursorUpdate) -> Result<CursorUpdate, ActorError> {
         let mut state = self
             .state
@@ -759,6 +779,7 @@ impl DocumentActor {
         })
     }
 
+    /// Restart the authoritative buffer with explicit config while retaining text and document identity.
     pub fn configure(
         &self,
         request: SaveRequest,
@@ -800,6 +821,7 @@ impl DocumentActor {
         Ok(result)
     }
 
+    /// Drain completed native write requests for workspace event delivery.
     pub fn take_saved(&self) -> Vec<SaveResult> {
         self.state
             .lock()
@@ -807,6 +829,7 @@ impl DocumentActor {
             .unwrap_or_default()
     }
 
+    /// Consume native notifications and service intercepted writes under the actor lock.
     fn service_notifications(state: &mut ActorState) -> Result<(), ActorError> {
         for note in state.nvim.drain_notifications() {
             match note {
@@ -829,6 +852,7 @@ impl DocumentActor {
         Ok(())
     }
 
+    /// Validate the disk baseline, atomically save and clear dirty state only after success.
     fn save_locked(state: &mut ActorState) -> Result<SaveResult, ActorError> {
         let path = state.path.as_ref().ok_or(WorkspaceError::InvalidPath)?;
         let baseline = state.services.storage.atomic_write(
@@ -851,6 +875,7 @@ impl DocumentActor {
         })
     }
 
+    /// Persist a dirty recovery snapshot or remove the checkpoint when the buffer is clean.
     fn checkpoint_locked(state: &ActorState) -> Result<(), ActorError> {
         if !state.snapshot.dirty {
             if let Some(path) = &state.recovery {
@@ -877,6 +902,7 @@ impl DocumentActor {
         Ok(())
     }
 
+    /// Re-read ready native text, increment revision only on change and update recovery state.
     fn sync_locked(state: &mut ActorState) -> Result<bool, ActorError> {
         // Deferred API reads cannot answer while Vim waits for the next key.
         // Keep the acknowledged snapshot and leave input available to finish it.
@@ -905,6 +931,7 @@ impl DocumentActor {
         Ok(true)
     }
 
+    /// Restore the original native cursor option after a GUI Visual selection ends.
     fn restore_gui_virtualedit(state: &mut ActorState) -> Result<(), ActorError> {
         if let Some(original) = state.gui_virtualedit.as_ref() {
             state.nvim.restore_virtualedit(original)?;
@@ -913,6 +940,7 @@ impl DocumentActor {
         Ok(())
     }
 
+    /// Clamp the last acknowledged GUI selection to valid current UTF-16 boundaries.
     fn cached_cursor(state: &ActorState) -> CursorUpdate {
         let clamp = |offset: Utf16Offset| {
             let mut offset = Utf16Offset(
@@ -933,6 +961,7 @@ impl DocumentActor {
         }
     }
 
+    /// Refuse deferred reads while native Vim input or a blocking command remains unfinished.
     fn require_ready(state: &ActorState) -> Result<(), ActorError> {
         if state.nvim.input_pending()? {
             return Err(ActorError::Nvim(

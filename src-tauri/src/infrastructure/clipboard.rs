@@ -7,6 +7,7 @@ use std::sync::Mutex;
 pub struct NativeClipboard(Mutex<Option<arboard::Clipboard>>);
 
 impl crate::application::clipboard::Clipboard for NativeClipboard {
+    /// Publish supported native clipboard formats through one platform-specific adapter.
     fn write(&self, text: String, html: Option<String>, rtf: Option<String>) -> Result<(), String> {
         if text
             .len()
@@ -53,6 +54,7 @@ impl crate::application::clipboard::Clipboard for NativeClipboard {
 }
 
 #[cfg(target_os = "macos")]
+/// Publish text, HTML and RTF data together to the macOS pasteboard.
 fn write_macos(text: &str, html: Option<&str>, rtf: Option<&str>) -> Result<(), String> {
     use objc2_app_kit::NSPasteboard;
     use objc2_foundation::{NSArray, NSData, NSString};
@@ -92,6 +94,7 @@ fn write_macos(text: &str, html: Option<&str>, rtf: Option<&str>) -> Result<(), 
 }
 
 #[cfg(windows)]
+/// Publish Unicode text, CF_HTML and RTF data together to the Windows clipboard.
 fn write_windows(
     text: &str,
     html: Option<&str>,

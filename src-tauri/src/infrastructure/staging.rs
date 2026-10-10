@@ -41,6 +41,7 @@ pub fn guard_staging_path(root: &Path, candidate: &Path) -> Result<PathBuf, Work
     Ok(joined)
 }
 
+/// Reject every linked component between the staging root and candidate path.
 pub fn check_no_symlink(path: &Path, root: &Path) -> Result<(), WorkspaceError> {
     // Every existing prefix must be a real directory inside root, never a link.
     let mut current = root.to_owned();
@@ -89,6 +90,7 @@ pub fn check_no_symlink(path: &Path, root: &Path) -> Result<(), WorkspaceError> 
 mod tests {
     use super::*;
     #[test]
+    /// Verify absolute, parent-traversal and linked staging paths cannot escape the root.
     fn staging_guard_rejects_escapes() {
         let root = Path::new("/staging");
         assert!(guard_staging_path(root, Path::new("copy_01/notes.md")).is_ok());

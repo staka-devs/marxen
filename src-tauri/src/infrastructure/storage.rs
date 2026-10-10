@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
+/// Read file bytes, returning None only when the file is missing.
 pub fn read_disk(path: &Path) -> Result<Option<Vec<u8>>, WorkspaceError> {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() => Err(WorkspaceError::OutsideWorkspace),
@@ -16,6 +17,7 @@ pub fn read_disk(path: &Path) -> Result<Option<Vec<u8>>, WorkspaceError> {
     }
 }
 
+/// Compute the disk content fingerprint while retaining missing-file semantics.
 pub fn disk_fingerprint(path: &Path) -> Result<Option<Fingerprint>, WorkspaceError> {
     Ok(read_disk(path)?.map(|bytes| fingerprint(&bytes)))
 }
@@ -68,6 +70,7 @@ pub fn resolve(root: &Path, relative: &str) -> Result<PathBuf, WorkspaceError> {
     Ok(target)
 }
 
+/// Reject directories, unsafe links and destinations outside the optional workspace root.
 pub fn check_target(root: Option<&Path>, path: &Path) -> Result<(), WorkspaceError> {
     if let Some(root) = root {
         let resolved = resolve(root, &relative(root, path)?)?;
@@ -137,6 +140,7 @@ pub fn atomic_write(
     Ok(fingerprint(bytes))
 }
 
+/// Flush directory metadata after a durable file replacement on supported platforms.
 pub fn sync_directory(path: &Path) -> Result<(), WorkspaceError> {
     #[cfg(unix)]
     fs::File::open(path)?.sync_all()?;
@@ -145,6 +149,7 @@ pub fn sync_directory(path: &Path) -> Result<(), WorkspaceError> {
     Ok(())
 }
 
+/// Atomically persist a serialized recovery record independently of the live file.
 pub fn checkpoint(path: &Path, record: &RecoveryRecord) -> Result<(), WorkspaceError> {
     let bytes = serde_json::to_vec(record).map_err(|e| WorkspaceError::Io {
         detail: e.to_string(),
@@ -162,6 +167,7 @@ pub fn checkpoint(path: &Path, record: &RecoveryRecord) -> Result<(), WorkspaceE
     Ok(())
 }
 
+/// Remove a recovery record while accepting an already absent file.
 pub fn remove_checkpoint(path: &Path) -> Result<(), WorkspaceError> {
     match fs::remove_file(path) {
         Ok(()) => sync_directory(path.parent().ok_or(WorkspaceError::InvalidPath)?),
@@ -249,6 +255,7 @@ pub fn read_image_bytes(path: &Path) -> Result<Vec<u8>, WorkspaceError> {
 }
 
 impl From<std::io::Error> for WorkspaceError {
+    /// Preserve a native I/O failure as a structured workspace error.
     fn from(error: std::io::Error) -> Self {
         Self::Io {
             detail: error.to_string(),
@@ -256,7 +263,10 @@ impl From<std::io::Error> for WorkspaceError {
     }
 }
 
-use crate::application::ports::{Clock, DirectoryEntry, FileInfo, FileReader, DocumentStorage, DirectoryStorage, WorkspaceStorage, StagingStorage};
+use crate::application::ports::{
+    Clock, DirectoryEntry, DirectoryStorage, DocumentStorage, FileInfo, FileReader, StagingStorage,
+    WorkspaceStorage,
+};
 pub struct NativeStorage;
 pub struct SystemClock;
 impl Clock for SystemClock {
@@ -269,18 +279,22 @@ impl Clock for SystemClock {
     }
 }
 impl FileReader for NativeStorage {
+    /// Delegate optional file reads to the native filesystem helper.
     fn read_disk(&self, path: &Path) -> Result<Option<Vec<u8>>, WorkspaceError> {
         read_disk(path)
     }
+    /// Delegate disk conflict fingerprints to the native read helper.
     fn disk_fingerprint(&self, path: &Path) -> Result<Option<Fingerprint>, WorkspaceError> {
         disk_fingerprint(path)
     }
 }
 impl DocumentStorage for NativeStorage {
+    /// Remove one guarded file through the native filesystem.
     fn remove_file(&self, path: &Path) -> Result<(), WorkspaceError> {
         Ok(fs::remove_file(path)?)
     }
 
+    /// Create a non-overwriting link and retain the structured AlreadyExists error.
     fn hard_link(&self, source: &Path, target: &Path) -> Result<(), WorkspaceError> {
         fs::hard_link(source, target).map_err(|e| {
             if e.kind() == std::io::ErrorKind::AlreadyExists {
@@ -291,9 +305,11 @@ impl DocumentStorage for NativeStorage {
         })
     }
 
+    /// Delegate save-destination containment checks to the shared native helper.
     fn check_target(&self, root: Option<&Path>, path: &Path) -> Result<(), WorkspaceError> {
         check_target(root, path)
     }
+    /// Delegate conflict-checked atomic replacement to the native durable-write helper.
     fn atomic_write(
         &self,
         path: &Path,
@@ -303,23 +319,29 @@ impl DocumentStorage for NativeStorage {
     ) -> Result<Fingerprint, WorkspaceError> {
         atomic_write(path, bytes, expected, root)
     }
+    /// Delegate recovery record persistence to the shared atomic checkpoint helper.
     fn checkpoint(&self, path: &Path, record: &RecoveryRecord) -> Result<(), WorkspaceError> {
         checkpoint(path, record)
     }
+    /// Delegate recovery record dismissal to the idempotent native helper.
     fn remove_checkpoint(&self, path: &Path) -> Result<(), WorkspaceError> {
         remove_checkpoint(path)
     }
 }
 impl DirectoryStorage for NativeStorage {
+    /// Resolve the supplied filesystem path to its canonical absolute target.
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, WorkspaceError> {
         Ok(fs::canonicalize(path)?)
     }
+    /// Create a required directory hierarchy through the native filesystem.
     fn create_dir_all(&self, path: &Path) -> Result<(), WorkspaceError> {
         Ok(fs::create_dir_all(path)?)
     }
+    /// Create one new directory and preserve native existing-entry failures.
     fn create_dir(&self, path: &Path) -> Result<(), WorkspaceError> {
         Ok(fs::create_dir(path)?)
     }
+    /// Read symlink-aware native entry metadata for containment decisions.
     fn metadata(&self, path: &Path) -> Result<FileInfo, WorkspaceError> {
         let m = fs::symlink_metadata(path)?;
         Ok(FileInfo {
@@ -329,15 +351,20 @@ impl DirectoryStorage for NativeStorage {
         })
     }
     /// Query path existence through the native filesystem adapter.
-    fn exists(&self, path: &Path) -> bool { path.exists() }
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
 }
 impl WorkspaceStorage for NativeStorage {
+    /// Delegate canonical workspace path resolution to the shared containment helper.
     fn resolve(&self, root: &Path, relative: &str) -> Result<PathBuf, WorkspaceError> {
         resolve(root, relative)
     }
+    /// Delegate image reads to the shared size-bounded native helper.
     fn read_image_bytes(&self, path: &Path) -> Result<Vec<u8>, WorkspaceError> {
         read_image_bytes(path)
     }
+    /// Enumerate direct native children with their captured directory, file and link kinds.
     fn read_dir(&self, path: &Path) -> Result<Vec<DirectoryEntry>, WorkspaceError> {
         fs::read_dir(path)?
             .map(|entry| {
@@ -356,15 +383,19 @@ impl WorkspaceStorage for NativeStorage {
     }
 }
 impl StagingStorage for NativeStorage {
+    /// Write proposal bytes to the use case's already guarded staging destination.
     fn write_staging(&self, path: &Path, bytes: &[u8]) -> Result<(), WorkspaceError> {
         Ok(fs::write(path, bytes)?)
     }
+    /// Remove the use case's guarded completed staging directory recursively.
     fn remove_staging(&self, path: &Path) -> Result<(), WorkspaceError> {
         Ok(fs::remove_dir_all(path)?)
     }
+    /// Delegate staging-relative path validation to the shared native containment helper.
     fn guard_staging_path(&self, root: &Path, candidate: &Path) -> Result<PathBuf, WorkspaceError> {
         super::staging::guard_staging_path(root, candidate)
     }
+    /// Delegate staging component link rejection to the native containment helper.
     fn check_no_symlink(&self, path: &Path, root: &Path) -> Result<(), WorkspaceError> {
         super::staging::check_no_symlink(path, root)
     }

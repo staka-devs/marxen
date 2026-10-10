@@ -20,12 +20,14 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    /// Report whether any registered authoritative buffer process remains alive.
     pub fn has_live_documents(&self) -> bool {
         self.actors
             .values()
             .any(|actor| actor.is_alive().unwrap_or(false))
     }
 
+    /// Validate a folder root and create a separate recovery namespace with injected services.
     pub fn open(
         root: &Path,
         recovery_home: &Path,
@@ -55,27 +57,34 @@ impl Workspace {
         })
     }
 
+    /// Return workspace identity and open document descriptors.
     pub fn info(&self) -> WorkspaceInfo {
         WorkspaceInfo {
             root: self.root.display().to_string(),
         }
     }
+    /// Borrow the canonical workspace root used for path containment checks.
     pub fn root(&self) -> &Path {
         &self.root
     }
+    /// Report whether the workspace has any registered documents.
     pub fn is_empty(&self) -> bool {
         self.actors.is_empty()
     }
+    /// Look up the authoritative actor by stable document ID.
     pub fn actor(&self, id: &str) -> Result<&DocumentActor, WorkspaceError> {
         self.actors.get(id).ok_or(WorkspaceError::UnknownDocument)
     }
+    /// Derive a recovery filename from the stable document ID.
     fn record_path(&self, id: &str) -> PathBuf {
         self.recovery
             .join(format!("{}.json", storage::fingerprint(id.as_bytes()).0))
     }
+    /// Allocate a process-local document identifier using the injected clock.
     fn new_id(&self) -> String {
         format!("doc-{}-{}", self.clock.nanos(), self.actors.len())
     }
+    /// Build a document descriptor from its current authoritative snapshot and relative path.
     fn description(&self, actor: &DocumentActor) -> Result<OpenDocument, WorkspaceError> {
         Ok(OpenDocument {
             path: actor
@@ -87,6 +96,7 @@ impl Workspace {
         })
     }
 
+    /// List registered document descriptors in stable identifier order.
     pub fn documents(&self) -> Result<Vec<OpenDocument>, WorkspaceError> {
         self.actors
             .values()
@@ -94,6 +104,7 @@ impl Workspace {
             .collect()
     }
 
+    /// Enumerate supported text, image and directory entries while rejecting links and unsafe paths.
     pub fn list(&self, path: &str) -> Result<Vec<WorkspaceEntry>, WorkspaceError> {
         let folder = self.storage.resolve(&self.root, path)?;
         if !self.storage.metadata(&folder).is_ok_and(|m| m.directory) {
@@ -150,6 +161,7 @@ impl Workspace {
         Ok(entries)
     }
 
+    /// Open a contained Markdown file in a real authoritative buffer.
     pub fn open_markdown(&mut self, path: &str) -> Result<OpenDocument, WorkspaceError> {
         let target = self.storage.resolve(&self.root, path)?;
         if !storage::markdown(&target) {
@@ -158,6 +170,7 @@ impl Workspace {
         self.open_text_file(path)
     }
 
+    /// Open a contained supported UTF-8 text file with the same revision contract.
     pub fn open_text_file(&mut self, path: &str) -> Result<OpenDocument, WorkspaceError> {
         let target = self.storage.resolve(&self.root, path)?;
         if !storage::text_family(&target) {
@@ -194,6 +207,7 @@ impl Workspace {
         Ok(result)
     }
 
+    /// Register a new pathless authoritative buffer and its recovery checkpoint.
     pub fn open_untitled(
         &mut self,
         id: DocumentId,
@@ -211,6 +225,7 @@ impl Workspace {
         Ok(result)
     }
 
+    /// Create a new contained Markdown file without overwriting an existing destination.
     pub fn create(&mut self, path: &str, text: &str) -> Result<OpenDocument, WorkspaceError> {
         let target = self.storage.resolve(&self.root, path)?;
         if !storage::markdown(&target) {
@@ -224,6 +239,7 @@ impl Workspace {
         self.open_markdown(path)
     }
 
+    /// Rename a Markdown document only at the acknowledged revision and a safe destination.
     pub fn rename(
         &mut self,
         request: SaveRequest,
@@ -238,6 +254,7 @@ impl Workspace {
         self.description(actor)
     }
 
+    /// Honor the caller's save, discard or cancel decision before removing the actor.
     pub fn close(
         &mut self,
         request: SaveRequest,
@@ -272,6 +289,7 @@ impl Workspace {
         Ok(())
     }
 
+    /// Search supported contained text files using authoritative text for open documents.
     pub fn search(&self, query: &str) -> Result<Vec<SearchMatch>, WorkspaceError> {
         if query.is_empty() {
             return Err(WorkspaceError::InvalidPath);
@@ -391,6 +409,7 @@ impl Workspace {
         events
     }
 
+    /// Read valid recovery records from the workspace's separate recovery directory.
     fn records(&self) -> Result<Vec<RecoveryRecord>, WorkspaceError> {
         let mut records = Vec::new();
         for entry in self.storage.read_dir(&self.recovery)? {
@@ -424,6 +443,7 @@ impl Workspace {
         Ok(records)
     }
 
+    /// List recoverable documents with current disk conflict information.
     pub fn recovery_entries(&self) -> Result<Vec<RecoveryEntry>, WorkspaceError> {
         self.records()?
             .into_iter()
@@ -448,6 +468,7 @@ impl Workspace {
             .collect()
     }
 
+    /// Restore a valid recovery record while retaining conflict checks against the captured baseline.
     pub fn restore(&mut self, id: &str) -> Result<OpenDocument, WorkspaceError> {
         if self.actors.contains_key(id) {
             return Err(WorkspaceError::AlreadyExists);
@@ -483,6 +504,7 @@ impl Workspace {
         Ok(result)
     }
 
+    /// Delete the selected recovery record without changing live text or disk content.
     pub fn discard_recovery(&self, id: &str) -> Result<(), WorkspaceError> {
         if self.actors.contains_key(id) {
             return Err(WorkspaceError::AlreadyExists);
@@ -490,6 +512,7 @@ impl Workspace {
         self.storage.remove_checkpoint(&self.record_path(id))
     }
 
+    /// Resolve a document-relative image and return bounded bytes with verified image MIME type.
     pub fn load_image(&self, id: &str, relative: &str) -> Result<ImageData, WorkspaceError> {
         let document = self.actor(id)?.path().ok_or(WorkspaceError::InvalidPath)?;
         let decoded = decode_image_path(relative)?;
@@ -527,6 +550,7 @@ impl Workspace {
         })
     }
 
+    /// Read a contained workspace image for the explorer viewer.
     pub fn load_workspace_image(&self, path: &str) -> Result<ImageData, WorkspaceError> {
         let target = self.storage.resolve(&self.root, path)?;
         let bytes = self.storage.read_image_bytes(&target)?;
@@ -536,6 +560,7 @@ impl Workspace {
         })
     }
 
+    /// Insert a contained image reference through a revision-checked Markdown range edit.
     pub fn insert_workspace_image(
         &self,
         request: SaveRequest,
@@ -568,6 +593,7 @@ impl Workspace {
         })?)
     }
 
+    /// Validate bounded external image bytes before importing them into the workspace.
     pub fn import_external_image(
         &self,
         request: SaveRequest,
@@ -586,6 +612,7 @@ impl Workspace {
         self.paste_image(request, name, &bytes, range)
     }
 
+    /// Import image bytes into the attachment folder and replace the exact GUI range atomically.
     pub fn paste_image(
         &self,
         request: SaveRequest,
@@ -651,6 +678,7 @@ impl Workspace {
     }
 }
 
+/// Percent-encode image reference characters that would break Markdown URLs.
 fn encode_image_name(name: &str) -> String {
     name.bytes()
         .map(|b| {
@@ -663,6 +691,7 @@ fn encode_image_name(name: &str) -> String {
         .collect()
 }
 
+/// Determine supported image MIME from its extension and validated byte signature.
 fn image_mime(path: &Path, bytes: &[u8]) -> Result<&'static str, WorkspaceError> {
     let extension = path
         .extension()
@@ -680,6 +709,7 @@ fn image_mime(path: &Path, bytes: &[u8]) -> Result<&'static str, WorkspaceError>
     }
 }
 
+/// Decode safe relative image URLs while rejecting absolute, remote and traversal targets.
 fn decode_image_path(path: &str) -> Result<String, WorkspaceError> {
     let mut decoded = Vec::with_capacity(path.len());
     let bytes = path.as_bytes();

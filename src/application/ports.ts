@@ -43,7 +43,6 @@ import type {
   IsolationDiff,
   IsolatedCopyInfo,
   StagedProposal,
-  IsolatedCopyDoc,
 } from "../contracts/isolation-contracts";
 import type { PromptContext, PromptMode, ProposalText, IsolatedCopyId } from "../contracts/ai-contracts";
 import type { ImageResolver } from "../domain/image-sources";
@@ -107,7 +106,6 @@ export interface DocumentGateway {
   /** Fetch the Neovim config state. */
   fetchConfig(documentId: DocumentId): Promise<NvimConfig>;
 }
-
 /**
  * Raw document transport port behind the registry use cases.
  *
@@ -289,14 +287,3 @@ export interface ImageLoader {
   /** Shared resolver factory for the active document. */
   forDocument(documentId: string): ImageResolver;
 }
-
-/** Whether the desktop transport is available (browser stays read-only). */
-export type DesktopFlag = boolean;
-
-/** Staging slot shared by agent and inline chats (single copy at a time). */
-export interface StagingSlot {
-  copyId: string;
-}
-
-/** Isolated copy document descriptor for staging registration. */
-export type { IsolatedCopyDoc };

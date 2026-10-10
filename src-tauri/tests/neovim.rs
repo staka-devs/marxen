@@ -7,7 +7,7 @@
 //! sharing GUI range edits, `:w` delegation to Rust, config errors,
 //! revision serialization, and cursor reporting.
 
-use marxen_lib::application::document::{ActorError, DocumentActor};
+use marxen_lib::application::document::ActorError;
 use marxen_lib::contracts::{
     ContractError, CursorUpdate, DocumentId, EditRequest, EditSource, Revision, SaveRequest,
     TextEdit, Utf16Offset, Utf16Range, VimMode,

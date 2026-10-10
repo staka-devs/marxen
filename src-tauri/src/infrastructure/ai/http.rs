@@ -4,6 +4,7 @@ use crate::contracts::ai::*;
 use crate::domain::ai::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+/// Build a provider HTTP client with the caller's overall request timeout.
 pub fn http_client(timeout: Duration) -> Result<reqwest::Client, AiError> {
     reqwest::Client::builder()
         .timeout(timeout)
@@ -13,6 +14,7 @@ pub fn http_client(timeout: Duration) -> Result<reqwest::Client, AiError> {
         })
 }
 
+/// Stream provider responses into scoped proposals while honoring cancellation and timeouts.
 pub async fn run_http_prompt(
     client: &reqwest::Client,
     target: &HttpTarget,
@@ -172,6 +174,7 @@ pub async fn run_http_prompt(
 
 // ---- Connection tests (dry run first, live only on explicit request) ----
 
+/// Probe the validated API root's models endpoint with the caller's selected credential.
 pub async fn test_openai_live(
     client: &reqwest::Client,
     endpoint: &str,
@@ -203,6 +206,7 @@ pub async fn test_openai_live(
     })
 }
 
+/// Probe the validated API root's messages endpoint with a bounded minimal request.
 pub async fn test_anthropic_live(
     client: &reqwest::Client,
     endpoint: &str,

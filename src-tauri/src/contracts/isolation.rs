@@ -79,7 +79,7 @@ pub fn typescript() -> String {
         ApproveResult::decl(&cfg),
         StagedProposal::decl(&cfg),
     ];
-    let mut output = "// Generated from src-tauri/src/isolation.rs. Run npm run isolation-contracts:generate.\n// Do not edit by hand. Isolation IPC schema version 2.\n".to_owned();
+    let mut output = "// Generated from src-tauri/src/contracts/isolation.rs. Run npm run isolation-contracts:generate.\n// Do not edit by hand. Isolation IPC schema version 2.\n".to_owned();
     output.push_str("import type { DocumentId, Revision, Utf16Range } from \"./contracts\";\n");
     output.push_str("import type { IsolatedCopyId } from \"./ai-contracts\";\n");
     for declaration in declarations {
