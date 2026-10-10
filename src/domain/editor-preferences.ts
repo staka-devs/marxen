@@ -46,4 +46,3 @@ export function normalizeEditorPreferences(value: unknown): EditorPreferences {
     highlightActiveLine: bool("highlightActiveLine", fallback.highlightActiveLine),
   };
 }
-
