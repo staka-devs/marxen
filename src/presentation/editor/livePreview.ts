@@ -15,7 +15,7 @@
 // disposes its maps and GL resources.
 
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
-import { RangeSetBuilder, StateField, type Extension } from "@codemirror/state";
+import { StateField, type Extension, type Range } from "@codemirror/state";
 import { computeLiveBlocks, extractLinkDefinitions, findTableCellRange, type LiveBlock } from "../../domain/render/blocks";
 import { renderMarkdownDocument } from "../../domain/render/pipeline";
 import { toggleCheckbox } from "../../domain/markdown-gui";
@@ -333,24 +333,47 @@ class LiveBlockWidget extends WidgetType {
   }
 }
 
-/** Build replacement decorations skipping the selection block. */ function buildDecorations(docText: string, selFrom: number, selTo: number, defs: string, getCallbacks: () => LivePreviewCallbacks): DecorationSet {
-  const builder = new RangeSetBuilder<Decoration>();
-  for (const block of computeLiveBlocks(docText)) {
+/** Render inactive blocks, style active headings, and compact unselected separator lines without changing source offsets. */ function buildDecorations(docText: string, selFrom: number, selTo: number, defs: string, getCallbacks: () => LivePreviewCallbacks): DecorationSet {
+  const decorations: Range<Decoration>[] = [];
+  const blocks = computeLiveBlocks(docText);
+  for (const block of blocks) {
     if (block.to <= block.from) continue;
     // The block holding the selection (or cursor) stays raw source so every
     // keystroke lands on the original Markdown through normal callbacks.
-    if (selFrom <= block.to && selTo >= block.from) continue;
+    if (selFrom <= block.to && selTo >= block.from) {
+      const text = docText.slice(block.from, block.to);
+      if (block.kind === "heading") {
+        const atx = /^(#{1,6})[ \t]+/.exec(text);
+        const level = atx?.[1].length ?? (/\n[ \t]*=+[ \t]*$/.test(text) ? 1 : 2);
+        decorations.push(Decoration.line({ class: "marxen-live-heading", attributes: { "data-heading-level": String(level) } }).range(block.from));
+        if (atx) decorations.push(Decoration.mark({ class: "marxen-live-heading-marker" }).range(block.from, block.from + atx[0].length));
+      } else if (block.kind === "code") {
+        let offset = block.from;
+        for (const line of text.split("\n")) {
+          decorations.push(Decoration.line({ class: "marxen-live-code-line" }).range(offset));
+          offset += line.length + 1;
+        }
+      }
+      continue;
+    }
     const text = docText.slice(block.from, block.to);
-    builder.add(
-      block.from,
-      block.to,
-      Decoration.replace({
+    decorations.push(Decoration.replace({
         widget: new LiveBlockWidget(cacheKey(block.kind, text, defs), block.kind, block.from, text, defs, getCallbacks),
         block: true,
-      }),
-    );
+      }).range(block.from, block.to));
   }
-  return builder.finish();
+  let offset = 0;
+  let blockIndex = 0;
+  for (const line of docText.split("\n")) {
+    while (blockIndex < blocks.length && blocks[blockIndex].to < offset) blockIndex += 1;
+    const block = blocks[blockIndex];
+    const insideBlock = block && block.from <= offset && offset < block.to;
+    if (line.trim() === "" && !insideBlock && !(selFrom <= offset + line.length && selTo >= offset)) {
+      decorations.push(Decoration.line({ class: "marxen-live-gap" }).range(offset));
+    }
+    offset += line.length + 1;
+  }
+  return Decoration.set(decorations, true);
 }
 
 /** Create the live-preview CodeMirror extension with widget activation. */ export function createLivePreview(getCallbacks: () => LivePreviewCallbacks): Extension {

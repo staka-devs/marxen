@@ -90,8 +90,9 @@ test("tree/tabs/quick-open/search/outline/palette/themes work in Japanese", asyn
   await page.getByRole("menuitem", { name: "クイックオープン" }).click();
   await expect(page.getByTestId("quick-open")).toBeVisible();
   await page.getByTestId("quick-open").getByLabel("ファイル名で絞り込む").fill("はじめ");
-  await expect(page.getByTestId("quick-open")).toContainText("メモ/はじめに.md");
-  await page.getByTestId("quick-open").getByRole("button", { name: "閉じる (Esc)" }).click();
+  await expect(page.getByTestId("quick-open").getByRole("button", { name: "メモ/はじめに.md" })).toBeVisible();
+  await page.getByTestId("quick-open").getByLabel("ファイル名で絞り込む").press("Escape");
+  await expect(page.getByTestId("quick-open")).not.toBeVisible();
 
   await page.getByRole("button", { name: "検索", exact: true }).click();
   await expect(page.getByTestId("search-panel")).toBeVisible();
