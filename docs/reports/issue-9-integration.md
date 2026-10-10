@@ -20,7 +20,7 @@
 
 ## Windows 配布物
 
-未署名 NSIS `Marxen_0.1.0_x64-setup.exe` を生成し、インストールせず展開して確認した。
+Word と Rust を確認したこの配布物は `.local/releases/windows/archive/Marxen_0.1.0_x64-setup-4e9ffcf.exe` に保存する。未署名 NSIS をインストールせず展開して確認した。最新 UI の配布物・画面・検証は [Issue #20 の検証](issue-20-ui.md) を参照する。
 
 | 項目 | 値 |
 | --- | --- |
