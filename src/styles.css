@@ -69,6 +69,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 /* Five GitHub alert kinds. */
 .marxen-md .markdown-alert { border: 1px solid var(--border); border-left-width: 4px; border-radius: 0.5rem; padding: 0.5em 0.9em; margin: 0.75em 0; }
 .marxen-md .markdown-alert-title { display: flex; align-items: center; gap: 0.4em; font-weight: 700; margin: 0 0 0.25em; }
+.marxen-md .markdown-alert-title svg { fill: currentColor; flex-shrink: 0; }
 .marxen-md .markdown-alert-note { border-left-color: #0969da; }
 .marxen-md .markdown-alert-note .markdown-alert-title { color: #0969da; }
 .marxen-md .markdown-alert-tip { border-left-color: #1a7f37; }
@@ -108,7 +109,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .marxen-md kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 0.3rem; padding: 0 0.35em; font-size: 0.85em; background: var(--muted); }
 
 /* Inline live widgets inside the CodeMirror editor (ADR-0061). */
-.marxen-live-widget { padding: 2px 0; }
+.marxen-live-widget { padding: 2px 0; white-space: normal; }
 .marxen-live-widget .marxen-live-body { font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; }
 .marxen-live-widget .marxen-live-loading { color: var(--muted-foreground); font-size: 0.8em; padding: 0.25em 0; }
 .marxen-live-widget table { font-size: 0.9em; }
