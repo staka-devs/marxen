@@ -1,11 +1,11 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { hostTarget, manifest, repoRoot, requestedTarget } from "./neovim-common.mjs";
 
 const target = requestedTarget();
 if (target !== hostTarget()) throw new Error("Run the real Neovim smoke test on its native OS/architecture");
-const root = join(repoRoot, "src-tauri", "resources", "neovim");
+const root = resolve(process.env.MARXEN_VERIFY_NVIM_ROOT || join(repoRoot, "src-tauri", "resources", "neovim"));
 const metadata = JSON.parse(await readFile(join(root, "marxen-bundle.json"), "utf8"));
 if (metadata.target !== target || metadata.version !== manifest.version || metadata.sha256 !== manifest.targets[target].sha256) throw new Error("Wrong Neovim bundle; rerun bundle:neovim");
 const [major, minor, patch] = manifest.version.split(".").map(Number);

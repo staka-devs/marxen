@@ -22,6 +22,13 @@ fn guard(root: &Path, candidate: &Path) -> Result<PathBuf, String> {
     if root.as_os_str().is_empty() {
         return Err("empty root".into());
     }
+    let portable = candidate.as_os_str().to_string_lossy();
+    let bytes = portable.as_bytes();
+    if portable.starts_with('\\')
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+    {
+        return Err("absolute path rejected".into());
+    }
     let mut normalized = PathBuf::new();
     for component in candidate.components() {
         match component {

@@ -1,4 +1,4 @@
-// Raw grid parsing for the Neovim原文ビュー (plugin screens).
+// Raw grid parsing for the NeovimNeovim 画面 (plugin screens).
 // Mirrors src-tauri/src/neovim/grid.rs: `redraw` params are the updates array
 // itself; each `grid_line` update carries [grid, row, col, cells] tuples with
 // variable-length cells [text] / [text, hl] / [text, hl, repeat].

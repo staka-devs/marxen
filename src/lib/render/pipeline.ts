@@ -119,7 +119,7 @@ function errorBox(message: string): Element {
 
 function rawDetails(source: string): Element {
   return element("details", { className: ["marxen-source"] }, [
-    element("summary", {}, [textNode("原文を表示")]),
+    element("summary", {}, [textNode("コードを表示")]),
     rawSourceBlock(source),
   ]);
 }
@@ -300,7 +300,7 @@ function rehypeMarxenBlocks() {
         siblings.splice(target.index, 1, holder as never);
       } else {
         const holder = element("div", { className: ["marxen-codeblock"], ...startProp, ...endProp }, [
-          element("p", { className: ["marxen-codeblock-note"] }, [textNode(`「${target.lang}」の強調表示には対応していません。原文のまま表示します。`)]),
+          element("p", { className: ["marxen-codeblock-note"] }, [textNode(`「${target.lang}」の強調表示には対応していません。Markdownのまま表示します。`)]),
           element("pre", {}, [element("code", { className: [`language-${target.lang}`] }, [textNode(normalized)])]),
         ]);
         siblings.splice(target.index, 1, holder as never);
@@ -314,7 +314,7 @@ const RANGE_TAGS = new Set([
   "p", "ul", "ol", "li", "table", "blockquote", "pre", "hr", "section", "details", "div",
 ]);
 
-/** Stamp shared source ranges so live/read map blocks to原文 lines. */
+/** Stamp shared source ranges so live/read map blocks toMarkdown lines. */
 function rehypeSourceRanges() {
   return (tree: Root) => {
     visit(tree, "element", (node: Element) => {
@@ -374,7 +374,7 @@ export async function renderMarkdownDocument(source: string): Promise<RenderResu
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
     return {
-      html: `<div class="marxen-error" role="alert">描画できませんでした。原文は保持されています。${escapeHtml(message)}</div><pre>${escapeHtml(source)}</pre>`,
+      html: `<div class="marxen-error" role="alert">描画できませんでした。Markdownは保持されています。${escapeHtml(message)}</div><pre>${escapeHtml(source)}</pre>`,
       diagnostics: [],
       blocks,
     };

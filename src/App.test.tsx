@@ -64,7 +64,9 @@ it("switches live/source/read/split without losing the document", async () => {
   fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "source" } });
   expect(screen.getByTestId("editor-primary")).toBeVisible();
   fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "split" } });
-  expect(screen.getByTestId("editor-secondary")).toBeVisible();
+  expect(screen.getByTestId("editor-primary")).toBeVisible();
+  await within(screen.getByTestId("preview")).findByText("日本語で書く");
+  expect(screen.queryByTestId("editor-secondary")).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "read" } });
   await within(screen.getByTestId("preview")).findByText("日本語で書く");
   expect(screen.getByTestId("preview").textContent).toBe(before);

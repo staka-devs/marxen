@@ -4,7 +4,7 @@ import type {
   CloseAction, CursorUpdate, DocumentId, DocumentSnapshot, GridUpdate, ImageData,
   ModeUpdate, NvimConfig, OpenDocument, PasteResult, RecoveryEntry, SaveRequest,
   SaveResult, SearchMatch, TextEdit, Utf16Range, WorkspaceEntry, WorkspaceEvent,
-  WorkspaceInfo,
+  WorkspaceInfo, VimInputResult,
 } from "../shared/contracts";
 
 /** Native commands never read/write files in JS; ranges count UTF-16 units. */
@@ -30,6 +30,7 @@ export const workspaceApi = {
     invoke<PasteResult>("paste_image", { ...request, name, bytes: Array.from(bytes), range }),
   input: (request: SaveRequest, keys: string) => invoke<DocumentSnapshot>("nvim_input", { ...request, keys }),
   fetchMode: (documentId: DocumentId) => invoke<ModeUpdate>("fetch_mode", { documentId }),
+  inputWithCopy: (request: SaveRequest, keys: string) => invoke<VimInputResult>("nvim_input_with_copy", { ...request, keys }),
   hasMapping: (documentId: DocumentId, mode: string, lhs: string) =>
     invoke<boolean>("has_nvim_mapping", { documentId, mode, lhs }),
   fetchCursor: (documentId: DocumentId) => invoke<CursorUpdate>("fetch_cursor", { documentId }),
@@ -187,7 +188,7 @@ export const SAMPLE_WORKSPACE: WorkspaceFile[] = [
   // every document through the Issue #4 registry, and the demo stays read-only.
   {
     path: "メモ/はじめに.md",
-    text: "# はじめに\n\nMarxen へようこそ。原文と Vim 操作を大切にします。\n\n- [ ] 日本語で書く\n- [ ] プレビューを見る\n\n| 項目 | 状態 |\n| --- | --- |\n| 原文 | 保持 |\n",
+    text: "# はじめに\n\nMarxen へようこそ。Markdownと Vim 操作を大切にします。\n\n- [ ] 日本語で書く\n- [ ] プレビューを見る\n\n| 項目 | 状態 |\n| --- | --- |\n| Markdown | 保持 |\n",
   },
   {
     path: "メモ/東京.md",
@@ -205,7 +206,7 @@ export const SAMPLE_WORKSPACE: WorkspaceFile[] = [
   // full fixtures are asserted in unit tests). Browser renders them read-only.
   {
     path: "検証/不正な構文.md",
-    text: "# 不正な構文でも表示を続けられるサンプル\n\n```mermaid\nflowchart LR\n    A --> [\n```\n\n$$\n\\frac{1}{\n$$\n\n最後の段落は原文のまま残ること。\n",
+    text: "# 不正な構文でも表示を続けられるサンプル\n\n```mermaid\nflowchart LR\n    A --> [\n```\n\n$$\n\\frac{1}{\n$$\n\n最後の段落はMarkdownのまま残ること。\n",
   },
   {
     path: "検証/安全でないHTML.md",

@@ -62,7 +62,7 @@ export function describeWorkspaceError(cause: unknown): string {
     const record = cause as { code: string; detail?: string; path?: string };
     switch (record.code) {
       case "conflict":
-        return `保存競合を検出しました (${record.path ?? "不明"})。最新の原文に再同期してから承認してください。`;
+        return `保存競合を検出しました (${record.path ?? "不明"})。最新のMarkdownに再同期してから承認してください。`;
       case "stale_revision":
         return "リビジョンが古いため拒否しました。再同期してください。";
       case "outside_workspace":

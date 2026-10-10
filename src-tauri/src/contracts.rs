@@ -1,5 +1,6 @@
 //! Wire contract v1. Rust owns this definition; export-contracts generates TypeScript.
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use ts_rs::TS;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -267,6 +268,35 @@ pub struct PasteResult {
 pub struct NvimConfig {
     pub path: Option<String>,
     pub errors: Vec<String>,
+    /// Copy selectors read from the active vimrc. Values use Neovim key
+    /// notation (for example `<F6>`), so the shell can compare them with its
+    /// serialized DOM key events without inventing a second mapping language.
+    pub copy_keys: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CopyFormat {
+    Markdown,
+    Text,
+    Rich,
+    Html,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct YankCopy {
+    pub format: CopyFormat,
+    /// Exact native TextYankPost contents, including linewise newlines.
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct VimInputResult {
+    pub snapshot: DocumentSnapshot,
+    pub copy: Option<YankCopy>,
+    pub copy_ready: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -310,6 +340,9 @@ pub fn typescript() -> String {
         ImageData::decl(&cfg),
         PasteResult::decl(&cfg),
         NvimConfig::decl(&cfg),
+        CopyFormat::decl(&cfg),
+        YankCopy::decl(&cfg),
+        VimInputResult::decl(&cfg),
         GridUpdate::decl(&cfg),
     ];
     let mut output = "// Generated from src-tauri/src/contracts.rs. Run npm run contracts:generate.\n// Do not edit by hand. Global offsets count UTF-16 code units; ranges are [start, end).\n".to_owned();

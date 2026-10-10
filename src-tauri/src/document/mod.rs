@@ -16,9 +16,9 @@
 //! normal buffer change that `u` reverts.
 
 use crate::contracts::{
-    ContractError, CursorUpdate, DocumentEvent, DocumentId, DocumentSnapshot, EditRequest,
-    GridUpdate, ModeUpdate, NvimConfig, Revision, SaveRequest, SaveResult, Utf16Offset, VimMode,
-    WorkspaceError,
+    ContractError, CopyFormat, CursorUpdate, DocumentEvent, DocumentId, DocumentSnapshot,
+    EditRequest, GridUpdate, ModeUpdate, NvimConfig, Revision, SaveRequest, SaveResult,
+    Utf16Offset, VimInputResult, VimMode, WorkspaceError, YankCopy,
 };
 use crate::neovim::config::ConfigSource;
 use crate::neovim::coordinates::global_utf16_to_line_byte;
@@ -87,6 +87,8 @@ struct ActorState {
     save_requested: bool,
     last_cursor: (Utf16Offset, Utf16Offset),
     gui_virtualedit: Option<String>,
+    /// One following command may choose a format for the last native yank.
+    ready_yank: Option<(Revision, String)>,
 }
 
 /// Serialized owner of one document's Neovim buffer, snapshot, and file path.
@@ -150,6 +152,7 @@ impl DocumentActor {
             ],
         )?;
         nvim.install_save_intercept()?;
+        nvim.install_yank_observer()?;
         nvim.command("setlocal buftype=acwrite")?;
         // Keep undo history anchored at the initial content: one clean change
         // so the first GUI edit is a single `undo` step back to initial.
@@ -174,6 +177,7 @@ impl DocumentActor {
                 save_requested: false,
                 last_cursor: (Utf16Offset(0), Utf16Offset(0)),
                 gui_virtualedit: None,
+                ready_yank: None,
             }),
         })
     }
@@ -308,6 +312,7 @@ impl DocumentActor {
             .state
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        state.ready_yank = None;
         state.nvim.input(keys)?;
         Self::sync_locked(&mut state)?;
         Self::service_notifications(&mut state)?;
@@ -325,10 +330,60 @@ impl DocumentActor {
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         Self::sync_locked(&mut state)?;
         validate_save(&state.snapshot, &request)?;
+        state.ready_yank = None;
         state.nvim.input(keys)?;
         Self::sync_locked(&mut state)?;
         Self::service_notifications(&mut state)?;
         Ok(state.snapshot.clone())
+    }
+
+    /// Native input and post-yank selectors share the actor lock. A selector
+    /// is considered only as the very next key after a real TextYankPost,
+    /// after a ready/mapping check. Every other key follows Neovim normally.
+    pub fn input_with_copy(
+        &self,
+        request: SaveRequest,
+        keys: &str,
+    ) -> Result<VimInputResult, ActorError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::sync_locked(&mut state)?;
+        Self::service_notifications(&mut state)?;
+        validate_save(&state.snapshot, &request)?;
+        if let Some((revision, text)) = state.ready_yank.take() {
+            if revision == state.snapshot.revision
+                && state.nvim.mode()? == VimMode::Normal
+                && !state.nvim.input_pending()?
+                && !crate::neovim::mapping::has_mapping(state.nvim.client(), "n", keys)?
+            {
+                for (name, selector) in state.nvim.copy_keys()? {
+                    if state.nvim.same_key(keys, &selector)? {
+                        let format = match name.as_str() {
+                            "markdown" => CopyFormat::Markdown,
+                            "text" => CopyFormat::Text,
+                            "rich" => CopyFormat::Rich,
+                            "html" => CopyFormat::Html,
+                            _ => continue,
+                        };
+                        return Ok(VimInputResult {
+                            snapshot: state.snapshot.clone(),
+                            copy: Some(YankCopy { format, text }),
+                            copy_ready: false,
+                        });
+                    }
+                }
+            }
+        }
+        state.nvim.input(keys)?;
+        Self::sync_locked(&mut state)?;
+        Self::service_notifications(&mut state)?;
+        Ok(VimInputResult {
+            snapshot: state.snapshot.clone(),
+            copy: None,
+            copy_ready: state.ready_yank.is_some(),
+        })
     }
 
     /// Native `undo` (shared history with GUI edits), then sync.
@@ -338,6 +393,7 @@ impl DocumentActor {
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         Self::require_ready(&state)?;
+        state.ready_yank = None;
         state.nvim.undo()?;
         let _ = state.nvim.mode();
         Self::sync_locked(&mut state)?;
@@ -350,6 +406,7 @@ impl DocumentActor {
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         Self::require_ready(&state)?;
+        state.ready_yank = None;
         state.nvim.redo()?;
         let _ = state.nvim.mode();
         Self::sync_locked(&mut state)?;
@@ -381,6 +438,24 @@ impl DocumentActor {
             revision: state.snapshot.revision,
             mode,
         })
+    }
+
+    pub fn copy_keys(&self) -> Result<std::collections::BTreeMap<String, String>, ActorError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
+        Ok(state.nvim.copy_keys()?)
+    }
+
+    pub fn copy_key_errors(&self) -> Result<Vec<String>, ActorError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
+        Ok(state.nvim.copy_config()?.1)
     }
 
     /// Display navigation must yield to user mappings and pending Vim input.
@@ -649,6 +724,9 @@ impl DocumentActor {
         Self::require_ready(&state)?;
         Self::sync_locked(&mut state)?;
         validate_cursor(&state.snapshot, &update)?;
+        if (update.anchor, update.head) != state.last_cursor {
+            state.ready_yank = None;
+        }
         let (mode, _) = state.nvim.mode_state()?;
         if mode == VimMode::VisualBlock && update.anchor != update.head {
             return Err(ActorError::Nvim(
@@ -797,12 +875,22 @@ impl DocumentActor {
             nvim.set_buf_name(&path.to_string_lossy())?;
         }
         nvim.install_save_intercept()?;
+        nvim.install_yank_observer()?;
         nvim.command("setlocal buftype=acwrite")?;
+        let (copy_keys, copy_errors) = nvim.copy_config()?;
         let result = NvimConfig {
             path: path.map(|p| p.display().to_string()),
-            errors: nvim.config_report().errors.clone(),
+            errors: nvim
+                .config_report()
+                .errors
+                .iter()
+                .cloned()
+                .chain(copy_errors)
+                .collect(),
+            copy_keys,
         };
         state.nvim = nvim;
+        state.ready_yank = None;
         state.gui_virtualedit = None;
         state.grid.clear();
         Ok(result)
@@ -817,6 +905,11 @@ impl DocumentActor {
 
     fn service_notifications(state: &mut ActorState) -> Result<(), ActorError> {
         for note in state.nvim.drain_notifications() {
+            if note.method == "marxen:yanked" {
+                if let Some(text) = note.params.first().and_then(rmpv::Value::as_str) {
+                    state.ready_yank = Some((state.snapshot.revision, text.to_owned()));
+                }
+            }
             if note.method == "marxen:save-requested" {
                 state.save_requested = true;
             }
@@ -902,6 +995,7 @@ impl DocumentActor {
             return Ok(false);
         }
         let revision = next_revision(state.snapshot.revision)?;
+        state.ready_yank = None;
         let dirty = state.baseline.as_ref() != Some(&storage::fingerprint(text.as_bytes()));
         state.snapshot = DocumentSnapshot {
             document_id: state.snapshot.document_id.clone(),

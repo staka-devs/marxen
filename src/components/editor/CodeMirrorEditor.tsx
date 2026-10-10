@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type CSSProperties } from "react";
 import { Compartment, EditorState } from "@codemirror/state";
-import { EditorView, lineNumbers } from "@codemirror/view";
+import { EditorView, lineNumbers, drawSelection, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 import type { TextEdit } from "../../shared/contracts";
 import { createLivePreview, type LivePreviewCallbacks } from "./livePreview";
 import type { ImageResolver } from "../preview/images";
+import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../lib/editor-preferences";
 
 export interface EditorSelection {
   anchor: number;
@@ -43,6 +44,9 @@ interface Props {
    * it after their HTML mounts, on the widget abort lifecycle.
    */
   resolveImage?: ImageResolver;
+  preferences?: EditorPreferences;
+  vimMode?: string;
+  allowTextInput?: boolean;
 }
 
 /** Common prefix/suffix diff as a single wire range edit. */
@@ -91,14 +95,19 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   return [{ range: { start, end: endBefore }, text: after.slice(start, endAfter) }];
 }
 
-export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage }: Props) {
+export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const editableRef = useRef(new Compartment());
   const liveRef = useRef(new Compartment());
+  const appearanceRef = useRef(new Compartment());
   const syncing = useRef(false);
   const composing = useRef(false);
   const preComposition = useRef<string | null>(null);
+  const preCompositionSelection = useRef<EditorSelection | null>(null);
+  const compositionAllowed = useRef(true);
+  const allowTextInputRef = useRef(allowTextInput);
+  allowTextInputRef.current = allowTextInput;
   const callbacks = useRef({ onGuiEdits, onSelectionChange });
   callbacks.current = { onGuiEdits, onSelectionChange };
   const valueRef = useRef(value);
@@ -135,17 +144,17 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
         selection: initialSelection ? { anchor: initialSelection.anchor, head: initialSelection.head } : undefined,
         extensions: [
           markdown(),
-          lineNumbers(),
-          EditorView.lineWrapping,
+          drawSelection({ cursorBlinkRate: 0 }),
+          appearanceRef.current.of([]),
           editableRef.current.of(EditorView.editable.of(editableRefValue.current)),
           liveRef.current.of([]),
           EditorView.contentAttributes.of({ "aria-label": ariaLabel, role: "textbox", tabindex: "0" }),
           EditorView.theme({
             "&": { backgroundColor: "transparent", fontSize: "14px", height: "100%" },
             ".cm-content": { fontFamily: "ui-monospace, monospace", padding: "12px 0" },
-            ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "#949084" },
+            ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "var(--muted-foreground)" },
             ".cm-scroller": { overflow: "auto" },
-            "&.cm-focused": { outline: "2px solid #6b8067", outlineOffset: "-2px" },
+            "&.cm-focused": { outline: "none" },
           }),
           EditorView.updateListener.of((update) => {
             if (syncing.current) return;
@@ -174,6 +183,8 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
     const onStart = () => {
       composing.current = true;
       preComposition.current = view.state.doc.toString();
+      preCompositionSelection.current = { anchor: view.state.selection.main.anchor, head: view.state.selection.main.head };
+      compositionAllowed.current = allowTextInputRef.current;
     };
     const onEnd = () => {
       if (!composing.current) return;
@@ -181,6 +192,14 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
       const before = preComposition.current ?? valueRef.current;
       const afterText = view.state.doc.toString();
       preComposition.current = null;
+      if (!compositionAllowed.current && !allowTextInputRef.current) {
+        syncing.current = true;
+        const prior = preCompositionSelection.current;
+        const selection = prior ? { anchor: Math.min(prior.anchor, valueRef.current.length), head: Math.min(prior.head, valueRef.current.length) } : undefined;
+        try { view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: valueRef.current }, selection }); }
+        finally { syncing.current = false; }
+        return;
+      }
       const edits = singleEditFromDiff(before, afterText);
       if (edits) callbacks.current.onGuiEdits?.(edits);
     };
@@ -224,6 +243,20 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
     view.dispatch({ effects: editableRef.current.reconfigure(EditorView.editable.of(editable)) });
   }, [editable]);
 
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({ effects: appearanceRef.current.reconfigure([
+      ...(preferences.lineNumbers ? [lineNumbers()] : []),
+      ...(preferences.wordWrap ? [EditorView.lineWrapping] : []),
+      ...(preferences.highlightActiveLine ? [highlightActiveLine(), highlightActiveLineGutter()] : []),
+      EditorView.theme({
+        "&": { fontSize: `${preferences.fontSize}px` },
+        ".cm-content": { lineHeight: String(preferences.lineHeight) },
+      }),
+    ]) });
+  }, [preferences.fontSize, preferences.lineHeight, preferences.lineNumbers, preferences.wordWrap, preferences.highlightActiveLine]);
+
   // Live widgets toggle without remounting the editor: reconfiguring the
   // compartment destroys removed widgets (abort + dispose run there).
   useEffect(() => {
@@ -257,5 +290,5 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
     }
   }, [externalCursor]);
 
-  return <div ref={host} data-testid={testId ?? "editor"} aria-label={ariaLabel} className="h-full min-h-0 flex-1 overflow-hidden" />;
+  return <div ref={host} data-testid={testId ?? "editor"} data-vim-mode={vimMode} data-readonly={!editable} style={{ "--editor-font-size": `${preferences.fontSize}px`, "--editor-line-height": preferences.lineHeight } as CSSProperties} aria-label={ariaLabel} className="marxen-editor h-full min-h-0 flex-1 overflow-hidden" />;
 }

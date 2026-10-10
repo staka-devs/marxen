@@ -28,7 +28,7 @@ describe("sanitizeSvg", () => {
 describe("hydration lifecycles", () => {
   it("writes nothing and resolves when already aborted", async () => {
     const root = document.createElement("div");
-    root.innerHTML = `<div class="marxen-special" data-marxen-kind="mermaid"><div class="marxen-mermaid-output"></div><details class="marxen-source"><summary>原文を表示</summary><pre><code>flowchart LR\n    A --&gt; B</code></pre></details></div>`;
+    root.innerHTML = `<div class="marxen-special" data-marxen-kind="mermaid"><div class="marxen-mermaid-output"></div><details class="marxen-source"><summary>コードを表示</summary><pre><code>flowchart LR\n    A --&gt; B</code></pre></details></div>`;
     const controller = new AbortController();
     controller.abort();
     await hydrateMarkdownView(root, controller.signal);

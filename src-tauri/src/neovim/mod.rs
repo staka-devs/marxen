@@ -16,6 +16,7 @@ pub mod rpc;
 use config::{argv_for, collect_errors, describe_source, ConfigReport, ConfigSource};
 use coordinates::{join_lines, split_lines};
 use rpc::{EmbedClient, RpcError};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -405,6 +406,100 @@ impl NeovimSession {
             "nvim_exec_lua",
             vec![rmpv::Value::from(code), rmpv::Value::Array(vec![])],
         )
+    }
+
+    /// Read Marxen's optional copy selectors from the already sourced vimrc.
+    /// The defaults deliberately use function keys, which are not motions or
+    /// operators in Normal mode. A user's vimrc can change them without
+    /// asking the frontend to parse Vimscript:
+    /// `let g:marxen_copy_markdown_key = '<F6>'` (empty disables a selector).
+    pub fn copy_keys(&self) -> Result<BTreeMap<String, String>, RpcError> {
+        Ok(self.copy_config()?.0)
+    }
+
+    pub fn copy_config(&self) -> Result<(BTreeMap<String, String>, Vec<String>), RpcError> {
+        let value = self.exec_lua(
+            r#"
+                local out = {keys = vim.empty_dict(), errors = {}}
+                local seen = {}
+                local reserved = {['<left>']=true, ['<right>']=true, ['<up>']=true,
+                    ['<down>']=true, ['<home>']=true, ['<end>']=true}
+                for i, name in ipairs({'markdown', 'text', 'rich', 'html'}) do
+                    local setting = 'marxen_copy_' .. name .. '_key'
+                    local value = vim.g[setting]
+                    if value == nil then value = '<F' .. (i + 5) .. '>' end
+                    local problem
+                    if type(value) ~= 'string' then problem = '文字列で指定してください。'
+                    elseif value ~= '' then
+                        local term = vim.api.nvim_replace_termcodes(value, true, true, true)
+                        local key = vim.fn.keytrans(term):lower()
+                        local single = vim.fn.strchars(term) == 1 or key:match('^<[^<>]+>$')
+                        if #value > 64 or not single then problem = '一つのキーを指定してください。'
+                        elseif reserved[key] or (key:find('[cd]%-') and key:match('[ps]>$')) then
+                            problem = 'アプリのショートカット・表示行移動のキーは指定できません。'
+                        elseif seen[term] then
+                            problem = 'g:marxen_copy_' .. seen[term] .. '_key と重複しています。'
+                            out.keys[seen[term]] = nil
+                        else seen[term] = name; out.keys[name] = value end
+                    end
+                    if problem then table.insert(out.errors, 'g:' .. setting .. ': ' .. problem) end
+                end
+                return out
+            "#,
+        )?;
+        #[derive(serde::Deserialize)]
+        struct Config {
+            keys: BTreeMap<String, String>,
+            errors: Vec<String>,
+        }
+        let config: Config = rmpv::ext::from_value(value)
+            .map_err(|error| RpcError::Invalid(format!("copy configuration: {error}")))?;
+        Ok((config.keys, config.errors))
+    }
+
+    /// Compare canonical Neovim termcodes, including case aliases such as
+    /// `<c-f6>`. Called only when native input is ready for another command.
+    pub fn same_key(&self, left: &str, right: &str) -> Result<bool, RpcError> {
+        let value = self.client.call("nvim_exec_lua", vec![
+            rmpv::Value::from("local a,b = ...; return vim.api.nvim_replace_termcodes(a,true,true,true) == vim.api.nvim_replace_termcodes(b,true,true,true)"),
+            rmpv::Value::Array(vec![left.into(), right.into()]),
+        ])?;
+        value
+            .as_bool()
+            .ok_or_else(|| RpcError::Invalid("key comparison is not boolean".into()))
+    }
+
+    /// Observe actual yanks (including mapped, repeated, named-register and
+    /// rectangular yanks). Never read a deferred register API while Vim is
+    /// waiting for a motion. Delete/change events do not arm copy selectors.
+    pub fn install_yank_observer(&self) -> Result<(), RpcError> {
+        self.client.call(
+            "nvim_exec_lua",
+            vec![
+                rmpv::Value::from(
+                    r#"
+                local owned = ...
+                local target = 1
+                for _, channel in ipairs(vim.api.nvim_list_chans()) do
+                    if channel.stream == 'stdio' then target = channel.id; break end
+                end
+                local group = vim.api.nvim_create_augroup('marxen_yank_' .. owned, {clear = true})
+                vim.api.nvim_create_autocmd('TextYankPost', {
+                    group = group, buffer = owned,
+                    callback = function()
+                        local event = vim.v.event
+                        if event.operator ~= 'y' then return end
+                        local text = table.concat(event.regcontents, '\n')
+                        if event.regtype == 'V' then text = text .. '\n' end
+                        vim.fn.rpcnotify(target, 'marxen:yanked', text)
+                    end,
+                })
+            "#,
+                ),
+                rmpv::Value::Array(vec![self.buf.clone()]),
+            ],
+        )?;
+        Ok(())
     }
 
     pub fn call_function(

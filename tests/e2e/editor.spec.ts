@@ -26,7 +26,20 @@ test("live/source/read/split retain the document without editing it", async ({ p
   await expect(page.locator('[data-testid="editor-primary"] .cm-content')).toBeVisible();
 
   await setViewMode(page, "split");
-  await expect(page.locator('[data-testid="editor-secondary"] .cm-content')).toBeVisible();
+  await expect(page.locator('[data-testid="editor-primary"] .cm-content')).toBeVisible();
+  await expect(page.getByTestId("preview")).toContainText("日本語で書く");
+  await expect(page.locator(".cm-editor")).toHaveCount(1);
+  const left = await page.getByTestId("editor-primary").boundingBox();
+  const right = await page.getByTestId("preview").boundingBox();
+  expect(left!.x + left!.width).toBeLessThan(right!.x);
+  expect(Math.abs(left!.y - right!.y)).toBeLessThan(2);
+  const divider = page.getByRole("separator", { name: "Markdown とプレビューの幅" });
+  await divider.focus();
+  await divider.press("ArrowRight");
+  await expect(divider).toHaveAttribute("aria-valuenow", "55");
+  expect((await page.getByTestId("editor-primary").boundingBox())!.width).toBeGreaterThan(left!.width);
+  await divider.press("Home");
+  await expect(divider).toHaveAttribute("aria-valuenow", "50");
 
   await setViewMode(page, "live");
   await expect(page.locator('[data-testid="editor-primary"] .cm-content')).toBeVisible();
@@ -61,7 +74,7 @@ test("invalid fixtures render safely without executing", async ({ page }) => {
 
   await page.getByRole("button", { name: "検証/不正な構文.md" }).click();
   await setViewMode(page, "read");
-  await expect(page.getByTestId("preview")).toContainText("原文のまま残ること");
+  await expect(page.getByTestId("preview")).toContainText("Markdownのまま残ること");
   await expect(page.getByTestId("revision")).toHaveText("リビジョン 0");
 });
 
@@ -103,10 +116,10 @@ test("tree/tabs/quick-open/search/outline/palette/themes work in Japanese", asyn
   await page.screenshot({ path: "docs/reports/issue-5-ui/settings-dark.png" });
 });
 
-test("Neovim原文ビュー handles plugin screens", async ({ page }) => {
+test("NeovimNeovim 画面 handles plugin screens", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "その他の操作" }).click();
-  await page.getByRole("menuitem", { name: "原文ビュー" }).click();
+  await page.getByRole("menuitem", { name: "Neovim 画面" }).click();
   const raw = page.getByTestId("raw-grid");
   await expect(raw).toBeVisible();
   await expect(raw).toHaveAttribute("role", "textbox");

@@ -196,6 +196,14 @@ pub fn guard_staging_path(root: &Path, candidate: &Path) -> Result<PathBuf, Work
     if root.as_os_str().is_empty() {
         return Err(WorkspaceError::InvalidPath);
     }
+    // Unix Path components do not recognize Windows drive or rooted paths.
+    let portable = candidate.as_os_str().to_string_lossy();
+    let bytes = portable.as_bytes();
+    if portable.starts_with('\\')
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+    {
+        return Err(WorkspaceError::OutsideWorkspace);
+    }
     let mut normalized = PathBuf::new();
     for component in candidate.components() {
         match component {

@@ -86,7 +86,7 @@ export function validateGeoJson(source: string): GeoJsonValidation {
   try {
     data = JSON.parse(source);
   } catch {
-    return { ok: false, message: "GeoJSON を JSON として読めません。原文を修正してください。" };
+    return { ok: false, message: "GeoJSON を JSON として読めません。Markdownを修正してください。" };
   }
   if (!data || typeof data !== "object") return { ok: false, message: "GeoJSON がオブジェクトではありません。" };
   const doc = data as GeoJsonGeometry & { features?: unknown };
@@ -147,7 +147,7 @@ export function validateTopoJson(source: string): TopoJsonValidation {
   try {
     data = JSON.parse(source);
   } catch {
-    return { ok: false, message: "TopoJSON を JSON として読めません。原文を修正してください。" };
+    return { ok: false, message: "TopoJSON を JSON として読めません。Markdownを修正してください。" };
   }
   if (!data || typeof data !== "object") return { ok: false, message: "TopoJSON がオブジェクトではありません。" };
   const doc = data as { type?: unknown; objects?: unknown; arcs?: unknown };
@@ -248,7 +248,7 @@ export function validateMermaidStructure(source: string): BlockValidation {
   ];
   for (const [open, close] of pairs) {
     if (!balancedPairs(source, open, close)) {
-      return { ok: false, message: `Mermaid の「${open}${close}」の対応が崩れています。原文を確認してください。` };
+      return { ok: false, message: `Mermaid の「${open}${close}」の対応が崩れています。Markdownを確認してください。` };
     }
   }
   return { ok: true };
@@ -258,7 +258,7 @@ export function validateMermaidStructure(source: string): BlockValidation {
 export function validateMathContent(source: string): BlockValidation {
   if (source.trim() === "") return { ok: false, message: "数式が空です。" };
   if (!balancedPairs(source, "{", "}")) {
-    return { ok: false, message: "数式の { } の対応が崩れています。原文を確認してください。" };
+    return { ok: false, message: "数式の { } の対応が崩れています。Markdownを確認してください。" };
   }
   return { ok: true };
 }

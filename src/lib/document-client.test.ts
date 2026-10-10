@@ -23,6 +23,49 @@ function snapshot(documentId: string, revision: number, text: string, dirty = tr
 
 beforeEach(() => vi.resetAllMocks());
 
+it("serializes copy formatting and native writes before accepting the next key", async () => {
+  const client = new RegistryClient();
+  let releaseCopy!: () => void;
+  mockedInvoke.mockResolvedValue({ snapshot: snapshot("copy", 0, "source", false), copy: { format: "rich", text: "source" }, copyReady: false });
+  const onCopy = vi.fn(() => new Promise<void>((resolve) => { releaseCopy = resolve; }));
+  const first = client.vimInputWithCopy("copy", "<F8>", onCopy);
+  const second = client.vimInputWithCopy("copy", "j", vi.fn());
+  await vi.waitFor(() => expect(onCopy).toHaveBeenCalledOnce());
+  expect(mockedInvoke).toHaveBeenCalledOnce();
+  releaseCopy();
+  await first;
+  await second;
+  expect(mockedInvoke).toHaveBeenNthCalledWith(2, "nvim_input_with_copy", { documentId: "copy", baseRevision: 0, keys: "j" });
+});
+
+it("rejects a stale copy selector before writing the clipboard", async () => {
+  const client = new RegistryClient();
+  mockedInvoke.mockRejectedValueOnce({ code: "contract", error: { code: "stale_revision", expected: 1, received: 0 } });
+  mockedInvoke.mockResolvedValueOnce(snapshot("copy", 1, "fresh"));
+  const onCopy = vi.fn();
+  await expect(client.vimInputWithCopy("copy", "<F6>", onCopy)).rejects.toBeInstanceOf(StaleResync);
+  expect(onCopy).not.toHaveBeenCalled();
+});
+
+it("routes a printable copy selector using the queued native mode after an Insert to Normal burst", async () => {
+  const client = new RegistryClient();
+  const onCopy = vi.fn(async () => {});
+  const keys: string[] = [];
+  mockedInvoke.mockImplementation(async (command, args) => {
+    if (command === "fetch_mode") return { mode: "normal", revision: 0 };
+    if (command === "nvim_input_with_copy") {
+      keys.push(String((args as { keys: string }).keys));
+      return { snapshot: snapshot("copy", 0, "source", false), copyReady: keys.length === 3,
+        copy: keys.length === 4 ? { format: "markdown", text: "source\n" } : null };
+    }
+    throw new Error(`Unexpected ${command}`);
+  });
+  const results = await Promise.all(["<Esc>", "y", "y", "m"].map(key => client.routeCharKey("copy", key, { start: 0, end: 0 }, onCopy)));
+  expect(keys).toEqual(["<Esc>", "y", "y", "m"]);
+  expect(onCopy).toHaveBeenCalledExactlyOnceWith({ format: "markdown", text: "source\n" });
+  expect(results.at(-1)).toMatchObject({ action: "vim", copyReady: false });
+});
+
 describe("registry client sends revision-aware requests", () => {
   it("passes document IDs and base revisions through unchanged", async () => {
     const client = new RegistryClient();
