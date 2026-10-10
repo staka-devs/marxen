@@ -4,6 +4,7 @@
 use marxen_lib::ai::*;
 use marxen_lib::ai_contracts::*;
 use marxen_lib::contracts::{DocumentId, Revision, Utf16Offset, Utf16Range};
+use marxen_lib::isolation::{guard_staging_path as guard_isolation_path, IsolationManager};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -477,21 +478,6 @@ async fn live_tests_use_mock_server_without_real_credentials() {
     server.done.take().expect("join").join().expect("server");
 }
 
-struct FixedResolver {
-    root: PathBuf,
-}
-
-impl StagingResolver for FixedResolver {
-    fn root(&self) -> &Path {
-        &self.root
-    }
-
-    fn resolve(&self, copy_id: &IsolatedCopyId) -> Result<PathBuf, AiError> {
-        let candidate = PathBuf::from(&copy_id.0);
-        guard_staging_path(&self.root, &candidate)
-    }
-}
-
 fn acp_request(argv: AcpArgv) -> AiPromptRequest {
     AiPromptRequest {
         provider: AiProviderConfig {
@@ -554,11 +540,9 @@ fn acp_full_run_streams_chunks_inside_staging_copy() {
     std::fs::create_dir_all(&staging).expect("staging dir");
     std::fs::create_dir_all(staging.join("copy_07")).expect("copy dir");
     let flags = fresh_dir("marxen-ai-test-flags-full");
-    let resolver = FixedResolver {
-        root: staging.clone(),
-    };
     let request = acp_request(mock_agent_argv_with_flag_dir(&[], &flags));
-    let staging_dir = resolver.resolve(&request.staging.copy_id).unwrap();
+    let staging_dir =
+        guard_isolation_path(&staging, Path::new(&request.staging.copy_id.0)).unwrap();
     assert!(staging_dir.starts_with(&staging));
     let registry = Arc::new(RunRegistry::new());
     let (run_id, cancel) = registry.register();
@@ -825,15 +809,14 @@ fn dry_runs_and_handshakes_use_no_real_credentials() {
 }
 
 #[test]
-fn staging_resolver_interface_rejects_outside_copies() {
-    let root = std::env::temp_dir().join("marxen-ai-test-resolver");
-    std::fs::create_dir_all(&root).expect("root");
-    let resolver = FixedResolver { root: root.clone() };
-    let inside = resolver.resolve(&IsolatedCopyId("copy_07".into())).unwrap();
-    assert!(inside.starts_with(&root));
-    assert!(RejectingResolver
-        .resolve(&IsolatedCopyId("copy_07".into()))
-        .is_err());
+fn staging_guard_and_manager_reject_outside_or_unknown_copies() {
+    let root = tempfile::tempdir().unwrap();
+    let inside = guard_isolation_path(root.path(), Path::new("copy_07")).unwrap();
+    assert!(inside.starts_with(root.path()));
+    assert!(guard_isolation_path(root.path(), Path::new("../live/doc.md")).is_err());
+    assert!(guard_isolation_path(root.path(), root.path()).is_err());
+    let manager = IsolationManager::open(root.path()).unwrap();
+    assert!(manager.resolve(&IsolatedCopyId("copy_07".into())).is_err());
 }
 
 fn run_mock_prompt(
@@ -845,9 +828,9 @@ fn run_mock_prompt(
     std::fs::create_dir_all(staging.join("copy_07")).expect("copy dir");
     let flags = fresh_dir(&format!("marxen-ai-test-flags-{flag_name}"));
     let argv = mock_agent_argv_with_flag_dir(extra, &flags);
-    let resolver = FixedResolver { root: staging };
     let request = acp_request(argv.clone());
-    let staging_dir = resolver.resolve(&request.staging.copy_id).unwrap();
+    let staging_dir =
+        guard_isolation_path(&staging, Path::new(&request.staging.copy_id.0)).unwrap();
     let registry = Arc::new(RunRegistry::new());
     let (run_id, cancel) = registry.register();
     let params = acp_params(argv, &staging_dir, timeout);
@@ -883,9 +866,9 @@ fn acp_fragmented_and_coalesced_writes_decode_identically() {
 fn acp_rejects_oversized_lines() {
     let staging = fresh_dir("marxen-ai-test-staging-huge");
     std::fs::create_dir_all(staging.join("copy_07")).expect("copy dir");
-    let resolver = FixedResolver { root: staging };
     let request = acp_request(mock_agent_argv(&["--huge-line", "--no-permission"]));
-    let staging_dir = resolver.resolve(&request.staging.copy_id).unwrap();
+    let staging_dir =
+        guard_isolation_path(&staging, Path::new(&request.staging.copy_id.0)).unwrap();
     let registry = Arc::new(RunRegistry::new());
     let (run_id, cancel) = registry.register();
     let params = acp_params(
@@ -934,9 +917,9 @@ fn acp_graceful_cancel_uses_notification_and_clean_exit() {
     std::fs::create_dir_all(staging.join("copy_07")).expect("copy dir");
     let flags = fresh_dir("marxen-ai-test-flags-graceful");
     let argv = mock_agent_argv_with_flag_dir(&["--cancel-graceful"], &flags);
-    let resolver = FixedResolver { root: staging };
     let request = acp_request(argv.clone());
-    let staging_dir = resolver.resolve(&request.staging.copy_id).unwrap();
+    let staging_dir =
+        guard_isolation_path(&staging, Path::new(&request.staging.copy_id.0)).unwrap();
     let registry = Arc::new(RunRegistry::new());
     let (run_id, cancel) = registry.register();
     let params = acp_params(argv, &staging_dir, Duration::from_secs(30));

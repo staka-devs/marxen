@@ -2,6 +2,11 @@
 use crate::contracts::WorkspaceEvent;
 use crate::workspace::Workspace;
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "desktop")]
+pub mod ai;
+#[cfg(feature = "desktop")]
+pub mod isolation;
+
 #[derive(Default)]
 pub struct ActorState {
     pub workspace: Arc<Mutex<Option<Workspace>>>,
