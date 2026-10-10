@@ -108,6 +108,8 @@ test("tree/tabs/quick-open/search/outline/palette/themes work in Japanese", asyn
   await page.screenshot({ path: "docs/reports/issue-5-ui/palette.png" });
   await page.getByTestId("command-palette").getByLabel("コマンドで絞り込む").fill("保存");
   await expect(page.getByTestId("command-palette")).toContainText("ファイル: 保存する");
+  await page.getByTestId("command-palette").getByLabel("コマンドで絞り込む").press("Escape");
+  await expect(page.getByTestId("command-palette")).not.toBeVisible();
 
   await page.getByRole("button", { name: "設定表示切替" }).click();
   await expect(page.getByTestId("settings")).toBeVisible();
