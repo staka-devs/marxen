@@ -509,18 +509,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               )}
               {desktop && workspace.wsRoot && <button type="button" onClick={() => setRootCollapsed((value) => !value)} aria-expanded={!rootCollapsed} aria-label="ワークスペースのフォルダー" className="flex h-8 w-full items-center gap-1.5 px-3 text-left text-xs font-semibold hover:bg-muted/50" title={workspace.wsRoot}>{rootCollapsed ? <ChevronRight size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" /> : <ChevronDown size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />}<FolderOpen size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" /><span className="truncate">{workspace.wsRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace.wsRoot}</span></button>}
               {(!desktop || !rootCollapsed) && <FileTree desktop={desktop} nodes={treeNodes} activePath={activeImage ?? active?.path ?? null} onOpenFile={(path) => { void session.openFile(path); if (window.innerWidth < 768) setSideView(null); }} />}
-              {desktop && !workspace.wsRoot && (
-                <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
-                  <p className="mb-2">フォルダーを開いてください。</p>
-                  <button
-                    type="button"
-                    onClick={() => void workspace.pickFolderAndOpen()}
-                    className="w-full rounded-md border border-border px-2 py-1.5"
-                  >
-                    フォルダーを開く
-                  </button>
-                </div>
-              )}
+              {desktop && !workspace.wsRoot && <p className="px-4 py-3 text-xs leading-5 text-muted-foreground">フォルダーが選択されていません。</p>}
             </div>
           )}
           {sideView === "search" && (

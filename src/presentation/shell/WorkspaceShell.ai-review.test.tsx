@@ -206,7 +206,7 @@ let handler: ((event: AiStreamEvent) => void) | null = null;
   fireEvent.click(screen.getByRole("button", { name: "開く" }));
   await screen.findByRole("button", { name: "メモ/a.md" });
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   fireEvent.click(screen.getByRole("button", { name: "AI 支援" }));
   await screen.findByTestId("ai-sidebar");
 }

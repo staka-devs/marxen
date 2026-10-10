@@ -7,7 +7,8 @@ import type { AiGateway } from "../application/ports";
 
 const mockStartPrompt = vi.fn<AiGateway["startPrompt"]>();
 
-vi.mock("./ai-provider-settings", () => ({
+vi.mock("./ai-provider-settings", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./ai-provider-settings")>(),
   /** Mocked settings subview for chat tests. */
   default: () => <div>接続設定 mock</div>,
 }));
