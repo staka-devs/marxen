@@ -21,6 +21,9 @@ import {
   describeWorkspaceError as describeIsolationError,
 } from "../../lib/isolation";
 import { FileTree, buildTree } from "../workspace/FileTree";
+import { ImageViewer } from "../workspace/ImageViewer";
+import { ImageDropZone, type ImageDrop } from "../workspace/ImageDropZone";
+import { entryKind, isImagePath, isMarkdownPath } from "../../lib/workspace-files";
 import { Tabs, type TabItem } from "../workspace/Tabs";
 import { QuickOpen } from "../workspace/QuickOpen";
 import { SearchPanel, type SearchHitItem } from "../workspace/SearchPanel";
@@ -162,6 +165,7 @@ export function WorkspaceShell() {
   const [wsRoot, setWsRoot] = useState<string | null>(null);
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
   const [docs, setDocs] = useState<Record<string, OpenDoc>>(desktop ? {} : demo);
+  const [imageTabs, setImageTabs] = useState<Record<string, string>>({});
   const [tabs, setTabs] = useState<string[]>(() => (desktop ? [] : [SAMPLE_WORKSPACE[0].path]));
   const [activeId, setActiveId] = useState<string | null>(() => (desktop ? null : SAMPLE_WORKSPACE[0].path));
   const [viewMode, setViewMode] = useState<ViewMode>("live");
@@ -275,6 +279,9 @@ export function WorkspaceShell() {
   }, []);
 
   const active: OpenDoc | null = activeId ? (docs[activeId] ?? null) : null;
+  const activeImage = activeId ? imageTabs[activeId] : undefined;
+  const activeIsMarkdown = active !== null && isMarkdownPath(active.path);
+  const effectiveViewMode: ViewMode = active && !activeIsMarkdown ? "source" : viewMode;
 
   const sayStale = useCallback((snapshot: DocumentSnapshot) => {
     const id = snapshot.documentId;
@@ -415,6 +422,7 @@ export function WorkspaceShell() {
           next[doc.snapshot.documentId] = docFromOpen(doc);
         }
         setDocs(next);
+        setImageTabs({});
         const ids = open.map((doc) => doc.snapshot.documentId);
         setTabs(ids);
         setActiveId(ids[0] ?? null);
@@ -446,8 +454,15 @@ export function WorkspaceShell() {
         setActiveId(path);
         return;
       }
+      if (isImagePath(path)) {
+        const id = "image:" + path;
+        setImageTabs(prev => ({ ...prev, [id]: path }));
+        setTabs(prev => prev.includes(id) ? prev : [...prev, id]);
+        setActiveId(id);
+        return;
+      }
       try {
-        const open = await workspaceApi.openMarkdown(path);
+        const open = await (isMarkdownPath(path) ? workspaceApi.openMarkdown(path) : workspaceApi.openTextFile(path));
         const doc = docFromOpen(open);
         if (registry instanceof RegistryClient) registry.noteSnapshot(open.snapshot);
         setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
@@ -602,6 +617,15 @@ export function WorkspaceShell() {
 
   const closeTab = useCallback(
     async (id: string) => {
+      if (id.startsWith("image:")) {
+        setImageTabs(prev => { const next = { ...prev }; delete next[id]; return next; });
+        setTabs(prev => {
+          const next = prev.filter(item => item !== id);
+          if (activeRef.current === id) setActiveId(next[next.length - 1] ?? null);
+          return next;
+        });
+        return;
+      }
       if (!registry) {
         setTabs((prev) => {
           const next = prev.filter((item) => item !== id);
@@ -971,7 +995,7 @@ export function WorkspaceShell() {
           revision = result.snapshot.revision;
           const inserted = result.snapshot.text.length - previousLength;
           previousLength = result.snapshot.text.length;
-          const next = cursor.start + Math.max(inserted, 0);
+          const next = cursor.end + inserted;
           cursor = { start: next, end: next };
           if (!isSelectionGenCurrent(id, gen)) {
             mergeSnapshot(result.snapshot);
@@ -1000,7 +1024,7 @@ export function WorkspaceShell() {
       const id = activeRef.current;
       if (!docsRef.current[id]) return;
       const data = event.clipboardData;
-      const files = Array.from(data?.files ?? []).filter((file) => /^image\/(png|jpeg|gif|webp)$/.test(file.type));
+      const files = isMarkdownPath(docsRef.current[id].path) ? Array.from(data?.files ?? []).filter((file) => /^image\/(png|jpeg|gif|webp)$/.test(file.type)) : [];
       if (files.length > 0) {
         // Empty text alongside images is a pure image paste: files win and
         // the (empty) text is ignored so nothing inserts twice.
@@ -1043,6 +1067,51 @@ export function WorkspaceShell() {
     },
     [desktop, registry, takeRange, pasteImageFiles, routeCapturedPaste],
   );
+
+  const handleImageDrop = useCallback((drop: ImageDrop, range: { start: number; end: number }) => {
+    const id = activeRef.current;
+    const doc = id ? docsRef.current[id] : undefined;
+    if (!id || !doc || !registry || !isMarkdownPath(doc.path)) return;
+    if (drop.kind === "files") {
+      void pasteImageFiles(id, drop.files, range);
+      return;
+    }
+    const gen = bumpSelectionGen(id);
+    const request = { documentId: id, baseRevision: doc.revision };
+    void (async () => {
+      try {
+        let revision = request.baseRevision;
+        let cursor = range;
+        let length = doc.text.length;
+        const paths = drop.kind === "workspace" ? [drop.path] : drop.paths;
+        for (const path of paths) {
+          const result = drop.kind === "workspace"
+            ? await registry.insertWorkspaceImage({ documentId: id, baseRevision: revision }, path, cursor)
+            : (await registry.importExternalImage({ documentId: id, baseRevision: revision }, path, cursor)).snapshot;
+          revision = result.revision;
+          const next = cursor.end + result.text.length - length;
+          length = result.text.length;
+          cursor = { start: next, end: next };
+          mergeSnapshot(result);
+          if (isSelectionGenCurrent(id, gen)) {
+            caretRef.current[id] = next;
+            setSelections(prev => ({ ...prev, [id]: { anchor: next, head: next } }));
+            echoCursor(id, next, next);
+          }
+        }
+        await loadEntries();
+        setNotice("画像を挿入しました。");
+      } catch (cause) {
+        if (cause instanceof StaleResync) sayStale(cause.snapshot);
+        else setNotice(workspaceErrorText(cause));
+      }
+    })();
+  }, [registry, pasteImageFiles, bumpSelectionGen, mergeSnapshot, isSelectionGenCurrent, echoCursor, loadEntries, sayStale]);
+
+  const dropSelection = active ? {
+    start: Math.min(selections[active.documentId]?.anchor ?? 0, selections[active.documentId]?.head ?? 0),
+    end: Math.max(selections[active.documentId]?.anchor ?? 0, selections[active.documentId]?.head ?? 0),
+  } : { start: 0, end: 0 };
 
   // -- search + revision-aware replace ---------------------------------------
 
@@ -1256,7 +1325,7 @@ export function WorkspaceShell() {
   }, [desktop, activeId, active?.revision, wsRoot, refreshRuntime]);
 
   useEffect(() => {
-    if (!desktop || !activeId) return;
+    if (!desktop || !activeId || !docsRef.current[activeId]) return;
     void refreshModeCursor(activeId);
   }, [desktop, activeId, refreshModeCursor]);
 
@@ -1389,7 +1458,7 @@ export function WorkspaceShell() {
   }, [registry, configPath, mergeSnapshot, refreshModeCursor, sayStale]);
 
   useEffect(() => {
-    if (!registry || !activeId) return;
+    if (!registry || !activeId || !docsRef.current[activeId]) return;
     registry
       .fetchConfig(activeId)
       .then((config) => {
@@ -1498,13 +1567,13 @@ export function WorkspaceShell() {
     () =>
       tabs.map((id) => {
         const doc = docs[id];
-        return { id, label: fileLabel(doc?.path ?? null, id), dirty: doc?.dirty ?? false };
+        return { id, label: fileLabel(imageTabs[id] ?? doc?.path ?? null, id), dirty: doc?.dirty ?? false };
       }),
-    [tabs, docs],
+    [tabs, docs, imageTabs],
   );
 
   const quickPaths = useMemo(() => {
-    const fromEntries = entries.filter((entry) => !entry.directory && entry.markdown).map((entry) => entry.path);
+    const fromEntries = entries.filter((entry) => !entry.directory && entryKind(entry)).map((entry) => entry.path);
     const fromDocs = Object.values(docs).map((doc) => doc.path).filter((path): path is string => path !== null);
     return Array.from(new Set([...fromDocs, ...fromEntries, ...Object.keys(demo)]));
   }, [entries, docs, demo]);
@@ -1696,21 +1765,19 @@ export function WorkspaceShell() {
     });
     setInlineKind(target.kind);
     setInlineOpen(true);
-    setShowAi(true);
   }, [registry, selections, inlineBusy]);
 
   const inlineAnchor = useCallback(() => {
     const host = document.querySelector<HTMLElement>('[data-testid="editor-primary"] .cm-editor');
     if (!host) return null;
+    const box = host.getBoundingClientRect();
     try {
       const view = EditorView.findFromDOM(host);
-      const range = inlineSnapshot?.ranges[0];
-      const caret = view?.coordsAtPos(Math.min(range?.end ?? 0, view.state.doc.length));
-      if (caret) return caret;
+      const caret = view?.coordsAtPos(view.state.selection.main.head);
+      if (caret) return { ...caret, left: Math.min(caret.left, Math.max(box.left + 12, box.right - 396)) };
     } catch { /* Editor may be rebuilding after a view switch. */ }
-    const box = host.getBoundingClientRect();
     return { left: box.left + 24, top: box.top + 24, bottom: box.top + 48 };
-  }, [inlineSnapshot]);
+  }, []);
 
   const closeInlineChat = useCallback(() => {
     setInlineOpen(false);
@@ -2019,8 +2086,8 @@ export function WorkspaceShell() {
                   </button>
                 </div>
               )}
-              {desktop && wsRoot && <p className="truncate px-2 text-[11px] text-muted-foreground" title={wsRoot}>{wsRoot}</p>}
-              <FileTree nodes={treeNodes} activePath={active?.path ?? null} onOpenFile={(path) => void openFile(path)} />
+              {desktop && wsRoot && <p className="flex items-center gap-1.5 px-2 text-xs font-medium" title={wsRoot}><FolderOpen size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" /><span className="truncate">{wsRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? wsRoot}</span></p>}
+              <FileTree nodes={treeNodes} activePath={activeImage ?? active?.path ?? null} onOpenFile={(path) => void openFile(path)} />
               {desktop && !wsRoot && (
                 <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
                   <p className="mb-2">フォルダーを開いてください。</p>
@@ -2068,7 +2135,8 @@ export function WorkspaceShell() {
           <label className="sr-only" htmlFor="view-mode-select">表示モード</label>
           <select
             id="view-mode-select"
-            value={viewMode}
+            value={effectiveViewMode}
+            disabled={!activeIsMarkdown}
             onChange={(event) => setViewMode(event.target.value as ViewMode)}
             aria-label="表示モード"
             className="h-7 max-w-36 rounded bg-transparent px-1 text-xs text-muted-foreground hover:bg-muted"
@@ -2083,6 +2151,7 @@ export function WorkspaceShell() {
             type="button"
             onClick={() => setViewMode((mode) => mode === "split" ? "live" : "split")}
             aria-label="プレビューを横に開く"
+            disabled={!activeIsMarkdown}
             aria-pressed={viewMode === "split"}
             title="プレビューを横に開く"
             className={`rounded p-1.5 hover:bg-muted ${viewMode === "split" ? "text-primary" : "text-muted-foreground"}`}
@@ -2092,7 +2161,7 @@ export function WorkspaceShell() {
           <button
             type="button"
             onClick={() => void handleSave()}
-            disabled={!desktop}
+            disabled={!desktop || !active}
             title={desktop ? "保存" : READONLY_MESSAGE}
             aria-label="保存"
             className="rounded-md p-1.5 text-muted-foreground hover:bg-muted disabled:opacity-50"
@@ -2184,7 +2253,7 @@ export function WorkspaceShell() {
                 onUndo={() => void handleUndo()}
                 onRedo={() => void handleRedo()}
                 vimMode={MODE_JA[vimMode] ?? vimMode}
-                disabled={!desktop}
+                disabled={!desktop || !activeIsMarkdown}
               />
             <div role="group" aria-label="移動基準" className="mt-2 flex gap-1">
               {(["display", "source"] as NavBasis[]).map((basis) => (
@@ -2376,20 +2445,21 @@ export function WorkspaceShell() {
 
         <main
           className="grid min-h-0 min-w-0 flex-1 overflow-hidden"
-          style={{ gridTemplateColumns: viewMode === "split" && active ? `minmax(0, ${splitRatio}fr) 5px minmax(0, ${100 - splitRatio}fr)` : "minmax(0, 1fr)" }}
+          style={{ gridTemplateColumns: effectiveViewMode === "split" && activeIsMarkdown && active ? `minmax(0, ${splitRatio}fr) 5px minmax(0, ${100 - splitRatio}fr)` : "minmax(0, 1fr)" }}
           aria-label="編集領域"
         >
           {/* One editor-primary at a time: live owns the inline preview
               pane, source/split own the raw pane. Selections live in shell
               state so scroll/cursor survive mode switches. */}
-          {active ? (
-            viewMode === "live" ? (
-              <div onKeyDownCapture={onEditorKeyDown} onPasteCapture={onPasteCapture} className="min-h-0 min-w-0">
+          {activeImage ? <ImageViewer key={activeImage} path={activeImage} /> : active ? (
+            effectiveViewMode === "live" ? (
+              <ImageDropZone enabled={desktop && activeIsMarkdown} selection={dropSelection} onDrop={handleImageDrop} onError={setNotice}>
+              <div onKeyDownCapture={onEditorKeyDown} onPasteCapture={onPasteCapture} className="h-full min-h-0 min-w-0">
                 <CodeMirrorEditor
                   key={`live-${active.documentId}`}
                   value={active.text}
                   editable={desktop}
-                  ariaLabel={`${active.path ?? active.documentId}のMarkdownエディタ`}
+                  ariaLabel={`${active.path ?? active.documentId}の${activeIsMarkdown ? "Markdown" : "テキスト"}エディタ`}
                   testId="editor-primary"
                   initialSelection={selections[active.documentId] ?? null}
                   externalCursor={cursorEcho[active.documentId] ?? null}
@@ -2402,19 +2472,21 @@ export function WorkspaceShell() {
                   onSelectionChange={(selection) => handleSelection(active.documentId, selection)}
                 />
               </div>
+              </ImageDropZone>
             ) : (
+              <ImageDropZone hidden={effectiveViewMode === "read"} enabled={desktop && activeIsMarkdown && effectiveViewMode !== "read"} selection={dropSelection} onDrop={handleImageDrop} onError={setNotice}>
               <div
                 onKeyDownCapture={onEditorKeyDown}
                 onPasteCapture={onPasteCapture}
-                className={viewMode === "read" ? "hidden" : "flex min-h-0 min-w-0 flex-col"}
-                aria-hidden={viewMode === "read"}
+                className={effectiveViewMode === "read" ? "hidden" : "flex h-full min-h-0 min-w-0 flex-col"}
+                aria-hidden={effectiveViewMode === "read"}
               >
-                {viewMode === "split" && <div className="flex h-7 shrink-0 items-center border-b border-border px-3 text-xs text-muted-foreground">Markdown</div>}
+                {effectiveViewMode === "split" && <div className="flex h-7 shrink-0 items-center border-b border-border px-3 text-xs text-muted-foreground">Markdown</div>}
                 <CodeMirrorEditor
                   key={`primary-${active.documentId}`}
                   value={active.text}
                   editable={desktop}
-                  ariaLabel={`${active.path ?? active.documentId}のMarkdownエディタ`}
+                  ariaLabel={`${active.path ?? active.documentId}の${activeIsMarkdown ? "Markdown" : "テキスト"}エディタ`}
                   testId="editor-primary"
                   preferences={preferences}
                   vimMode={vimMode}
@@ -2425,18 +2497,19 @@ export function WorkspaceShell() {
                   onSelectionChange={(selection) => handleSelection(active.documentId, selection)}
                 />
               </div>
+              </ImageDropZone>
             )
           ) : (
             <div className="rounded-md border border-dashed border-border p-4 text-xs text-muted-foreground">
-              フォルダーを開き、ツリーから Markdown ファイルを開いてください。
+              フォルダーを開き、ツリーからファイルを開いてください。
             </div>
           )}
-          {viewMode === "read" && active && (
+          {effectiveViewMode === "read" && activeIsMarkdown && active && (
             <div className="min-h-0 min-w-0">
               <MarkdownPreview key={`read-${active.documentId}`} text={active.text} resolveImage={readResolver} />
             </div>
           )}
-          {viewMode === "split" && active && (
+          {effectiveViewMode === "split" && active && (
             <>
               <div
                 role="separator"
@@ -2484,7 +2557,7 @@ export function WorkspaceShell() {
         )}
 
         <footer className="flex h-[22px] shrink-0 items-center gap-3 overflow-hidden whitespace-nowrap border-t border-border px-2 text-[11px] text-muted-foreground">
-          <span className="min-w-0 flex-1 truncate">{active?.path ?? "ファイルを開いてください"}</span>
+          <span className="min-w-0 flex-1 truncate">{activeImage ?? active?.path ?? "ファイルを開いてください"}</span>
           {cursorPos && <span data-testid="cursor">カーソル {cursorPos}</span>}
           {desktop && active && <span data-testid="vim-footer-mode">{MODE_JA[vimMode] ?? vimMode}</span>}
           <span data-testid="revision">リビジョン {active?.revision ?? "—"}</span>
@@ -2525,7 +2598,7 @@ export function WorkspaceShell() {
               disabled={agentBusy}
               onBusyChange={setInlineChatBusy}
               onProposal={handleProposal}
-              onReview={() => void fetchReviewDiff()}
+              onReview={() => { setShowAi(true); void fetchReviewDiff(); }}
               onClose={closeInlineChat}
             />
           </div>

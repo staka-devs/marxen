@@ -150,6 +150,7 @@ pub enum WorkspaceError {
     InvalidPath,
     OutsideWorkspace,
     NotMarkdown,
+    NotText,
     InvalidUtf8,
     AlreadyExists,
     NotFound,
@@ -190,6 +191,17 @@ pub struct WorkspaceEntry {
     pub name: String,
     pub directory: bool,
     pub markdown: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub kind: Option<WorkspaceFileKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceFileKind {
+    Markdown,
+    Text,
+    Image,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -331,6 +343,7 @@ pub fn typescript() -> String {
         ContractError::decl(&cfg),
         WorkspaceError::decl(&cfg),
         WorkspaceInfo::decl(&cfg),
+        WorkspaceFileKind::decl(&cfg),
         WorkspaceEntry::decl(&cfg),
         OpenDocument::decl(&cfg),
         SearchMatch::decl(&cfg),

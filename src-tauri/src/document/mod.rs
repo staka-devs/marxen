@@ -730,7 +730,7 @@ impl DocumentActor {
         let (mode, _) = state.nvim.mode_state()?;
         if mode == VimMode::VisualBlock && update.anchor != update.head {
             return Err(ActorError::Nvim(
-                "矩形選択は Neovim 原文ビューで操作してください".into(),
+                "矩形選択は Neovim 画面で操作してください".into(),
             ));
         }
         let visual = matches!(mode, VimMode::Visual | VimMode::VisualLine);
