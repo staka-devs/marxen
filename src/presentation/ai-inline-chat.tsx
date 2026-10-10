@@ -237,10 +237,11 @@ export default function InlineChat({
       style={anchor ? position : undefined}
       onKeyDown={handleKeyDown}
     >
-      <div className="flex items-center gap-1">
-        <p className="min-w-0 flex-1 truncate text-[11px] font-semibold">
+      <div className="ai-chat-inline-header flex items-center gap-1">
+        <p className="min-w-0 flex-1 truncate text-xs font-semibold">
           インラインチャット（{target.kind === "selection" ? "選択" : "段落"}）
         </p>
+        <span className="shrink-0 rounded border border-border px-1 py-px text-[10px] leading-4 text-muted-foreground">書き換え</span>
         <button
           type="button"
           aria-label="インラインチャットを閉じる"
@@ -257,7 +258,7 @@ export default function InlineChat({
         {documentLabel}
       </p>
       {target.excerpt !== "" && (
-        <p className="ai-chat-inline-excerpt mt-1.5 max-h-20 overflow-y-auto whitespace-pre-wrap p-1.5 text-[11px] text-muted-foreground">
+        <p className="ai-chat-inline-excerpt mt-1.5 max-h-20 overflow-y-auto whitespace-pre-wrap p-1.5 text-xs leading-5 text-muted-foreground">
           {target.excerpt}
         </p>
       )}
@@ -265,7 +266,7 @@ export default function InlineChat({
         <textarea
           ref={inputRef}
           aria-label="インライン指示"
-          className="ai-chat-composer-input block max-h-32 min-h-10 w-full overflow-y-auto px-1 py-1 text-xs"
+          className="ai-chat-composer-input block max-h-32 min-h-10 w-full overflow-y-auto px-1 py-1 text-[13px] leading-6"
           rows={2}
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
@@ -290,15 +291,15 @@ export default function InlineChat({
         </div>
       </div>
       {disabled && <p className="mt-1 text-[11px] text-muted-foreground">他の応答を生成しています。</p>}
-      <div aria-live="polite" className="mt-1">
-        {output && !proposal && <p className="max-h-40 overflow-y-auto whitespace-pre-wrap text-xs">{output}</p>}
-        {cancelled && <p className="text-xs">取り消しました。</p>}
+      <div aria-live="polite" className="ai-chat-inline-result mt-1 border-t border-border/60 pt-1.5 empty:hidden empty:border-t-0 empty:pt-0">
+        {output && !proposal && <p className="max-h-40 overflow-y-auto whitespace-pre-wrap text-[13px] leading-6">{output}</p>}
+        {cancelled && <p className="text-xs text-muted-foreground">取り消しました。</p>}
         {error && (
           <p role="alert" className="text-xs font-medium text-red-600">{describeAiError(error)}</p>
         )}
         {proposal && (
-          <div className="mt-1 rounded-md border border-border p-1.5">
-            <p className="text-[11px] font-medium text-muted-foreground">提案</p>
+          <div className="py-0.5">
+            <p className="text-[11px] text-muted-foreground">提案 • 差分確認のうえ取り込みます</p>
             <div className="marxen-chat-body mt-1 max-h-48 overflow-y-auto"><MarkdownPreview text={proposal.text} label="インラインの提案" testId="inline-response" /></div>
           </div>
         )}
