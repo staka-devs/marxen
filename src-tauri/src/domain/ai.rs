@@ -3,7 +3,7 @@ use crate::contracts::ai::*;
 use crate::contracts::Utf16Range;
 use crate::domain::validation::validate_document_id;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 pub const MAX_PROMPT_CHARS: usize = 20_000;
 pub const MAX_HISTORY_MESSAGES: usize = 32;
@@ -851,6 +851,8 @@ pub enum HttpBackend {
 }
 
 pub struct HttpTarget {
+    /// Validated API root shared by provider-specific connection probes.
+    pub base: String,
     pub url: String,
     pub model: String,
     pub backend: HttpBackend,
@@ -867,6 +869,7 @@ pub fn http_target(config: &AiProviderConfig) -> Result<HttpTarget, AiError> {
             validate_model(&openai.model)?;
             Ok(HttpTarget {
                 url: format!("{base}/chat/completions"),
+                base,
                 model: openai.model.clone(),
                 backend: HttpBackend::OpenAi,
             })
@@ -883,6 +886,7 @@ pub fn http_target(config: &AiProviderConfig) -> Result<HttpTarget, AiError> {
             validate_model(&anthropic.model)?;
             Ok(HttpTarget {
                 url: format!("{base}/messages"),
+                base,
                 model: anthropic.model.clone(),
                 backend: HttpBackend::Anthropic,
             })

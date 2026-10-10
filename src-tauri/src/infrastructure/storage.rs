@@ -1,5 +1,5 @@
 //! Rust-only disk operations. Text is UTF-8 without newline/BOM conversion.
-use crate::contracts::{DocumentSnapshot, WorkspaceError};
+use crate::contracts::WorkspaceError;
 use crate::domain::storage::*;
 
 use std::fs;
@@ -256,7 +256,7 @@ impl From<std::io::Error> for WorkspaceError {
     }
 }
 
-use crate::application::ports::{Clock, DirectoryEntry, FileInfo, Storage};
+use crate::application::ports::{Clock, DirectoryEntry, FileInfo, FileReader, DocumentStorage, DirectoryStorage, WorkspaceStorage, StagingStorage};
 pub struct NativeStorage;
 pub struct SystemClock;
 impl Clock for SystemClock {
@@ -268,16 +268,29 @@ impl Clock for SystemClock {
             .as_nanos()
     }
 }
-impl Storage for NativeStorage {
+impl FileReader for NativeStorage {
     fn read_disk(&self, path: &Path) -> Result<Option<Vec<u8>>, WorkspaceError> {
         read_disk(path)
     }
     fn disk_fingerprint(&self, path: &Path) -> Result<Option<Fingerprint>, WorkspaceError> {
         disk_fingerprint(path)
     }
-    fn resolve(&self, root: &Path, relative: &str) -> Result<PathBuf, WorkspaceError> {
-        resolve(root, relative)
+}
+impl DocumentStorage for NativeStorage {
+    fn remove_file(&self, path: &Path) -> Result<(), WorkspaceError> {
+        Ok(fs::remove_file(path)?)
     }
+
+    fn hard_link(&self, source: &Path, target: &Path) -> Result<(), WorkspaceError> {
+        fs::hard_link(source, target).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                WorkspaceError::AlreadyExists
+            } else {
+                e.into()
+            }
+        })
+    }
+
     fn check_target(&self, root: Option<&Path>, path: &Path) -> Result<(), WorkspaceError> {
         check_target(root, path)
     }
@@ -296,10 +309,8 @@ impl Storage for NativeStorage {
     fn remove_checkpoint(&self, path: &Path) -> Result<(), WorkspaceError> {
         remove_checkpoint(path)
     }
-    fn read_image_bytes(&self, path: &Path) -> Result<Vec<u8>, WorkspaceError> {
-        read_image_bytes(path)
-    }
-
+}
+impl DirectoryStorage for NativeStorage {
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, WorkspaceError> {
         Ok(fs::canonicalize(path)?)
     }
@@ -317,6 +328,16 @@ impl Storage for NativeStorage {
             link: m.file_type().is_symlink(),
         })
     }
+    /// Query path existence through the native filesystem adapter.
+    fn exists(&self, path: &Path) -> bool { path.exists() }
+}
+impl WorkspaceStorage for NativeStorage {
+    fn resolve(&self, root: &Path, relative: &str) -> Result<PathBuf, WorkspaceError> {
+        resolve(root, relative)
+    }
+    fn read_image_bytes(&self, path: &Path) -> Result<Vec<u8>, WorkspaceError> {
+        read_image_bytes(path)
+    }
     fn read_dir(&self, path: &Path) -> Result<Vec<DirectoryEntry>, WorkspaceError> {
         fs::read_dir(path)?
             .map(|entry| {
@@ -333,18 +354,8 @@ impl Storage for NativeStorage {
             })
             .collect()
     }
-    fn hard_link(&self, source: &Path, target: &Path) -> Result<(), WorkspaceError> {
-        fs::hard_link(source, target).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::AlreadyExists {
-                WorkspaceError::AlreadyExists
-            } else {
-                e.into()
-            }
-        })
-    }
-    fn remove_file(&self, path: &Path) -> Result<(), WorkspaceError> {
-        Ok(fs::remove_file(path)?)
-    }
+}
+impl StagingStorage for NativeStorage {
     fn write_staging(&self, path: &Path, bytes: &[u8]) -> Result<(), WorkspaceError> {
         Ok(fs::write(path, bytes)?)
     }

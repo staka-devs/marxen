@@ -191,6 +191,7 @@ impl Buffer for NativeBuffer {
         self.0.command("setlocal buftype=acwrite")?;
         Ok(())
     }
+    #[cfg(feature = "dev-tools")]
     fn command_for_fixture(&self, command: &str) -> Result<(), BufferError> {
         Ok(self.0.command(command)?)
     }

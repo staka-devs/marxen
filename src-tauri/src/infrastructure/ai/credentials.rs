@@ -1,19 +1,10 @@
 //! OS credentials and in-memory fixture implementation.
 use crate::application::ai::credentials::*;
-use crate::application::ai::runs::*;
 use crate::contracts::ai::*;
-use crate::contracts::Utf16Range;
 use crate::domain::ai::*;
-use crate::domain::validation::validate_document_id;
-use serde_json::Value;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
-use std::time::Instant;
+use std::sync::Mutex;
+#[derive(Default)]
 pub struct MemoryKeyring {
     inner: Mutex<HashMap<String, String>>,
 }

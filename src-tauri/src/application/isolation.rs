@@ -33,7 +33,7 @@ use crate::domain::storage::{self, Fingerprint};
 use std::collections::HashMap;
 
 use crate::application::ports::*;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,7 +70,7 @@ struct IsolatedCopy {
 /// `pins` counts live runs (ACP process or HTTP stream) per copy; pinned
 /// copies refuse approve/reject/cancel until the run settles and releases.
 pub struct IsolationManager {
-    storage: Arc<dyn Storage>,
+    storage: Arc<dyn StagingStorage>,
     clock: Arc<dyn Clock>,
     staging_root: PathBuf,
     next: u64,
@@ -94,7 +94,7 @@ impl IsolationManager {
 impl IsolationManager {
     pub fn open(
         staging_root: &Path,
-        storage: Arc<dyn Storage>,
+        storage: Arc<dyn StagingStorage>,
         clock: Arc<dyn Clock>,
     ) -> Result<Self, WorkspaceError> {
         storage.create_dir_all(staging_root)?;
@@ -223,7 +223,7 @@ impl IsolationManager {
         let staging_dir = self
             .storage
             .guard_staging_path(&self.staging_root, Path::new(&copy_id.0))?;
-        if staging_dir.exists() {
+        if self.storage.exists(&staging_dir) {
             return Err(WorkspaceError::AlreadyExists);
         }
         self.storage.create_dir_all(&staging_dir)?;
@@ -302,7 +302,7 @@ impl IsolationManager {
                     render_scoped_file(&snapshot.document_id, &slices).into_bytes()
                 };
                 self.storage
-                    .write_staging(&staging_file, staged_bytes.as_bytes())?;
+                    .write_staging(&staging_file, &staged_bytes)?;
                 self.storage
                     .check_no_symlink(&staging_file, &self.staging_root)?;
                 bases.push(CopyBase {

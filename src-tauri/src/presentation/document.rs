@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 pub struct ActorState {
     pub services: crate::application::ports::DocumentServices,
+    pub files: Arc<dyn crate::application::ports::WorkspaceStorage>,
     pub clock: Arc<dyn crate::application::ports::Clock>,
     pub workspace: Arc<Mutex<Option<Workspace>>>,
     pub pending: Arc<Mutex<Vec<WorkspaceEvent>>>,
@@ -13,10 +14,12 @@ impl ActorState {
     /// Retain injected native dependencies alongside the workspace/event locks.
     pub fn new(
         services: crate::application::ports::DocumentServices,
+        files: Arc<dyn crate::application::ports::WorkspaceStorage>,
         clock: Arc<dyn crate::application::ports::Clock>,
     ) -> Self {
         Self {
             services,
+            files,
             clock,
             workspace: Arc::new(Mutex::new(None)),
             pending: Arc::new(Mutex::new(Vec::new())),
@@ -68,6 +71,7 @@ mod desktop {
             std::path::Path::new(&path),
             &recovery,
             state.services.clone(),
+            state.files.clone(),
             state.clock.clone(),
         )?;
         let info = workspace.info();

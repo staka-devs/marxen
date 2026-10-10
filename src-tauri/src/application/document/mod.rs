@@ -455,6 +455,7 @@ impl DocumentActor {
     }
 
     /// Test/maintenance escape hatch: run one Neovim command on the owned buffer.
+    #[cfg(feature = "dev-tools")]
     pub fn nvim_command(&self, cmd: &str) -> Result<(), ActorError> {
         let state = self
             .state

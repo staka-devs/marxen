@@ -41,6 +41,7 @@ pub fn open_workspace(root: &Path, recovery: &Path) -> Result<Workspace, Workspa
         root,
         recovery,
         document_services(),
+        Arc::new(infrastructure::storage::NativeStorage),
         Arc::new(infrastructure::storage::SystemClock),
     )
 }
@@ -59,6 +60,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(presentation::document::ActorState::new(
             document_services(),
+            std::sync::Arc::new(infrastructure::storage::NativeStorage),
             std::sync::Arc::new(infrastructure::storage::SystemClock),
         ))
         .manage(presentation::clipboard::ClipboardState(

@@ -1,6 +1,6 @@
 use marxen_lib::application::document::DocumentActor;
 use marxen_lib::contracts::*;
-use marxen_lib::{storage, workspace::Workspace};
+use marxen_lib::domain::storage;
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;

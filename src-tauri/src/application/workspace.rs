@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub struct Workspace {
-    storage: Arc<dyn Storage>,
+    storage: Arc<dyn WorkspaceStorage>,
     services: DocumentServices,
     clock: Arc<dyn Clock>,
     root: PathBuf,
@@ -30,9 +30,9 @@ impl Workspace {
         root: &Path,
         recovery_home: &Path,
         services: DocumentServices,
+        storage: Arc<dyn WorkspaceStorage>,
         clock: Arc<dyn Clock>,
     ) -> Result<Self, WorkspaceError> {
-        let storage = services.storage.clone();
         let root = storage.canonicalize(root)?;
         if !storage.metadata(&root).is_ok_and(|m| m.directory) {
             return Err(WorkspaceError::InvalidPath);
@@ -620,7 +620,7 @@ impl Workspace {
         let folder = parent.join("images");
         let relative_folder = storage::relative(&self.root, &folder)?;
         self.storage.resolve(&self.root, &relative_folder)?;
-        if !folder.exists() {
+        if !self.storage.exists(&folder) {
             self.storage.create_dir(&folder)?;
         }
         let path = format!("{relative_folder}/{name}");

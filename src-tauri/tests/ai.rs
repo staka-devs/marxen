@@ -2,7 +2,6 @@
 //! server; ACP runs against the mock-acp-agent subprocess. No real
 //! credentials, no network beyond 127.0.0.1, no Claude Code anywhere.
 use marxen_lib::application::ai::{credentials::*, runs::*};
-use marxen_lib::application::isolation::IsolationManager;
 use marxen_lib::contracts::ai::*;
 use marxen_lib::contracts::{DocumentId, Revision, Utf16Offset, Utf16Range};
 use marxen_lib::domain::ai::*;

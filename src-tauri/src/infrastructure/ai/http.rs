@@ -1,20 +1,9 @@
 //! HTTP clients and streamed AI protocol adapters.
-use crate::application::ai::credentials::*;
 use crate::application::ai::runs::*;
 use crate::contracts::ai::*;
-use crate::contracts::Utf16Range;
 use crate::domain::ai::*;
-use crate::domain::validation::validate_document_id;
-use futures::StreamExt;
-use serde_json::Value;
-use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
-use std::time::Instant;
 pub fn http_client(timeout: Duration) -> Result<reqwest::Client, AiError> {
     reqwest::Client::builder()
         .timeout(timeout)

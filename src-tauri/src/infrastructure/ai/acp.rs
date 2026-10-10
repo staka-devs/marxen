@@ -1,12 +1,8 @@
 //! ACP subprocess lifecycle and bounded stdio framing.
-use crate::application::ai::credentials::*;
 use crate::application::ai::runs::*;
 use crate::contracts::ai::*;
-use crate::contracts::Utf16Range;
 use crate::domain::ai::*;
-use crate::domain::validation::validate_document_id;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -311,14 +307,6 @@ fn wait_for_exit(child: &mut Child, grace: Duration) {
     }
 }
 
-/// Graceful shutdown: dropping the connection closes stdin (the transport's
-/// termination signal), then wait briefly and kill leftovers. Always reaps.
-fn shutdown_agent(conn: AgentConn, mut child: Child, grace: Duration) {
-    drop(conn);
-    wait_for_exit(&mut child, grace);
-    let _ = child.kill();
-    let _ = child.wait();
-}
 
 /// Result of initialize + session/new. No prompt is ever sent by this path.
 #[derive(Debug, Clone)]

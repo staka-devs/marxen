@@ -6,7 +6,7 @@
 //! `init.lua`; that file is passed as `-u <path>` and any load failure is
 //! surfaced instead of silently falling back.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub use crate::application::ports::{ConfigReport, ConfigSource};
 

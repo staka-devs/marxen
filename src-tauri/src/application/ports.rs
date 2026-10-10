@@ -69,6 +69,7 @@ pub trait Buffer: Send {
     fn resize_grid(&self, width: u32, height: u32) -> Result<(), BufferError>;
     fn clear_modified(&self) -> Result<(), BufferError>;
     fn install_save_intercept(&self) -> Result<(), BufferError>;
+    #[cfg(feature = "dev-tools")]
     fn command_for_fixture(&self, command: &str) -> Result<(), BufferError>;
     fn drain_save_requests(&self) -> Vec<String>;
     fn drain_notifications(&self) -> Vec<BufferNotification>;
@@ -84,7 +85,7 @@ pub trait BufferFactory: Send + Sync {
 }
 #[derive(Clone)]
 pub struct DocumentServices {
-    pub storage: Arc<dyn Storage>,
+    pub storage: Arc<dyn DocumentStorage>,
     pub buffers: Arc<dyn BufferFactory>,
 }
 pub trait Clock: Send + Sync {
@@ -132,10 +133,13 @@ impl DirectoryEntry {
         Ok(self.info)
     }
 }
-pub trait Storage: Send + Sync {
+pub trait FileReader: Send + Sync {
     fn read_disk(&self, path: &Path) -> Result<Option<Vec<u8>>, WorkspaceError>;
     fn disk_fingerprint(&self, path: &Path) -> Result<Option<Fingerprint>, WorkspaceError>;
-    fn resolve(&self, root: &Path, relative: &str) -> Result<PathBuf, WorkspaceError>;
+}
+pub trait DocumentStorage: FileReader {
+    fn hard_link(&self, source: &Path, target: &Path) -> Result<(), WorkspaceError>;
+    fn remove_file(&self, path: &Path) -> Result<(), WorkspaceError>;
     fn check_target(&self, root: Option<&Path>, path: &Path) -> Result<(), WorkspaceError>;
     fn atomic_write(
         &self,
@@ -146,14 +150,21 @@ pub trait Storage: Send + Sync {
     ) -> Result<Fingerprint, WorkspaceError>;
     fn checkpoint(&self, path: &Path, record: &RecoveryRecord) -> Result<(), WorkspaceError>;
     fn remove_checkpoint(&self, path: &Path) -> Result<(), WorkspaceError>;
-    fn read_image_bytes(&self, path: &Path) -> Result<Vec<u8>, WorkspaceError>;
+}
+pub trait DirectoryStorage: Send + Sync {
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, WorkspaceError>;
     fn create_dir_all(&self, path: &Path) -> Result<(), WorkspaceError>;
     fn create_dir(&self, path: &Path) -> Result<(), WorkspaceError>;
     fn metadata(&self, path: &Path) -> Result<FileInfo, WorkspaceError>;
+    /// Check whether a path exists without leaking filesystem access into use cases.
+    fn exists(&self, path: &Path) -> bool;
+}
+pub trait WorkspaceStorage: DocumentStorage + DirectoryStorage {
+    fn resolve(&self, root: &Path, relative: &str) -> Result<PathBuf, WorkspaceError>;
+    fn read_image_bytes(&self, path: &Path) -> Result<Vec<u8>, WorkspaceError>;
     fn read_dir(&self, path: &Path) -> Result<Vec<DirectoryEntry>, WorkspaceError>;
-    fn hard_link(&self, source: &Path, target: &Path) -> Result<(), WorkspaceError>;
-    fn remove_file(&self, path: &Path) -> Result<(), WorkspaceError>;
+}
+pub trait StagingStorage: FileReader + DirectoryStorage {
     fn write_staging(&self, path: &Path, bytes: &[u8]) -> Result<(), WorkspaceError>;
     fn remove_staging(&self, path: &Path) -> Result<(), WorkspaceError>;
     fn guard_staging_path(&self, root: &Path, candidate: &Path) -> Result<PathBuf, WorkspaceError>;

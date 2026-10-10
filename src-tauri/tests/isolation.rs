@@ -13,8 +13,7 @@ use marxen_lib::contracts::ai::{
     ProposalText,
 };
 use marxen_lib::contracts::{DocumentSnapshot, Revision, Utf16Offset, Utf16Range, WorkspaceError};
-use marxen_lib::domain::ai::*;
-use marxen_lib::infrastructure::ai::{acp::*, credentials::*, discovery::*, http::*};
+use marxen_lib::infrastructure::ai::{acp::*, credentials::*};
 use marxen_lib::infrastructure::staging::guard_staging_path;
 use std::fs;
 use std::path::Path;
