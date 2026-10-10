@@ -154,3 +154,97 @@ fn display_key_routing_detects_global_buffer_and_pending_mappings() {
     assert!(!actor.has_user_mapping("n", "j").unwrap());
     assert!(actor.has_user_mapping("invalid", "j").is_err());
 }
+
+#[test]
+fn native_visual_selection_reports_exact_unicode_scope_and_direction() {
+    let actor = DocumentActor::open(
+        DocumentId("visual-scope".into()),
+        "a😀日本\nsecond".into(),
+        None,
+    )
+    .unwrap();
+    for typed in ["l", "v", "l"] {
+        key(&actor, typed);
+    }
+    let selected = actor.cursor().unwrap();
+    assert_eq!((selected.anchor.0, selected.head.0), (1, 4));
+    key(&actor, "o");
+    let reversed = actor.cursor().unwrap();
+    assert_eq!((reversed.anchor.0, reversed.head.0), (4, 1));
+    key(&actor, "\u{1b}");
+    actor.nvim_command("set selection=exclusive").unwrap();
+    actor.nvim_command("normal! gg0l").unwrap();
+    for typed in ["v", "l"] {
+        key(&actor, typed);
+    }
+    let exclusive = actor.cursor().unwrap();
+    assert_eq!((exclusive.anchor.0, exclusive.head.0), (1, 3));
+    assert_eq!(actor.snapshot().text, "a😀日本\nsecond");
+    assert_eq!(actor.snapshot().revision, Revision(0));
+}
+
+#[test]
+fn native_line_selection_includes_line_breaks_and_block_is_not_a_contiguous_scope() {
+    let actor = DocumentActor::open(
+        DocumentId("line-scope".into()),
+        "abc\n日😀\nthird".into(),
+        None,
+    )
+    .unwrap();
+    for typed in ["V", "j"] {
+        key(&actor, typed);
+    }
+    let selected = actor.cursor().unwrap();
+    assert_eq!((selected.anchor.0, selected.head.0), (0, 8));
+    key(&actor, "o");
+    let reversed = actor.cursor().unwrap();
+    assert_eq!((reversed.anchor.0, reversed.head.0), (8, 0));
+    key(&actor, "\u{1b}");
+    actor.nvim_command("normal! gg0").unwrap();
+    for typed in ["<C-v>", "j", "l"] {
+        key(&actor, typed);
+    }
+    assert_eq!(actor.current_mode().unwrap().mode, VimMode::VisualBlock);
+    let block = actor.cursor().unwrap();
+    assert_eq!(
+        block.anchor, block.head,
+        "a rectangle must never authorize a widened contiguous AI scope"
+    );
+    key(&actor, "d");
+    assert_ne!(actor.snapshot().text, "abc\n日😀\nthird");
+    key(&actor, "u");
+    assert_eq!(actor.snapshot().text, "abc\n日😀\nthird");
+}
+
+#[test]
+fn pending_cursor_cache_never_splits_a_new_surrogate_pair() {
+    let actor =
+        DocumentActor::open(DocumentId("cached-scope".into()), "abcd".into(), None).unwrap();
+    actor
+        .set_cursor(marxen_lib::contracts::CursorUpdate {
+            document_id: actor.snapshot().document_id,
+            revision: Revision(0),
+            anchor: Utf16Offset(2),
+            head: Utf16Offset(2),
+        })
+        .unwrap();
+    actor
+        .apply_edits(EditRequest {
+            document_id: actor.snapshot().document_id,
+            base_revision: Revision(0),
+            source: EditSource::Gui,
+            edits: vec![TextEdit {
+                range: Utf16Range {
+                    start: Utf16Offset(0),
+                    end: Utf16Offset(4),
+                },
+                text: "a😀".into(),
+            }],
+        })
+        .unwrap();
+    key(&actor, "g");
+    let cursor = actor.cursor().unwrap();
+    assert_eq!((cursor.anchor.0, cursor.head.0), (1, 1));
+    marxen_lib::validation::validate_cursor(&actor.snapshot(), &cursor).unwrap();
+    key(&actor, "\u{1b}");
+}

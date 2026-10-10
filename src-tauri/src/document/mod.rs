@@ -198,6 +198,30 @@ impl DocumentActor {
             .expect("document actor lock poisoned")
     }
 
+    /// Validate a planned edit against a live, ready authoritative buffer.
+    /// This does not change text or Undo history. Multi-document approvals
+    /// preflight every actor before the first mutation; apply still rechecks.
+    pub fn preflight_edits(&self, request: &EditRequest) -> Result<DocumentSnapshot, ActorError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
+        Self::sync_locked(&mut state)?;
+        if request.edits.is_empty() {
+            validate_save(
+                &state.snapshot,
+                &SaveRequest {
+                    document_id: request.document_id.clone(),
+                    base_revision: request.base_revision,
+                },
+            )?;
+        } else {
+            validate_edit(&state.snapshot, request)?;
+        }
+        Ok(state.snapshot.clone())
+    }
+
     /// Apply GUI/AI range edits validated against `base_revision`.
     pub fn apply_edits(&self, request: EditRequest) -> Result<DocumentSnapshot, ActorError> {
         let mut state = self
@@ -582,7 +606,27 @@ impl DocumentActor {
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         Self::sync_locked(&mut state)?;
-        if state.nvim.mode_state()?.1 {
+        let (mode, blocking) = state.nvim.mode_state()?;
+        if blocking {
+            return Ok(Self::cached_cursor(&state));
+        }
+        if matches!(mode, VimMode::Visual | VimMode::VisualLine) {
+            let (start_row, start_col, end_row, end_col, newline, forward) =
+                state.nvim.visual_selection()?;
+            let start = crate::neovim::coordinates::line_byte_to_global_utf16(
+                &state.snapshot.text,
+                start_row,
+                start_col,
+            )?;
+            let mut end = crate::neovim::coordinates::line_byte_to_global_utf16(
+                &state.snapshot.text,
+                end_row,
+                end_col,
+            )?;
+            if newline {
+                end.0 += 1;
+            }
+            state.last_cursor = if forward { (start, end) } else { (end, start) };
             return Ok(Self::cached_cursor(&state));
         }
         let (row, col) = state.nvim.win_cursor()?;
@@ -788,11 +832,22 @@ impl DocumentActor {
     }
 
     fn cached_cursor(state: &ActorState) -> CursorUpdate {
+        let clamp = |offset: Utf16Offset| {
+            let mut offset = Utf16Offset(
+                offset
+                    .0
+                    .min(crate::neovim::coordinates::utf16_len(&state.snapshot.text)),
+            );
+            if crate::validation::utf16_to_utf8(&state.snapshot.text, offset).is_err() {
+                offset.0 = offset.0.saturating_sub(1);
+            }
+            offset
+        };
         CursorUpdate {
             document_id: state.snapshot.document_id.clone(),
             revision: state.snapshot.revision,
-            anchor: state.last_cursor.0,
-            head: state.last_cursor.1,
+            anchor: clamp(state.last_cursor.0),
+            head: clamp(state.last_cursor.1),
         }
     }
 

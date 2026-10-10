@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import App from "./App";
 import { readRuntimeStatus } from "./lib/runtime";
@@ -21,7 +21,12 @@ it("shows the Japanese workspace shell with disconnected status", async () => {
   expect(screen.getByTestId("tabs")).toBeVisible();
   expect(screen.getByTestId("gui-toolbar")).toBeVisible();
   expect(screen.getByTestId("editor-primary")).toBeVisible();
-  expect(screen.getByTestId("preview")).toBeVisible();
+  // Live mode renders inline widgets inside the editor, never a separate
+  // preview pane; the first heading block (cursor at 0) stays raw source.
+  expect(screen.queryByTestId("preview")).toBeNull();
+  await waitFor(() => {
+    expect(screen.getByTestId("editor-primary").querySelector(".marxen-live-widget")).not.toBeNull();
+  });
   expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 0");
   expect(screen.getByTestId("readonly-note")).toBeVisible();
 });
@@ -52,17 +57,25 @@ it("switches live/source/read/split without losing the document", async () => {
   });
   render(<App />);
   await screen.findByTestId("editor-primary");
-  // The Issue #6 preview renders asynchronously; wait for it in each mode.
+  // Live mode keeps a single editor with inline widgets (no separate preview).
+  await waitFor(() => {
+    expect(screen.getByTestId("editor-primary").querySelector(".marxen-live-widget")).not.toBeNull();
+  });
+  expect(screen.queryByTestId("preview")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "閲覧" }));
+  // Read mode renders the shared pipeline in its own preview pane.
   await within(screen.getByTestId("preview")).findByText("日本語で書く");
   const before = screen.getByTestId("preview").textContent;
-  fireEvent.click(screen.getByRole("button", { name: "閲覧" }));
-  await within(screen.getByTestId("preview")).findByText("日本語で書く");
-  expect(screen.getByTestId("preview")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "原文" }));
   expect(screen.getByTestId("editor-primary")).toBeVisible();
+  expect(screen.queryByTestId("preview")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "分割" }));
   expect(screen.getByTestId("editor-secondary")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "ライブ" }));
+  expect(screen.getByTestId("editor-primary")).toBeVisible();
+  expect(screen.queryByTestId("preview")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "閲覧" }));
   await within(screen.getByTestId("preview")).findByText("日本語で書く");
   expect(screen.getByTestId("preview").textContent).toBe(before);
+  expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 0");
 });

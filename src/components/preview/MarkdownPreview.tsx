@@ -1,12 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { renderMarkdownDocument, type RenderResult } from "../../lib/render/pipeline";
-import { hydrateMarkdownView } from "./hydrate";
+import { disposeMarkdownView, hydrateMarkdownView } from "./hydrate";
+import { hydrateLocalImages, type ImageResolver } from "./images";
 import "leaflet/dist/leaflet.css";
 
 interface Props {
   text: string;
   label?: string;
   testId?: string;
+  /**
+   * Local-image resolver (ADR-0063): the UI layer supplies a Rust-backed
+   * loader mapping relative sources to displayable URLs. Invoked after the
+   * sanitized HTML mounts; abort-aware and stale-safe. Absent = images stay
+   * as authored (browser demo behavior).
+   */
+  resolveImage?: ImageResolver;
 }
 
 /**
@@ -17,19 +25,23 @@ interface Props {
  * GeoJSON / TopoJSON / STL) hydrate locally with bundled libraries; raw
  * source and Japanese errors stay visible for malformed input.
  */
-export function MarkdownPreview({ text, label = "プレビュー", testId = "preview" }: Props) {
+export function MarkdownPreview({ text, label = "プレビュー", testId = "preview", resolveImage }: Props) {
   const [result, setResult] = useState<RenderResult | null>(null);
   const hostRef = useRef<HTMLElement | null>(null);
+  const latestPipeline = useRef<Promise<RenderResult> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setResult(null);
-    renderMarkdownDocument(text)
+    // Superseded renders are discarded: only the latest text wins, so a
+    // slow pass can never overwrite newer HTML (stale-result guard).
+    const pipeline = renderMarkdownDocument(text);
+    pipeline
       .then((next) => {
-        if (!cancelled) setResult(next);
+        if (!cancelled && pipeline === latestPipeline.current) setResult(next);
       })
       .catch(() => {
-        if (!cancelled) {
+        if (!cancelled && pipeline === latestPipeline.current) {
           setResult({
             html: "<div class=\"marxen-error\" role=\"alert\">描画できませんでした。原文は保持されています。</div>",
             diagnostics: [],
@@ -37,6 +49,7 @@ export function MarkdownPreview({ text, label = "プレビュー", testId = "pre
           });
         }
       });
+    latestPipeline.current = pipeline;
     return () => {
       cancelled = true;
     };
@@ -44,8 +57,19 @@ export function MarkdownPreview({ text, label = "プレビュー", testId = "pre
 
   useEffect(() => {
     if (!result || !hostRef.current) return;
-    void hydrateMarkdownView(hostRef.current);
-  }, [result]);
+    const host = hostRef.current;
+    // A new result aborts the previous hydrate pass and disposes its maps
+    // and GL resources before fresh placeholders are enhanced. Local images
+    // resolve on the same lifecycle so late bytes never land on stale HTML.
+    const controller = new AbortController();
+    const pending: Array<Promise<unknown>> = [hydrateMarkdownView(host, controller.signal)];
+    if (resolveImage) pending.push(hydrateLocalImages(host, resolveImage, controller.signal));
+    void Promise.allSettled(pending);
+    return () => {
+      controller.abort();
+      disposeMarkdownView(host);
+    };
+  }, [result, resolveImage]);
 
   if (!result) {
     return (
