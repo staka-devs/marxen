@@ -153,4 +153,14 @@ it("limits desktop quick-open to supported workspace files and opens its keyboar
   await waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# literal **text**"));
   expect(screen.queryByTestId("quick-open")).toBeNull();
   expect(mockInvoke).toHaveBeenCalledWith("open_text_file", { path: "notes.txt" });
+  const editor = screen.getByTestId("editor-primary").querySelector(".cm-content");
+  await waitFor(() => expect(editor).toHaveFocus());
+  const file = within(screen.getByTestId("file-tree")).getByRole("button", { name: "notes.txt" });
+  file.focus();
+  fireEvent.click(file);
+  await waitFor(() => expect(editor).toHaveFocus());
+  const tab = screen.getByRole("tab", { name: "notes.txt" });
+  tab.focus();
+  fireEvent.click(tab);
+  await waitFor(() => expect(editor).toHaveFocus());
 });

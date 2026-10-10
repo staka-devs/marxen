@@ -196,6 +196,12 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   const [notice, setNotice] = useState<string | null>(null);
   /** Revision-aware document session: docs, tabs, selections, and mutations. */
   const session = useDocumentSession({ desktop, documentGateway, workspaceGateway, clipboardGateway, notify: setNotice });
+  const [editorFocus, setEditorFocus] = useState<{ path: string; sequence: number } | null>(null);
+  /** Open a file and request editor focus after React commits the active pane. */
+  async function openFileForEditing(path: string) {
+    await session.openFile(path);
+    setEditorFocus((previous) => ({ path, sequence: (previous?.sequence ?? 0) + 1 }));
+  }
   /** Vim key routing with optimistic ranges and mapping-first execution. */
   const vim = useVimEditing({ desktop, navBasis, notify: setNotice, session });
   /** Workspace lifecycle: entries, search, events, runtime, grid, config. */
@@ -508,7 +514,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                 </div>
               )}
               {desktop && workspace.wsRoot && <button type="button" onClick={() => setRootCollapsed((value) => !value)} aria-expanded={!rootCollapsed} aria-label="ワークスペースのフォルダー" className="flex h-8 w-full items-center gap-1.5 px-3 text-left text-xs font-semibold hover:bg-muted/50" title={workspace.wsRoot}>{rootCollapsed ? <ChevronRight size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" /> : <ChevronDown size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />}<FolderOpen size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" /><span className="truncate">{workspace.wsRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace.wsRoot}</span></button>}
-              {(!desktop || !rootCollapsed) && <FileTree desktop={desktop} nodes={treeNodes} activePath={activeImage ?? active?.path ?? null} onOpenFile={(path) => { void session.openFile(path); if (window.innerWidth < 768) setSideView(null); }} />}
+              {(!desktop || !rootCollapsed) && <FileTree desktop={desktop} nodes={treeNodes} activePath={activeImage ?? active?.path ?? null} onOpenFile={(path) => { void openFileForEditing(path); if (window.innerWidth < 768) setSideView(null); }} />}
               {desktop && !workspace.wsRoot && <p className="px-4 py-3 text-xs leading-5 text-muted-foreground">フォルダーが選択されていません。</p>}
             </div>
           )}
@@ -540,7 +546,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       <div className="relative flex min-w-0 flex-1 flex-col">
         <header className="marxen-editor-header flex h-10 shrink-0 items-center gap-1 border-b border-border bg-card pr-2">
           <div className="min-w-0 flex-1">
-            <Tabs tabs={tabItems} activeId={activeId} onSelect={session.setActiveId} onClose={(id) => void session.closeTab(id)} />
+            <Tabs tabs={tabItems} activeId={activeId} onSelect={(id) => { session.setActiveId(id); const path = session.docsRef.current[id]?.path; if (path) setEditorFocus((previous) => ({ path, sequence: (previous?.sequence ?? 0) + 1 })); }} onClose={(id) => void session.closeTab(id)} />
           </div>
           <button
             type="button"
@@ -872,6 +878,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   editable={desktop}
                   ariaLabel={`${active.path ?? active.documentId}の${activeIsMarkdown ? "Markdown" : "テキスト"}エディタ`}
                   testId="editor-primary"
+                  focusRequest={editorFocus?.path === active.path ? editorFocus.sequence : 0}
                   initialSelection={selections[active.documentId] ?? null}
                   externalCursor={cursorEcho[active.documentId] ?? null}
                   livePreview
@@ -899,6 +906,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   editable={desktop}
                   ariaLabel={`${active.path ?? active.documentId}の${activeIsMarkdown ? "Markdown" : "テキスト"}エディタ`}
                   testId="editor-primary"
+                  focusRequest={editorFocus?.path === active.path ? editorFocus.sequence : 0}
                   preferences={preferences}
                   vimMode={vimMode}
                   allowTextInput={vimMode === "insert" || vimMode === "replace"}
@@ -1000,7 +1008,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           paths={quickPaths}
           label="クイックオープン"
           testId="quick-open"
-          onSelect={(path) => void session.openFile(path)}
+          onSelect={(path) => void openFileForEditing(path)}
           onClose={() => setQuickOpen(false)}
         />
           {staging.inlineOpen && staging.inlineSnapshot && active && staging.inlineSnapshot.documentId === active.documentId && (
