@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { filterPaths, fuzzyMatch, outlineFromMarkdown, replaceAll, searchWorkspace } from "./workspace";
+import { filterPaths, fuzzyMatch, isSupportedConfigName, outlineFromMarkdown, replaceAll, replaceEdits, searchWorkspace } from "./workspace";
+import { applyTextEdits } from "./utf16";
 
 describe("workspace helpers", () => {
   it("fuzzy-matches Japanese paths for quick-open", () => {
@@ -19,5 +20,22 @@ describe("workspace helpers", () => {
     const files = [{ path: "a.md", text: "東京\n東京タワー\n大阪" }];
     expect(searchWorkspace(files, "東京")).toHaveLength(2);
     expect(replaceAll("aaa", "a", "b")).toEqual({ text: "bbb", count: 3 });
+  });
+
+  it("expresses revision-aware replace as ascending range edits", () => {
+    const text = "東京\n東京タワー\n";
+    const { edits, count } = replaceEdits(text, "東京", "大阪");
+    expect(count).toBe(2);
+    // Ascending and non-overlapping, applicable against the base revision.
+    expect(edits.map((edit) => edit.range.start)).toEqual([0, 3]);
+    expect(applyTextEdits(text, edits)).toBe("大阪\n大阪タワー\n");
+    expect(replaceEdits(text, "", "x")).toEqual({ edits: [], count: 0 });
+  });
+
+  it("accepts dotted and underscore vimrc names", () => {
+    for (const name of ["vimrc", "_vimrc", ".vimrc", "init.vim", "init.lua"]) {
+      expect(isSupportedConfigName(`/cfg/${name}`)).toBe(true);
+    }
+    expect(isSupportedConfigName("/cfg/init.toml")).toBe(false);
   });
 });

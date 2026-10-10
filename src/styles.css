@@ -26,14 +26,14 @@
 }
 
 [data-theme="dark"] {
-  --background: #1c1e1c;
-  --foreground: #e8e6df;
-  --card: #242724;
-  --primary: #8fb08d;
-  --primary-foreground: #1c1e1c;
-  --muted: #2e322e;
-  --muted-foreground: #a8aca0;
-  --border: #3a3e3a;
+  --background: #14161a;
+  --foreground: #e8eaed;
+  --card: #1c1f26;
+  --primary: #8ab4f8;
+  --primary-foreground: #14161a;
+  --muted: #262a33;
+  --muted-foreground: #9aa0ab;
+  --border: #333945;
 }
 
 [data-theme="contrast"] {

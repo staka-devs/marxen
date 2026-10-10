@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
 import {
@@ -16,6 +16,7 @@ import {
   summarizeContext,
   testConnection,
 } from "../lib/ai";
+import { loadAiProfile, saveAiProfile } from "../lib/ai-profiles";
 import type {
   AcpPreset,
   AiError,
@@ -36,6 +37,12 @@ export interface AiPanelProps {
   contexts: PromptContext[];
   staging: StagingTarget | null;
   onRemoveContext?: (documentId: string) => void;
+  /**
+   * Called once per completed run with the proposal text. The proposal never
+   * edits the document: review/apply belongs to the Issue #8 ReviewPanel,
+   * which consumes the same (proposal, sent) pair.
+   */
+  onProposal?: (proposal: ProposalText, sent: ContextSummary[]) => void;
 }
 
 const KIND_ORDER: AiProviderKind[] = ["acp", "openai_compatible", "anthropic"];
@@ -85,14 +92,20 @@ export function buildProviderConfig(state: {
   };
 }
 
-export default function AiPanel({ contexts, staging, onRemoveContext }: AiPanelProps) {
-  const [kind, setKind] = useState<AiProviderKind>("acp");
-  const [preset, setPreset] = useState<AcpPreset>("codex");
-  const [command, setCommand] = useState("");
-  const [argsText, setArgsText] = useState("");
-  const [endpoint, setEndpoint] = useState(DEFAULT_ENDPOINTS.openai_compatible);
-  const [model, setModel] = useState("");
-  const [anthropicEnabled, setAnthropicEnabled] = useState(false);
+export default function AiPanel({ contexts, staging, onRemoveContext, onProposal }: AiPanelProps) {
+  // Non-secret provider profile restored once; secrets never live here.
+  const [saved] = useState(loadAiProfile);
+  const [kind, setKind] = useState<AiProviderKind>(saved.kind);
+  const [preset, setPreset] = useState<AcpPreset>(saved.preset);
+  const [command, setCommand] = useState(saved.command);
+  const [argsText, setArgsText] = useState(saved.argsText);
+  const [endpoint, setEndpoint] = useState(saved.endpoint);
+  const [model, setModel] = useState(saved.model);
+  const [anthropicEnabled, setAnthropicEnabled] = useState(saved.anthropicEnabled);
+
+  useEffect(() => {
+    saveAiProfile({ kind, preset, command, argsText, endpoint, model, anthropicEnabled });
+  }, [kind, preset, command, argsText, endpoint, model, anthropicEnabled]);
   const [credential, setCredentialState] = useState<CredentialRef | null>(null);
   const [secretInput, setSecretInput] = useState("");
   const [credentialMessage, setCredentialMessage] = useState<string | null>(null);
@@ -134,6 +147,7 @@ export default function AiPanel({ contexts, staging, onRemoveContext }: AiPanelP
       case "done":
         setProposal(event.payload.proposal);
         setSent(event.payload.sent);
+        onProposal?.(event.payload.proposal, event.payload.sent);
         setRunning(false);
         setStopFn(null);
         break;

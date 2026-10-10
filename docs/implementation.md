@@ -7,12 +7,12 @@
 | 作業 | 担当 | 依存 |
 | --- | --- | --- |
 | Tauri 基盤・IPC・3 OS CI・devcontainer | Codex | なし |
-| Neovim・IME・表示座標の技術検証 | OpenCode（Codex がレビュー・統合） | 基盤 |
+| Neovim・IME・表示座標 | OpenCode（Codex がレビュー・統合） | 基盤 |
 | ワークスペース・保存・復元 | Codex | IPC |
-| UI・ライブプレビュー・GUI 編集 | OpenCode | 技術検証 |
+| UI・ライブプレビュー・GUI 編集 | OpenCode | 文書 IPC |
 | GitHub 記法・地図・3D | OpenCode | 描画基盤 |
 | ACP・直接 API・AI パネル | OpenCode | IPC |
-| AI 変更の隔離・差分適用 | Codex | 保存 |
+| AI 変更の隔離・差分適用 | OpenCode（Codex がレビュー・統合） | 保存・AI 接続 |
 | 統合・回帰・配布 | Codex / OpenCode | 全機能 |
 
 Orca で Issue ごとの子ワークスペースとブランチを管理し、依存順に統合する。OpenCode は **MuseSpark1.3 Contributor / Xhigh** の実効設定を確認してから起動する。指定モデルが利用できなければ OpenCode の担当は停止して報告し、別モデルへ自動変更しない。Claude Code を起動・委任・接続検証しない。Anthropic Messages API は独立した接続先として利用者の認証設定後に有効化する。
@@ -24,8 +24,8 @@ Rust が Neovim RPC、保存、AI プロセス、HTTP を所有する。文書 I
 ## 受入条件
 
 - 日本語 IME、絵文字、mapping 優先、モード切替、表示座標、GUI 編集と Vim Undo の共存を実 Neovim で検証する。
-- ライブ / 原文 / 閲覧と分割表示で cursor / scroll / Undo を維持する。表示基準の縦移動・行頭末・選択、原文基準の単語・text object・macro を扱う。
-- vimrc / _vimrc / init.vim / init.lua を選択でき、エラーを表示する。専用設定が既定。画面依存 plugin 操作は Neovim 原文ビューで扱う。
+- ライブ表示は本文内の非アクティブな Markdown ブロックをリッチ表示し、編集するブロックでは原文を扱う。ライブ / 原文 / 閲覧と分割表示で cursor / scroll / Undo を維持する。表示基準の縦移動・行頭末・選択、原文基準の単語・text object・macro を扱う。
+- .vimrc / vimrc / _vimrc / init.vim / init.lua を選択でき、エラーを表示する。専用設定が既定。画面依存 plugin 操作は Neovim 原文ビューで扱う。
 - tree、tabs、quick open、全文検索置換、outline、command palette、テーマ、相対画像、画像貼付、外部変更、保存競合、クラッシュ復元。
 - 共通 remark / rehype 基盤で GFM、highlight、5 Alerts、脚注、MathJax、Mermaid、HTML sanitize、GeoJSON / TopoJSON / ASCII STL。Shiki、MathJax、Mermaid、Leaflet / TopoJSON、Three.js はローカル配布。
 - ACP (Codex / OpenCode / 任意コマンド)、OpenAI 互換 Chat Completions、Anthropic Messages、stream / cancel / test / error、OS 資格情報ストア。
