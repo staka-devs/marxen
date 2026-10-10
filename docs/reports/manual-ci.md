@@ -42,6 +42,6 @@ Rust 回帰・Clippy のソース `2bb2f3e` と `4e9ffcf` は実装トークン�
 
 [Linux 手動検証](issue-16-linux-manual-ci.md) の frontend は型・依存・文書・243 件・Node 19 件・build・E2E 29 件が成功した。これは最新 UI の Linux 再実行ではない。Linux native は開発依存不足、macOS 手動検証は未実施。macOS / Linux の実 WebView / IME の確認へ置き換えない。
 
-`4e9ffcf` の [Actions](https://github.com/staka-devs/marxen/actions/runs/38027095455) は四 target とも step 数 0。注釈は支払い失敗または利用上限を示す。[最新 PR checks](https://github.com/staka-devs/marxen/pull/10/checks) と手動検証を区別する。
+`3612c81` の [Actions](https://github.com/staka-devs/marxen/actions/runs/38048257173) は四 target とも step 数 0。注釈は支払い失敗または利用上限を示す。[最新 PR checks](https://github.com/staka-devs/marxen/pull/10/checks) と手動検証を区別する。
 
 五層・SOLID・YAGNI・DRY は [TypeScript](issue-14-frontend-architecture.md)、[Rust](issue-15-backend-architecture.md)、[最新 UI](issue-20-ui.md) でレビューする。依存と文書の静的検査は成功し、原則の全面的な証明とは区別する。
