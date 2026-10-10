@@ -59,7 +59,8 @@ fn basename_of(command: &str) -> &str {
     command.rsplit(['/', '\\']).next().unwrap_or(command)
 }
 
-/// Claude Code must never be launched from a preset or custom argv.
+/// Recognize `claude`/`claude-code` basenames after removing a literal `.exe`
+/// suffix and folding ASCII case, for rejection before process launch.
 pub fn is_claude_command(command: &str) -> bool {
     let base = basename_of(command);
     let stem = base

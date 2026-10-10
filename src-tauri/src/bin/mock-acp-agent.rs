@@ -21,6 +21,8 @@ struct Agent {
     pending: Vec<u8>,
 }
 
+/// Serialize one compact JSON value and append LF using independent mock framing.
+/// Panic only if serialization fails; no library protocol helper is reused.
 fn encode(value: &serde_json::Value) -> Vec<u8> {
     let mut line = serde_json::to_vec(value).expect("mock message serializes");
     line.push(b'\n');
@@ -28,6 +30,7 @@ fn encode(value: &serde_json::Value) -> Vec<u8> {
 }
 
 impl Agent {
+    /// Encode an envelope and buffer it in coalescing mode, otherwise write it now.
     fn send(&mut self, value: &serde_json::Value) {
         let line = encode(value);
         if self.coalesce {
@@ -37,6 +40,8 @@ impl Agent {
         self.write_line(&line);
     }
 
+    /// Write and clear the entire coalesced buffer in one batch, ignoring output errors.
+    /// Do nothing outside coalescing mode or when there are no pending bytes.
     fn flush(&mut self) {
         if self.coalesce && !self.pending.is_empty() {
             let bytes: Vec<u8> = std::mem::take(&mut self.pending);
@@ -45,6 +50,8 @@ impl Agent {
         }
     }
 
+    /// Write a framed line immediately, optionally in three-byte pieces with
+    /// 1 ms delays to split JSON and UTF-8 boundaries; output failures are ignored.
     fn write_line(&mut self, line: &[u8]) {
         if self.fragment {
             // Split mid-line and mid-UTF-8 on purpose.
@@ -59,11 +66,13 @@ impl Agent {
         let _ = self.out.flush();
     }
 
+    /// Send or queue a JSON-RPC success result echoing the supplied request ID.
     fn respond(&mut self, id: &serde_json::Value, result: serde_json::Value) {
         let reply = serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result });
         self.send(&reply);
     }
 
+    /// Send or queue a JSON-RPC error with mock code -32000 and the request ID.
     fn respond_error(&mut self, id: &serde_json::Value, message: &str) {
         let reply = serde_json::json!({
             "jsonrpc": "2.0",
@@ -73,6 +82,7 @@ impl Agent {
         self.send(&reply);
     }
 
+    /// Emit a `session/update` text-chunk notification for the specified session.
     fn notify_update(&mut self, session_id: &str, text: &str) {
         let note = serde_json::json!({
             "jsonrpc": "2.0",
@@ -89,6 +99,8 @@ impl Agent {
     }
 }
 
+/// Read the first matching `--flag value` or `--flag=value` argument.
+/// A separate flag with no following value, or an absent flag, yields `None`.
 fn flag_value(name: &str) -> Option<String> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -102,16 +114,20 @@ fn flag_value(name: &str) -> Option<String> {
     None
 }
 
+/// Check for an exact standalone flag after argv[0], without interpreting `=value`.
 fn has_flag(name: &str) -> bool {
     std::env::args().skip(1).any(|arg| arg == name)
 }
 
+/// Resolve the optional marker-output directory from `--flag-dir` without validating it.
 fn flag_dir() -> Option<std::path::PathBuf> {
     flag_value("--flag-dir").map(std::path::PathBuf::from)
 }
 
 /// Independent staging guard: the mock only writes contained relative paths
 /// inside its cwd, mirroring the production containment rule.
+/// Normalize `.`/`..` lexically and reject empty or absolute paths and traversal
+/// beyond the root; this helper does not resolve or check symlinks.
 fn guarded_staging_target(
     root: &std::path::Path,
     candidate: &str,
@@ -151,6 +167,8 @@ fn guarded_staging_target(
     Ok(joined)
 }
 
+/// Read JSON lines from stdin, tolerating CRLF and skipping empty/malformed JSON lines.
+/// Log malformed JSON, and return `None` on EOF, read failure, or invalid UTF-8.
 fn read_message(reader: &mut BufReader<std::io::StdinLock<'_>>) -> Option<serde_json::Value> {
     let mut line = Vec::new();
     loop {
@@ -179,6 +197,7 @@ fn read_message(reader: &mut BufReader<std::io::StdinLock<'_>>) -> Option<serde_
     }
 }
 
+/// Build mock permission request ID 900 with one allow-once and one reject-once option.
 fn permission_request(session_id: &str) -> serde_json::Value {
     serde_json::json!({
         "jsonrpc": "2.0",
@@ -200,6 +219,7 @@ fn permission_request(session_id: &str) -> serde_json::Value {
     })
 }
 
+/// Recognize only a selected `mock_reject` permission outcome, not cancellation or approval.
 fn permission_denied(answer: &serde_json::Value) -> bool {
     answer
         .pointer("/result/outcome/outcome")
@@ -211,6 +231,10 @@ fn permission_denied(answer: &serde_json::Value) -> bool {
             == Some("mock_reject")
 }
 
+/// Serve independent ACP initialize/session/prompt fixtures over stdio until EOF.
+/// Flags inject interleaving, fragmentation/coalescing, delays, huge lines,
+/// permission denial, graceful cancellation, and staging writes before/after completion.
+/// `--exit-early` exits with status 1; unsupported request methods receive mock errors.
 fn main() {
     if has_flag("--exit-early") {
         std::process::exit(1);

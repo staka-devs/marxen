@@ -1,5 +1,8 @@
 use std::{fs, path::Path};
 
+/// Write document/workspace TypeScript contracts to the default or `--output` path.
+/// `--check` requires exact generated text after normalizing existing CRLF;
+/// missing/stale output or failed filesystem operations panic.
 fn main() {
     let default_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/contracts/contracts.ts");
     let args: Vec<String> = std::env::args().collect();

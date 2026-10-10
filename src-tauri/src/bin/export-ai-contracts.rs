@@ -1,5 +1,8 @@
 use std::{fs, path::Path};
 
+/// Generate AI IPC TypeScript at the default contracts path or `--output` target.
+/// `--check` compares existing text after CRLF normalization; missing files,
+/// mismatches, and filesystem failures panic rather than silently passing.
 fn main() {
     let default_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/contracts/ai-contracts.ts");

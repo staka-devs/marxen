@@ -1,5 +1,8 @@
 use std::{fs, path::Path};
 
+/// Generate isolation TypeScript contracts at the default or `--output` path.
+/// `--check` reads and compares CRLF-normalized output without writing it,
+/// panicking on missing/stale files; generation also panics on filesystem failure.
 fn main() {
     let default_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/contracts/isolation-contracts.ts");

@@ -312,8 +312,8 @@ impl NeovimSession {
         Ok((mode::parse_mode(&value)?, mode::parse_blocking(&value)?))
     }
 
-    /// Detect blocking or command-line input before querying pending mapping,
-    /// operator, or safe-state flags; reject a non-string `state()` result.
+    /// Detect blocking or command-line input before querying native pending-state
+    /// flags with `state('moS')`; reject a non-string result.
     pub fn input_pending(&self) -> Result<bool, RpcError> {
         let (mode, blocking) = self.mode_state()?;
         if blocking || mode == crate::contracts::VimMode::CommandLine {

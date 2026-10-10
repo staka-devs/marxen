@@ -11,6 +11,8 @@ mod regression {
     use super::*;
     use crate::contracts::{DocumentId, Revision, Utf16Offset, Utf16Range};
 
+    /// Build a revision-7 Unicode context for wire/structural tests; its excerpt
+    /// is deliberately not a snapshot-authorized slice of the `[1, 3)` source range.
     fn context() -> PromptContext {
         PromptContext {
             document_id: DocumentId("doc_01".into()),
@@ -23,6 +25,7 @@ mod regression {
         }
     }
 
+    /// Build a Codex ACP ask request with one context, `copy_01`, and no session/history.
     fn acp_request() -> AiPromptRequest {
         AiPromptRequest {
             provider: AiProviderConfig {
@@ -45,6 +48,8 @@ mod regression {
         }
     }
 
+    /// Accept a bounded ASCII handle and reject empty, spaced, path-like, Unicode,
+    /// and over-128-byte identifiers.
     #[test]
     fn handles_accept_valid_and_reject_bad() {
         assert!(validate_handle("copy_01", "x").is_ok());
@@ -53,6 +58,8 @@ mod regression {
         }
     }
 
+    /// Reject recognized Claude Code command basenames across case/path variants
+    /// while keeping unrelated and similarly prefixed executable names available.
     #[test]
     fn claude_commands_are_refused() {
         for command in [
@@ -78,6 +85,8 @@ mod regression {
         }
     }
 
+    /// Require the official `codex-acp` argv, custom argv for custom mode, and no
+    /// argv override for fixed presets; reject an empty custom command.
     #[test]
     fn preset_argv_resolution_is_strict() {
         let codex = AcpConfig {
@@ -123,6 +132,8 @@ mod regression {
         assert!(resolve_acp_argv(&empty_command).is_err());
     }
 
+    /// Normalize trailing endpoint slashes and allow local HTTP, while rejecting
+    /// unsupported/missing schemes, empty hosts, embedded credentials, and spaces.
     #[test]
     fn endpoint_validation_rejects_non_http_and_embedded_auth() {
         assert_eq!(
@@ -142,6 +153,8 @@ mod regression {
         }
     }
 
+    /// Require a single backend configuration matching its kind and explicit
+    /// Anthropic opt-in without excluding the independent Anthropic API backend.
     #[test]
     fn provider_configs_must_match_kind_and_anthropic_is_opt_in() {
         assert!(validate_provider_config(&acp_request().provider).is_ok());
@@ -180,6 +193,9 @@ mod regression {
         assert!(validate_provider_config(&enabled).is_ok());
     }
 
+    /// Keep source offsets independent of excerpt length/surrogate boundaries
+    /// during structural validation; reject blank prompts, absent/reversed ranges,
+    /// and HTTP session IDs, while permitting general questions without contexts.
     #[test]
     fn prompt_requests_check_ranges_structurally() {
         assert!(validate_prompt_request(&acp_request()).is_ok());
@@ -229,6 +245,8 @@ mod regression {
         assert!(validate_prompt_request(&bare).is_ok());
     }
 
+    /// Freeze the exact Japanese mode instruction, document/revision/UTF-16 header,
+    /// Unicode excerpt, and prompt delimiters rendered for one ask request.
     #[test]
     fn composed_message_has_exact_sent_scope() {
         let message = compose_user_message(PromptMode::Ask, "これは何ですか", &[context()]);
@@ -242,6 +260,8 @@ mod regression {
         );
     }
 
+    /// Skip SSE comments, accept CRLF/LF framing, retain a split payload until
+    /// completion, and drain an unterminated final data event at EOF.
     #[test]
     fn sse_decoder_survives_chunk_splits_comments_and_crlf() {
         let mut decoder = SseDecoder::default();
@@ -255,6 +275,8 @@ mod regression {
         assert_eq!(decoder.finish(), Some("tail".to_owned()));
     }
 
+    /// Preserve Unicode deltas, ignore role-only chunks, classify bad-key errors
+    /// as authentication failures, and fail on other provider errors or invalid JSON.
     #[test]
     fn openai_deltas_and_errors_map_correctly() {
         let delta = r#"{"choices": [{"delta": {"content": "日本語"}, "finish_reason": null}]}"#;
@@ -274,6 +296,8 @@ mod regression {
         assert!(openai_delta_text("not json").is_err());
     }
 
+    /// Extract Anthropic text deltas and message-stop signals, ignore JSON/start
+    /// noise, and classify authentication envelopes as `AuthFailed`.
     #[test]
     fn anthropic_signals_cover_text_end_error_and_noise() {
         let delta =
@@ -304,6 +328,7 @@ mod regression {
         ));
     }
 
+    /// Accept HTTP 200, classify 401 as authentication failure, and 500 as connection failure.
     #[test]
     fn http_status_maps_to_auth_or_connection_errors() {
         assert!(map_http_status(200, "").is_none());
@@ -325,6 +350,8 @@ mod regression {
     }
 
     impl std::io::Read for Chunked<'_> {
+        /// Copy at most `max` bytes into the caller's buffer and advance the remaining slice.
+        /// Return zero at EOF or when the buffer/cap allows no bytes.
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
             if self.data.is_empty() {
                 return Ok(0);
@@ -337,15 +364,19 @@ mod regression {
     }
 
     impl std::io::BufRead for Chunked<'_> {
+        /// Borrow all remaining fixture bytes independently of the `read` fragmentation cap.
         fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
             Ok(self.data)
         }
 
+        /// Advance by the requested byte count, clamped to the remaining fixture length.
         fn consume(&mut self, amount: usize) {
             self.data = &self.data[amount.min(self.data.len())..];
         }
     }
 
+    /// Require one LF per compact ACP message and decode multiple envelopes
+    /// both from whole-stream reads and 1–7-byte reads splitting Unicode scalars.
     #[test]
     fn ndjson_survives_fragmentation_coalescing_and_utf8_splits() {
         let first = serde_json::json!({"jsonrpc": "2.0", "id": 1});
@@ -372,6 +403,8 @@ mod regression {
         assert_eq!(reader.next_value().unwrap(), None);
     }
 
+    /// Reject invalid UTF-8/JSON, truncated EOF lines, and oversized ACP lines;
+    /// distinguish clean EOF and tolerate empty lines plus CRLF framing.
     #[test]
     fn ndjson_rejects_bad_lines_and_limits_size() {
         // Invalid UTF-8.
@@ -403,6 +436,8 @@ mod regression {
         assert_eq!(reader.next_value().unwrap(), None);
     }
 
+    /// Route response IDs, notifications, and agent requests to distinct variants,
+    /// preserving request ID/method and rejecting an envelope with neither.
     #[test]
     fn incoming_messages_classify_by_id_and_method() {
         let response = serde_json::json!({"jsonrpc": "2.0", "id": 3, "result": {}});
@@ -429,6 +464,8 @@ mod regression {
         assert!(classify_incoming(malformed).is_err());
     }
 
+    /// Accept ACP v1, reject v2 or missing negotiation, and preserve the unsupported
+    /// version number through serialized error round-trips.
     #[test]
     fn protocol_version_negotiation_is_explicit() {
         let ok = serde_json::json!({"result": {"protocolVersion": 1}});
@@ -447,6 +484,8 @@ mod regression {
         assert_eq!(roundtrip, AiError::UnsupportedProtocol { version: 2 });
     }
 
+    /// Select the reject option in the exact ACP outcome shape, cancel explicitly
+    /// or when only approval exists, and retain IDs in unsupported-method errors.
     #[test]
     fn permission_answers_deny_by_default_with_exact_shapes() {
         let params = serde_json::json!({
@@ -477,6 +516,8 @@ mod regression {
         assert_eq!(unknown["id"], 7);
     }
 
+    /// Recognize all five supported prompt stop reasons, including cancellation,
+    /// and reject a response missing `stopReason`.
     #[test]
     fn stop_reasons_route_cancellation() {
         for (raw, expected) in [
@@ -492,6 +533,8 @@ mod regression {
         assert!(parse_stop_reason(&serde_json::json!({"result": {}})).is_err());
     }
 
+    /// Preserve initialize identity/version, staging cwd with no MCP servers,
+    /// session prompt scope, ID-free cancellation, and text-only update extraction.
     #[test]
     fn acp_builders_and_update_parsing_keep_protocol_shape() {
         let init = acp_initialize(1);
@@ -532,6 +575,8 @@ mod regression {
         assert_eq!(acp_update_text(&tool_call), None);
     }
 
+    /// Refuse prompts before a session opens, concurrent prompts, and foreign
+    /// session IDs; allow the recorded session again after prompt completion.
     #[test]
     fn tracker_enforces_lifecycle() {
         let mut tracker = AcpSessionTracker::new();
@@ -550,6 +595,8 @@ mod regression {
         assert!(tracker.prompt_started(Some("sess_1")).is_ok());
     }
 
+    /// Keep provider credential slots distinct across set/has/delete operations,
+    /// use separate account keys, and reject an empty secret.
     #[test]
     fn memory_keyring_holds_separate_slots() {
         let keyring = MemoryKeyring::default();
@@ -568,6 +615,8 @@ mod regression {
         assert!(validate_secret("").is_err());
     }
 
+    /// Stream started/chunk events before completion, concatenate Unicode output,
+    /// and retain the request's base revision and scalar-count scope echo.
     #[test]
     fn mock_script_emits_started_chunks_done_with_sent_echo() {
         let request = acp_request();
@@ -596,6 +645,8 @@ mod regression {
         }
     }
 
+    /// Emit cancellation for a pre-cancelled mock run and an error event for an
+    /// injected authentication failure after the initial started event.
     #[test]
     fn mock_script_honors_cancel_and_failure() {
         let request = acp_request();
@@ -625,6 +676,7 @@ mod regression {
         assert!(matches!(events[1], AiStreamEvent::Error(_)));
     }
 
+    /// Build a terminal done fixture for the given run without provenance or scope entries.
     fn gate_done(run_id: &AiRunId) -> AiStreamEvent {
         AiStreamEvent::Done(StreamDone {
             run_id: run_id.clone(),
@@ -636,6 +688,7 @@ mod regression {
         })
     }
 
+    /// Deliver started/chunk events live while buffering completion until settlement.
     #[test]
     fn terminal_gate_streams_live_then_delivers_once() {
         let run_id = AiRunId("run_gate".into());
@@ -669,6 +722,8 @@ mod regression {
         assert!(matches!(terminal, AiStreamEvent::Done(_)));
     }
 
+    /// Keep the first done event when a driver later emits an error and returns
+    /// a failure, preventing a second terminal delivery.
     #[test]
     fn terminal_gate_keeps_first_settlement_only() {
         let run_id = AiRunId("run_gate2".into());
@@ -696,6 +751,8 @@ mod regression {
         ));
     }
 
+    /// Turn an error or silent successful driver outcome into an explicit error,
+    /// while retaining a buffered cancellation without delivering it live.
     #[test]
     fn terminal_gate_maps_silent_and_error_outcomes() {
         let run_id = AiRunId("run_gate3".into());
@@ -729,6 +786,7 @@ mod regression {
         ));
     }
 
+    /// Classify an intentionally absent executable as `MissingBinary` before agent startup.
     #[test]
     fn missing_binaries_report_without_spawning_agents() {
         let argv = AcpArgv {
@@ -741,6 +799,8 @@ mod regression {
         ));
     }
 
+    /// Reject a Claude Code preset on the wire and round-trip the exact
+    /// `request_cancelled` error tag.
     #[test]
     fn wire_rejects_claude_presets_and_tags_cancellation() {
         let rejected: Result<AcpPreset, _> = serde_json::from_str("\"claude_code\"");
@@ -751,6 +811,7 @@ mod regression {
         assert_eq!(roundtrip, AiError::RequestCancelled);
     }
 
+    /// Build one history fixture with the supplied role and exact owned text.
     fn history_message(role: ChatRole, text: &str) -> ChatHistoryMessage {
         ChatHistoryMessage {
             role,
@@ -758,6 +819,8 @@ mod regression {
         }
     }
 
+    /// Allow empty/valid history but reject excess message count, blank entries,
+    /// more than 20,000 Unicode scalars in one entry, and embedded NUL.
     #[test]
     fn history_validation_bounds_turns_and_chars() {
         assert!(validate_history(&[]).is_ok());
@@ -774,6 +837,8 @@ mod regression {
         assert!(validate_history(&[history_message(ChatRole::User, &with_nul)]).is_err());
     }
 
+    /// Include history validation in pure request checks and retain compatibility
+    /// with legacy serialized requests whose missing history defaults to empty.
     #[test]
     fn prompt_requests_validate_history_before_side_effects() {
         let mut request = acp_request();
@@ -797,6 +862,8 @@ mod regression {
         assert!(parsed.history.is_empty());
     }
 
+    /// Carry user/assistant history in the ACP text preamble and prompt envelope,
+    /// while keeping empty-history composition identical to the original wire text.
     #[test]
     fn acp_composition_carries_history_explicitly() {
         let history = vec![
@@ -827,6 +894,8 @@ mod regression {
         assert!(text.contains("前回の質問") && text.contains("前回の回答"));
     }
 
+    /// Keep a prior question/answer as separate HTTP messages before the current
+    /// scoped prompt for both OpenAI-compatible and Anthropic body builders.
     #[test]
     fn http_bodies_carry_two_turn_history_as_messages() {
         let history = vec![

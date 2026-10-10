@@ -3,8 +3,8 @@
 //! The default is an isolated embedded session (`-u NONE -i NONE -n
 //! --noplugin`) so tests and the editor never read the user's `~/.config`.
 //! Users may explicitly pick one of `vimrc` / `_vimrc` / `init.vim` /
-//! `init.lua`; that file is passed as `-u <path>` and any load failure is
-//! surfaced instead of silently falling back.
+//! `init.lua`; the session sources that file after isolated boot and reports
+//! load failures in its configuration report.
 
 use std::path::Path;
 
