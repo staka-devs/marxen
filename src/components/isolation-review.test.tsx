@@ -94,4 +94,13 @@ describe("review panel", () => {
     expect(screen.getByRole("button", { name: "承認して適用" })).toBeDisabled();
     expect(screen.queryByText("copy_08")).not.toBeInTheDocument();
   });
+
+  it("keeps completed results available without inactive approval controls", () => {
+    render(<ReviewPanel {...baseProps()} copyId={null} onStageProposal={null} status="承認して適用しました。"
+      outcomes={[{ documentId: "doc_08", applied: true, revision: 4, error: null, rolledBack: false, rollbackError: null }]} />);
+    expect(screen.getByRole("status")).toHaveTextContent("承認して適用しました。");
+    expect(screen.queryByRole("button", { name: "承認して適用" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("承認して適用しました。"));
+    expect(screen.getByRole("list", { name: "承認結果", hidden: true })).toHaveTextContent("doc_08 適用");
+  });
 });

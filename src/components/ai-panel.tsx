@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { History, Plus, RotateCcw, Send, Square, X } from "lucide-react";
 import { Button } from "./ui/button";
+import "./ai-chat.css";
 import AiProviderSettings from "./ai-provider-settings";
 import { MarkdownPreview } from "./preview/MarkdownPreview";
 import {
@@ -55,6 +57,8 @@ export interface AiPanelProps {
   onProvider?: (provider: AiProviderConfig) => void;
   /** Increment to expand the collapsed connection settings (root Settings entry point). */
   openSettingsToken?: number;
+  /** Compact header close control; root wires it to hide the AI pane. */
+  onClose?: () => void;
   /** Visible filename labels per document id (no internal ids in product text). */
   contextLabels?: Record<string, string>;
   /** Fenced while the other chat owns a run on the shared staging slot. */
@@ -94,6 +98,7 @@ export default function AiPanel({
   contextLabels,
   disabled,
   onBusyChange,
+  onClose,
   onRemoveContext,
   onProposal,
 }: AiPanelProps) {
@@ -190,6 +195,15 @@ export default function AiPanel({
   const differentProvider = conversation?.providerKey !== providerKey;
   const anthropicBlocked = provider.kind === "anthropic" && !(provider.anthropic?.enabled ?? false);
   const canSend = !running && !disabled && !differentProvider && contexts.length > 0 && prompt.trim().length > 0 && !anthropicBlocked;
+  // The retry action stays quiet: it appears only while idle when a previous
+  // prompt exists and the trailing turn failed, was cancelled, or never
+  // produced an assistant turn (e.g. staging failed with a stream error).
+  const lastPrompt = conversation ? lastUserPrompt(conversation.messages) : null;
+  const tailMessage = conversation?.messages[conversation.messages.length - 1];
+  const tailFailed = tailMessage !== undefined && (tailMessage.role === "user"
+    ? true
+    : tailMessage.state === "error" || tailMessage.state === "cancelled");
+  const showRetry = !running && lastPrompt !== null && (!!streamError || tailFailed);
 
   async function resolveStaging(wanted: PromptContext[]): Promise<StagingTarget> {
     if (ensureStaging) return ensureStaging(wanted);
@@ -390,36 +404,47 @@ export default function AiPanel({
   if (!conversation) return null;
 
   return (
-    <div aria-label="Agent チャット" className="flex h-full min-h-0 flex-col gap-2">
-      <div className="flex items-center gap-1">
-        <h2 id="ai-panel-title" className="min-w-0 flex-1 truncate text-sm font-semibold">Agent チャット</h2>
-        <Button variant="outline" size="sm" aria-label="新しい会話" title="新しい会話" onClick={handleNewConversation}>
-          新規
+    <div aria-label="Agent チャット" className="ai-chat-panel flex h-full min-h-0 flex-col gap-1.5">
+      <div className="ai-chat-header flex shrink-0 items-center gap-1">
+        <h2 id="ai-panel-title" className="min-w-0 flex-1 truncate text-xs font-semibold">Agent チャット</h2>
+        {conversations.length > 1 && (
+          <label className="flex min-w-0 max-w-[55%] items-center gap-0.5 text-muted-foreground" title="会話の履歴">
+            <History size={13} aria-hidden="true" className="shrink-0" />
+            <select
+              aria-label="会話の選択"
+              className="ai-chat-history-select min-w-0 flex-1 truncate"
+              value={conversationId}
+              onChange={(event) => handleSelectConversation(event.target.value)}
+            >
+              {conversations.map((item, index) => (
+                <option key={item.id} value={item.id}>
+                  会話 {index + 1}{isBusy(item.messages) ? "（生成中）" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <Button variant="outline" size="sm" aria-label="新しい会話" title="新しい会話" onClick={handleNewConversation} className="ai-chat-action shrink-0 px-2">
+          <Plus size={14} aria-hidden="true" />
         </Button>
-      </div>
-      {conversations.length > 1 && (
-        <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
-          会話
-          <select
-            aria-label="会話の選択"
-            className="min-w-0 flex-1 rounded-md border border-border bg-card px-1.5 py-1 text-xs text-foreground"
-            value={conversationId}
-            onChange={(event) => handleSelectConversation(event.target.value)}
+        {onClose && (
+          <button
+            type="button"
+            aria-label="Agent チャットを閉じる"
+            title="閉じる"
+            className="shrink-0 rounded p-1 hover:bg-muted"
+            onClick={onClose}
           >
-            {conversations.map((item, index) => (
-              <option key={item.id} value={item.id}>
-                会話 {index + 1}{isBusy(item.messages) ? "（生成中）" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <div className="flex flex-wrap gap-1" aria-label="送信対象">
+            <X size={14} aria-hidden="true" />
+          </button>
+        )}
+      </div>
+      <div className="ai-chat-chips flex shrink-0 flex-wrap gap-1" aria-label="送信対象">
         {contexts.length === 0 ? (
           <span className="text-[11px] text-muted-foreground">送信対象がありません。</span>
         ) : (
           contexts.map((context) => (
-            <span key={context.documentId} className="inline-flex max-w-full items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px]">
+            <span key={context.documentId} className="inline-flex max-w-full items-center gap-0.5 rounded border border-border bg-card px-1.5 py-px text-[11px] leading-5">
               <span
                 className="truncate"
                 title={`rev ${context.revision}`}
@@ -431,7 +456,7 @@ export default function AiPanel({
                   type="button"
                   aria-label={`${labelFor(contextLabels, context.documentId)}を外す`}
                   title="外す"
-                  className="rounded px-1 hover:bg-muted"
+                  className="rounded px-0.5 leading-none hover:bg-muted"
                   onClick={() => onRemoveContext(context.documentId)}
                 >
                   ×
@@ -441,7 +466,7 @@ export default function AiPanel({
           ))
         )}
       </div>
-      <div ref={transcriptRef} aria-live="polite" aria-label="会話" className="min-h-0 flex-1 space-y-4 overflow-y-auto py-2">
+      <div ref={transcriptRef} aria-live="polite" aria-label="会話" className="min-h-0 flex-1 space-y-3 overflow-y-auto py-1.5">
         {conversation.messages.length === 0 && (
           <p className="text-[11px] text-muted-foreground">質問や生成指示を下に入力して送信します。</p>
         )}
@@ -478,47 +503,56 @@ export default function AiPanel({
           <p className="text-[11px] text-muted-foreground">応答を生成しています…</p>
         )}
       </div>
-      <div className="shrink-0 space-y-2 border-t border-border pt-2">
-        <div role="group" aria-label="プロンプトの種類" className="flex flex-wrap gap-2">
-          {MODE_ORDER.map((candidate) => (
-            <label key={candidate} className="inline-flex items-center gap-1 text-xs">
-              <input
-                type="radio"
-                name="ai-prompt-mode"
-                checked={mode === candidate}
-                onChange={() => setMode(candidate)}
-              />
-              {MODE_LABELS[candidate]}
-            </label>
-          ))}
-        </div>
-        <textarea
-          aria-label="プロンプト"
-          className="block max-h-40 w-full overflow-y-auto rounded-lg border border-border bg-card px-2 py-1.5 text-xs"
-          rows={3}
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          placeholder="AI への指示を書きます"
-        />
-        <div className="flex gap-1">
-          <Button size="sm" aria-label="送信" onClick={() => void handleSend()} disabled={!canSend}>
-            {running ? "送信中…" : "送信"}
-          </Button>
-          {running && (
-            <Button variant="outline" size="sm" aria-label="取り消し" onClick={() => void handleCancel()}>
-              取消
+      <div className="ai-chat-composer shrink-0 border-t border-border pt-1.5">
+        <div className="ai-chat-composer-box px-1.5 pb-1.5 pt-1">
+          <textarea
+            aria-label="プロンプト"
+            className="ai-chat-composer-input block max-h-40 min-h-14 w-full overflow-y-auto px-1 py-1 text-xs"
+            rows={3}
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="AI への指示を書きます"
+          />
+          <div className="mt-1 flex items-center gap-1">
+            <div role="group" aria-label="プロンプトの種類" className="min-w-0 flex-1">
+              <select
+                aria-label="モード"
+                title="プロンプトの種類"
+                className="ai-chat-mode-select w-full min-w-0 truncate"
+                value={mode}
+                onChange={(event) => setMode(event.target.value as PromptMode)}
+              >
+                {MODE_ORDER.map((candidate) => (
+                  <option key={candidate} value={candidate}>
+                    {MODE_LABELS[candidate]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Button size="sm" aria-label="送信" title="送信" onClick={() => void handleSend()} disabled={!canSend} className="ai-chat-action shrink-0">
+              <Send size={13} aria-hidden="true" />
+              {running ? "送信中…" : "送信"}
             </Button>
-          )}
-          {!running && (
-            <Button variant="outline" size="sm" aria-label="再試行" title="直前の入力を再送します" onClick={() => void handleRetry()} disabled={disabled || differentProvider || !lastUserPrompt(conversation.messages)}>
-              再試行
-            </Button>
-          )}
+            {running && (
+              <Button variant="outline" size="sm" aria-label="取り消し" title="取り消し" onClick={() => void handleCancel()} className="ai-chat-action shrink-0">
+                <Square size={12} aria-hidden="true" />
+                取消
+              </Button>
+            )}
+            {showRetry && (
+              <Button variant="outline" size="sm" aria-label="再試行" title="直前の入力を再送します" onClick={() => void handleRetry()} disabled={disabled || differentProvider || lastPrompt === null} className="ai-chat-action shrink-0">
+                <RotateCcw size={13} aria-hidden="true" />
+                再試行
+              </Button>
+            )}
+          </div>
         </div>
-        {disabled && <p className="text-[11px] text-muted-foreground">他の応答を生成しています。</p>}
-        {differentProvider && <p className="text-[11px] text-muted-foreground">接続先が異なる会話です。続けるには新しい会話を作成してください。</p>}
-        {anthropicBlocked && <p className="text-[11px] text-muted-foreground">Anthropic を有効化すると送信できます。</p>}
-        <AiProviderSettings provider={provider} onProvider={changeProvider} openToken={openSettingsToken} />
+        {disabled && <p className="mt-1 text-[11px] text-muted-foreground">他の応答を生成しています。</p>}
+        {differentProvider && <p className="mt-1 text-[11px] text-muted-foreground">接続先が異なる会話です。続けるには新しい会話を作成してください。</p>}
+        {anthropicBlocked && <p className="mt-1 text-[11px] text-muted-foreground">Anthropic を有効化すると送信できます。</p>}
+        <div className="ai-chat-settings mt-1.5">
+          <AiProviderSettings provider={provider} onProvider={changeProvider} openToken={openSettingsToken} />
+        </div>
       </div>
     </div>
   );

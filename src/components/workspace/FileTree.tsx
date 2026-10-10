@@ -98,8 +98,8 @@ function Node({ node, activePath, onOpenFile, depth }: NodeProps) {
           event.dataTransfer.effectAllowed = "copy";
           event.dataTransfer.setData(WORKSPACE_IMAGE_DRAG, node.path);
         }}
-        className={`flex w-full items-center gap-1.5 truncate border-l-2 py-1 pr-2 text-left text-xs hover:bg-muted ${selected ? "border-primary bg-muted font-medium text-foreground" : "border-transparent text-muted-foreground"}`}
-        style={{ paddingLeft: 6 + depth * 14 }}
+        className={`flex h-6 w-full items-center gap-1.5 truncate border-l-2 pr-2 text-left text-[13px] hover:bg-muted ${selected ? "border-primary bg-muted text-foreground" : "border-transparent text-foreground/85"}`}
+        style={{ paddingLeft: 6 + depth * 16 }}
       >
         {node.directory ? (open ? <ChevronDown size={12} aria-hidden /> : <ChevronRight size={12} aria-hidden />) : <span className="w-3 shrink-0" />}
         <Icon size={15} aria-hidden data-file-icon={node.directory ? (open ? "folder-open" : "folder") : node.kind} className="shrink-0" />
