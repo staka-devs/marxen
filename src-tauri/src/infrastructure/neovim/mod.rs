@@ -23,6 +23,7 @@ use std::sync::OnceLock;
 static RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// Configure the installed Tauri resource directory before opening documents.
+/// Only the first call takes effect because the directory is stored in a `OnceLock`.
 pub fn configure_resource_dir(directory: PathBuf) {
     let _ = RESOURCE_DIR.set(directory);
 }
@@ -55,6 +56,8 @@ pub fn bundle_paths() -> Result<BundlePaths, String> {
     Err("Neovim のアプリ配布資源ディレクトリが設定されていません".into())
 }
 
+/// Require the platform binary, runtime directory, and a readable JSON manifest
+/// with a nonempty target string under this bundle root; return localized diagnostics on failure.
 fn bundle_paths_at(root: &Path) -> Result<BundlePaths, String> {
     let exe = root.join(if cfg!(windows) {
         "bin/nvim.exe"
@@ -94,10 +97,14 @@ pub struct NeovimSession {
 }
 
 impl NeovimSession {
+    /// Open the bundled embedded Neovim without reading user init files or plugins.
     pub fn spawn_isolated() -> Result<Self, String> {
         Self::spawn_with_config(ConfigSource::Isolated)
     }
 
+    /// Boot isolated Neovim, capture its current buffer, then explicitly source a
+    /// selected user config. Source errors are retained in the report while the
+    /// session remains usable; missing/unsupported config, bundle, spawn, and required RPC failures return errors.
     pub fn spawn_with_config(source: ConfigSource) -> Result<Self, String> {
         let bundle = bundle_paths().map_err(|detail| format!("neovim bundle: {detail}"))?;
         // Always boot isolated; user files are sourced explicitly afterwards so
@@ -182,20 +189,25 @@ impl NeovimSession {
         })
     }
 
+    /// Borrow the configuration source label and collected startup errors.
     pub fn config_report(&self) -> &ConfigReport {
         &self.config
     }
 
+    /// Borrow the synchronous RPC client owned by this buffer session.
     pub fn client(&self) -> &EmbedClient {
         &self.client
     }
 
+    /// Borrow the native buffer handle captured when the session was opened.
     pub fn buf(&self) -> &rmpv::Value {
         &self.buf
     }
 
     // -- buffer text -------------------------------------------------------
 
+    /// Fetch every line of the owned buffer and require an array of UTF-8 strings.
+    /// Native/transport failures and malformed response values propagate as RPC errors.
     pub fn get_lines(&self) -> Result<Vec<String>, RpcError> {
         let result = self.client.call(
             "nvim_buf_get_lines",
@@ -223,10 +235,13 @@ impl NeovimSession {
         }
     }
 
+    /// Join all authoritative buffer lines with LF without appending an extra newline.
     pub fn get_text(&self) -> Result<String, RpcError> {
         Ok(join_lines(&self.get_lines()?))
     }
 
+    /// Replace the owned buffer using LF-split lines, preserving a final empty
+    /// line and representing empty text as one empty native line.
     pub fn set_text(&self, text: &str) -> Result<(), RpcError> {
         let lines: Vec<rmpv::Value> = split_lines(text)
             .into_iter()
@@ -285,6 +300,7 @@ impl NeovimSession {
 
     // -- modes, input, commands --------------------------------------------
 
+    /// Query the contract mode via the fast mode API, discarding its blocking flag.
     pub fn mode(&self) -> Result<crate::contracts::VimMode, RpcError> {
         Ok(self.mode_state()?.0)
     }
@@ -296,6 +312,8 @@ impl NeovimSession {
         Ok((mode::parse_mode(&value)?, mode::parse_blocking(&value)?))
     }
 
+    /// Detect blocking or command-line input before querying pending mapping,
+    /// operator, or safe-state flags; reject a non-string `state()` result.
     pub fn input_pending(&self) -> Result<bool, RpcError> {
         let (mode, blocking) = self.mode_state()?;
         if blocking || mode == crate::contracts::VimMode::CommandLine {
@@ -313,6 +331,8 @@ impl NeovimSession {
     /// Native character/line selection as half-open byte coordinates.
     /// getregion supplies complete composing characters and follows 'selection'.
     /// Rectangular selections cannot be expressed as one contiguous range.
+    /// Return zero-based start/end rows, UTF-8 byte columns, newline inclusion,
+    /// and forward direction; reject malformed native tuples or coordinates.
     pub fn visual_selection(&self) -> Result<(u32, u32, u32, u32, bool, bool), RpcError> {
         let value = self.exec_lua(
             r#"
@@ -377,6 +397,7 @@ impl NeovimSession {
     }
 
     /// Feed keys as typed, honoring user mappings (wraps `nvim_input`).
+    /// Return the number of input bytes accepted, not the number of executed commands.
     pub fn input(&self, keys: &str) -> Result<usize, RpcError> {
         let result = self
             .client
@@ -387,12 +408,15 @@ impl NeovimSession {
         }
     }
 
+    /// Execute one Ex command and propagate native command or transport errors.
     pub fn command(&self, cmd: &str) -> Result<(), RpcError> {
         self.client
             .call("nvim_command", vec![rmpv::Value::from(cmd)])?;
         Ok(())
     }
 
+    /// Execute an Ex command and capture its output; require a string response,
+    /// using empty text if its MessagePack string is not valid UTF-8.
     pub fn command_output(&self, cmd: &str) -> Result<String, RpcError> {
         let result = self
             .client
@@ -403,6 +427,7 @@ impl NeovimSession {
         }
     }
 
+    /// Execute Lua without positional arguments and return its raw MessagePack value.
     pub fn exec_lua(&self, code: &str) -> Result<rmpv::Value, RpcError> {
         self.client.call(
             "nvim_exec_lua",
@@ -419,6 +444,9 @@ impl NeovimSession {
         Ok(self.copy_config()?.0)
     }
 
+    /// Read copy selectors with F6–F9 defaults; empty strings disable selectors.
+    /// Collect diagnostics for invalid/reserved/duplicate keys and omit rejected
+    /// selectors, removing both colliding formats; malformed result data is an RPC error.
     pub fn copy_config(&self) -> Result<(BTreeMap<String, String>, Vec<String>), RpcError> {
         let value = self.exec_lua(
             r#"
@@ -504,6 +532,7 @@ impl NeovimSession {
         Ok(())
     }
 
+    /// Call a named Vimscript function with supplied values and return its raw result.
     pub fn call_function(
         &self,
         func: &str,
@@ -515,6 +544,8 @@ impl NeovimSession {
         )
     }
 
+    /// Measure native display-cell width with the active Neovim settings.
+    /// Reject negative or non-integer results rather than treating them as widths.
     pub fn strdisplaywidth(&self, text: &str) -> Result<u64, RpcError> {
         let result = self.call_function("strdisplaywidth", vec![rmpv::Value::from(text)])?;
         match result {
@@ -548,17 +579,20 @@ impl NeovimSession {
         }
     }
 
+    /// Run `silent! undo`, suppressing native undo errors while preserving transport errors.
     pub fn undo(&self) -> Result<(), RpcError> {
         // `silent!` keeps an empty undo history from failing the test setup.
         self.command("silent! undo")?;
         Ok(())
     }
 
+    /// Run `silent! redo`, suppressing native redo errors while preserving transport errors.
     pub fn redo(&self) -> Result<(), RpcError> {
         self.command("silent! redo")?;
         Ok(())
     }
 
+    /// Capture the current native `:messages` history for diagnostics.
     pub fn messages(&self) -> Result<String, RpcError> {
         self.command_output("messages")
     }
@@ -607,11 +641,13 @@ impl NeovimSession {
         Ok(())
     }
 
+    /// Poll child-process status without issuing an RPC to a potentially exited peer.
     pub fn is_alive(&self) -> Result<bool, RpcError> {
         self.client.is_alive()
     }
 
     /// Drain `marxen:save-requested` notifications queued since the last call.
+    /// Consume the whole queue and discard every other notification kind.
     pub fn drain_save_requests(&self) -> Vec<rpc::Notification> {
         self.client
             .drain_notifications()

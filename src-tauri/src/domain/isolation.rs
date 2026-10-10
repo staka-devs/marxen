@@ -3,6 +3,8 @@ use crate::contracts::ai::*;
 use crate::contracts::*;
 use crate::domain::storage;
 use std::path::{Component, Path};
+/// Accept a 1–128-byte ASCII alphanumeric/hyphen/underscore copy handle.
+/// Invalid handles, including path syntax, return `InvalidPath`.
 pub fn validate_copy_id_string(id: &str) -> Result<(), WorkspaceError> {
     if id.is_empty()
         || id.len() > 128
@@ -14,10 +16,13 @@ pub fn validate_copy_id_string(id: &str) -> Result<(), WorkspaceError> {
     }
     Ok(())
 }
+/// Count UTF-16 code units, saturating at the largest representable contract offset.
 pub(crate) fn utf16_len(text: &str) -> u32 {
     u32::try_from(text.encode_utf16().count()).unwrap_or(u32::MAX)
 }
 
+/// Copy a half-open UTF-16 range after converting both scalar-safe boundaries.
+/// Conversion errors propagate; callers must ensure `start <= end` to avoid a slice panic.
 pub(crate) fn utf16_slice(text: &str, range: &Utf16Range) -> Result<String, ContractError> {
     let start = crate::domain::validation::utf16_to_utf8(text, range.start)?.0 as usize;
     let end = crate::domain::validation::utf16_to_utf8(text, range.end)?.0 as usize;
@@ -48,12 +53,14 @@ pub(crate) fn reject_forbidden_relative(rel: &str) -> Result<(), WorkspaceError>
     Ok(())
 }
 
+/// Wrap a stale-revision contract error with the received and authoritative revisions.
 pub(crate) fn stale(received: Revision, expected: Revision) -> WorkspaceError {
     WorkspaceError::Contract {
         error: ContractError::StaleRevision { expected, received },
     }
 }
 
+/// Preserve a scope-validation explanation in a workspace I/O error.
 pub(crate) fn invalid_scope(detail: &str) -> WorkspaceError {
     WorkspaceError::Io {
         detail: detail.to_owned(),
@@ -114,6 +121,7 @@ pub(crate) fn validate_context_against_snapshot(
 const SCOPE_MARK: &str = "--- marxen-scope";
 pub(crate) const PATCH_MARK: &str = "--- marxen-patch";
 
+/// Render one staging header with the document handle and half-open UTF-16 offsets.
 pub(crate) fn scope_header(document_id: &DocumentId, range: &Utf16Range) -> String {
     format!(
         "--- marxen-scope document={} range=[{}, {}) ---",
@@ -121,6 +129,8 @@ pub(crate) fn scope_header(document_id: &DocumentId, range: &Utf16Range) -> Stri
     )
 }
 
+/// Parse the exact `range=[start, end)` suffix as unsigned UTF-16 offsets.
+/// Malformed syntax or numbers yield `None`; ordering is validated by the caller.
 pub(crate) fn parse_range_suffix(text: &str) -> Option<Utf16Range> {
     let (start, end) = text
         .strip_prefix("range=[")?
@@ -132,6 +142,8 @@ pub(crate) fn parse_range_suffix(text: &str) -> Option<Utf16Range> {
     })
 }
 
+/// Read a scope marker, nonempty document handle, and numeric range from one header.
+/// Return `None` for malformed headers; this does not match registered scopes.
 pub(crate) fn parse_scope_header(line: &str) -> Option<(String, Utf16Range)> {
     let rest = line.strip_prefix(SCOPE_MARK)?.strip_suffix(" ---")?.trim();
     let (doc_part, range_part) = rest.split_once(' ')?;
@@ -180,6 +192,8 @@ pub(crate) fn parse_scoped_file(text: &str) -> Result<Vec<(String, Utf16Range, S
     Ok(sections)
 }
 
+/// Join section lines with LF, preserving empty lines represented by the input.
+/// The temporary trailing LF is removed again; an empty vector yields empty text.
 pub(crate) fn join_body(lines: Vec<String>) -> String {
     if lines.is_empty() {
         return String::new();
@@ -191,6 +205,8 @@ pub(crate) fn join_body(lines: Vec<String>) -> String {
     out.strip_suffix('\n').unwrap_or(&out).to_owned()
 }
 
+/// Emit each scope as a header, LF, exact excerpt, and one framing LF.
+/// Excerpts and range order are used as supplied, without validation or normalization.
 pub(crate) fn render_scoped_file(
     document_id: &DocumentId,
     scopes: &[(Utf16Range, String)],
@@ -315,6 +331,7 @@ pub(crate) fn apply_patch_to_text(
     Ok(out)
 }
 
+/// Clone reviewed sections into the same header/excerpt format used for staging files.
 pub(crate) fn render_scoped_sections(
     document_id: &DocumentId,
     sections: &[(Utf16Range, String)],
@@ -333,6 +350,7 @@ mod tests {
     use super::*;
     use crate::contracts::{DocumentId, Revision};
 
+    /// Allow a normal copy handle while rejecting empty, relative-path, and absolute-path IDs.
     #[test]
     fn copy_ids_are_valid_handles() {
         assert!(validate_copy_id_string("copy_01").is_ok());
@@ -341,6 +359,8 @@ mod tests {
         assert!(validate_copy_id_string("/abs").is_err());
     }
 
+    /// Assert that multiple sections preserve document IDs, UTF-16 ranges, empty
+    /// bodies, internal LFs, and an excerpt's trailing LF across render/parse.
     #[test]
     fn scoped_sections_round_trip_exactly() {
         let doc = DocumentId("doc_01".into());
@@ -379,6 +399,8 @@ mod tests {
         }
     }
 
+    /// Keep a syntactically valid foreign document ID for later scope validation,
+    /// while rejecting text without a leading scope header and empty files.
     #[test]
     fn scoped_parse_rejects_header_mismatch() {
         let bad = "--- marxen-scope document=other range=[0, 1) ---\nx\n";
@@ -389,6 +411,8 @@ mod tests {
         assert!(parse_scoped_file("").is_err());
     }
 
+    /// Omit equal-text patches and localize replacements/EOF insertions without
+    /// absorbing a preceding BOM or unchanged CRLF bytes.
     #[test]
     fn minimal_edit_preserves_outside_bytes() {
         assert!(minimal_edit("abc", "abc").is_none());
@@ -401,6 +425,7 @@ mod tests {
         assert_eq!(edit.text, " world");
     }
 
+    /// Mark equal documents explicitly and show only the removed/added middle lines.
     #[test]
     fn unified_diff_marks_changes() {
         let same = unified_diff("a\nb\n", "a\nb\n", "a.md");
@@ -410,6 +435,7 @@ mod tests {
         assert!(diff.contains("+B"));
     }
 
+    /// Keep stale revisions classified as contract failures in the workspace error wrapper.
     #[test]
     fn revision_helper_reports_stale() {
         let error = stale(Revision(1), Revision(2));

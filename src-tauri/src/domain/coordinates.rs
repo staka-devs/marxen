@@ -37,7 +37,7 @@ pub fn join_lines(lines: &[String]) -> String {
     lines.join("\n")
 }
 
-/// Total UTF-16 code units in the whole document.
+/// Total UTF-16 code units in the whole document, saturated at `u32::MAX`.
 pub fn utf16_len(text: &str) -> u32 {
     u32::try_from(text.encode_utf16().count()).unwrap_or(u32::MAX)
 }
@@ -112,6 +112,7 @@ pub fn display_width(text: &str) -> usize {
 }
 
 /// Display-cell width of one line up to (not including) a UTF-8 byte column.
+/// Reject a column beyond the line or inside a UTF-8 scalar.
 pub fn line_display_prefix(line: &str, byte_col: usize) -> Result<usize, ContractError> {
     if byte_col > line.len() {
         return Err(ContractError::OffsetOutOfBounds);
@@ -126,6 +127,8 @@ pub fn line_display_prefix(line: &str, byte_col: usize) -> Result<usize, Contrac
 mod unit {
     use super::*;
 
+    /// Round-trip scalar boundaries through zero-based rows and UTF-8 byte columns
+    /// in text containing emoji, Japanese, CRLF, and a combining mark.
     #[test]
     fn converts_global_offsets_to_neovim_positions() {
         // "a😀日本語\r\ne\u{301}" — same shape as the wire fixture.
@@ -155,6 +158,7 @@ mod unit {
         let _ = nl_utf16;
     }
 
+    /// Reject a split UTF-16 surrogate pair, a split UTF-8 scalar, and an absent row.
     #[test]
     fn rejects_bad_positions() {
         let text = "a😀日本語";
@@ -172,6 +176,7 @@ mod unit {
         );
     }
 
+    /// Keep CJK and emoji at two cells and combining marks at zero added cells.
     #[test]
     fn measures_display_width() {
         assert_eq!(display_width("a"), 1);

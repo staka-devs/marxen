@@ -69,6 +69,8 @@ pub struct StagedProposal {
     pub chars: u32,
 }
 
+/// Return exported isolation IPC TypeScript declarations with document/AI imports.
+/// Trim trailing whitespace from each line and finish with one LF; no files are written.
 pub fn typescript() -> String {
     let cfg = ts_rs::Config::default();
     let declarations = [

@@ -17,6 +17,7 @@ pub struct KeymapEntry {
     pub buffer: bool,
 }
 
+/// Copy valid UTF-8 MessagePack strings and reject all other value kinds.
 fn value_to_string(value: &Value) -> Option<String> {
     match value {
         Value::String(text) => text.as_str().map(str::to_owned),
@@ -25,6 +26,8 @@ fn value_to_string(value: &Value) -> Option<String> {
 }
 
 /// List mappings for `mode` (`"n"`, `"i"`, `"v"`, ...).
+/// Query the global mapping API, omit entries without a string lhs, and reject
+/// a non-array response; current-buffer mappings require a separate query.
 pub fn list_keymaps(client: &EmbedClient, mode: &str) -> Result<Vec<KeymapEntry>, RpcError> {
     let result = client.call("nvim_get_keymap", vec![Value::from(mode)])?;
     let items = match result {

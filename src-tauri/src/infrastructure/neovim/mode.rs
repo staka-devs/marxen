@@ -46,6 +46,8 @@ pub fn from_short(short: &str) -> Result<VimMode, RpcError> {
     short_to_mode(short).ok_or_else(|| RpcError::Invalid(format!("unknown Neovim mode: {short:?}")))
 }
 
+/// Read the boolean `blocking` field from a mode response, rejecting missing,
+/// non-boolean, or non-map values as protocol errors.
 pub fn parse_blocking(value: &Value) -> Result<bool, RpcError> {
     value
         .as_map()
@@ -58,6 +60,8 @@ pub fn parse_blocking(value: &Value) -> Result<bool, RpcError> {
         .ok_or_else(|| RpcError::Invalid("nvim_get_mode lacks boolean blocking".into()))
 }
 
+/// Map the leading native mode code to the nearest contract mode, folding select
+/// modes into visual modes; empty or unrecognized codes yield `None`.
 fn short_to_mode(short: &str) -> Option<VimMode> {
     if short == "\u{16}" || short == "\u{16}s" {
         return Some(VimMode::VisualBlock);
@@ -83,6 +87,7 @@ mod unit {
     use super::*;
     use rmpv::Value;
 
+    /// Build a native-mode response fixture with the supplied code and nonblocking input.
     fn mode_map(short: &str) -> Value {
         Value::Map(vec![
             (Value::from("mode"), Value::from(short)),
@@ -90,6 +95,8 @@ mod unit {
         ])
     }
 
+    /// Cover normal/insert submodes, replace, visual variants, command line,
+    /// terminal mode, and `nt` remaining normal inside a terminal buffer.
     #[test]
     fn maps_common_modes() {
         for (short, expected) in [

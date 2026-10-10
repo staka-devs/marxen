@@ -1,5 +1,7 @@
 //! CF_HTML offsets are UTF-8 byte positions, independently padded to ten
 //! digits. A complete HTML context helps native document importers.
+/// Wrap an HTML fragment in NUL-terminated Windows CF_HTML bytes.
+/// Header offsets count UTF-8 bytes and exclude the final NUL from `EndHTML`.
 pub(crate) fn windows_html(fragment: &str) -> Vec<u8> {
     const PREFIX: &str = "<html><head><meta charset=\"utf-8\"></head><body><!--StartFragment-->";
     const SUFFIX: &str = "<!--EndFragment--></body></html>";
@@ -22,6 +24,8 @@ pub(crate) fn windows_html(fragment: &str) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    /// Guard byte-accurate Unicode fragment boundaries, independently padded offsets,
+    /// the HTML end marker, and the terminating NUL with a large embedded image.
     #[test]
     fn fragment_offsets_cover_all_unicode_text_and_multiple_images() {
         let fragment = format!(

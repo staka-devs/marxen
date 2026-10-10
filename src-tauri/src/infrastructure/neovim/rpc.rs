@@ -34,6 +34,7 @@ pub enum RpcError {
 }
 
 impl std::fmt::Display for RpcError {
+    /// Prefix each transport/protocol/native diagnostic with its Neovim error category.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(detail) => write!(f, "neovim io: {detail}"),
@@ -163,6 +164,9 @@ impl EmbedClient {
     }
 
     /// Raw RPC request. `params` must be an array-shaped Vec.
+    /// Flush a request with a fresh ID and wait at most 15 seconds for its response.
+    /// Remove failed/timed-out requests and distinguish remote errors from encoding,
+    /// I/O, timeout, and disconnected/poisoned-lock failures.
     pub fn call(&self, method: &str, params: Vec<Value>) -> Result<Value, RpcError> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::channel();
@@ -291,7 +295,8 @@ impl EmbedClient {
             .map_err(|cause| RpcError::Io(format!("poll nvim: {cause}")))
     }
 
-    /// Kill the embedded child. Best-effort; errors are returned as strings.
+    /// Kill and reap the embedded child on a best-effort basis.
+    /// Ignore kill/wait failures; a poisoned child lock returns `Disconnected`.
     pub fn shutdown(&self) -> Result<(), RpcError> {
         let mut child = self
             .child
@@ -303,6 +308,7 @@ impl EmbedClient {
     }
 
     /// Stderr captured so far (config load failures surface here).
+    /// Keep the latest at most 64 KiB and return empty text if the capture lock is poisoned.
     pub fn stderr_text(&self) -> String {
         self.stderr_text
             .lock()
@@ -313,11 +319,15 @@ impl EmbedClient {
 }
 
 impl Drop for EmbedClient {
+    /// Attempt to kill and reap the owned child when the client is dropped, ignoring shutdown errors.
     fn drop(&mut self) {
         let _ = self.shutdown();
     }
 }
 
+/// Decode child stdout, route valid responses by ID, and queue valid notifications.
+/// Ignore malformed/unsupported envelopes; EOF or decode failure clears pending
+/// senders so waiting calls observe disconnection instead of waiting for timeout.
 fn reader_loop<R: Read + Send + 'static>(
     mut reader: BufReader<R>,
     pending: Arc<Mutex<HashMap<u32, mpsc::Sender<Response>>>>,

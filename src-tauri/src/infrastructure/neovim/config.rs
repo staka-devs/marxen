@@ -22,6 +22,7 @@ pub fn is_supported_config_name(path: &Path) -> bool {
     )
 }
 
+/// Label an isolated startup or explicitly selected user config path for diagnostics.
 pub fn describe_source(source: &ConfigSource) -> String {
     match source {
         ConfigSource::Isolated => "isolated(-u NONE)".into(),
@@ -30,6 +31,8 @@ pub fn describe_source(source: &ConfigSource) -> String {
 }
 
 /// Extra argv for `nvim --embed` for a validated source.
+/// Isolated mode disables init, ShaDa, swap, and plugins. User mode requires an
+/// existing supported config file and disables ShaDa/swap without disabling plugins.
 pub fn argv_for(source: &ConfigSource) -> Result<Vec<String>, String> {
     match source {
         ConfigSource::Isolated => Ok(vec![
@@ -62,6 +65,7 @@ pub fn argv_for(source: &ConfigSource) -> Result<Vec<String>, String> {
 }
 
 /// Collect boot errors from child stderr text plus `:messages` output.
+/// Use line-content heuristics, prefix the source, then sort and deduplicate diagnostics.
 pub fn collect_errors(stderr_text: &str, messages_output: &str) -> Vec<String> {
     let mut errors = Vec::new();
     for line in stderr_text
@@ -94,6 +98,7 @@ pub fn collect_errors(stderr_text: &str, messages_output: &str) -> Vec<String> {
 mod unit {
     use super::*;
 
+    /// Allow the five init/vimrc basenames while rejecting unrelated config and plugin names.
     #[test]
     fn accepts_supported_names() {
         for name in ["vimrc", "_vimrc", "init.vim", "init.lua", ".vimrc"] {
@@ -103,6 +108,7 @@ mod unit {
         assert!(!is_supported_config_name(Path::new("plugin.vim")));
     }
 
+    /// Keep isolated startup explicit about `-u NONE` and plugin suppression.
     #[test]
     fn isolated_argv_never_touches_home() {
         let argv = argv_for(&ConfigSource::Isolated).unwrap().join(" ");
@@ -110,6 +116,7 @@ mod unit {
         assert!(argv.contains("--noplugin"));
     }
 
+    /// Preserve an E492 startup diagnostic from stderr/messages in the combined report.
     #[test]
     fn surfaces_error_lines() {
         let errors = collect_errors(

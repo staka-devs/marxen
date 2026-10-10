@@ -263,6 +263,8 @@ pub struct AiTestResult {
     pub detail: String,
 }
 
+/// Return exported AI IPC TypeScript declarations and document-type imports,
+/// prefixed with the independent AI schema version; no files are written.
 pub fn typescript() -> String {
     let cfg = ts_rs::Config::default();
     let declarations = [

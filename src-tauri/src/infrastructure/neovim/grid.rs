@@ -38,6 +38,7 @@ pub fn attach(client: &EmbedClient, width: u64, height: u64) -> Result<Value, Rp
     )
 }
 
+/// Detach this RPC client's headless UI, propagating native or transport failures.
 pub fn detach(client: &EmbedClient) -> Result<Value, RpcError> {
     client.call("nvim_ui_detach", vec![])
 }
@@ -47,6 +48,8 @@ pub fn detach(client: &EmbedClient) -> Result<Value, RpcError> {
 /// `params` is the updates array itself: each element is
 /// `[event, ...args]`, and one `grid_line` update may carry several
 /// `[grid, row, col_start, cells]` tuples.
+/// Skip malformed updates/cells, allow a trailing wrap flag, and default absent
+/// repeat counts to one; rows and columns are zero-based grid-cell coordinates.
 pub fn grid_lines_from_redraw(params: &[Value]) -> Vec<GridLine> {
     let mut out = Vec::new();
     for update in params {
@@ -108,6 +111,7 @@ pub fn grid_lines_from_redraw(params: &[Value]) -> Vec<GridLine> {
 }
 
 /// Rendered text of a grid line (highlights stripped, repeats expanded).
+/// Treat a zero repeat count as one occurrence and preserve empty wide-character cells.
 pub fn grid_line_text(line: &GridLine) -> String {
     let mut text = String::new();
     for cell in &line.cells {
@@ -118,6 +122,7 @@ pub fn grid_line_text(line: &GridLine) -> String {
     text
 }
 
+/// Accept only MessagePack integers representable as unsigned 64-bit values.
 fn as_u64(value: &Value) -> Option<u64> {
     match value {
         Value::Integer(int) => int.as_u64(),
@@ -129,6 +134,7 @@ fn as_u64(value: &Value) -> Option<u64> {
 mod unit {
     use super::*;
 
+    /// Parse a Japanese grid-line update and concatenate its cells without highlights.
     #[test]
     fn parses_grid_line_redraw() {
         let params = vec![Value::Array(vec![

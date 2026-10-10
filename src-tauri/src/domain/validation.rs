@@ -2,6 +2,8 @@
 use crate::contracts::*;
 use std::ops::Range;
 
+/// Accept a 1–128-byte document handle containing only ASCII letters, digits,
+/// hyphens, or underscores; return `InvalidDocumentId` otherwise.
 pub fn validate_document_id(id: &DocumentId) -> Result<(), ContractError> {
     if id.0.is_empty()
         || id.0.len() > 128
@@ -15,6 +17,7 @@ pub fn validate_document_id(id: &DocumentId) -> Result<(), ContractError> {
     Ok(())
 }
 
+/// Advance a revision by one, returning `RevisionExhausted` instead of wrapping.
 pub fn next_revision(revision: Revision) -> Result<Revision, ContractError> {
     revision
         .0
@@ -23,6 +26,8 @@ pub fn next_revision(revision: Revision) -> Result<Revision, ContractError> {
         .ok_or(ContractError::RevisionExhausted)
 }
 
+/// Convert a global UTF-16 code-unit offset to a UTF-8 byte offset, including EOF.
+/// Reject surrogate-pair splits, offsets beyond EOF, and text too large for `u32` bytes.
 pub fn utf16_to_utf8(text: &str, offset: Utf16Offset) -> Result<Utf8ByteOffset, ContractError> {
     if text.len() > u32::MAX as usize {
         return Err(ContractError::OffsetOutOfBounds);
@@ -48,6 +53,8 @@ pub fn utf16_to_utf8(text: &str, offset: Utf16Offset) -> Result<Utf8ByteOffset, 
     }
 }
 
+/// Count UTF-16 code units before a global UTF-8 byte offset, including EOF.
+/// Reject bytes beyond EOF, bytes inside a scalar, or a result exceeding `u32`.
 pub fn utf8_to_utf16(text: &str, offset: Utf8ByteOffset) -> Result<Utf16Offset, ContractError> {
     let byte = offset.0 as usize;
     if byte > text.len() {
@@ -61,6 +68,8 @@ pub fn utf8_to_utf16(text: &str, offset: Utf8ByteOffset) -> Result<Utf16Offset, 
         .map_err(|_| ContractError::OffsetOutOfBounds)
 }
 
+/// Check handle syntax, document identity, then revision equality against the snapshot.
+/// A revision mismatch reports both the authoritative and received revisions.
 fn validate_identity(
     snapshot: &DocumentSnapshot,
     id: &DocumentId,
@@ -81,6 +90,8 @@ fn validate_identity(
 
 /// Edits must be ascending, non-overlapping, and expressed against one base snapshot.
 /// Equal starts (including multiple insertions) are rejected to remove ordering ambiguity.
+/// Validate identity and revision capacity first, then return UTF-8 byte ranges;
+/// empty edits, reversed ranges, and invalid UTF-16 boundaries are errors.
 pub fn validate_edit(
     snapshot: &DocumentSnapshot,
     request: &EditRequest,
@@ -110,6 +121,7 @@ pub fn validate_edit(
     Ok(ranges)
 }
 
+/// Require a save to address the snapshot's document and current revision.
 pub fn validate_save(
     snapshot: &DocumentSnapshot,
     request: &SaveRequest,
@@ -117,6 +129,8 @@ pub fn validate_save(
     validate_identity(snapshot, &request.document_id, request.base_revision)
 }
 
+/// Require matching document/revision and surrogate-safe UTF-16 anchor and head offsets.
+/// Anchor and head may be reversed because selection direction is preserved.
 pub fn validate_cursor(
     snapshot: &DocumentSnapshot,
     update: &CursorUpdate,
@@ -127,6 +141,7 @@ pub fn validate_cursor(
     Ok(())
 }
 
+/// Require a mode update to address the snapshot's document and current revision.
 pub fn validate_mode(
     snapshot: &DocumentSnapshot,
     update: &ModeUpdate,

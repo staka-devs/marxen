@@ -167,6 +167,7 @@ pub enum WorkspaceError {
 }
 
 impl std::fmt::Display for WorkspaceError {
+    /// Render the error's debug variant and fields, propagating formatter failures.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self:?}")
     }
@@ -315,6 +316,8 @@ pub struct GridUpdate {
     pub updates: Vec<serde_json::Value>,
 }
 
+/// Return the document/workspace contract declarations as exported TypeScript
+/// with the generation notice and UTF-16 range convention; no files are written.
 pub fn typescript() -> String {
     let cfg = ts_rs::Config::default();
     let declarations = [
