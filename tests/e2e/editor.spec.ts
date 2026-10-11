@@ -135,7 +135,9 @@ test("read-only demo never simulates save success", async ({ page }) => {
   await page.getByRole("menuitem", { name: "コマンドパレット" }).click();
   await page.getByTestId("command-palette").getByLabel("コマンドで絞り込む").fill("保存");
   await page.getByRole("button", { name: "ファイル: 保存する" }).click();
-  await expect(page.getByRole("alert")).toContainText("ブラウザ表示では編集できません");
+  const notice = page.getByTestId("notification-toast");
+  await expect(notice).toHaveAttribute("role", "status");
+  await expect(notice).toContainText("ブラウザ表示では編集できません");
   await expect(page.getByTestId("revision")).toHaveText("リビジョン 0");
   await expect(page.getByTestId("dirty")).toHaveText("保存済み");
 });
