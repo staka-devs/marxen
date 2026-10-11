@@ -45,6 +45,11 @@ export function listenWorkspaceEvents(callback: (events: WorkspaceEvent[]) => vo
   return listen<WorkspaceEvent[]>("marxen:workspace", (event) => callback(event.payload));
 }
 
+// Issue #6 rendering samples: the full GitHub fixture is bundled for
+// live/read display. Malformed and unsafe excerpts stay short so the
+// Issue #5 editor specs keep asserting the same visible strings.
+import githubMarkdownFixture from "../../tests/fixtures/github-markdown.md?raw";
+
 export interface WorkspaceFile {
   path: string;
   text: string;
@@ -160,6 +165,10 @@ export const SAMPLE_WORKSPACE: WorkspaceFile[] = [
   {
     path: "README.md",
     text: "# Marxen\n\n書くことに、集中できる場所。\n",
+  },
+  {
+    path: "検証/GitHub記法.md",
+    text: githubMarkdownFixture,
   },
   // Invalid-input demo docs (short excerpts mirroring tests/fixtures/; the
   // full fixtures are asserted in unit tests). Browser renders them read-only.
