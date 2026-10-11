@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import { Bot, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronDown, ChevronRight, FileText, FilePlus2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Bot, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronDown, ChevronRight, FileText, FilePlus2 } from "lucide-react";
 import { CodeMirrorEditor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
 import AiPanel from "../ai-panel";
@@ -23,6 +23,7 @@ import { CommandPalette, type PaletteCommand } from "../workspace/CommandPalette
 import { SettingsPanel } from "../workspace/SettingsPanel";
 import { RawGridView } from "../workspace/RawGridView";
 import { GuiToolbar } from "../workspace/GuiToolbar";
+import { NotificationToast, WorkspaceDialog, type Notice, type NoticeKind } from "../workspace/Notifications";
 import {
   formatRange,
   insertImage,
@@ -197,7 +198,16 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   const [palette, setPalette] = useState(false);
   const [settings, setSettings] = useState(false);
   const [folderInput, setFolderInput] = useState("");
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNoticeState] = useState<Notice | null>(null);
+  const noticeSequence = useRef(0);
+  /** Emit a distinct notification occurrence without changing the editor's layout. */
+  const setNotice = useCallback((message: string | null, kind: NoticeKind = "info") => {
+    setNoticeState(message === null ? null : { id: ++noticeSequence.current, message, kind });
+  }, []);
+  /** Dismiss only the notification whose timeout or close action is still current. */
+  const dismissNotice = useCallback((id: number) => setNoticeState((current) => current?.id === id ? null : current), []);
+  const [recoveryPromptOpen, setRecoveryPromptOpen] = useState(false);
+  const [dismissedExternal, setDismissedExternal] = useState<{ path: string; deleted: boolean } | null>(null);
   /** Revision-aware document session: docs, tabs, selections, and mutations. */
   const session = useDocumentSession({ desktop, documentGateway, workspaceGateway, clipboardGateway, notify: setNotice });
   const [editorFocus, setEditorFocus] = useState<{ path: string; sequence: number } | null>(null);
@@ -223,6 +233,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     /** Reset folder UI after a workspace opens. */
     onWorkspaceOpened: () => { setManualFolder(false); setRootCollapsed(false); },
   });
+  const recoveryKey = workspace.recovery.map((entry) => entry.documentId).join("\0");
+  useEffect(() => { setRecoveryPromptOpen(recoveryKey.length > 0); }, [recoveryKey]);
   /** Image attachments: resolvers, paste capture, and drop routing. */
   const image = useImageAttachments({
     desktop,
@@ -336,7 +348,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       else if (id === "palette-quickopen") setQuickOpen(true);
       else if (id === "palette-raw") setShowRaw((value) => !value);
       else if (id === "palette-raw-refresh") workspace.handleRawGridRefresh();
-      else if (id === "palette-recovery") void workspace.refreshRecovery();
+      else if (id === "palette-recovery") { setRecoveryPromptOpen(true); void workspace.refreshRecovery(); }
       else if (id === "palette-ai") {
         if (!desktop) setNotice(READONLY_MESSAGE);
         else setShowAi(true);
@@ -726,7 +738,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                       workspace.setRenameDoc(session.activeRef.current);
                     } else if (id === "reload") void session.handleReload();
                     else if (id === "close" && session.activeRef.current) void session.closeTab(session.activeRef.current);
-                    else if (id === "recovery") void workspace.refreshRecovery();
+                    else if (id === "recovery") { setRecoveryPromptOpen(true); void workspace.refreshRecovery(); }
                     else if (id === "settings") setSettings(true);
                   }}
                   className="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-[13px] hover:bg-muted focus:bg-muted focus:outline-none"
@@ -739,29 +751,21 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           </EditorActionsPopover>
         )}
 
-        <div className="min-h-0 shrink-0 space-y-2 overflow-y-auto empty:hidden">
-          {notice && (
-            <div role="alert" className="flex min-h-7 items-center gap-2 border-b border-border bg-card px-3 text-xs">
-              <span className="min-w-0 flex-1 truncate" title={notice}>{notice}</span>
-              <button type="button" aria-label="通知を閉じる" onClick={() => setNotice(null)} className="shrink-0 rounded-sm p-1 text-muted-foreground hover:bg-muted"><X size={13} aria-hidden="true" /></button>
-            </div>
-          )}
-          {activeExternal && active && (
-            <div role="alert" data-testid="external-banner" className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3 text-xs">
-              <span>
-                {activeExternal.deleted ? "ファイルが外部で削除されました。" : "ファイルが外部で変更されました。"}
-                {active.dirty ? "未保存の変更を保持しています。" : ""}
-              </span>
-              {!active.dirty && (
+          {notice && <NotificationToast theme={theme} notice={notice} onDismiss={dismissNotice} />}
+          {activeExternal && active && activeExternal !== dismissedExternal && (
+            <NotificationToast theme={theme} testId="external-banner" raised={notice !== null}
+              notice={{ id: 0, kind: "info", message: `${activeExternal.deleted ? "ファイルが外部で削除されました。" : "ファイルが外部で変更されました。"}${active.dirty ? "未保存の変更を保持しています。" : ""}` }}
+              onDismiss={() => setDismissedExternal(activeExternal)}
+              actions={!active.dirty && !activeExternal.deleted ? (
                 <button type="button" onClick={() => void session.handleReload()} className="rounded-md border border-border px-3 py-1">
                   再読込する
                 </button>
-              )}
-            </div>
+              ) : undefined} />
           )}
           {isConflicted && active && (
-            <div role="alert" data-testid="conflict-banner" className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3 text-xs">
-              <span>保存競合: ディスクが変更されています。本文は保持しています。</span>
+            <WorkspaceDialog theme={theme} label="保存競合" testId="conflict-banner" onDismiss={() => session.setConflictDoc(null)}>
+              <p className="mb-3">ディスク上のファイルが変更されています。本文は保持しています。</p>
+              <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => {
@@ -790,15 +794,16 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               <button type="button" onClick={() => session.setConflictDoc(null)} className="rounded-md border border-border px-3 py-1">
                 保持する
               </button>
-            </div>
+              </div>
+            </WorkspaceDialog>
           )}
-          {workspace.recovery.length > 0 && (
-            <div role="alert" data-testid="recovery-banner" className="rounded-lg border border-border bg-card p-3 text-xs">
-              <p className="mb-2 font-medium">前回未保存の文書があります（クラッシュ復元）。</p>
-              <ul className="space-y-1">
+          {recoveryPromptOpen && workspace.recovery.length > 0 && !session.closeDecision && !isConflicted && !workspace.newFileOpen && !workspace.renameDoc && (
+            <WorkspaceDialog theme={theme} label="未保存の文書を復元" testId="recovery-dialog" onDismiss={() => setRecoveryPromptOpen(false)}>
+              <p className="mb-3 text-muted-foreground">前回終了時の未保存の変更があります。復元する文書を選んでください。</p>
+              <ul className="divide-y divide-border">
                 {workspace.recovery.map((entry) => (
-                  <li key={entry.documentId} className="flex flex-wrap items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate">
+                  <li key={entry.documentId} className="flex flex-wrap items-center gap-2 py-2">
+                    <span className="min-w-0 flex-1 break-words" title={entry.path ?? undefined}>
                       {entry.path ?? entry.documentId}
                       {entry.conflict ? "（ディスクも変更あり）" : ""}
                     </span>
@@ -811,10 +816,11 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   </li>
                 ))}
               </ul>
-            </div>
+              <div className="mt-4 flex justify-end"><button type="button" onClick={() => setRecoveryPromptOpen(false)} className="rounded-md border border-border px-3 py-1">後で</button></div>
+            </WorkspaceDialog>
           )}
           {session.closeDecision && (
-            <div role="dialog" aria-label="閉じる確認" data-testid="close-dialog" className="rounded-lg border border-border bg-card p-3 text-xs">
+            <WorkspaceDialog theme={theme} label="閉じる確認" testId="close-dialog" onDismiss={() => void session.resolveCloseDecision("cancel")}>
               <p className="mb-2">未保存の変更があります。どうしますか。</p>
               <div className="flex gap-2">
                 <button type="button" onClick={() => void session.resolveCloseDecision("save")} className="rounded-md border border-border px-3 py-1">
@@ -827,10 +833,11 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   キャンセル
                 </button>
               </div>
-            </div>
+            </WorkspaceDialog>
           )}
           {workspace.newFileOpen && (
-            <div role="dialog" aria-label="新規ファイル" className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3 text-xs">
+            <WorkspaceDialog theme={theme} label="新規ファイル" onDismiss={() => workspace.setNewFileOpen(false)}>
+              <div className="flex flex-wrap items-center gap-2">
               <input
                 value={workspace.newFilePath}
                 onChange={(event) => workspace.setNewFilePath(event.target.value)}
@@ -844,10 +851,12 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               <button type="button" onClick={() => workspace.setNewFileOpen(false)} className="rounded-md border border-border px-3 py-1">
                 閉じる
               </button>
-            </div>
+              </div>
+            </WorkspaceDialog>
           )}
           {workspace.renameDoc && (
-            <div role="dialog" aria-label="名前の変更" className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3 text-xs">
+            <WorkspaceDialog theme={theme} label="名前の変更" onDismiss={() => workspace.setRenameDoc(null)}>
+              <div className="flex flex-wrap items-center gap-2">
               <input
                 value={workspace.renamePath}
                 onChange={(event) => workspace.setRenamePath(event.target.value)}
@@ -861,9 +870,9 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               <button type="button" onClick={() => workspace.setRenameDoc(null)} className="rounded-md border border-border px-3 py-1">
                 閉じる
               </button>
-            </div>
+              </div>
+            </WorkspaceDialog>
           )}
-        </div>
 
         <main
           className="grid min-h-0 min-w-0 flex-1 overflow-hidden"

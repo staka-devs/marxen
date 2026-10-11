@@ -12,6 +12,7 @@ import type { ImageResolver } from "../../../domain/image-sources";
 import { bytesToDataUrl } from "../../../domain/clipboard-text";
 import { isMarkdownPath } from "../../../domain/workspace-files";
 import { READONLY_MESSAGE, StaleResync, workspaceErrorText } from "../../../domain/document-errors";
+import type { NoticeKind } from "../../workspace/Notifications";
 import type { ImageDrop } from "../../workspace/ImageDropZone";
 import type { ImageLoader, WorkspaceGateway } from "../../../application/ports";
 import type { DocumentSession } from "./useDocumentSession";
@@ -22,7 +23,7 @@ export interface ImageAttachmentsArgs {
   /** True on desktop; the browser demo disables drops and pastes. */
   desktop: boolean;
   /** Surface a notice without importing shell state. */
-  notify: (message: string | null) => void;
+  notify: (message: string | null, kind?: NoticeKind) => void;
   /** Document session owning docs, selections, cursors, and snapshots. */
   session: DocumentSession;
   /** Vim routing for ranges and captured paste execution. */
@@ -197,7 +198,7 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
           // A stale range rejects without applying: surface it once and
           // never retry a file write that might already have landed.
           if (cause instanceof StaleResync) sayStale(cause.snapshot);
-          else setNotice(workspaceErrorText(cause));
+          else setNotice(workspaceErrorText(cause), "error");
         }
       }
     },
@@ -291,7 +292,7 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
         setNotice("画像を挿入しました。");
       } catch (cause) {
         if (cause instanceof StaleResync) sayStale(cause.snapshot);
-        else setNotice(workspaceErrorText(cause));
+        else setNotice(workspaceErrorText(cause), "error");
       }
     })();
   }, [registry, pasteImageFiles, bumpSelectionGen, mergeSnapshot, isSelectionGenCurrent, echoCursor, loadEntries, sayStale, docsRef, activeRef, caretRef, setSelections, notify]);

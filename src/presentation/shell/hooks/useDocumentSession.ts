@@ -15,6 +15,7 @@ import { isImagePath, isMarkdownPath } from "../../../domain/workspace-files";
 import { applySnapshot, docFromOpen, type OpenDoc } from "../../../application/document/document-helpers";
 import { COPY_LABELS } from "../../../domain/clipboard-text";
 import type { ClipboardGateway, DocumentGateway, WorkspaceGateway } from "../../../application/ports";
+import type { NoticeKind } from "../../workspace/Notifications";
 
 /** Injected ports for the document session. */
 export interface DocumentSessionArgs {
@@ -27,7 +28,7 @@ export interface DocumentSessionArgs {
   /** Clipboard gateway for yank presentation through Rust. */
   clipboardGateway?: ClipboardGateway;
   /** Surface a notice without importing shell state. */
-  notify: (message: string | null) => void;
+  notify: (message: string | null, kind?: NoticeKind) => void;
 }
 
 /** Document session state and revision-aware operations. */
@@ -234,7 +235,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       if (!doc || snapshot.revision < doc.revision) return prev;
       return { ...prev, [id]: applySnapshot(doc, snapshot) };
     });
-    setNotice(new StaleResync(snapshot).message);
+    setNotice(new StaleResync(snapshot).message, "error");
   }, [notify]);
 
   /** Merge an authoritative snapshot keeping newer-or-equal revisions. */
@@ -376,7 +377,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       try { if (registry) mergeSnapshot(await registry.fetchSnapshot(id)); } catch { /* The original error remains the useful notice. */ }
     }
     await refreshModeCursor(id, gen);
-    setNotice(workspaceErrorText(cause));
+    setNotice(workspaceErrorText(cause), "error");
   }, [registry, mergeSnapshot, refreshModeCursor, notify]);
 
   /** Commit text at the native cursor when preceding keys have moved it. */
@@ -452,7 +453,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       mergeSnapshot(await registry.undo(id));
       await refreshModeCursor(id, gen);
     } catch (cause) {
-      setNotice(workspaceErrorText(cause));
+      setNotice(workspaceErrorText(cause), "error");
     }
   }, [registry, mergeSnapshot, refreshModeCursor, bumpSelectionGen, notify]);
 
@@ -468,7 +469,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       mergeSnapshot(await registry.redo(id));
       await refreshModeCursor(id, gen);
     } catch (cause) {
-      setNotice(workspaceErrorText(cause));
+      setNotice(workspaceErrorText(cause), "error");
     }
   }, [registry, mergeSnapshot, refreshModeCursor, bumpSelectionGen, notify]);
 
@@ -485,7 +486,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       const result = await registry.save({ documentId: id, baseRevision: current.revision });
       setDocs((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], revision: result.revision, dirty: result.dirty } } : prev));
       setConflictDoc((prev) => (prev === id ? null : prev));
-      setNotice("保存しました。");
+      setNotice("保存しました。", "success");
     } catch (cause) {
       if (cause instanceof StaleResync) {
         sayStale(cause.snapshot);
@@ -495,7 +496,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       if (typeof record === "object" && record !== null && record.code === "conflict") {
         setConflictDoc(id);
       }
-      setNotice(workspaceErrorText(cause));
+      setNotice(workspaceErrorText(cause), "error");
     }
   }, [registry, sayStale, notify]);
 
@@ -518,7 +519,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       });
       setNotice("最新のMarkdownに再読込しました。");
     } catch (cause) {
-      setNotice(workspaceErrorText(cause));
+      setNotice(workspaceErrorText(cause), "error");
     }
   }, [registry, mergeSnapshot, notify]);
 
@@ -550,7 +551,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       try {
         await workspaceGateway!.closeDocument({ documentId: id, baseRevision: current?.revision ?? 0 }, "discard");
       } catch (cause) {
-        setNotice(workspaceErrorText(cause));
+        setNotice(workspaceErrorText(cause), "error");
         return;
       }
       setTabs((prev) => {
@@ -582,7 +583,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
           return;
         }
       } catch (cause) {
-        setNotice(workspaceErrorText(cause));
+        setNotice(workspaceErrorText(cause), "error");
         return;
       }
       setTabs((prev) => {
@@ -630,7 +631,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
         });
         await refreshModeCursor(doc.documentId);
       } catch (cause) {
-        setNotice(workspaceErrorText(cause));
+        setNotice(workspaceErrorText(cause), "error");
       }
     },
     [registry, workspaceGateway, refreshModeCursor, notify],
