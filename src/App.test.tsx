@@ -55,7 +55,9 @@ it("stays read-only in the browser and never simulates save success", async () =
   expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
   fireEvent.click(screen.getByRole("menuitem", { name: "コマンドパレット" }));
   fireEvent.click(await screen.findByText("ファイル: 保存する"));
-  expect(await screen.findByRole("alert")).toHaveTextContent(READONLY_MESSAGE);
+  const notice = await screen.findByTestId("notification-toast");
+  expect(notice).toHaveAttribute("role", "status");
+  expect(notice).toHaveTextContent(READONLY_MESSAGE);
   expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 0");
   expect(screen.getByTestId("dirty")).toHaveTextContent("保存済み");
 });
