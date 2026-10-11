@@ -27,6 +27,8 @@ export interface AiProviderSettingsProps {
   gateway?: Pick<AiGateway, "getCredentialState" | "setCredential" | "deleteCredential" | "testConnection">;
   /** Non-secret profile store injected by the composition root. */
   profileStore?: AiProfileStore;
+  /** Render the shared connection fields directly in the main settings page. */
+  embedded?: boolean;
 }
 
 const KIND_ORDER: AiProviderKind[] = ["acp", "openai_compatible", "anthropic"];
@@ -78,7 +80,7 @@ export function sanitizeProfileForTest(raw: unknown): AiProfile {
  * All native calls go through the injected `gateway`; profile persistence
  * goes through `profileStore`. No direct Tauri or storage imports.
  */
-export default function AiProviderSettings({ provider, onProvider, openToken, gateway, profileStore }: AiProviderSettingsProps) {
+export default function AiProviderSettings({ provider, onProvider, openToken, gateway, profileStore, embedded = false }: AiProviderSettingsProps) {
   const [kind, setKind] = useState<AiProviderKind>(provider.kind);
   const [preset, setPreset] = useState<AcpPreset>(provider.acp?.preset ?? "codex");
   const [command, setCommand] = useState(provider.acp?.argv?.command ?? "");
@@ -95,6 +97,21 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
   const [testBusy, setTestBusy] = useState(false);
   const [liveConfirm, setLiveConfirm] = useState(false);
   const detailsRef = useRef<HTMLDetailsElement>(null);
+  const publishedProvider = useRef(provider);
+
+  useEffect(() => {
+    if (JSON.stringify(provider) === JSON.stringify(publishedProvider.current)) return;
+    publishedProvider.current = provider;
+    setKind(provider.kind);
+    setPreset(provider.acp?.preset ?? "codex");
+    setCommand(provider.acp?.argv?.command ?? "");
+    setArgsText((provider.acp?.argv?.args ?? []).join("\n"));
+    setEndpoint(provider.openai?.endpoint ?? provider.anthropic?.endpoint ?? DEFAULT_ENDPOINTS.openai_compatible);
+    setModel(provider.openai?.model ?? provider.anthropic?.model ?? "");
+    setAnthropicEnabled(provider.anthropic?.enabled ?? false);
+    setCredentialState(null);
+    setTestResult(null);
+  }, [provider]);
 
   useEffect(() => {
     if (openToken !== undefined && openToken > 0) detailsRef.current?.setAttribute("open", "");
@@ -106,7 +123,11 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
     } catch {
       // Private mode/quota: profiles simply do not persist.
     }
-    onProvider(buildProviderConfig({ kind, preset, command, argsText, endpoint, model, anthropicEnabled }));
+    const next = buildProviderConfig({ kind, preset, command, argsText, endpoint, model, anthropicEnabled });
+    if (JSON.stringify(next) !== JSON.stringify(publishedProvider.current)) {
+      publishedProvider.current = next;
+      onProvider(next);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, preset, command, argsText, endpoint, model, anthropicEnabled]);
 
@@ -187,10 +208,8 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
 
   const claudeBlocked = kind === "acp" && preset === "custom" && isClaudeCommand(command);
 
-  return (
-    <details ref={detailsRef} data-testid="ai-provider-settings" className="max-h-[45dvh] overflow-y-auto rounded-md border border-border">
-      <summary className="cursor-pointer px-2 py-1.5 text-xs font-medium">接続設定</summary>
-      <div className="space-y-3 border-t border-border p-2">
+  const fields = (
+      <div className={embedded ? "space-y-4" : "space-y-3 border-t border-border p-2"}>
         <div role="group" aria-label="接続先">
           {KIND_ORDER.map((candidate) => (
             <Button
@@ -264,11 +283,11 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
             {kind === "anthropic" && (
               <label className="flex items-center gap-2 text-xs">
                 <input type="checkbox" checked={anthropicEnabled} onChange={(event) => setAnthropicEnabled(event.target.checked)} />
-                Anthropic を有効化する (opt-in)
+                Anthropic API を有効にする
               </label>
             )}
             <label className="block text-xs">
-              endpoint
+              API エンドポイント
               <input
                 aria-label="endpoint"
                 className="mt-1 block w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
@@ -278,7 +297,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
               />
             </label>
             <label className="block text-xs">
-              model
+              モデル
               <input
                 aria-label="model"
                 className="mt-1 block w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
@@ -289,8 +308,8 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
             </label>
           </div>
         )}
-        <div className="border-t border-border pt-2">
-          <p className="text-xs font-medium">資格情報 (OS ストア)</p>
+        {kind !== "acp" && <div className="border-t border-border pt-2">
+          <p className="text-xs font-medium">API キー</p>
           <p className="mt-1 text-[11px] text-muted-foreground">
             {credential === null ? "状態を確認してください。値は表示しません。" : credential.hasSecret ? "保存済み。値は表示しません。" : "未保存。"}
           </p>
@@ -311,7 +330,8 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
             <Button size="sm" onClick={() => void handleSaveCredential()} disabled={secretInput.length === 0}>保存</Button>
           </div>
           {credentialMessage && <p className="mt-1 text-[11px] text-muted-foreground">{credentialMessage}</p>}
-        </div>
+          <p className="mt-2 text-xs text-muted-foreground">OS の資格情報ストアに保存します。</p>
+        </div>}
         <div className="border-t border-border pt-2">
           <p className="text-xs font-medium">接続テスト</p>
           <div className="mt-1 flex flex-wrap items-center gap-1">
@@ -327,6 +347,11 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
           )}
         </div>
       </div>
+  );
+  return embedded ? <div data-testid="ai-provider-settings">{fields}</div> : (
+    <details ref={detailsRef} data-testid="ai-provider-settings" className="max-h-[45dvh] overflow-y-auto rounded-sm border border-border">
+      <summary className="cursor-pointer px-2 py-1.5 text-xs font-medium">接続設定</summary>
+      {fields}
     </details>
   );
 }

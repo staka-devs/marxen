@@ -254,7 +254,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({ effects: appearanceRef.current.reconfigure([
-      ...(preferences.lineNumbers ? [lineNumbers()] : []),
+      ...(preferences.lineNumbers && !livePreview ? [lineNumbers()] : []),
       ...(preferences.wordWrap ? [EditorView.lineWrapping] : []),
       ...(preferences.highlightActiveLine ? [highlightActiveLine(), highlightActiveLineGutter()] : []),
       EditorView.theme({
@@ -262,7 +262,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
         ".cm-content": { lineHeight: String(preferences.lineHeight) },
       }),
     ]) });
-  }, [preferences.fontSize, preferences.lineHeight, preferences.lineNumbers, preferences.wordWrap, preferences.highlightActiveLine]);
+  }, [preferences.fontSize, preferences.lineHeight, preferences.lineNumbers, preferences.wordWrap, preferences.highlightActiveLine, livePreview]);
 
   // Live widgets toggle without remounting the editor: reconfiguring the
   // compartment destroys removed widgets (abort + dispose run there).

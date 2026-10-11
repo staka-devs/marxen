@@ -26,6 +26,10 @@ function mathjaxVersion(): string {
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   define: { PACKAGE_VERSION: JSON.stringify(mathjaxVersion()) },
-  server: { port: 1420, strictPort: true },
+  server: {
+    port: 1420,
+    strictPort: true,
+    watch: { ignored: ["**/.local/**", "**/src-tauri/target/**"] },
+  },
   clearScreen: false,
 });
