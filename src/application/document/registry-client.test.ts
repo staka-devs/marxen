@@ -74,6 +74,93 @@ it("routes a printable copy selector using the queued native mode after an Inser
 });
 
 describe("registry client sends revision-aware requests", () => {
+  it("commits a delayed Unicode burst with exact source continuity, cursor order, Enter, and Undo", async () => {
+    const client = new RegistryClient(workspaceApi);
+    const initial = "abc\nx本文です\n";
+    client.noteSnapshot(snapshot("doc_1", 0, initial));
+    let text = initial;
+    let revision = 0;
+    let head = 5;
+    const releases: Array<() => void> = [];
+    const history = [text];
+    mockedInvoke.mockImplementation((command, args) => {
+      const a = args as { baseRevision?: number; edits?: Array<{ range: { start: number; end: number }; text: string }>; head?: number; keys?: string };
+      if (command === "apply_gui_edits") {
+        expect(a.baseRevision).toBe(revision);
+        const edit = a.edits![0];
+        text = text.slice(0, edit.range.start) + edit.text + text.slice(edit.range.end);
+        revision += 1;
+        history.push(text);
+        const ack = snapshot("doc_1", revision, text);
+        return new Promise((resolve) => releases.push(() => resolve(ack)));
+      }
+      if (command === "report_cursor") {
+        expect(a.head).toBeLessThanOrEqual(text.length);
+        head = a.head!;
+        return Promise.resolve({ documentId: "doc_1", revision, anchor: head, head });
+      }
+      if (command === "nvim_input") {
+        expect(a.keys).toBe("<CR>");
+        expect(head).toBe(8);
+        text = text.slice(0, head) + "\n" + text.slice(head);
+        revision += 1;
+        return Promise.resolve(snapshot("doc_1", revision, text));
+      }
+      if (command === "undo_document") {
+        text = history.at(-1)!;
+        revision += 1;
+        return Promise.resolve(snapshot("doc_1", revision, text));
+      }
+      throw new Error(`unexpected ${command}`);
+    });
+    const first = client.applyGuiEdits({ documentId: "doc_1", baseRevision: 0 }, initial, [{ range: { start: 5, end: 5 }, text: "日" }], { anchor: 6, head: 6 });
+    const second = client.applyGuiEdits({ documentId: "doc_1", baseRevision: 0 }, "abc\nx日本文です\n", [{ range: { start: 6, end: 6 }, text: "本" }], { anchor: 7, head: 7 });
+    const third = client.applyGuiEdits({ documentId: "doc_1", baseRevision: 0 }, "abc\nx日本本文です\n", [{ range: { start: 7, end: 7 }, text: "語" }], { anchor: 8, head: 8 });
+    const enter = client.vimInput("doc_1", "<CR>");
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(1);
+    for (const pending of [first, second, third]) {
+      releases.shift()!();
+      await pending;
+      if (pending !== third) await vi.waitFor(() => expect(releases).toHaveLength(1));
+    }
+    expect((await enter).text).toBe("abc\nx日本語\n本文です\n");
+    expect(head).toBe(8);
+    expect((await client.undo("doc_1")).text).toBe("abc\nx日本語本文です\n");
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === "report_cursor").map(([, args]) => (args as { head: number }).head)).toEqual([6, 7, 8]);
+  });
+
+  it("resyncs without applying a queued range after an out-of-band source change", async () => {
+    const client = new RegistryClient(workspaceApi);
+    client.noteSnapshot(snapshot("doc_1", 0, "abc"));
+    client.noteSnapshot(snapshot("doc_1", 1, "external abc"));
+    mockedInvoke.mockResolvedValue(snapshot("doc_1", 1, "external abc"));
+    await expect(client.applyGuiEdits({ documentId: "doc_1", baseRevision: 0 }, "abc", [{ range: { start: 1, end: 1 }, text: "日" }])).rejects.toBeInstanceOf(StaleResync);
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+  });
+
+  it("binds a captured composition commit to a newer revision only when the full source is identical", async () => {
+    const client = new RegistryClient(workspaceApi);
+    client.noteSnapshot(snapshot("doc_1", 0, "abc"));
+    client.noteSnapshot(snapshot("doc_1", 2, "abc"));
+    mockedInvoke.mockImplementation((command, args) => {
+      if (command === "apply_gui_edits") return Promise.resolve(snapshot("doc_1", 3, "abc日本語"));
+      if (command === "report_cursor") return Promise.resolve(args);
+      throw new Error(`unexpected ${command}`);
+    });
+    const result = await client.applyGuiEdits({ documentId: "doc_1", baseRevision: 0 }, "abc", [{ range: { start: 3, end: 3 }, text: "日本語" }], { anchor: 6, head: 6 });
+    expect(result.text).toBe("abc日本語");
+    expect(mockedInvoke).toHaveBeenCalledWith("apply_gui_edits", { documentId: "doc_1", baseRevision: 2, edits: [{ range: { start: 3, end: 3 }, text: "日本語" }] });
+    expect(mockedInvoke).toHaveBeenCalledWith("report_cursor", { documentId: "doc_1", revision: 3, anchor: 6, head: 6 });
+  });
+
+  it("rejects a native ACK whose text differs from the captured GUI edit", async () => {
+    const client = new RegistryClient(workspaceApi);
+    client.noteSnapshot(snapshot("doc_1", 0, "abc"));
+    mockedInvoke.mockResolvedValue(snapshot("doc_1", 1, "out-of-band"));
+    await expect(client.applyGuiEdits({ documentId: "doc_1", baseRevision: 0 }, "abc", [{ range: { start: 1, end: 1 }, text: "日" }])).rejects.toBeInstanceOf(StaleResync);
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === "report_cursor")).toHaveLength(0);
+  });
   it("passes document IDs and base revisions through unchanged", async () => {
     const client = new RegistryClient(workspaceApi);
     mockedInvoke.mockResolvedValueOnce(snapshot("doc_abc", 4, "hi"));
@@ -612,5 +699,75 @@ describe("GUI text and native Enter share one cursor", () => {
     const newline = client.vimInputWithCopy("enter", "<CR>", vi.fn());
     await paste;
     expect((await newline).snapshot.text).toBe("前日本語😀\n次\n後\n");
+  });
+});
+
+describe("captured printable keyboard input", () => {
+  it("rejects a range whose captured full source no longer matches", async () => {
+    const client = new RegistryClient(workspaceApi);
+    client.noteSnapshot(snapshot("doc_1", 2, "new text"));
+    mockedInvoke.mockResolvedValue(snapshot("doc_1", 2, "new text"));
+    await expect(client.routeCharKey("doc_1", "a", { start: 0, end: 0 }, undefined, "old text")).rejects.toBeInstanceOf(StaleResync);
+    expect(mockedInvoke.mock.calls.map(([command]) => command)).toEqual(["fetch_snapshot"]);
+  });
+  it("does not move the cursor when a character acknowledgement contains different text", async () => {
+    const client = new RegistryClient(workspaceApi);
+    client.noteSnapshot(snapshot("doc_1", 0, "前後"));
+    mockedInvoke.mockImplementation(async (command) => {
+      if (command === "fetch_mode") return { mode: "insert", revision: 0 };
+      if (command === "has_nvim_mapping") return false;
+      if (command === "apply_gui_edits") return snapshot("doc_1", 1, "別の文書");
+      throw new Error("Unexpected " + command);
+    });
+    await expect(client.routeCharKey("doc_1", "a", { start: 1, end: 1 }, undefined, "前後")).rejects.toBeInstanceOf(StaleResync);
+    expect(mockedInvoke.mock.calls.some(([command]) => command === "report_cursor")).toBe(false);
+  });
+});
+
+it("continues a native mapping prefix even when GUI text contains the pending prefix", async () => {
+  const client = new RegistryClient(workspaceApi);
+  client.noteSnapshot(snapshot("doc_1", 0, "本文"));
+  let revision = 0;
+  mockedInvoke.mockImplementation(async (command, args) => {
+    if (command === "fetch_mode") return { mode: "insert", revision };
+    if (command === "has_nvim_mapping") return (args as { lhs: string }).lhs === "j";
+    if (command === "nvim_input") {
+      const key = (args as { keys: string }).keys;
+      return snapshot("doc_1", key === "j" ? revision : ++revision, key === "j" ? "本文" : "jq本文");
+    }
+    throw new Error("Unexpected " + command);
+  });
+  await client.routeCharKey("doc_1", "j", { start: 0, end: 0 }, undefined, "本文");
+  const result = await client.routeCharKey("doc_1", "q", { start: 1, end: 1 }, undefined, "j本文");
+  expect(result).toMatchObject({ action: "vim", snapshot: { text: "jq本文" } });
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+});
+
+describe("text after a queued native cursor transition", () => {
+  it("binds committed Unicode and literal angle brackets after the Enter acknowledgement", async () => {
+    const client = new RegistryClient(workspaceApi);
+    client.noteSnapshot(snapshot("doc_1", 0, "前後"));
+    let revision = 0;
+    mockedInvoke.mockImplementation(async (command, args) => {
+      if (command === "fetch_mode") return { mode: "insert", revision };
+      if (command === "nvim_input_with_copy") { revision += 1; return { snapshot: snapshot("doc_1", revision, "前\n後"), copy: null, copyReady: false }; }
+      if (command === "nvim_input") {
+        expect(args).toEqual({ documentId: "doc_1", baseRevision: 1, keys: "<lt>Esc>日本😀" });
+        return snapshot("doc_1", ++revision, "前\n<Esc>日本😀後");
+      }
+      throw new Error("Unexpected " + command);
+    });
+    const enter = client.vimInputWithCopy("doc_1", "<CR>", vi.fn());
+    const text = client.insertNativeText("doc_1", "<Esc>日本😀");
+    await enter;
+    expect((await text).text).toBe("前\n<Esc>日本😀後");
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+  });
+  it.each([{ mode: "normal", revision: 0 }, { mode: "insert", revision: 1 }])("rejects text in an unexpected native mode or revision: $mode/$revision", async (mode) => {
+    const client = new RegistryClient(workspaceApi);
+    client.noteSnapshot(snapshot("doc_1", 0, "本文"));
+    mockedInvoke.mockImplementation(async (command) => command === "fetch_mode" ? mode : snapshot("doc_1", mode.revision, "本文"));
+    await expect(client.insertNativeText("doc_1", "日本")).rejects.toBeInstanceOf(StaleResync);
+    expect(mockedInvoke.mock.calls.some(([command]) => command === "nvim_input")).toBe(false);
   });
 });

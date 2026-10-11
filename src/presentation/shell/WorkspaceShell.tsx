@@ -891,7 +891,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   vimMode={vimMode}
                   allowTextInput={vimMode === "insert" || vimMode === "replace"}
                   resolveImage={image.liveResolver}
-                  onGuiEdits={(edits) => void session.applyEdits(active.documentId, edits)}
+                  onGuiEdits={(edits, beforeText, selection, key) => vim.routeGuiEdits(active.documentId, edits, beforeText, selection, key)}
                   onSelectionChange={(selection) => session.handleSelection(active.documentId, selection)}
                 />
               </div>
@@ -917,7 +917,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   allowTextInput={vimMode === "insert" || vimMode === "replace"}
                   initialSelection={selections[active.documentId] ?? null}
                   externalCursor={cursorEcho[active.documentId] ?? null}
-                  onGuiEdits={(edits) => void session.applyEdits(active.documentId, edits)}
+                  onGuiEdits={(edits, beforeText, selection, key) => vim.routeGuiEdits(active.documentId, edits, beforeText, selection, key)}
                   onSelectionChange={(selection) => session.handleSelection(active.documentId, selection)}
                 />
               </div>

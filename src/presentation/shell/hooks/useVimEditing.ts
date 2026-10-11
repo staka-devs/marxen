@@ -12,6 +12,7 @@ import type { DocumentSnapshot, TextEdit, YankCopy } from "../../../contracts/co
 import { READONLY_MESSAGE, StaleResync, workspaceErrorText } from "../../../domain/document-errors";
 import { serializeVimKey } from "../../../domain/vim-keys";
 import { correspondSource as correspondSnapshotSource, resolveEditRange } from "../../../domain/coordinates/selection-range";
+import type { EditorSelection } from "../../editor/CodeMirrorEditor";
 import type { NavBasis } from "../shellView";
 import type { DocumentSession } from "./useDocumentSession";
 
@@ -58,6 +59,8 @@ export interface VimEditing {
   ) => Promise<void>;
   /** Route Vim keys natively with burst revision binding at execution. */
   routeVimKeys: (id: string, keys: string) => Promise<void>;
+  /** Route GUI input using native cursor semantics during pending key transitions. */
+  routeGuiEdits: (id: string, edits: TextEdit[], beforeText: string, selection?: EditorSelection, key?: string) => void;
   /** Shell key router preserving IME, mappings, and display motion. */
   onEditorKeyDown: (event: React.KeyboardEvent) => void;
   /** Apply a range helper at the active selection as one edit. */
@@ -91,6 +94,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
     sayStale,
     refreshModeCursor,
     applyEdits,
+    applyNativeText,
     writeYankToClipboard,
   } = session;
   const navRef = useRef(navBasis);
@@ -228,6 +232,17 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
     [registry, mergeSnapshot, refreshModeCursor, sayStale, echoCursor, correspondRange, bumpSelectionGen, currentSelectionGen, isSelectionGenCurrent, docsRef, caretRef, notify],
   );
 
+  /** Keep committed text on the native queue until its pending cursor is known. */
+  const routeGuiEdits = useCallback((id: string, edits: TextEdit[], beforeText: string, selection?: EditorSelection, key?: string) => {
+    const edit = edits[0];
+    if ((pendingNativeInput.current[id] ?? 0) > 0 && selection && edits.length === 1 && edit.range.start === edit.range.end) {
+      pendingNativeInput.current[id] += 1;
+      void applyNativeText(id, edit.text).finally(() => { pendingNativeInput.current[id] -= 1; });
+      return;
+    }
+    void applyEdits(id, edits, beforeText, selection, key);
+  }, [applyEdits, applyNativeText]);
+
   // -- Vim key router (shell level; CodeMirror internals untouched) ---------
   //
   // Event-time work stays synchronous (no awaiting before enqueue) so
@@ -300,15 +315,15 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
         return;
       }
       if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
-        // Enqueue immediately so pending g/gg and operator prefixes never
-        // block. When the event-time mode is insert/replace, take the exact
-        // range with an optimistic caret and let the queue read the actual
-        // mode; otherwise fall back to real native input with no speculative
-        // range, so fast Normal->i->characters cannot use invented offsets.
+        // CodeMirror displays ordinary Insert input immediately and captures
+        // its exact source plus key identity for the mapping-first queue.
+        // Native mode transitions keep following keys native until their
+        // cursor is known; other surfaces retain their range-based routing.
+        const insertHint = vimModeRef.current === "insert" || vimModeRef.current === "replace";
+        if (insertHint && (pendingNativeInput.current[id] ?? 0) === 0 && target?.closest(".cm-content")) return;
         event.preventDefault();
         event.stopPropagation();
         if (!docsRef.current[id]) return;
-        const insertHint = vimModeRef.current === "insert" || vimModeRef.current === "replace";
         if (!insertHint || (pendingNativeInput.current[id] ?? 0) > 0) {
           void routeVimKeys(id, event.key);
           return;
@@ -363,6 +378,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
     routeCharKey,
     routeCapturedPaste,
     routeVimKeys,
+    routeGuiEdits,
     onEditorKeyDown,
     guiAtSelection,
   };

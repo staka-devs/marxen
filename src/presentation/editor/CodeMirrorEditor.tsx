@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, lineNumbers, drawSelection, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
@@ -32,7 +32,7 @@ interface Props {
   ariaLabel: string;
   testId?: string;
   /** Emit committed document changes as wire range edits. */
-  onGuiEdits?: (edits: TextEdit[]) => void;
+  onGuiEdits?: (edits: TextEdit[], beforeText: string, selection?: EditorSelection, key?: string) => void;
   /** Report selection changes for cursor tracking. */
   onSelectionChange?: (selection: EditorSelection) => void;
   initialSelection?: EditorSelection | null;
@@ -110,6 +110,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   const appearanceRef = useRef(new Compartment());
   const syncing = useRef(false);
   const composing = useRef(false);
+  const printableKey = useRef<string | undefined>(undefined);
   const preComposition = useRef<string | null>(null);
   const preCompositionSelection = useRef<EditorSelection | null>(null);
   const compositionAllowed = useRef(true);
@@ -130,7 +131,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   const getLiveCallbacks = useCallback((): LivePreviewCallbacks => {
     return {
       /** Forward widget edits to the current GUI handler. */
-      onGuiEdits: (edits) => callbacks.current.onGuiEdits?.(edits),
+      onGuiEdits: (edits) => callbacks.current.onGuiEdits?.(edits, viewRef.current?.state.doc.toString() ?? valueRef.current),
       resolveImage: resolveImageRef.current,
       /** Move the editor cursor into a source span and focus it. */
       focusSource: (from, to) => {
@@ -185,11 +186,16 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
               update.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
                 edits.push({ range: { start: from, end: to }, text: inserted.toString() });
               });
-              if (edits.length > 0) callbacks.current.onGuiEdits?.(edits);
+              if (edits.length > 0) {
+                const sel = update.state.selection.main;
+                const key = printableKey.current;
+                printableKey.current = undefined;
+                callbacks.current.onGuiEdits?.(edits, update.startState.doc.toString(), { anchor: sel.anchor, head: sel.head }, edits.length === 1 && edits[0].text === key ? key : undefined);
+              }
             }
-            // Enqueue the source change before reporting positions in that
-            // source. A following native key then sees both in queue order.
-            if (update.selectionSet || update.docChanged) {
+            // Text changes carry their own final cursor in the same queued
+            // commit; selection-only gestures use the staged cursor path.
+            if (update.selectionSet && !update.docChanged) {
               const sel = update.state.selection.main;
               callbacks.current.onSelectionChange?.({ anchor: sel.anchor, head: sel.head });
             }
@@ -199,8 +205,15 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
     });
     viewRef.current = view;
     const dom = view.contentDOM;
+    /** Capture printable keyboard identity before CodeMirror commits its text. */
+    const onKeyDown = (event: KeyboardEvent) => {
+      printableKey.current = !event.isComposing && !event.ctrlKey && !event.metaKey && !event.altKey && event.key.length === 1 ? event.key : undefined;
+    };
+    /** Prevent a key without a text transaction from tagging later input. */
+    const onKeyUp = () => { printableKey.current = undefined; };
     /** Snapshot document and selection when IME composition starts. */
     const onStart = () => {
+      printableKey.current = undefined;
       composing.current = true;
       preComposition.current = view.state.doc.toString();
       preCompositionSelection.current = { anchor: view.state.selection.main.anchor, head: view.state.selection.main.head };
@@ -222,13 +235,17 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
         return;
       }
       const edits = singleEditFromDiff(before, afterText);
-      if (edits) callbacks.current.onGuiEdits?.(edits);
       const sel = view.state.selection.main;
-      callbacks.current.onSelectionChange?.({ anchor: sel.anchor, head: sel.head });
+      if (edits) callbacks.current.onGuiEdits?.(edits, before, { anchor: sel.anchor, head: sel.head });
+      else callbacks.current.onSelectionChange?.({ anchor: sel.anchor, head: sel.head });
     };
+    dom.addEventListener("keydown", onKeyDown, true);
+    dom.addEventListener("keyup", onKeyUp);
     dom.addEventListener("compositionstart", onStart);
     dom.addEventListener("compositionend", onEnd);
     return () => {
+      dom.removeEventListener("keydown", onKeyDown, true);
+      dom.removeEventListener("keyup", onKeyUp);
       dom.removeEventListener("compositionstart", onStart);
       dom.removeEventListener("compositionend", onEnd);
       view.destroy();
@@ -299,7 +316,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   // composition or the user's active selection gestures. The programmatic
   // dispatch is guarded, so it never echoes back through onSelectionChange.
   const appliedCursorSeq = useRef<number | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const view = viewRef.current;
     if (!view || !externalCursor) return;
     if (composing.current) return;
