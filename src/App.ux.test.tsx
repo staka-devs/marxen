@@ -24,6 +24,7 @@ it("finds settings across categories and preserves an immediately applied font s
   expect(screen.getByText("一致する設定がありません。")).toBeVisible();
   fireEvent.keyDown(screen.getByTestId("settings"), { key: "Escape" });
   expect(trigger).toHaveFocus(); fireEvent.click(trigger);
+  fireEvent.click(screen.getByRole("button", { name: "エディター" }));
   expect(screen.getByLabelText("文字サイズ")).toHaveValue(19);
 });
 

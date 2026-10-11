@@ -32,20 +32,20 @@ test("github fixture renders alerts, footnotes, math, diagrams, maps, and 3D", a
   await expect(stl).toBeVisible();
   await expect(stl.locator("canvas, .marxen-error").first()).toBeVisible();
   expect(await preview.locator("script").count()).toBe(0);
-  await page.screenshot({ path: "docs/reports/issue-6-rendering/live-github.png" });
+  await page.screenshot({ path: "test-results/screenshots/issue-6-rendering/live-github.png" });
   await preview.locator(".markdown-alert-note").scrollIntoViewIfNeeded();
-  await page.screenshot({ path: "docs/reports/issue-6-rendering/alerts.png" });
+  await page.screenshot({ path: "test-results/screenshots/issue-6-rendering/alerts.png" });
   await preview.locator('[data-marxen-kind="mermaid"]').scrollIntoViewIfNeeded();
-  await page.screenshot({ path: "docs/reports/issue-6-rendering/mermaid-math.png" });
+  await page.screenshot({ path: "test-results/screenshots/issue-6-rendering/mermaid-math.png" });
   await preview.locator('[data-marxen-kind="geojson"]').scrollIntoViewIfNeeded();
-  await page.screenshot({ path: "docs/reports/issue-6-rendering/map-3d.png" });
+  await page.screenshot({ path: "test-results/screenshots/issue-6-rendering/map-3d.png" });
   await preview.locator('[data-marxen-kind="stl"]').scrollIntoViewIfNeeded();
-  await page.screenshot({ path: "docs/reports/issue-6-rendering/stl.png" });
+  await page.screenshot({ path: "test-results/screenshots/issue-6-rendering/stl.png" });
 
   // Read mode shares the same syntax tree and source ranges.
   await expect(preview.locator(".markdown-alert-note")).toBeVisible();
   await expect(preview.locator('[data-marxen-kind="mermaid"] svg')).toBeVisible();
-  await page.screenshot({ path: "docs/reports/issue-6-rendering/read-github.png" });
+  await page.screenshot({ path: "test-results/screenshots/issue-6-rendering/read-github.png" });
 });
 
 test("malformed blocks show errors with raw source and stay editable", async ({ page }) => {
@@ -59,5 +59,5 @@ test("malformed blocks show errors with raw source and stay editable", async ({ 
   await expect(preview).toContainText("A --> [");
   expect(await preview.locator("script").count()).toBe(0);
   await expect(page.getByTestId("revision")).toHaveText("リビジョン 0");
-  await page.screenshot({ path: "docs/reports/issue-6-rendering/malformed.png" });
+  await page.screenshot({ path: "test-results/screenshots/issue-6-rendering/malformed.png" });
 });

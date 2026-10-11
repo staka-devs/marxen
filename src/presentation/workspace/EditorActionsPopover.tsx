@@ -22,7 +22,7 @@ export function EditorActionsPopover({ children, onClose }: Props) {
     document.addEventListener("pointerdown", dismiss);
     return () => { document.removeEventListener("pointerdown", dismiss); previous?.focus(); };
   }, []);
-  return <div ref={panel} role="dialog" aria-label="エディター操作" className="absolute right-2 top-9 z-20 max-h-[calc(100dvh-96px)] w-64 overflow-y-auto rounded-sm border border-border bg-card p-1 shadow-xl"
+  return <div ref={panel} role="dialog" aria-label="エディター操作" className="absolute right-2 top-10 z-20 max-h-[calc(100dvh-96px)] w-64 overflow-y-auto rounded-sm border border-border bg-card p-1 shadow-xl"
     onKeyDown={(event) => {
       if (event.key === "Escape" || event.key === "Tab") {
         if (event.key === "Escape") event.preventDefault();

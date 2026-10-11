@@ -14,28 +14,28 @@
 :root {
   color-scheme: light;
   --background: #ffffff;
-  --foreground: #242424;
-  --card: #f3f3f3;
-  --primary: #0078d4;
+  --foreground: #30343b;
+  --card: #f6f7f9;
+  --primary: #2868b2;
   --primary-foreground: #ffffff;
-  --muted: #e8e8e8;
-  --muted-foreground: #616161;
-  --border: #dedede;
-  font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+  --muted: #e9ecf1;
+  --muted-foreground: #6b7280;
+  --border: #e2e5ea;
+  font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
 
 [data-theme="dark"] {
   color-scheme: dark;
-  --background: #1f1f1f;
-  --foreground: #cccccc;
-  --card: #181818;
-  --primary: #4daafc;
-  --primary-foreground: #181818;
-  --muted: #2a2a2a;
-  --muted-foreground: #9d9d9d;
-  --border: #303030;
+  --background: #1e1f23;
+  --foreground: #cdd0d8;
+  --card: #191a1e;
+  --primary: #8ab4f8;
+  --primary-foreground: #152238;
+  --muted: #2b2d34;
+  --muted-foreground: #8e939f;
+  --border: #2c2e35;
 }
 
 [data-theme="contrast"] {
@@ -65,8 +65,8 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 .marxen-editor .cm-activeLine { background: color-mix(in srgb, var(--primary) 7%, transparent); box-shadow: inset 2px 0 color-mix(in srgb, var(--primary) 55%, transparent); }
 .marxen-editor .cm-activeLineGutter { color: var(--foreground); background: color-mix(in srgb, var(--primary) 8%, transparent); }
 .marxen-editor .cm-scroller { font-family: "Cascadia Code", "Consolas", "Noto Sans Mono", monospace; }
-.marxen-editor[data-live-preview="true"] .cm-scroller { padding-inline: max(0px, calc((100% - 820px) / 2)); }
-.marxen-editor .cm-content { padding: 20px 0 48px; }
+.marxen-editor[data-live-preview="true"] .cm-scroller { font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif; padding-inline: max(32px, calc((100% - 760px) / 2)); }
+.marxen-editor .cm-content { padding: 32px 0 80px; }
 .marxen-editor .cm-line { padding-left: 12px; padding-right: 20px; }
 .marxen-editor .cm-gutterElement { min-width: 32px; padding-right: 8px; }
 .marxen-editor .marxen-live-widget { padding-left: 12px; padding-right: 20px; }
@@ -82,10 +82,17 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 
 /* Shared Markdown view (Issue #6, local-only rendering). */
 .marxen-md { overflow-wrap: anywhere; font-size: var(--editor-font-size, 15px); line-height: var(--editor-line-height, 1.7); }
-.marxen-md h1, .marxen-md h2, .marxen-md h3 { line-height: 1.6; margin: 0.8em 0 0.4em; }
-.marxen-md h1 { font-size: 1.6em; border-bottom: 1px solid var(--border); padding-bottom: 0.25em; }
-.marxen-md h2 { font-size: 1.35em; border-bottom: 1px solid var(--border); padding-bottom: 0.2em; }
+.marxen-md h1, .marxen-md h2, .marxen-md h3, .marxen-md h4, .marxen-md h5, .marxen-md h6 { font-weight: 600; line-height: 1.45; margin: 1.2em 0 0.5em; color: var(--foreground); }
+.marxen-md h1 { font-size: 1.8em; letter-spacing: -0.025em; }
+.marxen-md h2 { font-size: 1.35em; letter-spacing: -0.015em; }
 .marxen-md h3 { font-size: 1.15em; }
+.marxen-md h4, .marxen-md h5, .marxen-md h6 { font-size: 1em; }
+.marxen-md ul { list-style: disc; padding-left: 1.4em; margin: 0.5em 0; }
+.marxen-md ol { list-style: decimal; padding-left: 1.4em; margin: 0.5em 0; }
+.marxen-md li + li { margin-top: 0.15em; }
+.marxen-md li > p { margin: 0.25em 0; }
+.marxen-md :not(pre) > code { background: var(--muted); border-radius: 3px; padding: 0.12em 0.35em; font-size: 0.87em; }
+.marxen-md strong { font-weight: 600; }
 .marxen-md p { margin: 0.5em 0; }
 .marxen-md table { border-collapse: collapse; margin: 0.75em 0; width: 100%; }
 .marxen-md th, .marxen-md td { border: 1px solid var(--border); padding: 0.35em 0.6em; text-align: left; }
@@ -129,8 +136,8 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 .marxen-md .marxen-codeblock { margin: 0.75em 0; }
 .marxen-md .shiki, .marxen-md .shiki span { color: var(--shiki-light); background-color: var(--shiki-light-bg); }
 .marxen-md .marxen-codeblock-note { font-size: 0.8em; color: var(--muted-foreground); margin: 0 0 0.25em; }
-.marxen-md pre { background: var(--muted); border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.7em 0.9em; overflow-x: auto; margin: 0.5em 0; }
-.marxen-md pre.shiki { border: none; }
+.marxen-md pre { font-size: 0.87em; line-height: 1.65; background: var(--muted); border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.7em 0.9em; overflow-x: auto; margin: 0.5em 0; }
+.marxen-md pre.shiki { border: 1px solid var(--border); }
 .marxen-md .marxen-codeblock pre { margin: 0; }
 [data-theme="dark"] .marxen-md .shiki, [data-theme="dark"] .marxen-md .shiki span { color: var(--shiki-dark); background-color: var(--shiki-dark-bg); }
 [data-theme="dark"] .marxen-md pre.shiki { background-color: var(--shiki-dark-bg); }
@@ -154,8 +161,8 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 .marxen-chat-body .marxen-md h1 { font-size: 1.3em; }
 .marxen-chat-body .marxen-md h2 { font-size: 1.15em; }
 .marxen-chat-body .marxen-md h3 { font-size: 1.05em; }
-.marxen-live-widget { padding: 2px 0; white-space: normal; }
-.marxen-live-widget .marxen-live-body { font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; }
+.marxen-live-widget { padding: 0; white-space: normal; }
+.marxen-live-widget .marxen-live-body { font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
 .marxen-live-widget .marxen-live-body > :first-child { margin-top: 0; }
 .marxen-live-widget .marxen-live-body > :last-child { margin-bottom: 0; }
 .marxen-live-widget .marxen-live-loading { color: var(--muted-foreground); font-size: 0.8em; padding: 0.25em 0; }
@@ -166,9 +173,40 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 
 /* Keep nesting readable without adding chrome around every tree row. */
 .marxen-tree-children { position: relative; }
-.marxen-tree-children::before { content: ""; position: absolute; top: 0; bottom: 0; left: var(--tree-indent); width: 1px; background: var(--border); pointer-events: none; }
+.marxen-tree-children::before { opacity: 0.6; content: ""; position: absolute; top: 0; bottom: 0; left: var(--tree-indent); width: 1px; background: var(--border); pointer-events: none; }
 
 .marxen-settings-search:focus-visible { outline: none; }
 
 
 .marxen-settings-search::-webkit-search-cancel-button { display: none; }
+
+/* Stable document typography while the active block exposes editable syntax. */
+.marxen-workspace { font-size: 13px; }
+.marxen-activity { background: color-mix(in srgb, var(--card) 88%, black); }
+.marxen-activity button { transition: color 120ms, background-color 120ms; }
+.marxen-activity button[aria-pressed="true"] { background: color-mix(in srgb, var(--primary) 6%, transparent); }
+.marxen-activity button:hover { background: var(--muted); }
+.marxen-context-bar { background: var(--background); }
+.marxen-context-bar select { font-size: 11px; }
+.marxen-status { font-size: 10px; }
+.marxen-editor[data-live-preview="true"] .cm-line,
+.marxen-editor[data-live-preview="true"] .marxen-live-widget { padding-inline: 0; }
+.marxen-editor .cm-line.marxen-live-gap { line-height: 12px; }
+.marxen-editor .cm-line.marxen-live-heading { font-weight: 600; line-height: 1.45; letter-spacing: -0.015em; }
+.marxen-editor .cm-line.marxen-live-heading[data-heading-level="1"] { font-size: 1.8em; letter-spacing: -0.025em; }
+.marxen-editor .cm-line.marxen-live-heading[data-heading-level="2"] { font-size: 1.35em; }
+.marxen-editor .cm-line.marxen-live-heading[data-heading-level="3"] { font-size: 1.15em; }
+.marxen-editor .marxen-live-heading-marker { color: var(--muted-foreground); font-weight: 400; }
+.marxen-editor .cm-line.marxen-live-code-line { font-family: "Cascadia Code", "Consolas", monospace; font-size: 0.87em; background: var(--muted); }
+article.marxen-md { padding: 32px max(32px, calc((100% - 760px) / 2)) 80px; }
+.marxen-md > :first-child { margin-top: 0; }
+.marxen-live-body ul.contains-task-list { padding-left: 0; }
+.marxen-md .task-list-item input { margin-right: 0.4em; vertical-align: -0.05em; }
+@media (max-width: 800px) {
+  .marxen-editor[data-live-preview="true"] .cm-scroller { padding-inline: 24px; }
+  article.marxen-md { padding-inline: 24px; }
+}
+.marxen-picker-input:focus-visible { outline: none; }
+
+[data-theme="contrast"] [data-file-icon="folder"],
+[data-theme="contrast"] [data-file-icon="folder-open"] { color: var(--foreground); }

@@ -43,7 +43,7 @@ function SettingRow({ label, children }: { label: string; children: ReactNode })
 
 /** Searchable settings with shared AI fields, immediate preferences and a trapped dialog focus. */
 export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PREFERENCES, onPreferences, configPath, configError, onConfigPath, onBrowseConfig, onApplyConfig, applyingConfig, currentConfig, copyKeys, aiSettings, onClose }: Props) {
-  const [category, setCategory] = useState<Category | "all">("all");
+  const [category, setCategory] = useState<Category | "all">("appearance");
   const [query, setQuery] = useState("");
   const dialog = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
@@ -88,7 +88,6 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
               <h3 className="mb-3 text-sm font-semibold">{label}</h3>
               {id === "appearance" && <>
                 <SettingRow label="カラーテーマ"><select aria-label="カラーテーマ" className={`${inputClass} w-40`} value={theme} onChange={(event) => onTheme(event.target.value as ThemeId)}>{THEMES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></SettingRow>
-                <div className="mt-2 rounded-sm border border-border bg-card px-3 py-3" style={{ fontSize: preferences.fontSize, lineHeight: preferences.lineHeight }}><p>日本語のメモと Markdown</p><code className="text-muted-foreground">const message = "Hello, Marxen";</code></div>
               </>}
               {id === "editor" && <>
                 <SettingRow label="文字サイズ"><input aria-label="文字サイズ" type="number" min={11} max={28} value={preferences.fontSize} onChange={(event) => { const n = event.currentTarget.valueAsNumber; if (Number.isFinite(n)) change("fontSize", Math.min(28, Math.max(11, n))); }} className={`${inputClass} w-20`} /><span className="text-xs text-muted-foreground">px</span></SettingRow>
