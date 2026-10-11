@@ -1,6 +1,7 @@
 //! AI transports owned by Issue #7: ACP subprocesses, OpenAI-compatible SSE,
-//! independent opt-in Anthropic Messages, OS credential store, and Tauri commands.
+//! independent opt-in Anthropic Messages, OS credential store, and stream settlement.
 //!
+//! Desktop commands live in ipc::ai and retain their public re-exports here.
 //! Boundaries (see ADR-0070):
 //! - No Claude Code preset exists and Claude binaries are refused at validation.
 //! - Subprocesses spawn from argv arrays; nothing goes through a shell.
@@ -16,12 +17,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-#[cfg(feature = "desktop")]
-use std::sync::LazyLock;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
-#[cfg(feature = "desktop")]
-use tauri::Emitter;
 
 pub const MAX_PROMPT_CHARS: usize = 20_000;
 pub const MAX_HISTORY_MESSAGES: usize = 32;
@@ -1045,60 +1042,6 @@ impl AgentKeyring for OsKeyring {
             }),
         }
     }
-}
-
-// ---- Staging resolution (interface owned with #8) ----
-
-/// Map an isolated copy handle to its staging directory. #8 implements the
-/// real mapping; until then production uses RejectingResolver.
-pub trait StagingResolver: Send + Sync {
-    fn root(&self) -> &Path;
-    fn resolve(&self, copy_id: &IsolatedCopyId) -> Result<PathBuf, AiError>;
-}
-
-pub struct RejectingResolver;
-
-impl StagingResolver for RejectingResolver {
-    fn root(&self) -> &Path {
-        Path::new("")
-    }
-
-    fn resolve(&self, copy_id: &IsolatedCopyId) -> Result<PathBuf, AiError> {
-        Err(AiError::StagingUnresolved {
-            copy_id: copy_id.clone(),
-        })
-    }
-}
-
-/// Reject paths that escape the staging root (traversal or absolute detours).
-pub fn guard_staging_path(root: &Path, candidate: &Path) -> Result<PathBuf, AiError> {
-    let mut normalized = PathBuf::new();
-    for component in candidate.components() {
-        use std::path::Component;
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !normalized.pop() {
-                    return Err(AiError::LiveTargetRejected {
-                        detail: "作業コピーの外を指しています".into(),
-                    });
-                }
-            }
-            Component::Normal(part) => normalized.push(part),
-            Component::RootDir | Component::Prefix(_) => {
-                return Err(AiError::LiveTargetRejected {
-                    detail: "作業コピーの外を指しています".into(),
-                });
-            }
-        }
-    }
-    let joined = root.join(normalized);
-    if !joined.starts_with(root) || root.as_os_str().is_empty() {
-        return Err(AiError::LiveTargetRejected {
-            detail: "作業コピーの外を指しています".into(),
-        });
-    }
-    Ok(joined)
 }
 
 // ---- Mock transport (tests and connection dry runs) ----
@@ -2316,151 +2259,6 @@ fn error_detail(error: &AiError) -> String {
     }
 }
 
-// ---- Tauri commands (desktop only; JavaScript never sees secrets) ----
-
-#[cfg(feature = "desktop")]
-static RUNS: LazyLock<std::sync::Arc<RunRegistry>> =
-    LazyLock::new(|| std::sync::Arc::new(RunRegistry::new()));
-
-#[cfg(feature = "desktop")]
-fn emit_to_frontend(app: &tauri::AppHandle, event: AiStreamEvent) {
-    let _ = app.emit("ai-stream", event);
-}
-
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub fn ai_credential_state(kind: AiProviderKind) -> Result<CredentialRef, AiError> {
-    Ok(CredentialRef {
-        provider: kind,
-        has_secret: OsKeyring.has(kind)?,
-    })
-}
-
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub fn ai_set_credential(kind: AiProviderKind, secret: String) -> Result<(), AiError> {
-    OsKeyring.set(kind, &secret)
-}
-
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub fn ai_delete_credential(kind: AiProviderKind) -> Result<(), AiError> {
-    OsKeyring.delete(kind)
-}
-
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub async fn ai_test_connection(
-    config: AiProviderConfig,
-    live: bool,
-) -> Result<AiTestResult, AiError> {
-    validate_provider_config(&config)?;
-    if !live {
-        return dry_run_report(&config, &OsKeyring);
-    }
-    match config.kind {
-        AiProviderKind::Acp => {
-            let argv = resolve_acp_argv(config.acp.as_ref().expect("validated"))?;
-            handshake_acp(&argv)
-        }
-        AiProviderKind::OpenaiCompatible => {
-            let openai = config.openai.as_ref().expect("validated");
-            let secret = OsKeyring
-                .get(config.kind)?
-                .ok_or(AiError::MissingCredentials {
-                    provider: config.kind,
-                })?;
-            test_openai_live(&http_client(HTTP_TEST_TIMEOUT)?, &openai.endpoint, &secret).await
-        }
-        AiProviderKind::Anthropic => {
-            let anthropic = config.anthropic.as_ref().expect("validated");
-            let secret = OsKeyring
-                .get(config.kind)?
-                .ok_or(AiError::MissingCredentials {
-                    provider: config.kind,
-                })?;
-            test_anthropic_live(
-                &http_client(HTTP_TEST_TIMEOUT)?,
-                &anthropic.endpoint,
-                &anthropic.model,
-                &secret,
-            )
-            .await
-        }
-    }
-}
-
-#[cfg(feature = "desktop")]
-fn scope_error(request: &AiPromptRequest, error: crate::contracts::WorkspaceError) -> AiError {
-    use crate::contracts::WorkspaceError as W;
-    match error {
-        W::OutsideWorkspace => AiError::LiveTargetRejected {
-            detail: "作業コピーの外を指しています".into(),
-        },
-        W::NotFound | W::UnknownDocument | W::NoWorkspace => AiError::StagingUnresolved {
-            copy_id: request.staging.copy_id.clone(),
-        },
-        W::Contract { error } => AiError::InvalidConfig {
-            detail: format!("送信範囲が文書と一致しません: {error:?}"),
-        },
-        W::Conflict { path } => AiError::InvalidConfig {
-            detail: format!("ディスクが変更されています。再同期してください: {path}"),
-        },
-        W::Io { detail } => AiError::InvalidConfig { detail },
-        _ => AiError::StagingUnresolved {
-            copy_id: request.staging.copy_id.clone(),
-        },
-    }
-}
-
-/// Resolve the staging copy, authorize the prompt scope against the captured
-/// Rust snapshots, and pin the copy for the run. Workspace is locked before
-/// the isolation manager, matching the isolation IPC order.
-#[cfg(feature = "desktop")]
-fn prepare_scoped_run(
-    workspace_state: &tauri::State<'_, crate::ipc::ActorState>,
-    isolation: &tauri::State<'_, crate::isolation::IsolationState>,
-    request: &AiPromptRequest,
-) -> Result<std::path::PathBuf, AiError> {
-    let mut wguard = workspace_state
-        .workspace
-        .lock()
-        .map_err(|_| AiError::ConnectionFailed {
-            detail: "ワークスペースの状態を取得できません".into(),
-        })?;
-    let workspace = wguard.as_mut().ok_or_else(|| AiError::StagingUnresolved {
-        copy_id: request.staging.copy_id.clone(),
-    })?;
-    let mut mguard = isolation
-        .manager
-        .lock()
-        .map_err(|_| AiError::ConnectionFailed {
-            detail: "隔離コピーの状態を取得できません".into(),
-        })?;
-    let dir = mguard
-        .resolve(&request.staging.copy_id)
-        .map_err(|error| scope_error(request, error))?;
-    mguard
-        .authorize_prompt(workspace, request)
-        .map_err(|error| scope_error(request, error))?;
-    mguard
-        .pin_for_run(&request.staging.copy_id)
-        .map_err(|error| scope_error(request, error))?;
-    Ok(dir)
-}
-
-#[cfg(feature = "desktop")]
-fn release_scoped_run(app: &tauri::AppHandle, copy_id: &IsolatedCopyId) {
-    // Settlement-only release looked up from the owned handle, so background
-    // threads never need to carry State across lifetimes.
-    use tauri::Manager as _;
-    if let Some(state) = app.try_state::<crate::isolation::IsolationState>() {
-        if let Ok(mut manager) = state.manager.lock() {
-            manager.unpin_for_run(copy_id);
-        }
-    }
-}
-
 // ---- Terminal event gating (settlement before delivery) ----
 
 /// Buffers terminal stream events until the run truly settles. Started and
@@ -2565,121 +2363,7 @@ pub fn settle_production_run(
     }
 }
 #[cfg(feature = "desktop")]
-#[tauri::command]
-pub async fn ai_prompt_stream(
-    app: tauri::AppHandle,
-    workspace_state: tauri::State<'_, crate::ipc::ActorState>,
-    isolation: tauri::State<'_, crate::isolation::IsolationState>,
-    request: AiPromptRequest,
-) -> Result<AiRunId, AiError> {
-    validate_prompt_request(&request)?;
-    match request.provider.kind {
-        AiProviderKind::Acp => {
-            let argv = resolve_acp_argv(request.provider.acp.as_ref().expect("validated"))?;
-            // #8: agents run with the isolated copy as cwd after scope
-            // authorization. Live paths never cross this boundary; unknown,
-            // inactive, or out-of-scope copies are refused before spawning.
-            let staging_dir = prepare_scoped_run(&workspace_state, &isolation, &request)?;
-            let (run_id, cancel) = RUNS.register();
-            let registry = RUNS.clone();
-            let owned_run_id = run_id.clone();
-            let owned_request = request.clone();
-            std::thread::spawn(move || {
-                let params = AcpRunParams {
-                    argv,
-                    staging_dir,
-                    timeout: ACP_DEFAULT_TIMEOUT,
-                };
-                // Production settlement order shared with tests: the driver
-                // runs with terminals buffered, then the child is reaped,
-                // the pin released, and exactly one terminal delivered. The
-                // panel's Done never precedes settlement, and panics settle
-                // without leaking the child, the pin, or delivery.
-                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let mut gate = TerminalGate::new();
-                    let inner = run_acp_prompt(
-                        &params,
-                        &owned_request,
-                        &owned_run_id,
-                        &registry,
-                        &cancel,
-                        &mut |event| {
-                            gate.push(event, &mut |live| emit_to_frontend(&app, live));
-                        },
-                    );
-                    (gate, inner)
-                }));
-                let terminal = settle_production_run(
-                    outcome,
-                    &owned_run_id,
-                    || {
-                        registry.cancel(&owned_run_id);
-                    },
-                    || release_scoped_run(&app, &owned_request.staging.copy_id),
-                );
-                emit_to_frontend(&app, terminal);
-                registry.remove(&owned_run_id);
-            });
-            Ok(run_id)
-        }
-        AiProviderKind::OpenaiCompatible | AiProviderKind::Anthropic => {
-            // Credential and target readiness BEFORE any scope pin: a missing
-            // secret or keyring failure must return without pinning, so the
-            // copy stays usable for reject/cancel/approve. Scope
-            // authorization still precedes every network side effect.
-            let (target, secret) = resolve_http_request(&OsKeyring, &request.provider)?;
-            prepare_scoped_run(&workspace_state, &isolation, &request)?;
-            let (run_id, cancel) = RUNS.register();
-            let registry = RUNS.clone();
-            let owned_run_id = run_id.clone();
-            let owned_request = request.clone();
-            let owned_copy = request.staging.copy_id.clone();
-            tauri::async_runtime::spawn(async move {
-                // Same production settlement contract as ACP, shared with
-                // tests: buffer terminals, settle HTTP, release the pin,
-                // then deliver exactly once.
-                let settled =
-                    futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async {
-                        let mut gate = TerminalGate::new();
-                        let inner = async {
-                            let client = http_client(Duration::from_secs(600))?;
-                            run_http_prompt(
-                                &client,
-                                &target,
-                                &secret,
-                                &owned_request,
-                                &owned_run_id,
-                                &cancel,
-                                &mut |event| {
-                                    gate.push(event, &mut |live| emit_to_frontend(&app, live));
-                                },
-                            )
-                            .await
-                        }
-                        .await;
-                        (gate, inner)
-                    }))
-                    .await;
-                let terminal = settle_production_run(
-                    settled,
-                    &owned_run_id,
-                    || {},
-                    || release_scoped_run(&app, &owned_copy),
-                );
-                emit_to_frontend(&app, terminal);
-                registry.remove(&owned_run_id);
-            });
-            Ok(run_id)
-        }
-    }
-}
-
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub fn ai_prompt_cancel(run_id: AiRunId) -> Result<bool, AiError> {
-    validate_run_id(&run_id)?;
-    Ok(RUNS.cancel(&run_id))
-}
+pub use crate::ipc::ai::*;
 
 #[cfg(test)]
 mod tests {
@@ -3241,21 +2925,6 @@ mod tests {
         keyring.delete(AiProviderKind::OpenaiCompatible).unwrap();
         assert!(!keyring.has(AiProviderKind::OpenaiCompatible).unwrap());
         assert!(validate_secret("").is_err());
-    }
-
-    #[test]
-    fn staging_guard_rejects_escapes() {
-        let root = Path::new("/staging");
-        assert!(guard_staging_path(root, Path::new("copy_01/notes.md")).is_ok());
-        assert!(matches!(
-            guard_staging_path(root, Path::new("../live/doc.md")),
-            Err(AiError::LiveTargetRejected { .. })
-        ));
-        assert!(matches!(
-            guard_staging_path(root, Path::new("/etc/passwd")),
-            Err(AiError::LiveTargetRejected { .. })
-        ));
-        assert!(guard_staging_path(Path::new(""), Path::new("copy")).is_err());
     }
 
     #[test]
