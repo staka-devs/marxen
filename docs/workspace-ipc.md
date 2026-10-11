@@ -54,6 +54,7 @@ documentId と revision を返す。未開封ファイルはディスクを検�
 ファイル保存が必要な新規文書は `createMarkdown` で名前を付けて作る。
 
 reportCursor は anchor/head を検証し、head の実 Neovim カーソルを動かす。
+`has_nvim_mapping(documentId, mode, lhs)` は表示操作の前に global / buffer-local の mapping の先頭キーを確認する。mode は `n/i/v/x/s/o/c/t`、lhs は Vim キー文字列。進行中の Vim 操作や入力待ちも true を返し、続きのキーを Neovim へ届ける。
 GUI の選択 anchor は GUI が保持し、fetchCursor は実 Vim カーソルを返す。
 GridUpdate.updates は実 Neovim の raw redraw 通知。
 configure は明示的再起動で、本文/revision/未保存状態を維持し、Undo とモードを初期化する。

@@ -76,14 +76,14 @@ test("tree/tabs/quick-open/search/outline/palette/themes work in Japanese", asyn
   await page.getByTestId("command-palette").getByLabel("コマンドで絞り込む").fill("保存");
   await expect(page.getByTestId("command-palette")).toContainText("ファイル: 保存する");
 
-  await page.getByRole("button", { name: "設定" }).click();
+  await page.getByRole("button", { name: "設定", exact: true }).click();
   await expect(page.getByTestId("settings")).toBeVisible();
   await page.getByRole("button", { name: "ダーク" }).click();
   await expect(page.getByTestId("workspace-shell")).toHaveAttribute("data-theme", "dark");
   await page.screenshot({ path: "docs/reports/issue-5-ui/settings-dark.png" });
 });
 
-test("Neovim原文ビュー handles plugin screens", async ({ page }) => {
+test("Neovim screen exposes the read-only document grid", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "原文ビュー" }).click();
   await expect(page.getByTestId("raw-grid")).toBeVisible();

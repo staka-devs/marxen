@@ -21,7 +21,10 @@ vi.mock("../lib/ai", async (importOriginal) => {
     cancelPromptSafe: vi.fn(),
   };
 });
-beforeEach(() => vi.resetAllMocks());
+beforeEach(() => {
+  vi.resetAllMocks();
+  window.localStorage.clear();
+});
 
 const contexts: PromptContext[] = [
   { documentId: "doc_01", revision: 7, ranges: [{ start: 1, end: 3 }], text: "a😀日本語" },
@@ -148,5 +151,51 @@ describe("ai panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "接続テスト" }));
     expect(await screen.findByText(/codex が見つかりません/)).toBeVisible();
     expect(testConnection).toHaveBeenNthCalledWith(2, expect.anything(), true);
+  });
+
+  it("restores the persisted non-secret profile", () => {
+    window.localStorage.setItem(
+      "marxen.ai-profile.v1",
+      JSON.stringify({
+        kind: "openai_compatible",
+        preset: "codex",
+        command: "",
+        argsText: "",
+        endpoint: "https://example.com/v1",
+        model: "gpt-x",
+        anthropicEnabled: false,
+      }),
+    );
+    render(<AiPanel contexts={contexts} staging={staging} />);
+    expect(screen.getByLabelText("endpoint")).toHaveValue("https://example.com/v1");
+    expect(screen.getByLabelText("model")).toHaveValue("gpt-x");
+  });
+
+  it("persists profile changes without secrets and reports proposals once", async () => {
+    const seen: Array<[object, object]> = [];
+    vi.mocked(startPrompt).mockImplementation(async (_request, onEvent) => {
+      onEvent({ type: "started", payload: { runId: "run_9" } });
+      onEvent({
+        type: "done",
+        payload: {
+          runId: "run_9",
+          proposal: { text: "提案です", baseContexts: [{ documentId: "doc_01", revision: 7 }] },
+          sent: [{ documentId: "doc_01", revision: 7, ranges: [{ start: 1, end: 3 }], chars: 5 }],
+        },
+      });
+      return { runId: "run_9", stop: vi.fn() };
+    });
+    render(<AiPanel contexts={contexts} staging={staging} onProposal={(proposal, sent) => seen.push([proposal, sent])} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "書いて" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    expect(await screen.findByText("提案です")).toBeVisible();
+    expect(seen).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "OpenAI 互換" }));
+    fireEvent.change(screen.getByLabelText("model"), { target: { value: "gpt-x" } });
+    await vi.waitFor(() => {
+      const stored = JSON.parse(window.localStorage.getItem("marxen.ai-profile.v1") ?? "{}");
+      expect(stored).toMatchObject({ kind: "openai_compatible", model: "gpt-x" });
+    });
+    expect(window.localStorage.getItem("marxen.ai-profile.v1")).not.toContain("s3cret");
   });
 });

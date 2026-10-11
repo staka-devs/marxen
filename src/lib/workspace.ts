@@ -45,10 +45,14 @@ export function listenWorkspaceEvents(callback: (events: WorkspaceEvent[]) => vo
   return listen<WorkspaceEvent[]>("marxen:workspace", (event) => callback(event.payload));
 }
 
-// Issue #6 rendering samples: the full GitHub fixture is bundled for
-// live/read display. Malformed and unsafe excerpts stay short so the
-// Issue #5 editor specs keep asserting the same visible strings.
 import githubMarkdownFixture from "../../tests/fixtures/github-markdown.md?raw";
+export function isDesktop(): boolean {
+  try {
+    return isTauri();
+  } catch {
+    return false;
+  }
+}
 
 export interface WorkspaceFile {
   path: string;
@@ -153,7 +157,32 @@ export function replaceAll(text: string, query: string, replacement: string): { 
   return { text: out, count };
 }
 
+export interface ReplaceEdit {
+  range: { start: number; end: number };
+  text: string;
+}
+
+/**
+ * Revision-aware replace expressed as ascending wire range edits against the
+ * given base text. Callers send the result with the snapshot revision the
+ * text was read at; stale bases resync instead of retrying blindly.
+ */
+export function replaceEdits(text: string, query: string, replacement: string): { edits: ReplaceEdit[]; count: number } {
+  if (query === "") return { edits: [], count: 0 };
+  const edits: ReplaceEdit[] = [];
+  let from = 0;
+  for (;;) {
+    const idx = text.indexOf(query, from);
+    if (idx < 0) break;
+    edits.push({ range: { start: idx, end: idx + query.length }, text: replacement });
+    from = idx + query.length;
+  }
+  return { edits, count: edits.length };
+}
+
 export const SAMPLE_WORKSPACE: WorkspaceFile[] = [
+  // Browser-demo-only sample content. Never authoritative: the desktop reads
+  // every document through the Issue #4 registry, and the demo stays read-only.
   {
     path: "メモ/はじめに.md",
     text: "# はじめに\n\nMarxen へようこそ。原文と Vim 操作を大切にします。\n\n- [ ] 日本語で書く\n- [ ] プレビューを見る\n\n| 項目 | 状態 |\n| --- | --- |\n| 原文 | 保持 |\n",
@@ -182,7 +211,7 @@ export const SAMPLE_WORKSPACE: WorkspaceFile[] = [
   },
 ];
 
-export const SUPPORTED_CONFIG_NAMES = ["vimrc", "_vimrc", "init.vim", "init.lua"] as const;
+export const SUPPORTED_CONFIG_NAMES = ["vimrc", "_vimrc", ".vimrc", "init.vim", "init.lua"] as const;
 
 export function isSupportedConfigName(name: string): boolean {
   const base = name.split(/[\\/]/).pop() ?? name;
