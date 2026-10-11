@@ -7,7 +7,7 @@
 | 作業 | 担当 | 依存 |
 | --- | --- | --- |
 | Tauri 基盤・IPC・3 OS CI・devcontainer | Codex | なし |
-| Neovim・IME・表示座標の技術検証 | Codex | 基盤 |
+| Neovim・IME・表示座標の技術検証 | OpenCode（Codex がレビュー・統合） | 基盤 |
 | ワークスペース・保存・復元 | Codex | IPC |
 | UI・ライブプレビュー・GUI 編集 | OpenCode | 技術検証 |
 | GitHub 記法・地図・3D | OpenCode | 描画基盤 |

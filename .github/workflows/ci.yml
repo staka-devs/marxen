@@ -44,6 +44,8 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: npm ci
+      - run: npm run bundle:neovim -- --target ${{ matrix.target }}
+      - run: npm run verify:neovim -- --target ${{ matrix.target }}
       - run: npm run contracts:check
       - run: npm run typecheck
       - run: npm test
@@ -53,8 +55,6 @@ jobs:
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
       - run: cargo check --manifest-path src-tauri/Cargo.toml --locked
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
-      - run: npm run bundle:neovim -- --target ${{ matrix.target }}
-      - run: npm run verify:neovim -- --target ${{ matrix.target }}
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
       - name: Build unsigned native packages with complete Neovim runtime

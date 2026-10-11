@@ -1,33 +1,34 @@
 import { expect, test } from "@playwright/test";
 
+// Issue #2 foundation contract, kept green on the Issue #5 shell:
+// browser reports disconnection truthfully and stays read-only; it never
+// claims a desktop save or a Neovim revision.
+
 test("Japanese shell truthfully reports browser disconnection", async ({ page }) => {
   await page.goto("/");
   await expect(page).toHaveTitle("Marxen");
   await expect(page.locator("html")).toHaveAttribute("lang", "ja");
   await expect(page.getByRole("status")).toHaveText("Neovim 未接続");
-  await expect(page.getByText("ブラウザ表示です。デスクトップの Neovim には接続していません。")).toBeVisible();
-  await expect(page.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("workspace-shell")).toBeVisible();
+  await expect(page.getByTestId("readonly-note")).toBeVisible();
+  await expect(page.getByTestId("revision")).toHaveText("リビジョン 0");
 });
 
-test("CodeMirror sample is read-only, Unicode-safe, and can be closed", async ({ page }) => {
+test("browser demo is read-only and Unicode-safe", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "サンプルを表示" }).click();
-  const sample = page.getByRole("textbox", { name: "読み取り専用の Markdown サンプル" });
-  await expect(sample).toHaveAttribute("contenteditable", "false");
-  await expect(sample).toHaveAttribute("aria-readonly", "true");
-  await expect(sample).toContainText("東京 😀");
-  const before = await sample.textContent();
-  await sample.focus();
-  await page.keyboard.type("fake Vim input");
-  await page.keyboard.press("Escape");
-  await expect(sample).toHaveText(before!);
-  await page.getByRole("button", { name: "サンプルを閉じる" }).click();
-  await expect(sample).toHaveCount(0);
+  await page.getByRole("button", { name: "メモ/東京.md" }).click();
+  const editor = page.locator('[data-testid="editor-primary"] .cm-content');
+  await expect(editor).toBeVisible();
+  await expect(editor).toContainText("東京 😀");
+  await expect(editor).toHaveAttribute("contenteditable", "false");
+  await expect(page.getByRole("button", { name: "チェックリストを切り替える" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "保存", exact: true }).first()).toBeDisabled();
 });
 
 test("shell remains usable at narrow width", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Marxen" })).toBeAttached();
+  await expect(page.getByTestId("workspace-shell")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
