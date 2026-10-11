@@ -3,14 +3,13 @@ use crate::application::ai::runs::RunRegistry;
 use crate::application::ai::transport::*;
 use crate::contracts::ai::*;
 use crate::domain::ai::*;
-use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 pub struct NativeAiTransport;
 impl AiTransport for NativeAiTransport {
-    /// Resolve the configured executable through the native PATH adapter.
-    fn find_binary(&self, command: &str) -> Option<PathBuf> {
-        super::acp::find_on_path(command)
+    /// Resolve configured argv to a directly spawnable program without a shell.
+    fn resolve_launch(&self, argv: &AcpArgv) -> Result<ResolvedAcpLaunch, AiError> {
+        super::acp::resolve_acp_launch(argv)
     }
     /// Run the explicit ACP readiness probe through the native subprocess adapter.
     fn handshake(&self, argv: &AcpArgv) -> Result<AiTestResult, AiError> {

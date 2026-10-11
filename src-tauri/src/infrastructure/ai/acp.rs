@@ -1,5 +1,6 @@
 //! ACP subprocess lifecycle and bounded stdio framing.
 use crate::application::ai::runs::*;
+use crate::application::ai::transport::ResolvedAcpLaunch;
 use crate::contracts::ai::*;
 use crate::domain::ai::*;
 use serde_json::Value;
@@ -10,23 +11,238 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::time::Instant;
+/// Read `PATHEXT` order for executable probing, falling back to the bundled
+/// Windows default when the variable is absent or unparsable.
+/// Appends `ps1` after `PATHEXT` when missing so official npm shims resolve
+/// even on hosts whose `PATHEXT` omits PowerShell scripts.
+pub fn pathext_order() -> Vec<String> {
+    if cfg!(windows) {
+        if let Some(raw) = std::env::var_os("PATHEXT") {
+            if let Some(text) = raw.to_str() {
+                let mut parsed = parse_windows_pathext(text);
+                if !parsed.is_empty() {
+                    if !parsed.iter().any(|ext| ext == "ps1") {
+                        parsed.push("ps1".to_owned());
+                    }
+                    return parsed;
+                }
+            }
+        }
+    }
+    default_windows_pathext()
+}
+
 /// Find an executable on PATH with native platform extensions without starting it.
+/// On Windows this honors `PATHEXT` order (plus `.ps1` npm shims) and returns the
+/// first filesystem match, including shim scripts; use `resolve_acp_launch` when a
+/// directly spawnable program is required.
 pub fn find_on_path(command: &str) -> Option<PathBuf> {
     if command.contains('/') || command.contains('\\') || command.contains(':') {
         let path = Path::new(command);
-        return path.is_file().then(|| path.to_path_buf());
+        if path.is_file() {
+            return Some(path.to_path_buf());
+        }
+        // Explicit paths try the literal file plus PATHEXT siblings on Windows.
+        if cfg!(windows) {
+            for ext in pathext_order() {
+                let sibling = PathBuf::from(format!("{command}.{ext}"));
+                if sibling.is_file() {
+                    return Some(sibling);
+                }
+            }
+        }
+        return None;
     }
-    let probe = |name: &str| {
-        std::env::split_paths(&std::env::var_os("PATH")?).find_map(|dir| {
-            let candidate = dir.join(name);
+    let path_var = std::env::var_os("PATH")?;
+    if cfg!(windows) {
+        let order = pathext_order();
+        // Prefer directly runnable entries first, then shim scripts, then the
+        // raw extensionless npm wrapper, all in PATH directory order.
+        for dir in std::env::split_paths(&path_var) {
+            if dir.as_os_str().is_empty() {
+                continue;
+            }
+            // Exact filename when the caller already includes an extension.
+            if Path::new(command).extension().is_some() {
+                let candidate = dir.join(command);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+                continue;
+            }
+            for ext in &order {
+                let candidate = dir.join(format!("{command}.{ext}"));
+                if candidate.is_file() {
+                    // Return the first PATHEXT match; direct executables sort
+                    // before shims because `pathext_order` preserves PATHEXT.
+                    // `.ps1` is appended after PATHEXT, so `.exe`/`.com` win.
+                    return Some(candidate);
+                }
+            }
+            let raw = dir.join(command);
+            if raw.is_file() {
+                return Some(raw);
+            }
+        }
+        None
+    } else {
+        std::env::split_paths(&path_var).find_map(|dir| {
+            let candidate = dir.join(command);
             candidate.is_file().then_some(candidate)
         })
-    };
-    if cfg!(windows) {
-        probe(command).or_else(|| probe(&format!("{command}.exe")))
-    } else {
-        probe(command)
     }
+}
+
+/// Resolve an existing candidate and freeze its location before the agent changes cwd.
+/// Windows accepts direct executables and supported official npm shims only.
+fn resolve_launch_candidate(path: &Path, args: &[String]) -> Option<ResolvedAcpLaunch> {
+    if !path.is_file() {
+        return None;
+    }
+    let path = std::path::absolute(path).ok()?;
+    if cfg!(not(windows)) || is_direct_windows_executable(&path) {
+        return Some(ResolvedAcpLaunch {
+            program: path,
+            args: args.to_vec(),
+        });
+    }
+    let ext = path.extension()?.to_str()?;
+    is_windows_script_extension(ext)
+        .then(|| resolve_npm_shim_target(&path, args))
+        .flatten()
+}
+
+/// Resolve an explicit path or its Windows extension siblings without using a shell.
+fn resolve_explicit_launch(path: &Path, args: &[String]) -> Result<ResolvedAcpLaunch, AiError> {
+    if let Some(launch) = resolve_launch_candidate(path, args) {
+        return Ok(launch);
+    }
+    if !path.is_file() && cfg!(windows) {
+        for ext in pathext_order() {
+            let sibling = PathBuf::from(format!("{}.{ext}", path.display()));
+            if let Some(launch) = resolve_launch_candidate(&sibling, args) {
+                return Ok(launch);
+            }
+        }
+    }
+    Err(AiError::MissingBinary {
+        command: path.to_string_lossy().into_owned(),
+    })
+}
+
+/// Find the Node.js executable backing a `codex-acp` npm shim.
+/// Prefers a `node.exe` sibling of the npm root, then PATH lookup.
+fn find_node_program(npm_root: &Path) -> Option<PathBuf> {
+    let sibling = npm_root.join("node.exe");
+    if sibling.is_file() {
+        return Some(sibling);
+    }
+    find_on_path("node")
+        .filter(|candidate| is_direct_windows_executable(candidate))
+        .and_then(|candidate| std::path::absolute(candidate).ok())
+}
+
+/// Resolve a known official npm shim to its bundled target without a shell.
+/// `opencode` maps to `node_modules/@opencode/cli/bin/opencode.exe`;
+/// `codex-acp` maps to `node <npm>/node_modules/@agentclientprotocol/codex-acp/dist/index.js`.
+/// All other shims return `None` so callers keep searching or report missing.
+fn resolve_npm_shim_target(shim: &Path, original_args: &[String]) -> Option<ResolvedAcpLaunch> {
+    let stem = shim
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::to_ascii_lowercase)?;
+    let npm_root = shim.parent()?;
+    match stem.as_str() {
+        "opencode" | "opencode2" => {
+            let target = npm_root
+                .join("node_modules")
+                .join("@opencode")
+                .join("cli")
+                .join("bin")
+                .join("opencode.exe");
+            target.is_file().then(|| ResolvedAcpLaunch {
+                program: target,
+                args: original_args.to_vec(),
+            })
+        }
+        "codex-acp" => {
+            let script = npm_root
+                .join("node_modules")
+                .join("@agentclientprotocol")
+                .join("codex-acp")
+                .join("dist")
+                .join("index.js");
+            if !script.is_file() {
+                return None;
+            }
+            let node = find_node_program(npm_root)?;
+            let mut args = Vec::with_capacity(1 + original_args.len());
+            args.push(script.to_string_lossy().into_owned());
+            args.extend_from_slice(original_args);
+            Some(ResolvedAcpLaunch {
+                program: node,
+                args,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Resolve bare PATH commands to directly spawnable launches in directory order.
+/// Each directory prefers PATHEXT-ordered direct executables, then resolvable
+/// official npm shims; unresolvable scripts never satisfy the lookup.
+fn resolve_bare_launch(command: &str, args: &[String]) -> Result<ResolvedAcpLaunch, AiError> {
+    let path_var = std::env::var_os("PATH").ok_or_else(|| AiError::MissingBinary {
+        command: command.to_owned(),
+    })?;
+    let order = pathext_order();
+    for dir in std::env::split_paths(&path_var) {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        if cfg!(not(windows)) || Path::new(command).extension().is_some() {
+            if let Some(launch) = resolve_launch_candidate(&dir.join(command), args) {
+                return Ok(launch);
+            }
+            continue;
+        }
+        // First pass: directly runnable `.com`/`.exe` in PATHEXT order.
+        for ext in &order {
+            if !matches!(ext.as_str(), "com" | "exe") {
+                continue;
+            }
+            let candidate = dir.join(format!("{command}.{ext}"));
+            if let Some(launch) = resolve_launch_candidate(&candidate, args) {
+                return Ok(launch);
+            }
+        }
+        // Second pass: resolvable official shims (`.cmd`/`.bat`/`.ps1`).
+        for ext in &order {
+            if !is_windows_script_extension(ext) {
+                continue;
+            }
+            let candidate = dir.join(format!("{command}.{ext}"));
+            if let Some(launch) = resolve_launch_candidate(&candidate, args) {
+                return Ok(launch);
+            }
+        }
+    }
+    Err(AiError::MissingBinary {
+        command: command.to_owned(),
+    })
+}
+
+/// Resolve configured ACP argv to a directly spawnable program and final args.
+/// Validates argv first; explicit paths resolve via siblings, bare commands via
+/// PATH directory order with PATHEXT preference for direct executables.
+/// Npm shims for official adapters resolve to bundled targets; no shell is used
+/// and arguments are never interpolated into a command string.
+pub fn resolve_acp_launch(argv: &AcpArgv) -> Result<ResolvedAcpLaunch, AiError> {
+    validate_argv(argv)?;
+    if argv.command.contains('/') || argv.command.contains('\\') || argv.command.contains(':') {
+        return resolve_explicit_launch(Path::new(&argv.command), &argv.args);
+    }
+    resolve_bare_launch(&argv.command, &argv.args)
 }
 
 pub const MAX_ACP_LINE_BYTES: usize = 8_388_608;
@@ -110,15 +326,17 @@ pub use crate::application::ai::transport::AcpRunParams;
 
 /// Spawn the configured ACP argv directly with piped stdio and an isolated working directory.
 pub(super) fn spawn_acp(argv: &AcpArgv, staging_dir: &Path) -> Result<Child, AiError> {
-    // argv goes directly to the OS. No shell, no interpolation.
-    let mut command = Command::new(&argv.command);
+    // Resolve npm shims to bundled targets first. The resolved program goes
+    // directly to the OS with an argv array. No shell, no interpolation.
+    let launch = resolve_acp_launch(argv)?;
+    let mut command = Command::new(&launch.program);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW; protocol uses pipes.
     }
     command
-        .args(&argv.args)
+        .args(&launch.args)
         .current_dir(staging_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -267,16 +485,21 @@ impl AgentConn {
             .ok_or_else(|| AiError::StreamFailed {
                 detail: "要求に ID がありません".into(),
             })?;
+        let method = message
+            .get("method")
+            .and_then(|method| method.as_str())
+            .unwrap_or("agent")
+            .to_owned();
         self.write(&message)?;
         loop {
             match self.read_next(None) {
                 Ok(ConnLine::Value(message)) => match classify_incoming(message)? {
                     AgentIncoming::Response { id: got, body } => {
                         if got == id {
-                            if let Some(detail) = rpc_error(&body) {
-                                return Err(AiError::StreamFailed {
-                                    detail: format!("エージェントがエラーを返しました: {detail}"),
-                                });
+                            if let Some(error) =
+                                rpc_error(&format!("{method} が失敗しました"), &body)
+                            {
+                                return Err(error);
                             }
                             return Ok(body);
                         }
@@ -414,13 +637,13 @@ pub fn agent_handshake(
 }
 
 /// Extract a structured ACP response error with a bounded human-readable detail.
-fn rpc_error(message: &serde_json::Value) -> Option<String> {
+fn rpc_error(context: &str, message: &serde_json::Value) -> Option<AiError> {
     message.get("error").map(|error| {
-        error
+        let detail = error
             .get("message")
             .and_then(|message| message.as_str())
-            .unwrap_or("agent error")
-            .to_owned()
+            .unwrap_or("agent error");
+        map_acp_rpc_error(context, error.get("code").and_then(Value::as_i64), detail)
     })
 }
 
@@ -678,10 +901,8 @@ fn run_acp_conversation(
                         detail: format!("想定外の応答 ID を受けました: {got}"),
                     });
                 }
-                if let Some(detail) = rpc_error(&body) {
-                    return Err(AiError::StreamFailed {
-                        detail: format!("prompt に失敗しました: {detail}"),
-                    });
+                if let Some(error) = rpc_error("prompt に失敗しました", &body) {
+                    return Err(error);
                 }
                 match parse_stop_reason(&body)? {
                     StopReason::Cancelled => {

@@ -70,6 +70,112 @@ pub fn is_claude_command(command: &str) -> bool {
     stem == "claude" || stem == "claude-code"
 }
 
+/// Return true for Windows script extensions that `CreateProcess` cannot
+/// execute directly and that must never be spawned without resolution.
+pub fn is_windows_script_extension(extension: &str) -> bool {
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "cmd" | "bat" | "ps1"
+    )
+}
+
+/// Return true only for directly spawnable Windows executables (`.exe`/`.com`,
+/// case-insensitive). Extensionless npm wrappers and `.cmd`/`.bat`/`.ps1`
+/// shims return false; they require `resolve_acp_launch` handling.
+pub fn is_direct_windows_executable(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| matches!(ext.to_ascii_lowercase().as_str(), "exe" | "com"))
+}
+
+/// Split a `PATHEXT`-style `;.EXE;...` list into ordered bare extensions
+/// without a leading dot, lowercased for case-insensitive comparison.
+/// Empty, duplicate, and invalid entries are dropped; first-seen order is preserved.
+pub fn parse_windows_pathext(pathext: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for raw in pathext.split(';') {
+        let ext = raw.trim().trim_start_matches('.').to_ascii_lowercase();
+        if ext.is_empty() || !ext.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            continue;
+        }
+        if seen.insert(ext.clone()) {
+            out.push(ext);
+        }
+    }
+    out
+}
+
+/// Return the fallback Windows executable order used when `PATHEXT` is absent.
+/// Covers directly runnable `.com`/`.exe` plus official npm shims
+/// (`.bat`/`.cmd`/`.ps1`); other script types are intentionally omitted.
+pub fn default_windows_pathext() -> Vec<String> {
+    ["com", "exe", "bat", "cmd", "ps1"]
+        .iter()
+        .map(|ext| (*ext).to_owned())
+        .collect()
+}
+
+/// Detect authentication markers in an ACP JSON-RPC error message.
+/// Matches `auth_required`, authentication/unauthorized phrases, invalid-key
+/// markers, and bare 401/403 codes case-insensitively; pure string check.
+pub fn is_auth_required_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    [
+        "auth_required",
+        "auth required",
+        "authentication required",
+        "authentication failed",
+        "unauthorized",
+        "invalid_api_key",
+        "invalid api key",
+        "login required",
+        "needs authentication",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+        || lower.contains(" 401")
+        || lower.contains(" 403")
+        || lower.contains("(401")
+        || lower.contains("(403")
+}
+
+/// Map an ACP JSON-RPC error detail to a bounded actionable failure.
+/// Authentication markers become `AuthFailed` with terminal-login
+/// guidance; all other errors become `StreamFailed` prefixed by the caller
+/// context. Details are truncated to 500 Unicode scalars.
+pub fn map_acp_rpc_error(context: &str, code: Option<i64>, detail: &str) -> AiError {
+    let excerpt: String = detail.chars().take(500).collect();
+    if code == Some(-32000) || is_auth_required_message(&excerpt) {
+        return AiError::AuthFailed {
+            detail: format!(
+                "{context}: 認証を確認してください。利用する CLI でログインし、接続を再試行してください ({excerpt})"
+            ),
+        };
+    }
+    AiError::StreamFailed {
+        detail: format!("{context}: {excerpt}"),
+    }
+}
+
+/// Return an actionable Japanese install hint for a missing ACP executable.
+/// Names only official packages; never downloads or modifies global state.
+pub fn missing_binary_hint(command: &str) -> String {
+    let lower = command.to_ascii_lowercase();
+    let base = basename_of(&lower);
+    if base.contains("codex-acp") {
+        "npm install -g @agentclientprotocol/codex-acp で導入し PATH を通してください（自動導入はしません）".into()
+    } else if base.contains("opencode") {
+        "opencode v2 を導入し PATH を通してください（例: npm の @opencode/cli、https://opencode.ai）".into()
+    } else if base.contains("copilot") {
+        "GitHub Copilot CLI を導入し PATH を通してください".into()
+    } else if base.contains("node") {
+        "Node.js を導入し PATH を通してください".into()
+    } else {
+        "CLI をインストールして PATH を通してください".into()
+    }
+}
+
 /// Return `codex-acp`, `opencode acp`, or an empty custom-command template.
 /// This constructs argv only; it neither discovers nor installs an executable.
 pub fn preset_argv(preset: AcpPreset) -> AcpArgv {
@@ -1040,7 +1146,12 @@ pub fn error_detail(error: &AiError) -> String {
         | AiError::ConnectionFailed { detail }
         | AiError::AuthFailed { detail }
         | AiError::StreamFailed { detail } => detail.clone(),
-        AiError::MissingBinary { command } => format!("{command} が見つかりません"),
+        AiError::MissingBinary { command } => {
+            format!(
+                "{command} が見つかりません。{}",
+                missing_binary_hint(command)
+            )
+        }
         AiError::MissingCredentials { .. } => "資格情報がありません".into(),
         AiError::RequestCancelled => "取り消しました".into(),
         AiError::SessionRequired => "セッションが必要です".into(),
@@ -1049,7 +1160,9 @@ pub fn error_detail(error: &AiError) -> String {
         AiError::StagingUnresolved { .. } => "作業コピーを解決できません".into(),
         AiError::LiveTargetRejected { detail } => detail.clone(),
         AiError::UnsupportedProtocol { version } => {
-            format!("protocol version {version} には未対応です")
+            format!(
+                "protocol version {version} には未対応です。ACP v1 のアダプターを使ってください"
+            )
         }
         AiError::ClaudeCodeRefused { command } => format!("{command} は起動しません"),
         AiError::CredentialStoreFailed { detail } => detail.clone(),

@@ -91,24 +91,26 @@ impl AiService {
             return match config.kind {
                 AiProviderKind::Acp => {
                     let argv = resolve_acp_argv(config.acp.as_ref().expect("validated"))?;
-                    Ok(match self.transport.find_binary(&argv.command) {
-                        Some(path) => AiTestResult {
+                    Ok(match self.transport.resolve_launch(&argv) {
+                        Ok(launch) => AiTestResult {
                             config_options: None,
                             ok: true,
                             detail: format!(
                                 "{} が見つかりました ({})",
                                 argv.command,
-                                path.display()
+                                launch.program.display()
                             ),
                         },
-                        None => AiTestResult {
+                        Err(AiError::MissingBinary { command }) => AiTestResult {
                             config_options: None,
                             ok: false,
                             detail: format!(
-                                "{} が見つかりません。CLI をインストールして PATH を通してください",
-                                argv.command
+                                "{} が見つかりません。{}",
+                                command,
+                                missing_binary_hint(&command)
                             ),
                         },
+                        Err(error) => return Err(error),
                     })
                 }
                 kind => Ok(if self.keyring.has(kind)? {

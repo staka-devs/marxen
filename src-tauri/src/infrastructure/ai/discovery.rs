@@ -1,5 +1,5 @@
 //! Native connection readiness probes.
-use super::acp::find_on_path;
+use super::acp::resolve_acp_launch;
 use crate::application::ai::credentials::*;
 use crate::contracts::ai::*;
 use crate::domain::ai::*;
@@ -13,20 +13,26 @@ pub fn dry_run_report(
         AiProviderKind::Acp => {
             let acp = config.acp.as_ref().expect("validated");
             let argv = resolve_acp_argv(acp)?;
-            match find_on_path(&argv.command) {
-                Some(path) => Ok(AiTestResult {
+            match resolve_acp_launch(&argv) {
+                Ok(launch) => Ok(AiTestResult {
                     config_options: None,
                     ok: true,
-                    detail: format!("{} が見つかりました ({})", argv.command, path.display()),
+                    detail: format!(
+                        "{} が見つかりました ({})",
+                        argv.command,
+                        launch.program.display()
+                    ),
                 }),
-                None => Ok(AiTestResult {
+                Err(AiError::MissingBinary { command }) => Ok(AiTestResult {
                     config_options: None,
                     ok: false,
                     detail: format!(
-                        "{} が見つかりません。CLI をインストールして PATH を通してください",
-                        argv.command
+                        "{} が見つかりません。{}",
+                        command,
+                        missing_binary_hint(&command)
                     ),
                 }),
+                Err(error) => Err(error),
             }
         }
         kind => {

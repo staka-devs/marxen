@@ -150,4 +150,80 @@ mod tests {
         assert!(read_options(&json!({"result":{"configOptions":[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"missing","options":[{"value":"m1","name":"One"}]}]}})).is_err());
         assert!(read_options(&json!({"result":{"configOptions":{}}})).is_err());
     }
+    /// Decode the real OpenCode v2 session shape: `model` plus `effort`
+    /// (`thought_level`) are kept, `mode` is ignored without error.
+    #[test]
+    fn decodes_opencode_model_and_effort_ignoring_mode() {
+        let reply = json!({"result":{
+        "sessionId":"ses_test",
+        "configOptions":[
+            {"id":"model","name":"Model","category":"model","type":"select",
+             "currentValue":"opencode-go/muse-spark-1.3-contributor",
+             "options":[
+                {"value":"opencode-go/claude-haiku-5-5","name":"opencode-go/Claude Haiku 5.5"},
+                {"value":"opencode-go/muse-spark-1.3-contributor","name":"opencode-go/Muse Spark 1.3 Contributor"}]},
+            {"id":"effort","name":"Effort","description":"Available effort levels","category":"thought_level","type":"select",
+             "currentValue":"default",
+             "options":[
+                {"value":"low","name":"Low"},{"value":"high","name":"High"},
+                {"value":"xhigh","name":"Xhigh"},{"value":"default","name":"Default"}]},
+            {"id":"mode","name":"Session Mode","category":"mode","type":"select",
+             "currentValue":"build",
+             "options":[{"value":"build","name":"Build"},{"value":"plan","name":"Plan"}]}
+        ]}});
+        let result = read_options(&reply).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].id, "model");
+        assert_eq!(
+            result[0].current_value,
+            "opencode-go/muse-spark-1.3-contributor"
+        );
+        assert!(result[0]
+            .options
+            .iter()
+            .any(|choice| choice.value == "opencode-go/muse-spark-1.3-contributor"));
+        assert_eq!(result[1].id, "effort");
+        assert_eq!(result[1].category, "thought_level");
+        assert!(result[1]
+            .options
+            .iter()
+            .any(|choice| choice.value == "xhigh"));
+    }
+    /// Decode the real codex-acp session shape: `model` plus `reasoning_effort`
+    /// (`thought_level`) are kept, `fast-mode`/`mode`/`collaboration_mode` and the
+    /// newer top-level `models`/`modes` objects are ignored without error.
+    #[test]
+    fn decodes_codex_model_and_reasoning_effort_ignoring_extensions() {
+        let reply = json!({"result":{
+        "sessionId":"sess-codex",
+        "models":{"availableModels":[{"modelId":"gpt-6-sol[low]","name":"6 Sol (low)"}],"currentModelId":"gpt-6-sol[low]"},
+        "modes":{"availableModes":[{"id":"agent","name":"Auto review"}],"currentModeId":"agent"},
+        "configOptions":[
+            {"id":"mode","name":"Mode","category":"mode","type":"select",
+             "currentValue":"agent",
+             "options":[{"value":"agent","name":"Auto review"}]},
+            {"id":"model","name":"Model","description":"Model Codex uses","category":"model","type":"select",
+             "currentValue":"gpt-6-sol",
+             "options":[
+                {"value":"gpt-6-sol","name":"6 Sol","description":"Previous workhorse"},
+                {"value":"gpt-6-luna","name":"6 Luna","description":"Fast"}]},
+            {"id":"reasoning_effort","name":"Reasoning effort","category":"thought_level","type":"select",
+             "currentValue":"low",
+             "options":[
+                {"value":"low","name":"Low"},{"value":"xhigh","name":"Xhigh"},
+                {"value":"max","name":"Max"}]},
+            {"id":"fast-mode","name":"Fast mode","category":"model_config","type":"select",
+             "currentValue":"off",
+             "options":[{"value":"off","name":"Off"},{"value":"on","name":"On"}]}
+        ]}});
+        let result = read_options(&reply).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].id, "model");
+        assert_eq!(result[0].current_value, "gpt-6-sol");
+        assert_eq!(result[1].id, "reasoning_effort");
+        assert!(result[1]
+            .options
+            .iter()
+            .any(|choice| choice.value == "xhigh"));
+    }
 }
