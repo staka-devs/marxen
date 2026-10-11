@@ -1,3 +1,5 @@
+pub mod ai;
+pub mod ai_contracts;
 pub mod contracts;
 pub mod document;
 pub mod ipc;
@@ -102,6 +104,12 @@ pub fn run() {
             ipc::fetch_cursor,
             ipc::fetch_grid,
             ipc::fetch_config,
+            ai::ai_credential_state,
+            ai::ai_set_credential,
+            ai::ai_delete_credential,
+            ai::ai_test_connection,
+            ai::ai_prompt_stream,
+            ai::ai_prompt_cancel,
             ipc::configure_document
         ])
         .run(tauri::generate_context!())
