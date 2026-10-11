@@ -1,5 +1,6 @@
 //! Opt-in check against the real OS store, with a unique disposable test entry.
 #[test]
+/// Opt in to a disposable OS-store entry and verify persistence across independent entry handles.
 fn native_store_persists_across_entry_instances() {
     if std::env::var_os("MARXEN_NATIVE_KEYRING_TEST").is_none() {
         return;
@@ -15,6 +16,7 @@ fn native_store_persists_across_entry_instances() {
     let original = keyring::Entry::new("dev.staka.marxen.test", &user).unwrap();
     struct Cleanup(keyring::Entry);
     impl Drop for Cleanup {
+        /// Best-effort delete only the disposable credential entry if the native-store check unwinds.
         fn drop(&mut self) {
             let _ = self.0.delete_credential();
         }

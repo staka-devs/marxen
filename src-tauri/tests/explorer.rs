@@ -1,26 +1,31 @@
-use marxen_lib::{contracts::*, document::DocumentActor, storage, workspace::Workspace};
+use marxen_lib::application::{document::DocumentActor, workspace::Workspace};
+use marxen_lib::contracts::*;
 use std::{fs, path::Path};
 use tempfile::TempDir;
 
 const PNG: &[u8] = include_bytes!("../../tests/fixtures/pixel.png");
+/// Create independent temporary workspace and recovery roots and open the workspace fixture.
 fn setup() -> (TempDir, TempDir, Workspace) {
     let root = tempfile::tempdir().unwrap();
     let recovery = tempfile::tempdir().unwrap();
-    let workspace = Workspace::open(root.path(), recovery.path()).unwrap();
+    let workspace = marxen_lib::open_workspace(root.path(), recovery.path()).unwrap();
     (root, recovery, workspace)
 }
+/// Construct a half-open range whose endpoints are global UTF-16 code-unit offsets.
 fn range(start: u32, end: u32) -> Utf16Range {
     Utf16Range {
         start: Utf16Offset(start),
         end: Utf16Offset(end),
     }
 }
+/// Capture the document identifier and exact revision for a guarded workspace operation.
 fn request(s: &DocumentSnapshot) -> SaveRequest {
     SaveRequest {
         document_id: s.document_id.clone(),
         base_revision: s.revision,
     }
 }
+/// Apply one GUI range edit against the supplied snapshot and return the authoritative result.
 fn edit(a: &DocumentActor, s: &DocumentSnapshot, r: Utf16Range, text: &str) -> DocumentSnapshot {
     a.apply_edits(EditRequest {
         document_id: s.document_id.clone(),
@@ -35,6 +40,7 @@ fn edit(a: &DocumentActor, s: &DocumentSnapshot, r: Utf16Range, text: &str) -> D
 }
 
 #[test]
+/// Exercise text-file editing, delegated Vim save, native Undo and recovery through a real buffer.
 fn utf8_text_edits_vim_write_undo_and_recovery_use_real_neovim() {
     let (root, recovery, mut w) = setup();
     fs::write(root.path().join("notes.txt"), "# literal 😀\r\n日本").unwrap();
@@ -57,7 +63,7 @@ fn utf8_text_edits_vim_write_undo_and_recovery_use_real_neovim() {
     assert!(undone.dirty);
     assert_eq!(w.recovery_entries().unwrap().len(), 1);
     drop(w);
-    let mut restored = Workspace::open(root.path(), recovery.path()).unwrap();
+    let mut restored = marxen_lib::open_workspace(root.path(), recovery.path()).unwrap();
     let record = restored.recovery_entries().unwrap().remove(0);
     let doc = restored.restore(&record.document_id.0).unwrap();
     assert_eq!(doc.snapshot.text, opened.snapshot.text);
@@ -76,6 +82,7 @@ fn utf8_text_edits_vim_write_undo_and_recovery_use_real_neovim() {
 }
 
 #[test]
+/// Keep navigable folders and supported files while hiding unsupported extensions and binary masquerades.
 fn listing_hides_unsupported_and_disguised_binaries_but_keeps_folders() {
     let (root, _recovery, w) = setup();
     fs::create_dir(root.path().join("empty")).unwrap();
@@ -112,6 +119,7 @@ fn listing_hides_unsupported_and_disguised_binaries_but_keeps_folders() {
 }
 
 #[test]
+/// Insert an encoded relative image link only at a valid UTF-16 range and current revision.
 fn workspace_drag_inserts_relative_encoded_reference_and_checks_utf16_revision() {
     let (root, _recovery, mut w) = setup();
     fs::create_dir(root.path().join("notes")).unwrap();
@@ -163,6 +171,7 @@ fn workspace_drag_inserts_relative_encoded_reference_and_checks_utf16_revision()
 }
 
 #[test]
+/// Bound imported image data, contain its destination and reject stale requests before creating files.
 fn external_import_is_bounded_contained_and_rejects_stale_before_writes() {
     let (root, _recovery, mut w) = setup();
     let outside = tempfile::tempdir().unwrap();
@@ -199,7 +208,7 @@ fn external_import_is_bounded_contained_and_rejects_stale_before_writes() {
     let large = outside.path().join("large.png");
     fs::File::create(&large)
         .unwrap()
-        .set_len(storage::MAX_IMAGE_BYTES as u64 + 1)
+        .set_len(marxen_lib::domain::storage::MAX_IMAGE_BYTES as u64 + 1)
         .unwrap();
     assert!(w
         .import_external_image(request(&imported.snapshot), &large, range(2, 2))
@@ -213,6 +222,7 @@ fn external_import_is_bounded_contained_and_rejects_stale_before_writes() {
 }
 
 #[test]
+/// Refuse an image destination redirected outside the workspace by a Windows junction.
 fn image_directory_junction_cannot_import_outside_workspace() {
     let (root, _recovery, mut w) = setup();
     let outside = tempfile::tempdir().unwrap();

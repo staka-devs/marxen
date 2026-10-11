@@ -50,6 +50,7 @@ jobs:
       - run: npm run ai-contracts:check
       - run: npm run isolation-contracts:check
       - run: npm run typecheck
+      - run: npm run architecture:check
       - run: npm test
       - run: npm run test:bundling
       - run: npm run build
@@ -57,6 +58,10 @@ jobs:
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked --features dev-tools
       - run: cargo check --manifest-path src-tauri/Cargo.toml --locked
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --features dev-tools --all-targets -- -D warnings
+      - name: Build handwritten Rust documentation without warnings
+        run: cargo doc --manifest-path src-tauri/Cargo.toml --locked --features dev-tools --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: -D warnings
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
       - name: Build unsigned native packages with complete Neovim runtime

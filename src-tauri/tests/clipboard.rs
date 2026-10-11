@@ -1,7 +1,8 @@
+use marxen_lib::application::document::DocumentActor;
 use marxen_lib::contracts::{CopyFormat, DocumentId, Revision, SaveRequest, VimInputResult};
-use marxen_lib::document::DocumentActor;
 use std::time::{Duration, Instant};
 
+/// Submit native keys at the latest document revision and return the observed Vim input result.
 fn key(actor: &DocumentActor, keys: &str) -> VimInputResult {
     let snapshot = actor.snapshot();
     let started = Instant::now();
@@ -22,8 +23,9 @@ fn key(actor: &DocumentActor, keys: &str) -> VimInputResult {
 }
 
 #[test]
+/// Require repeated line and named-register yanks to copy exact Unicode while preserving text and revision.
 fn repeated_linewise_and_named_yanks_copy_exact_unicode_without_edits() {
-    let actor = DocumentActor::open(
+    let actor = marxen_lib::open_document(
         DocumentId("copy-repeat".into()),
         "# 日本 😀\nsecond".into(),
         None,
@@ -47,9 +49,11 @@ fn repeated_linewise_and_named_yanks_copy_exact_unicode_without_edits() {
 }
 
 #[test]
+/// Use Neovim yank events to preserve native visual and rectangular register contents.
 fn visual_and_rectangular_yanks_use_native_event_contents() {
     let actor =
-        DocumentActor::open(DocumentId("copy-visual".into()), "abXX\ncdYY".into(), None).unwrap();
+        marxen_lib::open_document(DocumentId("copy-visual".into()), "abXX\ncdYY".into(), None)
+            .unwrap();
     for event in ["v", "l", "y"] {
         key(&actor, event);
     }
@@ -62,8 +66,9 @@ fn visual_and_rectangular_yanks_use_native_event_contents() {
 }
 
 #[test]
+/// Preserve user mapping priority, incomplete commands and the next ordinary command after a yank.
 fn mappings_pending_input_and_next_normal_command_keep_their_meaning() {
-    let actor = DocumentActor::open(
+    let actor = marxen_lib::open_document(
         DocumentId("copy-mappings".into()),
         "first\nlast".into(),
         None,
@@ -102,9 +107,11 @@ fn mappings_pending_input_and_next_normal_command_keep_their_meaning() {
 }
 
 #[test]
+/// Apply configured format selectors from vimrc and respect an explicitly disabled selector.
 fn vimrc_selectors_are_live_canonical_and_can_be_disabled() {
     let actor =
-        DocumentActor::open(DocumentId("copy-config".into()), "word next".into(), None).unwrap();
+        marxen_lib::open_document(DocumentId("copy-config".into()), "word next".into(), None)
+            .unwrap();
     actor
         .nvim_command("let g:marxen_copy_markdown_key = ''")
         .unwrap();
@@ -124,9 +131,10 @@ fn vimrc_selectors_are_live_canonical_and_can_be_disabled() {
 }
 
 #[test]
+/// Expose invalid, reserved and duplicate format keys without intercepting their normal Vim input.
 fn invalid_reserved_and_duplicate_selectors_are_reported_and_disabled() {
     let actor =
-        DocumentActor::open(DocumentId("copy-invalid".into()), "word".into(), None).unwrap();
+        marxen_lib::open_document(DocumentId("copy-invalid".into()), "word".into(), None).unwrap();
     actor.nvim_command("let g:marxen_copy_markdown_key = '<c-p>' | let g:marxen_copy_text_key = 'zm' | let g:marxen_copy_rich_key = '<Left>'").unwrap();
     assert_eq!(actor.copy_key_errors().unwrap().len(), 3);
     assert_eq!(actor.copy_keys().unwrap().len(), 1);

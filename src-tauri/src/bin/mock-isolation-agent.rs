@@ -1,10 +1,12 @@
 //! Mock file-editing CLI for isolation tests. Simulates a CLI AI that edits
 //! only the isolated staging copy: it never receives live paths.
 //!
-//! Usage: mock-isolation-agent --staging-dir <DIR> --file <relative> --text <content>
-//! Exits non-zero on traversal, absolute paths, or symlink escapes.
+//! Usage: `mock-isolation-agent --staging-dir <DIR> --file <relative> --text <content>`
+//! Exits non-zero on invalid paths, a symlink at the target, or filesystem errors.
 use std::path::{Component, Path, PathBuf};
 
+/// Read the first matching `--flag value` or `--flag=value` command-line argument.
+/// Return `None` if absent or if the separate flag has no following value.
 fn arg_value(name: &str) -> Option<String> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -18,6 +20,9 @@ fn arg_value(name: &str) -> Option<String> {
     None
 }
 
+/// Normalize a relative candidate lexically under a nonempty staging root.
+/// Reject empty/absolute targets and parent traversal beyond the root; symlinks
+/// are not resolved here, and the caller separately checks the final target.
 fn guard(root: &Path, candidate: &Path) -> Result<PathBuf, String> {
     if root.as_os_str().is_empty() {
         return Err("empty root".into());
@@ -54,6 +59,9 @@ fn guard(root: &Path, candidate: &Path) -> Result<PathBuf, String> {
     Ok(joined)
 }
 
+/// Write the supplied UTF-8 text into a guarded staging target, creating parent directories.
+/// Exit 2 for missing required arguments, 3 for rejected paths/final symlinks,
+/// and 1 for mkdir/write failures; successful writes print the target path.
 fn main() {
     let staging = arg_value("--staging-dir").unwrap_or_default();
     let file = arg_value("--file").unwrap_or_default();

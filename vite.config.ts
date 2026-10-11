@@ -7,6 +7,11 @@ import tailwindcss from "@tailwindcss/vite";
 // eval('require') when the PACKAGE_VERSION global is missing. That Node-only
 // path throws inside browser bundles, so the locally bundled version is
 // injected at compile time instead (no CDN, no runtime require).
+/**
+ * Read the pinned MathJax version for compile-time injection without runtime require.
+ *
+ * Falls back to 3.2.1 when the package metadata is unreadable.
+ */
 function mathjaxVersion(): string {
   try {
     const pkg = JSON.parse(readFileSync(new URL("./node_modules/mathjax-full/package.json", import.meta.url), "utf8")) as {

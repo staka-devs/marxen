@@ -1,7 +1,8 @@
-use marxen_lib::neovim::{config::ConfigSource, rpc::RpcError, NeovimSession};
+use marxen_lib::infrastructure::neovim::{config::ConfigSource, rpc::RpcError, NeovimSession};
 use std::time::{Duration, Instant};
 
 #[test]
+/// Load user configuration through literal paths containing spaces and Unicode characters.
 fn user_config_paths_support_spaces_and_unicode() {
     let directory = tempfile::tempdir().unwrap();
     let settings = directory.path().join("設定 フォルダー");
@@ -27,6 +28,7 @@ fn user_config_paths_support_spaces_and_unicode() {
 }
 
 #[test]
+/// Wake a waiting RPC immediately when its owned Neovim process exits.
 fn exited_neovim_wakes_pending_rpc_without_waiting_for_timeout() {
     let session = NeovimSession::spawn_isolated().unwrap();
     std::thread::scope(|scope| {
@@ -53,8 +55,9 @@ fn exited_neovim_wakes_pending_rpc_without_waiting_for_timeout() {
 }
 
 #[test]
+/// Use packaged target metadata to identify the executable platform independently of the Neovim version.
 fn bundle_metadata_identifies_target_instead_of_version() {
-    let bundle = marxen_lib::neovim::bundle_paths().unwrap();
+    let bundle = marxen_lib::infrastructure::neovim::bundle_paths().unwrap();
     let target = if cfg!(windows) {
         "x86_64-pc-windows-msvc"
     } else if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
@@ -68,6 +71,7 @@ fn bundle_metadata_identifies_target_instead_of_version() {
 }
 
 #[test]
+/// Report process health after the owned native child has exited.
 fn process_health_detects_the_owned_child_exit() {
     let session = NeovimSession::spawn_isolated().unwrap();
     assert!(session.is_alive().unwrap());
@@ -76,6 +80,7 @@ fn process_health_detects_the_owned_child_exit() {
 }
 
 #[test]
+/// Accept only complete writes for the owned buffer and reject unsupported native write forms.
 fn vim_writes_delegate_only_complete_owned_document_saves() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("文書 original.md");
