@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { Bot, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronDown, ChevronRight, FileText, FilePlus2 } from "lucide-react";
+import { MessageSquare, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronDown, ChevronRight, FileText, FilePlus2 } from "lucide-react";
 import { CodeMirrorEditor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
 import AiPanel from "../ai-panel";
@@ -369,7 +369,11 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
      */
     const onKey = (event: KeyboardEvent) => {
       const mod = event.ctrlKey || event.metaKey;
-      if (mod && event.key.toLowerCase() === "p" && !event.shiftKey) {
+      if (event.defaultPrevented || (event.target instanceof Element && event.target.closest('[aria-modal="true"]'))) return;
+      if (desktop && mod && event.altKey && event.key.toLowerCase() === "i") {
+        event.preventDefault();
+        setShowAi((value) => !value);
+      } else if (mod && event.key.toLowerCase() === "p" && !event.shiftKey) {
         event.preventDefault();
         setQuickOpen((value) => !value);
       } else if (mod && event.key.toLowerCase() === "p" && event.shiftKey) {
@@ -385,7 +389,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [session.handleSave]);
+  }, [desktop, session.handleSave]);
 
   // -- derived view data --------------------------------------------------------
 
@@ -463,18 +467,6 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             {item.icon}
           </button>
         ))}
-        {desktop && (
-          <button
-            type="button"
-            onClick={() => setShowAi((value) => !value)}
-            aria-pressed={showAi}
-            aria-label="AI 支援"
-            title="AI 支援"
-            className={`relative flex h-10 w-full items-center justify-center border-l-2 hover:text-foreground ${showAi ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}
-          >
-            <Bot size={19} aria-hidden="true" />
-          </button>
-        )}
         <button
           type="button"
           onClick={() => setSettings(true)}
@@ -565,6 +557,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           <div className="min-w-0 flex-1">
             <Tabs tabs={tabItems} activeId={activeId} onSelect={(id) => { session.setActiveId(id); const path = session.docsRef.current[id]?.path; if (path) setEditorFocus((previous) => ({ path, sequence: (previous?.sequence ?? 0) + 1 })); }} onClose={(id) => void session.closeTab(id)} />
           </div>
+          {desktop && <button type="button" aria-label="チャットを切り替える" aria-pressed={showAi} title="チャット (Ctrl+Alt+I)" onClick={() => setShowAi((value) => !value)} className={`rounded-sm p-1.5 hover:bg-muted ${showAi ? "text-foreground" : "text-muted-foreground"}`}><MessageSquare size={16} aria-hidden="true" /></button>}
           <button
             type="button"
             onClick={() => void session.handleSave()}

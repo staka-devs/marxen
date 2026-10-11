@@ -33,6 +33,8 @@ export interface ChatConversation {
   id: string;
   messages: ChatMessage[];
   providerKey?: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 let conversationSeq = 0;
@@ -45,7 +47,16 @@ let messageSeq = 0;
  */
 export function createConversation(providerKey?: string): ChatConversation {
   conversationSeq += 1;
-  return { id: `conv_${Date.now()}_${conversationSeq}`, messages: [], providerKey };
+  const now = Date.now();
+  return { id: `conv_${now}_${conversationSeq}`, messages: [], providerKey, createdAt: now, updatedAt: now };
+}
+
+/** Identify a conversation by its first request without exposing internal identifiers. */
+export function conversationTitle(conversation: ChatConversation): string {
+  const prompt = conversation.messages.find((message) => message.role === "user")?.text.trim().replace(/\s+/g, " ");
+  if (!prompt) return "新しいチャット";
+  const characters = Array.from(prompt);
+  return characters.slice(0, 48).join("") + (characters.length > 48 ? "…" : "");
 }
 
 /**

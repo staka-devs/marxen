@@ -1,5 +1,7 @@
 import type { AcpConfigOption, AiProviderConfig } from "../contracts/ai-contracts";
 import { defaultProviderConfig, PRESET_LABELS } from "../domain/ai-config";
+import { RefreshCw } from "lucide-react";
+import { ChoiceMenu } from "./ui/choice-menu";
 
 interface AiModelControlsProps {
   provider: AiProviderConfig;
@@ -40,19 +42,13 @@ export function AiModelControls({ provider, onProvider, options, loading, discov
     else if (provider.anthropic) onProvider({ ...provider, anthropic: { ...provider.anthropic, model } });
   }
   return <div className="ai-model-controls">
-    <label><span className="sr-only">チャットの接続先</span>
-      <select aria-label="チャットの接続先" value={selectedProvider} disabled={disabled || loading} onChange={(event) => changeProvider(event.target.value)}>
-        {Object.entries(PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-        <option value="openai_compatible">OpenAI 互換 API</option><option value="anthropic">Anthropic API</option>
-      </select>
-    </label>
+    <ChoiceMenu label="チャットの接続先" value={selectedProvider} disabled={disabled} onChange={changeProvider} choices={[
+      ...Object.entries(PRESET_LABELS).map(([value, label]) => ({ value, label })),
+      { value: "openai_compatible", label: "OpenAI 互換 API" }, { value: "anthropic", label: "Anthropic API" },
+    ]} />
     {provider.kind === "acp" ? <>
-      {options.map((option) => <label key={option.id}><span className="sr-only">{option.category === "model" ? "チャットのモデル" : "チャットの推論強度"}</span>
-        <select aria-label={option.category === "model" ? "チャットのモデル" : "チャットの推論強度"} value={provider.acp?.selections?.find((item) => item.id === option.id)?.value ?? option.currentValue} disabled={disabled || loading} onChange={(event) => changeChoice(option.id, event.target.value)}>
-          {option.options.map((choice) => <option key={choice.value} value={choice.value}>{choice.name}</option>)}
-        </select>
-      </label>)}
-      <button type="button" className="ai-model-refresh" disabled={disabled || loading} onClick={onRefresh} aria-label="モデル候補を取得">{loading ? "接続中…" : discovered ? "候補を更新" : "モデルを選ぶ"}</button>
+      {options.map((option) => <ChoiceMenu key={option.id} label={option.category === "model" ? "チャットのモデル" : "チャットの推論強度"} value={provider.acp?.selections?.find((item) => item.id === option.id)?.value ?? option.currentValue} disabled={disabled || loading} onChange={(value) => changeChoice(option.id, value)} choices={option.options.map((choice) => ({ value: choice.value, label: choice.name }))} />)}
+      <button type="button" className="ai-model-refresh inline-flex items-center gap-1" disabled={disabled || loading} onClick={onRefresh} aria-label="モデル候補を取得" title="接続先が公開するモデル候補を取得"><RefreshCw size={12} aria-hidden="true" className={loading ? "animate-spin" : undefined} />{loading ? "接続中…" : discovered ? null : "モデルを選ぶ"}</button>
       {discovered && !loading && !error && options.length === 0 && <small>この接続先はモデル候補を公開していません。CLI の設定を使用します。</small>}
     </> : <label className="ai-model-api"><span className="sr-only">チャットのモデル</span><input aria-label="チャットのモデル" placeholder="モデル名を入力" value={provider.openai?.model ?? provider.anthropic?.model ?? ""} disabled={disabled} onChange={(event) => changeApiModel(event.target.value)} /></label>}
     {error && <small role="alert">{error}</small>}

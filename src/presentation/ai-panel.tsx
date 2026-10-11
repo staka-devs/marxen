@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { History, Plus, RotateCcw, Send, Square, X } from "lucide-react";
 import { Button } from "./ui/button";
+import { ChoiceMenu } from "./ui/choice-menu";
+import { ChatHistory } from "./ai/ChatHistory";
 import "./ai-chat.css";
 import AiProviderSettings, { describeProviderSummary } from "./ai-provider-settings";
 import { MarkdownPreview } from "./preview/MarkdownPreview";
@@ -171,6 +173,7 @@ export default function AiPanel({
   const [conversations, setConversations] = useState<ChatConversation[]>(() => [createConversation(providerKey)]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [mode, setMode] = useState<PromptMode>("ask");
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [streamError, setStreamError] = useState<AiError | null>(null);
   const [resolving, setResolving] = useState(false);
@@ -192,7 +195,7 @@ export default function AiPanel({
   const transcriptRef = useRef<HTMLDivElement>(null);
 
   /** Apply an update to one conversation by ID preserving others. */ function applyToConversation(id: string, update: (prev: ChatConversation) => ChatConversation) {
-    setConversations((prev) => prev.map((item) => (item.id === id ? update(item) : item)));
+    setConversations((prev) => prev.map((item) => (item.id === id ? { ...update(item), updatedAt: Date.now() } : item)));
   }
 
   /** Fence the run and mark streaming messages cancelled without touching state. */ function fenceRun() {
@@ -455,6 +458,7 @@ export default function AiPanel({
     setActiveId(next.id);
     setStreamError(null);
     setPrompt("");
+    setHistoryOpen(false);
   }
 
   /** Select a conversation fencing the previous run. */ function handleSelectConversation(id: string) {
@@ -462,39 +466,31 @@ export default function AiPanel({
     fenceRun();
     setActiveId(id);
     setStreamError(null);
+    const key = conversations.find((item) => item.id === id)?.providerKey;
+    if (key && key !== providerKey) {
+      const previousProvider = JSON.parse(key) as AiProviderConfig;
+      providerKeyRef.current = key;
+      if (onProvider) onProvider(previousProvider);
+      else setInternal(previousProvider);
+    }
   }
 
   if (!conversation) return null;
   const providerSummary = describeProviderSummary(provider);
 
   return (
-    <div aria-label="Agent チャット" className="ai-chat-panel flex h-full min-h-0 flex-col">
+    <div aria-label="チャット" className="ai-chat-panel flex h-full min-h-0 flex-col">
       <div className="ai-chat-header flex shrink-0 items-center gap-1">
-        <h2 id="ai-panel-title" className="min-w-0 flex-1 truncate text-[13px] font-semibold">Agent チャット</h2>
-        {conversations.length > 1 && (
-          <label className="flex min-w-0 max-w-[52%] items-center gap-0.5 text-muted-foreground" title="会話の履歴">
-            <History size={13} aria-hidden="true" className="shrink-0" />
-            <select
-              aria-label="会話の選択"
-              className="ai-chat-history-select min-w-0 flex-1 truncate"
-              value={conversationId}
-              onChange={(event) => handleSelectConversation(event.target.value)}
-            >
-              {conversations.map((item, index) => (
-                <option key={item.id} value={item.id}>
-                  会話 {index + 1}{isBusy(item.messages) ? "（生成中）" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        <Button variant="outline" size="sm" aria-label="新しい会話" title="新しい会話" onClick={handleNewConversation} className="ai-chat-action shrink-0 px-2">
+        <h2 id="ai-panel-title" className="min-w-0 flex-1 truncate text-[13px] font-medium">{historyOpen ? "チャットの履歴" : "チャット"}</h2>
+        <AiProviderSettings compact provider={provider} onProvider={changeProvider} openToken={openSettingsToken} gateway={aiGateway} profileStore={profileStore} />
+        <button type="button" aria-label={historyOpen ? "チャットに戻る" : "履歴を開く"} aria-pressed={historyOpen} title={historyOpen ? "チャットに戻る" : "チャットの履歴"} className="rounded-sm p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setHistoryOpen((value) => !value)}><History size={15} aria-hidden="true" /></button>
+        <button type="button" aria-label="新しい会話" title="新しいチャット" onClick={handleNewConversation} className="shrink-0 rounded-sm p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground">
           <Plus size={14} aria-hidden="true" />
-        </Button>
+        </button>
         {onClose && (
           <button
             type="button"
-            aria-label="Agent チャットを閉じる"
+            aria-label="チャットを閉じる"
             title="閉じる"
             className="shrink-0 rounded p-1 hover:bg-muted"
             onClick={onClose}
@@ -503,6 +499,7 @@ export default function AiPanel({
           </button>
         )}
       </div>
+      {historyOpen ? <ChatHistory conversations={conversations} activeId={conversationId} onSelect={(id) => { handleSelectConversation(id); setHistoryOpen(false); }} /> : <>
       <div className="ai-chat-chips flex shrink-0 flex-wrap items-center gap-1" aria-label="送信対象">
         {contexts.length === 0 ? (
           <span className="text-[11px] text-muted-foreground">送信対象がありません。</span>
@@ -584,9 +581,6 @@ export default function AiPanel({
       </div>
       <div className="ai-chat-composer shrink-0 border-t border-border pt-1.5">
         <div className="ai-chat-composer-box px-1.5 pb-1.5 pt-1">
-          {modelControls && (
-            <div className="ai-chat-model-slot mb-1 empty:hidden">{modelControls}</div>
-          )}
           <textarea
             aria-label="プロンプト"
             className="ai-chat-composer-input block max-h-40 min-h-14 w-full overflow-y-auto px-1 py-1 text-[13px] leading-6"
@@ -595,22 +589,11 @@ export default function AiPanel({
             onChange={(event) => setPrompt(event.target.value)}
             placeholder="AI への指示を書きます"
           />
-          <div className="mt-1 flex items-center gap-1">
-            <div role="group" aria-label="プロンプトの種類" className="min-w-0 flex-1">
-              <select
-                aria-label="モード"
-                title={`プロンプトの種類 • ${providerSummary}`}
-                className="ai-chat-mode-select w-full min-w-0 truncate"
-                value={mode}
-                onChange={(event) => setMode(event.target.value as PromptMode)}
-              >
-                {MODE_ORDER.map((candidate) => (
-                  <option key={candidate} value={candidate}>
-                    {MODE_LABELS[candidate]}
-                  </option>
-                ))}
-              </select>
+          <div className="mt-1 flex flex-wrap items-center gap-1">
+            <div role="group" aria-label="プロンプトの種類" className="min-w-0 shrink-0">
+              <ChoiceMenu label="モード" value={mode} onChange={(value) => setMode(value as PromptMode)} disabled={running || disabled} choices={MODE_ORDER.map((value) => ({ value, label: MODE_LABELS[value], description: value === "ask" ? "質問・要約・説明を依頼します。" : value === "generate" ? "指示から Markdown の草案を作ります。" : value === "rewrite" ? "選択した文章を整えます。" : "送信対象への変更を差分で確認します。" }))} />
             </div>
+            {modelControls && <div className="ai-chat-model-slot min-w-0 flex-1 empty:hidden">{modelControls}</div>}
             <Button size="sm" aria-label="送信" title="送信" onClick={() => void handleSend()} disabled={!canSend} className="ai-chat-action shrink-0">
               <Send size={13} aria-hidden="true" />
               {running ? "送信中…" : "送信"}
@@ -632,10 +615,8 @@ export default function AiPanel({
         {disabled && <p className="mt-1 text-[11px] text-muted-foreground">他の応答を生成しています。</p>}
         {differentProvider && <p className="mt-1 text-[11px] text-muted-foreground">接続先が異なる会話です。続けるには新しい会話を作成してください。</p>}
         {anthropicBlocked && <p className="mt-1 text-[11px] text-muted-foreground">Anthropic を有効化すると送信できます。</p>}
-        <div className="ai-chat-settings mt-1.5">
-          <AiProviderSettings provider={provider} onProvider={changeProvider} openToken={openSettingsToken} gateway={aiGateway} profileStore={profileStore} />
-        </div>
       </div>
+      </>}
     </div>
   );
 }

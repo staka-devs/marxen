@@ -207,14 +207,15 @@ let handler: ((event: AiStreamEvent) => void) | null = null;
   await screen.findByRole("button", { name: "メモ/a.md" });
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
   await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
-  fireEvent.click(screen.getByRole("button", { name: "AI 支援" }));
+  fireEvent.click(screen.getByRole("button", { name: "チャットを切り替える" }));
   await screen.findByTestId("ai-sidebar");
 }
 
 /** Send a rewrite prompt through automatic staging registration. */ async function registerAndSend() {
   // Preparation is automatic on send: no manual registration step.
   const sidebar = screen.getByTestId("ai-sidebar");
-  fireEvent.change(within(sidebar).getByLabelText("モード"), { target: { value: "rewrite" } });
+  fireEvent.click(within(sidebar).getByRole("combobox", { name: "モード" }));
+  fireEvent.click(screen.getByRole("option", { name: /推敲/ }));
   fireEvent.change(within(sidebar).getByLabelText("プロンプト"), { target: { value: "書いて" } });
   fireEvent.click(within(sidebar).getByRole("button", { name: "送信" }));
   await waitFor(() => expect(handler).not.toBeNull());

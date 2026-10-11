@@ -19,6 +19,11 @@ function Harness({ gateway }: { gateway: AiGateway }) {
 }
 /** Read the last controlled provider to inspect actual wire selections. */
 function currentProvider(): AiProviderConfig { return JSON.parse(screen.getByTestId("provider").textContent!); }
+/** Select a visible choice through the same popup interaction used by the product. */
+function choose(label: string, name: string) {
+  fireEvent.click(screen.getByRole("combobox", { name: label }));
+  fireEvent.click(screen.getByRole("option", { name }));
+}
 describe("chat model selection", () => {
   it("only discovers on request, stores advertised model/effort, and clears dependent effort", async () => {
     const testConnection = vi.fn().mockResolvedValue({ ok: true, detail: "fixture", configOptions: options });
@@ -27,12 +32,12 @@ describe("chat model selection", () => {
     fireEvent.click(screen.getByRole("button", { name: "モデル候補を取得" }));
     await screen.findByRole("combobox", { name: "チャットのモデル" });
     expect(testConnection).toHaveBeenCalledWith(defaultProviderConfig("acp"), true);
-    fireEvent.change(screen.getByRole("combobox", { name: "チャットの推論強度" }), { target: { value: "xhigh" } });
-    fireEvent.change(screen.getByRole("combobox", { name: "チャットのモデル" }), { target: { value: "fixture-b" } });
+    choose("チャットの推論強度", "Xhigh");
+    choose("チャットのモデル", "Fixture B");
     expect(currentProvider().acp?.selections).toEqual([{ id: "model", value: "fixture-b" }]);
-    fireEvent.change(screen.getByRole("combobox", { name: "チャットの推論強度" }), { target: { value: "xhigh" } });
+    choose("チャットの推論強度", "Xhigh");
     expect(currentProvider().acp?.selections).toEqual([{ id: "model", value: "fixture-b" }, { id: "reasoning", value: "xhigh" }]);
-    fireEvent.change(screen.getByRole("combobox", { name: "チャットの接続先" }), { target: { value: "copilot" } });
+    choose("チャットの接続先", "GitHub Copilot");
     expect(currentProvider().acp?.preset).toBe("copilot");
     expect(screen.queryByRole("combobox", { name: "チャットのモデル" })).toBeNull();
   });

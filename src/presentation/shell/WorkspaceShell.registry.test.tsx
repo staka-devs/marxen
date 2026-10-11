@@ -500,10 +500,15 @@ it("mounts the AI panel with the exact document scope", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
   await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
-  fireEvent.click(screen.getByRole("button", { name: "AI 支援" }));
+  expect(within(screen.getByRole("navigation", { name: "アクティビティ" })).queryByRole("button", { name: "チャットを切り替える" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "チャットを切り替える" }));
   const sidebar = await screen.findByTestId("ai-sidebar");
   expect(within(sidebar).getByText("a.md")).toBeVisible();
-  expect(within(sidebar).getByLabelText("Agent チャット")).toBeVisible();
+  expect(within(sidebar).getByLabelText("チャット")).toBeVisible();
+  fireEvent.keyDown(window, { key: "i", ctrlKey: true, altKey: true });
+  expect(sidebar).toHaveAttribute("aria-hidden", "true");
+  fireEvent.keyDown(window, { key: "i", ctrlKey: true, altKey: true });
+  expect(sidebar).toHaveAttribute("aria-hidden", "false");
 });
 
 it("keeps display-basis arrows in the editor and routes Vim keys natively", async () => {

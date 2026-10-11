@@ -35,10 +35,10 @@ export const PRESET_LABELS: Record<AcpPreset, string> = {
 
 /** Japanese labels for prompt modes. */
 export const MODE_LABELS: Record<PromptMode, string> = {
-  ask: "質問",
-  generate: "生成",
-  rewrite: "選択書き換え",
-  workspace: "ワークスペース編集",
+  ask: "相談",
+  generate: "執筆",
+  rewrite: "推敲",
+  workspace: "文書編集",
 };
 
 /** Default endpoints per provider kind (ACP has none). */
