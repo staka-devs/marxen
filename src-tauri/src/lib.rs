@@ -1,5 +1,7 @@
 pub mod ai;
 pub mod ai_contracts;
+#[cfg(feature = "desktop")]
+pub mod clipboard;
 pub mod contracts;
 pub mod document;
 pub mod ipc;
@@ -43,6 +45,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(ipc::ActorState::default())
+        .manage(clipboard::ClipboardState::default())
         .manage(isolation::IsolationState::default())
         .setup(|app| {
             neovim::configure_resource_dir(app.path().resource_dir()?);
@@ -80,11 +83,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_runtime_status,
+            clipboard::write_clipboard,
             ipc::open_document,
             ipc::fetch_snapshot,
             ipc::apply_gui_edits,
             ipc::save_document,
             ipc::fetch_mode,
+            ipc::nvim_input_with_copy,
             ipc::has_nvim_mapping,
             ipc::undo_document,
             ipc::report_cursor,
@@ -125,3 +130,5 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("Marxen desktop runtime failed");
 }
+#[cfg(any(all(feature = "desktop", windows), test))]
+mod clipboard_format;

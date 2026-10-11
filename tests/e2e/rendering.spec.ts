@@ -55,7 +55,7 @@ test("malformed blocks show errors with raw source and stay editable", async ({ 
   await page.getByLabel("表示モード").selectOption("read");
   const preview = page.getByTestId("preview");
   await expect(preview.locator(".marxen-error").first()).toBeVisible();
-  await expect(preview).toContainText("原文のまま残ること");
+  await expect(preview).toContainText("Markdownのまま残ること");
   await expect(preview).toContainText("A --> [");
   expect(await preview.locator("script").count()).toBe(0);
   await expect(page.getByTestId("revision")).toHaveText("リビジョン 0");

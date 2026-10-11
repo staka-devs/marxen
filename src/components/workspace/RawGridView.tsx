@@ -23,7 +23,7 @@ export function RawGridView({ text, lines, revision, onRefresh, grid, onVimKeys 
     <section
       data-testid="raw-grid"
       role="textbox"
-      aria-label="Neovim 原文ビュー"
+      aria-label="Neovim 画面"
       aria-multiline="true"
       aria-readonly={!onVimKeys}
       tabIndex={0}
@@ -46,7 +46,7 @@ export function RawGridView({ text, lines, revision, onRefresh, grid, onVimKeys 
       style={{ color: defaultForeground, backgroundColor: defaultBackground }}
     >
       {onRefresh && (
-        <button type="button" onClick={(event) => { event.stopPropagation(); onRefresh(); }} aria-label="原文ビューを更新する" title="再描画" className="absolute right-2 top-2 z-10 rounded p-1 text-muted-foreground hover:bg-muted">
+        <button type="button" onClick={(event) => { event.stopPropagation(); onRefresh(); }} aria-label="Neovim 画面を更新する" title="再描画" className="absolute right-2 top-2 z-10 rounded p-1 text-muted-foreground hover:bg-muted">
           <RotateCw size={14} aria-hidden="true" />
         </button>
       )}

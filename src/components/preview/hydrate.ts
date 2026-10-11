@@ -99,7 +99,7 @@ async function hydrateMermaid(root: HTMLElement, signal?: AbortSignal): Promise<
       block.dataset.hydrated = "true";
     } catch (cause) {
       if (signal?.aborted) return;
-      markError(block, signal, `Mermaid を描画できません。${cause instanceof Error ? cause.message : "原文を確認してください。"}`);
+      markError(block, signal, `Mermaid を描画できません。${cause instanceof Error ? cause.message : "Markdownを確認してください。"}`);
     }
   }
 }
@@ -159,7 +159,7 @@ async function hydrateGeoMaps(root: HTMLElement, signal?: AbortSignal): Promise<
     } catch (cause) {
       if (signal?.aborted) return;
       disposeBlock(block);
-      markError(block, signal, `地図を描画できません。${cause instanceof Error ? cause.message : "原文を確認してください。"}`);
+      markError(block, signal, `地図を描画できません。${cause instanceof Error ? cause.message : "Markdownを確認してください。"}`);
     }
   }
 }
@@ -223,7 +223,7 @@ async function hydrateStlViews(root: HTMLElement, signal?: AbortSignal): Promise
     } catch (cause) {
       if (signal?.aborted) return;
       disposeBlock(block);
-      markError(block, signal, `3D を描画できません。${cause instanceof Error ? cause.message : "原文を確認してください。"}`);
+      markError(block, signal, `3D を描画できません。${cause instanceof Error ? cause.message : "Markdownを確認してください。"}`);
     }
   }
 }

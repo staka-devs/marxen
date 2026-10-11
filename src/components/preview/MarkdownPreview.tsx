@@ -43,7 +43,7 @@ export function MarkdownPreview({ text, label = "プレビュー", testId = "pre
       .catch(() => {
         if (!cancelled && pipeline === latestPipeline.current) {
           setResult({
-            html: "<div class=\"marxen-error\" role=\"alert\">描画できませんでした。原文は保持されています。</div>",
+            html: "<div class=\"marxen-error\" role=\"alert\">描画できませんでした。Markdownは保持されています。</div>",
             diagnostics: [],
             blocks: [],
           });
@@ -76,7 +76,7 @@ export function MarkdownPreview({ text, label = "プレビュー", testId = "pre
       <article
         data-testid={testId}
         aria-label={label}
-        className="marxen-md h-full overflow-auto rounded-lg border border-border bg-card p-5 text-sm leading-7"
+        className="marxen-md h-full overflow-auto bg-background px-6 py-4 text-sm leading-7"
       >
         <p className="text-muted-foreground">描画を準備しています…</p>
       </article>
@@ -89,7 +89,7 @@ export function MarkdownPreview({ text, label = "プレビュー", testId = "pre
       data-testid={testId}
       aria-label={label}
       data-diagnostics={result.diagnostics.length}
-      className="marxen-md h-full overflow-auto rounded-lg border border-border bg-card p-5 text-sm leading-7"
+      className="marxen-md h-full overflow-auto bg-background px-6 py-4 text-sm leading-7"
       // Sanitized by renderMarkdownDocument: no raw HTML or scripts pass through.
       dangerouslySetInnerHTML={{ __html: result.html }}
     />

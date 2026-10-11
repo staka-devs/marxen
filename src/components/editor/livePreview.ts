@@ -60,7 +60,7 @@ function renderBlockHtml(key: string, blockText: string, defs: string): Promise<
       return result.html;
     })
     .catch(() => {
-      const fallback = `<div class="marxen-error" role="alert">描画できませんでした。原文は保持されています。</div>`;
+      const fallback = `<div class="marxen-error" role="alert">描画できませんでした。Markdownは保持されています。</div>`;
       rememberHtml(key, fallback);
       return fallback;
     })

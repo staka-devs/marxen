@@ -258,7 +258,7 @@ export default function AiPanel({ contexts, staging, onRemoveContext, onProposal
     <Card aria-labelledby="ai-panel-title">
       <h2 id="ai-panel-title" className="text-base font-semibold">AI 支援</h2>
       <p className="mt-1 text-xs text-muted-foreground">
-        回答は提案テキストです。原文への反映は差分レビュー (#8) を経ます。
+        回答は提案テキストです。Markdownへの反映は差分レビュー (#8) を経ます。
       </p>
 
       <div className="mt-4" role="group" aria-label="接続先">
@@ -491,7 +491,7 @@ export default function AiPanel({ contexts, staging, onRemoveContext, onProposal
         )}
         {proposal && (
           <div className="mt-2 rounded-lg border border-border p-3">
-            <p className="text-xs font-semibold text-muted-foreground">提案 (原文は変更しません)</p>
+            <p className="text-xs font-semibold text-muted-foreground">提案 (Markdownは変更しません)</p>
             <p className="mt-1 whitespace-pre-wrap text-sm">{proposal.text}</p>
             <p className="mt-2 text-xs text-muted-foreground">
               基準: {proposal.baseContexts.map((ref) => `${ref.documentId} rev ${ref.revision}`).join(", ")}

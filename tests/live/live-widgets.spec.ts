@@ -1,5 +1,26 @@
 import { expect, test, type Page } from "@playwright/test";
 
+test("view settings preserve live selection and show mode-specific cursor", async ({ page }) => {
+  await page.goto("/tests/live/harness/live.html");
+  await page.evaluate(() => { window.__harness.setValue("編集位置 😀 の確認\n\n次の段落\n"); window.__harness.echoCursor(3, 3); window.__harness.setVimMode("normal"); });
+  await page.locator(".cm-content").focus();
+  await expect(page.locator(".cm-activeLine")).toContainText("編集位置");
+  await expect.poll(() => page.locator(".cm-cursor").first().evaluate((el) => parseFloat(getComputedStyle(el).width))).toBeGreaterThan(5);
+  const value = await page.evaluate(() => window.__harness.getValue());
+  await page.evaluate(() => window.__harness.setPreferences({ fontSize: 22, lineHeight: 2, lineNumbers: false, wordWrap: false }));
+  await expect(page.locator(".cm-editor")).toHaveCSS("font-size", "22px");
+  await expect(page.locator(".cm-content")).toHaveCSS("line-height", "44px");
+  await expect(page.locator(".cm-lineNumbers")).toHaveCount(0);
+  await expect(page.locator(".cm-lineWrapping")).toHaveCount(0);
+  expect(await page.evaluate(() => window.__harness.getValue())).toBe(value);
+  expect(await page.evaluate(() => window.__harness.getEdits())).toEqual([]);
+  await page.evaluate(() => window.__harness.setVimMode("insert"));
+  await expect(page.locator(".cm-cursor").first()).toHaveCSS("width", "2px");
+  await page.keyboard.type("Z");
+  await expect.poll(() => harnessValue(page)).toBe(value.slice(0, 3) + "Z" + value.slice(3));
+  expect(await page.evaluate(() => window.__harness.getEdits())).toEqual([[{ range: { start: 3, end: 3 }, text: "Z" }]]);
+});
+
 test("browser IME composition sends only the final Unicode range edit", async ({ page, context }) => {
   await page.goto("/tests/live/harness/live.html");
   const before = "前😀後\n";
@@ -40,6 +61,21 @@ test("cancelled browser IME composition sends no edit", async ({ page, context }
   expect(await page.evaluate(() => window.__harness.getEdits())).toEqual([]);
   await input.send("Input.imeSetComposition", { text: "", selectionStart: 0, selectionEnd: 0 });
   await expect(content).toContainText("取消😀");
+  expect(await harnessValue(page)).toBe(before);
+  expect(await page.evaluate(() => window.__harness.getEdits())).toEqual([]);
+  await input.detach();
+});
+
+test("Normal mode IME cannot commit text into the Vim document", async ({ page, context }) => {
+  await page.goto("/tests/live/harness/live.html");
+  const before = "Vim の本文😀\n";
+  await page.evaluate((text) => { window.__harness.setValue(text); window.__harness.setVimMode("normal"); window.__harness.echoCursor(0, 0); }, before);
+  await page.locator(".cm-content").focus();
+  const input = await context.newCDPSession(page);
+  await input.send("Input.imeSetComposition", { text: "にほんご", selectionStart: 4, selectionEnd: 4 });
+  await input.send("Input.insertText", { text: "日本語" });
+  await expect.poll(() => page.locator(".cm-content").innerText()).toContain("Vim の本文😀");
+  await expect(page.locator(".cm-content")).not.toContainText("日本語");
   expect(await harnessValue(page)).toBe(before);
   expect(await page.evaluate(() => window.__harness.getEdits())).toEqual([]);
   await input.detach();
@@ -112,7 +148,7 @@ test("task checkbox emits a minimal range edit preserving unrelated bytes", asyn
 
 test("rendered list and table use compact document spacing", async ({ page }) => {
   await page.goto("/tests/live/harness/live.html");
-  await page.evaluate(() => window.__harness.setValue("# 見出し\n\n- [ ] 一つ\n- [ ] 二つ\n\n| 項目 | 状態 |\n| --- | --- |\n| 原文 | 保持 |\n"));
+  await page.evaluate(() => window.__harness.setValue("# 見出し\n\n- [ ] 一つ\n- [ ] 二つ\n\n| 項目 | 状態 |\n| --- | --- |\n| Markdown | 保持 |\n"));
   const list = page.locator(".marxen-live-widget ul");
   const table = page.locator(".marxen-live-widget table");
   await expect(table).toBeVisible();
