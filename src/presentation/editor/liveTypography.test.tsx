@@ -95,6 +95,14 @@ it("restores a rejected local edit when canonical text and revision are unchange
   expect(view.state.doc.toString()).toBe(before.text);
 });
 
+it("applies a canonical text update before its new cursor in the same render", () => {
+  const { rerender } = render(<CodeMirrorEditor value="" ariaLabel="検証" externalCursor={{ seq: 1, anchor: 0, head: 0 }} />);
+  const view = editorView();
+  rerender(<CodeMirrorEditor value="abc" ariaLabel="検証" externalCursor={{ seq: 2, anchor: 3, head: 3 }} />);
+  expect(view.state.doc.toString()).toBe("abc");
+  expect(view.state.selection.main.head).toBe(3);
+});
+
 it("rejects composition if native mode stops permitting input before commit", () => {
   const onGuiEdits = vi.fn();
   const { rerender } = render(<CodeMirrorEditor value="前後" ariaLabel="検証" allowTextInput onGuiEdits={onGuiEdits} />);

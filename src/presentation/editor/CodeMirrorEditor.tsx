@@ -266,7 +266,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   }, [focusRequest]);
 
   // Sync external snapshot text (undo, Vim sync, tab switch, GUI commit ack).
-  useEffect(() => {
+  useLayoutEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     const current = view.state.doc.toString();
