@@ -20,8 +20,10 @@ import rehypeMathjax from "rehype-mathjax";
 import rehypeStringify from "rehype-stringify";
 import { visit } from "unist-util-visit";
 import type { Element, Properties, Root } from "hast";
-import type { Root as MdastRoot, Content as MdastContent } from "mdast";
+import type { Root as MdastRoot } from "mdast";
 import type { VFile } from "vfile";
+import { escapeHtml } from "./html";
+import { alertKind, mdastText } from "./mdast";
 import { highlightCode } from "./shiki";
 import { CLOBBER_PREFIX, marxenSanitizeSchema } from "./sanitize-schema";
 import { isSpecialLanguage, type RenderDiagnostic, type RenderResult, type SourceBlock } from "./types";
@@ -361,10 +363,6 @@ function getProcessor(): ReturnType<typeof buildProcessor> {
   return processor;
 }
 
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
 /** Render Markdown to sanitized local-only HTML with diagnostics and blocks. Never throws. */
 export async function renderMarkdownDocument(source: string): Promise<RenderResult> {
   const blocks = parseMarkdownBlocks(source);
@@ -379,23 +377,6 @@ export async function renderMarkdownDocument(source: string): Promise<RenderResu
       blocks,
     };
   }
-}
-
-function mdastText(node: MdastContent): string {
-  if (node.type === "text" || node.type === "inlineCode") return node.value;
-  if ("children" in node && Array.isArray(node.children)) {
-    return (node.children as MdastContent[]).map(mdastText).join("");
-  }
-  return "";
-}
-
-function alertKind(node: MdastContent): string | null {
-  if (node.type !== "blockquote") return null;
-  const first = node.children[0];
-  if (!first || first.type !== "paragraph") return null;
-  const text = mdastText(first);
-  const match = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.exec(text.trim());
-  return match ? match[1].toLowerCase() : null;
 }
 
 /** Top-level source blocks with 1-based lines for live/read mapping. */

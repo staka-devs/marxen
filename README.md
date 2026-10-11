@@ -63,15 +63,17 @@ npm run contracts:check
 npm run ai-contracts:check
 npm run isolation-contracts:check
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-cargo test --manifest-path src-tauri/Cargo.toml --locked
+cargo test --manifest-path src-tauri/Cargo.toml --locked --features dev-tools
 cargo check --manifest-path src-tauri/Cargo.toml --locked
-cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+cargo clippy --manifest-path src-tauri/Cargo.toml --locked --features dev-tools --all-targets -- -D warnings
 npx playwright install chromium
 npm run test:e2e
 npm run build
 ```
 
-Rust 型の変更後は対応する `contracts:generate` / `ai-contracts:generate` / `isolation-contracts:generate` を実行します。GUI 依存のない環境では `cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --locked` を使用できます。実 Neovim はこの場合も必要です。Rust の lint は clippy、TypeScript は typecheck を実行します。独立した TypeScript lint の設定はありません。
+`dev-tools` は契約生成器とテスト用プロセスだけを有効にします。通常の配布ビルドでは有効にせず、これらの実行ファイルは同梱しません。
+
+Rust 型の変更後は対応する `contracts:generate` / `ai-contracts:generate` / `isolation-contracts:generate` を実行します。GUI 依存のない環境では `cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --locked --features dev-tools` を使用できます。実 Neovim はこの場合も必要です。Rust の lint は clippy、TypeScript は typecheck を実行します。独立した TypeScript lint の設定はありません。
 
 Playwright は製品用 production build と、配布に含まれないライブ描画 harness の2系統を実行します。既存サーバーは再利用しません。競合する場合は `MARXEN_E2E_PORT` / `MARXEN_E2E_LIVE_PORT` を変更できます。Chromium の成功は OS 固有の WebView・IME の成功を意味しません。
 
@@ -79,7 +81,7 @@ Playwright は製品用 production build と、配布に含まれないライブ
 
 ```powershell
 $env:MARXEN_NATIVE_KEYRING_TEST = '1'
-cargo test --manifest-path src-tauri/Cargo.toml --locked --test credentials_native
+cargo test --manifest-path src-tauri/Cargo.toml --locked --features dev-tools --test credentials_native
 Remove-Item Env:MARXEN_NATIVE_KEYRING_TEST
 ```
 

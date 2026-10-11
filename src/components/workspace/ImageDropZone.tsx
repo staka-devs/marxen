@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode, type DragEvent } from "react";
 import { EditorView } from "@codemirror/view";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { isDesktop } from "../../lib/workspace";
+import { listenNativeDrop } from "../../lib/native-drop";
 import { isImagePath, WORKSPACE_IMAGE_DRAG, WORKSPACE_IMAGE_POINTER_DROP } from "../../lib/workspace-files";
 import type { Utf16Range } from "../../shared/contracts";
 
@@ -46,9 +46,8 @@ export function ImageDropZone({ children, enabled, hidden = false, selection, on
     let cancelled = false;
     let unlisten: (() => void) | undefined;
     try {
-      void getCurrentWebview().onDragDropEvent(event => {
-        if (event.payload.type !== "drop" || !latest.current.enabled || composing.current) return;
-        const { position, paths } = event.payload;
+      void listenNativeDrop(({ position, paths }) => {
+        if (!latest.current.enabled || composing.current) return;
         const x = position.x / window.devicePixelRatio;
         const y = position.y / window.devicePixelRatio;
         const bounds = element.current?.getBoundingClientRect();

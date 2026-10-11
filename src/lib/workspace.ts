@@ -147,25 +147,6 @@ export function searchWorkspace(files: WorkspaceFile[], query: string, maxHits =
   return hits;
 }
 
-/** Replace all literal occurrences; returns the new text and hit count. */
-export function replaceAll(text: string, query: string, replacement: string): { text: string; count: number } {
-  if (query === "") return { text, count: 0 };
-  let count = 0;
-  let from = 0;
-  let out = "";
-  for (;;) {
-    const idx = text.indexOf(query, from);
-    if (idx < 0) {
-      out += text.slice(from);
-      break;
-    }
-    count += 1;
-    out += text.slice(from, idx) + replacement;
-    from = idx + query.length;
-  }
-  return { text: out, count };
-}
-
 export interface ReplaceEdit {
   range: { start: number; end: number };
   text: string;

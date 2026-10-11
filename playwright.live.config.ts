@@ -24,6 +24,9 @@ const port = livePort();
 export default defineConfig({
   testDir: "./tests/live",
   outputDir: "./test-results/live",
+  // The first navigation compiles the live harness's local renderers. Allow
+  // cold-cache startup without changing the 5s assertion timeout or retries.
+  timeout: 90_000,
   use: { baseURL: `http://127.0.0.1:${port}`, trace: "retain-on-failure" },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
