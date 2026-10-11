@@ -17,7 +17,7 @@ it("shows folders first with Lucide type icons, filters binaries and marks the s
   expect(screen.queryByRole("button", { name: "app.exe" })).toBeNull();
   const selected = screen.getByRole("button", { name: "config.json" });
   expect(selected).toHaveAttribute("aria-current", "true");
-  expect(selected.querySelector("svg")).toHaveClass("lucide-file-code2");
+  expect(selected.querySelector("svg[data-file-icon]")).toHaveAttribute("data-file-icon", "text");
   expect(screen.getByRole("button", { name: "notes" }).querySelector("svg[data-file-icon]")).toHaveAttribute("data-file-icon", "folder-open");
   expect(screen.getByRole("button", { name: "notes/readme.md" }).querySelector("svg[data-file-icon]")).toHaveAttribute("data-file-icon", "markdown");
   fireEvent.click(selected);

@@ -1,8 +1,42 @@
 /** Verify the five product layers and documentation on handwritten named operations. */
-import { readFileSync, readdirSync } from "node:fs";
-import { dirname, extname, relative, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import ts from "typescript";
+import { API } from "typescript/unstable/sync";
+import {
+  SyntaxKind,
+  getLeadingCommentRanges,
+  isArrowFunction,
+  isAsExpression,
+  isCallExpression,
+  isConstructorDeclaration,
+  isExportDeclaration,
+  isFunctionDeclaration,
+  isFunctionExpression,
+  isFunctionTypeNode,
+  isGetAccessorDeclaration,
+  isIdentifier,
+  isImportDeclaration,
+  isImportTypeNode,
+  isLiteralTypeNode,
+  isMethodDeclaration,
+  isMethodSignatureDeclaration,
+  isParenthesizedExpression,
+  isPropertyAccessExpression,
+  isPropertyAssignment,
+  isPropertyDeclaration,
+  isPropertySignatureDeclaration,
+  isSatisfiesExpression,
+  isSetAccessorDeclaration,
+  isStringLiteral,
+  isTypeAliasDeclaration,
+  isVariableDeclaration,
+} from "typescript/unstable/ast";
+
+// Bound the native compiler's worker pool while respecting explicit caller settings.
+process.env.GOMAXPROCS ??= "2";
+process.env.GOMEMLIMIT ??= "512MiB";
 
 export const LAYERS = ["domain", "application", "contracts", "infrastructure", "presentation"];
 const ALLOWED = {
@@ -56,11 +90,11 @@ function usefulDoc(text) {
 /** Return direct or declaration-level JSDoc for variable-bound functions and members. */
 function jsdocFor(node, sourceFile) {
   const candidates = [node];
-  if (ts.isVariableDeclaration(node)) candidates.push(node.parent, node.parent.parent);
+  if (isVariableDeclaration(node)) candidates.push(node.parent, node.parent.parent);
   for (const candidate of candidates) {
     const docs = candidate.jsDoc ?? [];
     if (docs.some(doc => usefulDoc(doc.getText(sourceFile)))) return true;
-    const comments = ts.getLeadingCommentRanges(sourceFile.text, candidate.getFullStart()) ?? [];
+    const comments = getLeadingCommentRanges(sourceFile.text, candidate.getFullStart()) ?? [];
     if (comments.some(comment => {
       const text = sourceFile.text.slice(comment.pos, comment.end);
       return text.startsWith("/**") && usefulDoc(text);
@@ -72,29 +106,44 @@ function jsdocFor(node, sourceFile) {
 /** Detect functions held by a binding, including callbacks wrapped by React hooks or test factories. */
 function functionInitializer(node) {
   if (!node) return false;
-  if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return true;
-  if (ts.isAsExpression(node) || ts.isParenthesizedExpression(node) || ts.isSatisfiesExpression(node)) return functionInitializer(node.expression);
-  if (!ts.isCallExpression(node)) return false;
-  const callee = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text : ts.isIdentifier(node.expression) ? node.expression.text : "";
-  return ["useCallback", "forwardRef", "memo", "fn"].includes(callee) && node.arguments.some(argument => ts.isArrowFunction(argument) || ts.isFunctionExpression(argument));
+  if (isArrowFunction(node) || isFunctionExpression(node)) return true;
+  if (isAsExpression(node) || isParenthesizedExpression(node) || isSatisfiesExpression(node)) return functionInitializer(node.expression);
+  if (!isCallExpression(node)) return false;
+  const callee = isPropertyAccessExpression(node.expression) ? node.expression.name.text : isIdentifier(node.expression) ? node.expression.text : "";
+  return ["useCallback", "forwardRef", "memo", "fn"].includes(callee) && node.arguments.some(argument => isArrowFunction(argument) || isFunctionExpression(argument));
 }
 
 /** Find named implementations and callable declarations, excluding anonymous inline callbacks. */
 function operationName(node, sourceFile) {
-  if (ts.isConstructorDeclaration(node)) return "constructor";
-  if (ts.isFunctionDeclaration(node)) return node.name?.text ?? "default function";
-  if (ts.isMethodDeclaration(node) || ts.isMethodSignature(node) || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) return node.name.getText(sourceFile);
-  if (ts.isVariableDeclaration(node) && functionInitializer(node.initializer)) return node.name.getText(sourceFile);
-  if ((ts.isPropertyAssignment(node) || ts.isPropertyDeclaration(node)) && functionInitializer(node.initializer)) return node.name.getText(sourceFile);
-  if (ts.isPropertySignature(node) && node.type && ts.isFunctionTypeNode(node.type)) return node.name.getText(sourceFile);
-  if (ts.isTypeAliasDeclaration(node) && ts.isFunctionTypeNode(node.type)) return node.name.text;
+  if (isConstructorDeclaration(node)) return "constructor";
+  if (isFunctionDeclaration(node)) return node.name?.text ?? "default function";
+  if (isMethodDeclaration(node) || isMethodSignatureDeclaration(node) || isGetAccessorDeclaration(node) || isSetAccessorDeclaration(node)) return node.name.getText(sourceFile);
+  if (isVariableDeclaration(node) && functionInitializer(node.initializer)) return node.name.getText(sourceFile);
+  if ((isPropertyAssignment(node) || isPropertyDeclaration(node)) && functionInitializer(node.initializer)) return node.name.getText(sourceFile);
+  if (isPropertySignatureDeclaration(node) && node.type && isFunctionTypeNode(node.type)) return node.name.getText(sourceFile);
+  if (isTypeAliasDeclaration(node) && isFunctionTypeNode(node.type)) return node.name.text;
   return null;
 }
 
-/** Resolve one relative or aliased TypeScript import to its source layer. */
-function importTarget(specifier, path, root, compilerOptions) {
-  const result = ts.resolveModuleName(specifier, resolve(root, path), compilerOptions, ts.sys).resolvedModule;
-  return result ? portable(relative(root, result.resolvedFileName)) : null;
+/** Resolve one relative TypeScript import to its repository layer through the native project program. */
+function importTarget(specifier, containingPath, root, project) {
+  if (typeof specifier !== "string") return null;
+  if (!specifier.startsWith(".") && !specifier.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(specifier)) return null;
+  const base = resolve(dirname(resolve(root, containingPath)), specifier);
+  const candidates = [base, `${base}.ts`, `${base}.tsx`, `${base}.mts`, `${base}.cts`, `${base}.d.ts`, join(base, "index.ts"), join(base, "index.tsx"), join(base, "index.d.ts")];
+  for (const candidate of candidates) {
+    let found = false;
+    if (project?.program) {
+      try {
+        if (project.program.getSourceFile(candidate)) found = true;
+      } catch {
+        found = false;
+      }
+    }
+    if (!found && existsSync(candidate)) found = true;
+    if (found) return portable(relative(root, candidate));
+  }
+  return null;
 }
 
 /** Report a forbidden import at its original location rather than at an adapter facade. */
@@ -102,10 +151,8 @@ function checkEdge(path, line, layer, target, issues) {
   if (target && !ALLOWED[layer].has(target)) issues.push({ path, line, rule: "dependency", detail: `${layer} must not depend on ${target}` });
 }
 
-/** Inspect TypeScript declarations, import/export edges, and references to actual browser globals. */
-export function inspectTypeScript(path, source, options = {}) {
-  const { root = process.cwd(), compilerOptions = {}, checker = null, sourceFile: existing = null } = options;
-  const sourceFile = existing ?? ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, /tsx$/.test(path) ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+/** Inspect one bound native source file while preserving docs, edges, and resolved global identity. */
+function inspectBoundSource(path, source, root, checker, sourceFile, project) {
   const issues = [];
   let methods = 0;
   let documented = 0;
@@ -121,23 +168,83 @@ export function inspectTypeScript(path, source, options = {}) {
       else issues.push({ path, line, rule: "documentation", detail: `JSDoc required: ${name}` });
     }
     let imported = null;
-    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) imported = node.moduleSpecifier.text;
-    if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) imported = node.argument.literal.text;
-    if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === "require")) && ts.isStringLiteral(node.arguments[0])) imported = node.arguments[0].text;
+    if ((isImportDeclaration(node) || isExportDeclaration(node)) && node.moduleSpecifier && isStringLiteral(node.moduleSpecifier)) imported = node.moduleSpecifier.text;
+    if (isImportTypeNode(node) && isLiteralTypeNode(node.argument) && isStringLiteral(node.argument.literal)) imported = node.argument.literal.text;
+    if (isCallExpression(node) && (node.expression.kind === SyntaxKind.ImportKeyword || (isIdentifier(node.expression) && node.expression.text === "require")) && node.arguments[0] && isStringLiteral(node.arguments[0])) imported = node.arguments[0].text;
     if (layer && imported) {
       if (inner && EFFECT_PACKAGES.test(imported)) issues.push({ path, line, rule: "effect", detail: `${layer} imports platform/UI package ${imported}` });
-      const target = importTarget(imported, path, root, compilerOptions);
+      const target = importTarget(imported, path, root, project);
       checkEdge(path, line, layer, target && layerOf(target), issues);
       if (target?.startsWith("src/") && !layerOf(target) && !isTest(target) && !target.endsWith(".d.ts")) issues.push({ path, line, rule: "dependency", detail: `layer imports unclassified/composition module ${target}` });
     }
-    if (inner && checker && ts.isIdentifier(node) && DOM_GLOBALS.has(node.text)) {
-      const symbol = checker.getSymbolAtLocation(node);
-      if (symbol?.declarations?.some(declaration => /(?:^|[\\/])lib\.dom\.d\.ts$/.test(declaration.getSourceFile().fileName))) issues.push({ path, line, rule: "effect", detail: `${layer} accesses browser global ${node.text}` });
+    if (inner && checker && isIdentifier(node) && DOM_GLOBALS.has(node.text)) {
+      let symbol = null;
+      try {
+        symbol = checker.getSymbolAtLocation(node);
+      } catch {
+        symbol = null;
+      }
+      const declarations = symbol?.declarations ?? [];
+      let isDom = false;
+      for (const declaration of declarations) {
+        let fileName = null;
+        try {
+          if (declaration && typeof declaration.resolve === "function") {
+            const resolved = project ? declaration.resolve(project) : declaration.resolve();
+            fileName = resolved?.getSourceFile?.()?.fileName ?? null;
+          } else if (declaration && typeof declaration.getSourceFile === "function") {
+            fileName = declaration.getSourceFile()?.fileName ?? null;
+          }
+        } catch {
+          fileName = null;
+        }
+        if (fileName && /(?:^|[\\/])lib\.dom\.d\.ts$/.test(fileName)) {
+          isDom = true;
+          break;
+        }
+      }
+      if (isDom) issues.push({ path, line, rule: "effect", detail: `${layer} accesses browser global ${node.text}` });
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
   if (!generated(source)) visit(sourceFile);
   return { methods, documented, issues };
+}
+
+/** Inspect TypeScript declarations, import/export edges, and references to actual browser globals. */
+export function inspectTypeScript(path, source, options = {}) {
+  const { root = process.cwd(), checker = null, sourceFile: existing = null, project = null } = options;
+  if (generated(source)) return { methods: 0, documented: 0, issues: [] };
+  if (existing) return inspectBoundSource(path, source, root, checker, existing, project);
+  const absolute = resolve(root, path);
+  if (existsSync(absolute)) {
+    const api = new API({});
+    try {
+      const snapshot = api.updateSnapshot({ openFiles: [absolute] });
+      const ownedProject = snapshot.getDefaultProjectForFile(absolute);
+      const ownedSource = ownedProject.program.getSourceFile(absolute);
+      return inspectBoundSource(path, source, root, ownedProject.checker, ownedSource, ownedProject);
+    } finally {
+      api.close();
+    }
+  }
+  const temporaryRoot = mkdtempSync(join(tmpdir(), "marxen-architecture-"));
+  try {
+    const staged = join(temporaryRoot, path);
+    mkdirSync(dirname(staged), { recursive: true });
+    writeFileSync(staged, source);
+    const api = new API({});
+    try {
+      const snapshot = api.updateSnapshot({ openFiles: [staged] });
+      const ownedProject = snapshot.getDefaultProjectForFile(staged);
+      const ownedSource = ownedProject.program.getSourceFile(staged);
+      return inspectBoundSource(path, source, temporaryRoot, ownedProject.checker, ownedSource, ownedProject);
+    } finally {
+      api.close();
+    }
+  } finally {
+    if (resolve(temporaryRoot).startsWith(resolve(tmpdir()) + sep) && basename(temporaryRoot).startsWith("marxen-architecture-")) rmSync(temporaryRoot, { recursive: true, force: true });
+  }
 }
 
 /** Tokenize Rust code while retaining outer documentation and skipping nested comments and strings. */
@@ -337,32 +444,49 @@ function placement(path) {
   return null;
 }
 
-/** Audit real repository source using TypeScript symbol resolution and Rust lexical inspection. */
+/** Audit real repository source using native TypeScript snapshots and Rust lexical inspection. */
 export function auditRepository(root) {
   const files = ["src", "src-tauri/src", "src-tauri/tests", "scripts", "tests"].flatMap(directory => sourceFiles(root, directory));
   files.push("src-tauri/build.rs");
   files.push(...readdirSync(root).filter(name => /^(?:vite(?:\.live)?|vitest|playwright(?:\.live)?)\.config\.ts$/.test(name)));
-  const config = ts.readConfigFile(resolve(root, "tsconfig.json"), ts.sys.readFile);
-  const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
-  const program = ts.createProgram(files.filter(path => /\.[jt]sx?$/.test(path)).map(path => resolve(root, path)), { ...parsed.options, noEmit: true });
-  const checker = program.getTypeChecker();
-  const issues = [];
-  let methods = 0;
-  let documented = 0;
-  for (const path of files.sort()) {
-    const source = readFileSync(resolve(root, path), "utf8");
-    const location = placement(path);
-    if (location) issues.push({ path, line: 1, rule: "placement", detail: location });
-    const result = extname(path) === ".rs" ? inspectRust(path, source) : inspectTypeScript(path, source, { root, compilerOptions: parsed.options, checker, sourceFile: program.getSourceFile(resolve(root, path)) });
-    methods += result.methods;
-    documented += result.documented;
-    issues.push(...result.issues);
+  const api = new API({});
+  try {
+    const tsconfigPath = resolve(root, "tsconfig.json");
+    const typescriptPaths = files.filter(path => /\.[jt]sx?$/.test(path));
+    const absoluteTargets = typescriptPaths.map(path => resolve(root, path));
+    const snapshot = api.updateSnapshot({ openProjects: [tsconfigPath], openFiles: absoluteTargets });
+    const mainProject = snapshot.getProject(tsconfigPath) ?? snapshot.getProjects()[0];
+    const issues = [];
+    let methods = 0;
+    let documented = 0;
+    for (const path of files.sort()) {
+      const source = readFileSync(resolve(root, path), "utf8");
+      const location = placement(path);
+      if (location) issues.push({ path, line: 1, rule: "placement", detail: location });
+      if (extname(path) === ".rs") {
+        const result = inspectRust(path, source);
+        methods += result.methods;
+        documented += result.documented;
+        issues.push(...result.issues);
+        continue;
+      }
+      const absolute = resolve(root, path);
+      const owner = absoluteTargets.includes(absolute) ? (snapshot.getDefaultProjectForFile(absolute) ?? mainProject) : mainProject;
+      const sourceFile = owner?.program.getSourceFile(absolute);
+      const checker = owner?.checker ?? null;
+      const result = inspectTypeScript(path, source, { root, checker, sourceFile: sourceFile ?? undefined, project: owner ?? undefined });
+      methods += result.methods;
+      documented += result.documented;
+      issues.push(...result.issues);
+    }
+    for (const base of ["src", "src-tauri/src"]) {
+      const directories = new Set(readdirSync(resolve(root, base), { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name));
+      for (const layer of LAYERS) if (!directories.has(layer)) issues.push({ path: base, line: 1, rule: "placement", detail: `missing layer directory ${layer}` });
+    }
+    return { files: files.length, methods, documented, issues };
+  } finally {
+    api.close();
   }
-  for (const base of ["src", "src-tauri/src"]) {
-    const directories = new Set(readdirSync(resolve(root, base), { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name));
-    for (const layer of LAYERS) if (!directories.has(layer)) issues.push({ path: base, line: 1, rule: "placement", detail: `missing layer directory ${layer}` });
-  }
-  return { files: files.length, methods, documented, issues };
 }
 
 /** Print bounded diagnostics and return a failing exit code when any architecture rule is broken. */

@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
-import ts from "typescript";
+import { API } from "typescript/unstable/sync";
 import { inspectRust, inspectTypeScript, layerOf } from "./architecture-check.mjs";
 
 /** Create real source files for module/global resolution and clean up only this owned fixture. */
@@ -187,10 +187,16 @@ test("browser globals are rejected while locally named document values remain va
   `;
   withSourceFixture(source, root => {
     const file = join(root, "src/application/example.ts");
-    const program = ts.createProgram([file], { noEmit: true });
-    const result = inspectTypeScript("src/application/example.ts", source, { root, checker: program.getTypeChecker(), sourceFile: program.getSourceFile(file) });
-    assert.equal(result.issues.filter(issue => issue.rule === "effect").length, 1);
-    assert.equal(result.documented, 1);
+    const api = new API({});
+    try {
+      const snapshot = api.updateSnapshot({ openFiles: [file] });
+      const project = snapshot.getDefaultProjectForFile(file);
+      const result = inspectTypeScript("src/application/example.ts", source, { root, checker: project.checker, sourceFile: project.program.getSourceFile(file), project });
+      assert.equal(result.issues.filter(issue => issue.rule === "effect").length, 1);
+      assert.equal(result.documented, 1);
+    } finally {
+      api.close();
+    }
   });
 });
 
@@ -202,9 +208,15 @@ test("browser HTTP calls are detected without rejecting an injected transport na
   `;
   withSourceFixture(source, root => {
     const file = join(root, "src/application/example.ts");
-    const program = ts.createProgram([file], { noEmit: true });
-    const result = inspectTypeScript("src/application/example.ts", source, { root, checker: program.getTypeChecker(), sourceFile: program.getSourceFile(file) });
-    assert.equal(result.issues.filter(issue => issue.rule === "effect").length, 1);
-    assert.equal(result.documented, 1);
+    const api = new API({});
+    try {
+      const snapshot = api.updateSnapshot({ openFiles: [file] });
+      const project = snapshot.getDefaultProjectForFile(file);
+      const result = inspectTypeScript("src/application/example.ts", source, { root, checker: project.checker, sourceFile: project.program.getSourceFile(file), project });
+      assert.equal(result.issues.filter(issue => issue.rule === "effect").length, 1);
+      assert.equal(result.documented, 1);
+    } finally {
+      api.close();
+    }
   });
 });
