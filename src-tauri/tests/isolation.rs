@@ -94,6 +94,7 @@ fn acp_request(
         provider: AiProviderConfig {
             kind: AiProviderKind::Acp,
             acp: Some(AcpConfig {
+                selections: None,
                 preset: AcpPreset::Custom,
                 argv: Some(argv),
             }),
@@ -609,6 +610,7 @@ fn stale_revision_and_disk_conflict_refuse_until_resync() {
         provider: AiProviderConfig {
             kind: AiProviderKind::Acp,
             acp: Some(AcpConfig {
+                selections: None,
                 preset: AcpPreset::Custom,
                 argv: Some(acp_argv(&[])),
             }),

@@ -93,6 +93,7 @@ impl AiService {
                     let argv = resolve_acp_argv(config.acp.as_ref().expect("validated"))?;
                     Ok(match self.transport.find_binary(&argv.command) {
                         Some(path) => AiTestResult {
+                            config_options: None,
                             ok: true,
                             detail: format!(
                                 "{} が見つかりました ({})",
@@ -101,6 +102,7 @@ impl AiService {
                             ),
                         },
                         None => AiTestResult {
+                            config_options: None,
                             ok: false,
                             detail: format!(
                                 "{} が見つかりません。CLI をインストールして PATH を通してください",
@@ -111,11 +113,13 @@ impl AiService {
                 }
                 kind => Ok(if self.keyring.has(kind)? {
                     AiTestResult {
+                        config_options: None,
                         ok: true,
                         detail: "設定と資格情報の存在を確認しました（通信なし）".into(),
                     }
                 } else {
                     AiTestResult {
+                        config_options: None,
                         ok: false,
                         detail: "資格情報が OS ストアにありません".into(),
                     }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { History, Plus, RotateCcw, Send, Square, X } from "lucide-react";
 import { Button } from "./ui/button";
 import "./ai-chat.css";
@@ -83,6 +83,13 @@ export interface AiPanelProps {
   profileStore?: AiProfileStore;
   /** Credential/connection gateway forwarded to the settings subview. */
   aiGateway?: AiGateway;
+  /**
+   * Optional model controls injected by the composition root.
+   *
+   * Rendered above the prompt box when provided; the panel never invents
+   * model IDs or lists and leaves selection state to the owner.
+   */
+  modelControls?: ReactNode;
 }
 
 const MODE_ORDER: PromptMode[] = ["ask", "generate", "rewrite", "workspace"];
@@ -148,6 +155,7 @@ export default function AiPanel({
   startPrompt: startPromptProp,
   profileStore,
   aiGateway,
+  modelControls,
 }: AiPanelProps) {
   /** Streaming transport: injected prop wins, otherwise the test fallback throws visibly. */
   const startPromptFn: AiGateway["startPrompt"] = startPromptProp
@@ -576,6 +584,9 @@ export default function AiPanel({
       </div>
       <div className="ai-chat-composer shrink-0 border-t border-border pt-1.5">
         <div className="ai-chat-composer-box px-1.5 pb-1.5 pt-1">
+          {modelControls && (
+            <div className="ai-chat-model-slot mb-1 empty:hidden">{modelControls}</div>
+          )}
           <textarea
             aria-label="プロンプト"
             className="ai-chat-composer-input block max-h-40 min-h-14 w-full overflow-y-auto px-1 py-1 text-[13px] leading-6"

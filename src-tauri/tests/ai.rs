@@ -500,6 +500,7 @@ fn acp_request(argv: AcpArgv) -> AiPromptRequest {
         provider: AiProviderConfig {
             kind: AiProviderKind::Acp,
             acp: Some(AcpConfig {
+                selections: None,
                 preset: AcpPreset::Custom,
                 argv: Some(argv),
             }),
@@ -768,6 +769,7 @@ fn dry_runs_and_handshakes_use_no_real_credentials() {
     let config = AiProviderConfig {
         kind: AiProviderKind::Acp,
         acp: Some(AcpConfig {
+            selections: None,
             preset: AcpPreset::Custom,
             argv: Some(AcpArgv {
                 command: "marxen-definitely-missing-binary".into(),
@@ -1006,6 +1008,7 @@ fn codex_adapter_without_install_is_a_clear_missing_binary() {
     let config = AiProviderConfig {
         kind: AiProviderKind::Acp,
         acp: Some(AcpConfig {
+            selections: None,
             preset: AcpPreset::Codex,
             argv: None,
         }),
@@ -1187,4 +1190,64 @@ fn oversized_history_is_rejected_before_any_side_effect() {
         })
         .collect();
     assert!(validate_prompt_request(&request).is_err());
+}
+
+/// Require chosen model and effort on the independent agent before prompting; reject ignored or unavailable choices.
+#[test]
+fn acp_model_choices_are_acknowledged_before_prompt() {
+    for (extra, model, succeeds) in [
+        (vec!["--models", "--no-permission"], "fixture-b", true),
+        (
+            vec!["--models", "--no-permission", "--ignore-model"],
+            "fixture-b",
+            false,
+        ),
+        (vec!["--models", "--no-permission"], "unavailable", false),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let flags = tempfile::tempdir().unwrap();
+        let argv = mock_agent_argv_with_flag_dir(&extra, flags.path());
+        let probe = agent_handshake(&argv, dir.path(), Duration::from_secs(10)).unwrap();
+        assert_eq!(probe.config_options[0].options[1].value, "fixture-b");
+        let mut request = acp_request(argv.clone());
+        request.provider.acp.as_mut().unwrap().selections = Some(vec![
+            AcpSelection {
+                id: "reasoning".into(),
+                value: "xhigh".into(),
+            },
+            AcpSelection {
+                id: "model".into(),
+                value: model.into(),
+            },
+        ]);
+        let registry = Arc::new(RunRegistry::new());
+        let (run_id, cancel) = registry.register();
+        let mut events = Vec::new();
+        let outcome = run_acp_prompt(
+            &acp_params(argv, dir.path(), Duration::from_secs(10)),
+            &request,
+            &run_id,
+            &registry,
+            &cancel,
+            &mut |event| events.push(event),
+        );
+        if succeeds {
+            outcome.unwrap();
+            let record: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(flags.path().join("prompt-model.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(record["model"], "fixture-b");
+            assert_eq!(record["effort"], "xhigh");
+            assert!(events_of(&events).1);
+            #[cfg(windows)]
+            assert_eq!(
+                std::fs::read_to_string(flags.path().join("console.txt")).unwrap(),
+                "0"
+            );
+        } else {
+            assert!(matches!(outcome, Err(AiError::InvalidConfig { .. })));
+            assert!(!flags.path().join("prompt-model.json").exists());
+        }
+    }
 }

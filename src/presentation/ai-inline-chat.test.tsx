@@ -171,6 +171,12 @@ describe("inline chat", () => {
     expect(screen.getByText("他の応答を生成しています。")).toBeVisible();
     expect(mockStartPrompt).not.toHaveBeenCalled();
   });
+
+  it("renders injected model controls without inventing model lists", () => {
+    renderInline({ modelControls: <div>モデル切替</div> });
+    expect(screen.getByText("モデル切替")).toBeVisible();
+    expect(mockStartPrompt).not.toHaveBeenCalled();
+  });
 });
 
 

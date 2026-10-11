@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Send, Square, X } from "lucide-react";
 import { Button } from "./ui/button";
 import "./ai-chat.css";
@@ -48,6 +48,13 @@ export interface InlineChatProps {
   anchor?: () => { left: number; top: number; bottom: number } | null;
   /** Streaming transport injected by the composition root. */
   startPrompt?: AiGateway["startPrompt"];
+  /**
+   * Optional model controls injected by the composition root.
+   *
+   * Rendered above the inline input when provided; the composer never
+   * invents model IDs or lists and leaves selection state to the owner.
+   */
+  modelControls?: ReactNode;
 }
 
 /**
@@ -69,6 +76,7 @@ export default function InlineChat({
   onClose,
   anchor,
   startPrompt: startPromptProp,
+  modelControls,
 }: InlineChatProps) {
   /** Injected streaming transport; throws visibly when not wired. */
   const startPromptFn: AiGateway["startPrompt"] = startPromptProp ?? (async () => { throw new Error("AI transport is not wired."); });
@@ -263,6 +271,9 @@ export default function InlineChat({
         </p>
       )}
       <div className="ai-chat-composer-box mt-1.5 px-1.5 pb-1.5 pt-1">
+        {modelControls && (
+          <div className="ai-chat-model-slot mb-1 empty:hidden">{modelControls}</div>
+        )}
         <textarea
           ref={inputRef}
           aria-label="インライン指示"

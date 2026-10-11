@@ -16,7 +16,7 @@ import type {
 export const AI_STREAM_EVENT = "ai-stream";
 
 /** AI IPC schema version mirrored from the Rust side. */
-export const AI_CONTRACT_VERSION = 2;
+export const AI_CONTRACT_VERSION = 3;
 
 /** Japanese labels for provider kinds shown in settings. */
 export const KIND_LABELS: Record<AiProviderKind, string> = {
@@ -29,6 +29,7 @@ export const KIND_LABELS: Record<AiProviderKind, string> = {
 export const PRESET_LABELS: Record<AcpPreset, string> = {
   codex: "Codex",
   opencode: "OpenCode",
+  copilot: "GitHub Copilot",
   custom: "カスタム",
 };
 
@@ -94,6 +95,7 @@ export interface ProviderConfigState {
   endpoint: string;
   model: string;
   anthropicEnabled: boolean;
+  acpSelections?: import("../contracts/ai-contracts").AcpSelection[];
 }
 
 /**
@@ -111,12 +113,12 @@ export function buildProviderConfig(state: ProviderConfigState): AiProviderConfi
         .filter((line) => line.length > 0);
       return {
         kind: "acp",
-        acp: { preset: "custom", argv: { command: state.command.trim(), args } },
+        acp: { preset: "custom", argv: { command: state.command.trim(), args }, ...(state.acpSelections?.length ? { selections: state.acpSelections } : {}) },
         openai: null,
         anthropic: null,
       };
     }
-    return { kind: "acp", acp: { preset: state.preset, argv: null }, openai: null, anthropic: null };
+    return { kind: "acp", acp: { preset: state.preset, argv: null, ...(state.acpSelections?.length ? { selections: state.acpSelections } : {}) }, openai: null, anthropic: null };
   }
   if (state.kind === "openai_compatible") {
     return {

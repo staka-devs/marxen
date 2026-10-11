@@ -31,6 +31,7 @@ mod regression {
             provider: AiProviderConfig {
                 kind: AiProviderKind::Acp,
                 acp: Some(AcpConfig {
+                    selections: None,
                     preset: AcpPreset::Codex,
                     argv: None,
                 }),
@@ -90,6 +91,7 @@ mod regression {
     #[test]
     fn preset_argv_resolution_is_strict() {
         let codex = AcpConfig {
+            selections: None,
             preset: AcpPreset::Codex,
             argv: None,
         };
@@ -102,11 +104,13 @@ mod regression {
             }
         );
         let custom_missing = AcpConfig {
+            selections: None,
             preset: AcpPreset::Custom,
             argv: None,
         };
         assert!(resolve_acp_argv(&custom_missing).is_err());
         let preset_with_argv = AcpConfig {
+            selections: None,
             preset: AcpPreset::Opencode,
             argv: Some(AcpArgv {
                 command: "x".into(),
@@ -115,6 +119,7 @@ mod regression {
         };
         assert!(resolve_acp_argv(&preset_with_argv).is_err());
         let custom = AcpConfig {
+            selections: None,
             preset: AcpPreset::Custom,
             argv: Some(AcpArgv {
                 command: "my-agent".into(),
@@ -123,6 +128,7 @@ mod regression {
         };
         assert!(resolve_acp_argv(&custom).is_ok());
         let empty_command = AcpConfig {
+            selections: None,
             preset: AcpPreset::Custom,
             argv: Some(AcpArgv {
                 command: String::new(),
@@ -169,6 +175,7 @@ mod regression {
         };
         assert!(validate_provider_config(&openai).is_ok());
         openai.acp = Some(AcpConfig {
+            selections: None,
             preset: AcpPreset::Codex,
             argv: None,
         });

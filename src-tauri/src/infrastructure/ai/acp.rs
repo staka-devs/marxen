@@ -111,7 +111,13 @@ pub use crate::application::ai::transport::AcpRunParams;
 /// Spawn the configured ACP argv directly with piped stdio and an isolated working directory.
 pub(super) fn spawn_acp(argv: &AcpArgv, staging_dir: &Path) -> Result<Child, AiError> {
     // argv goes directly to the OS. No shell, no interpolation.
-    Command::new(&argv.command)
+    let mut command = Command::new(&argv.command);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW; protocol uses pipes.
+    }
+    command
         .args(&argv.args)
         .current_dir(staging_dir)
         .stdin(Stdio::piped())
@@ -324,6 +330,7 @@ pub struct HandshakeInfo {
     pub session_id: String,
     pub agent_name: Option<String>,
     pub notifications: usize,
+    pub config_options: Vec<AcpConfigOption>,
 }
 
 /// Negotiate ACP initialization and session creation before accepting prompts.
@@ -391,6 +398,7 @@ pub fn agent_handshake(
             protocol_version: version,
             session_id,
             agent_name,
+            config_options: super::config_options::read_options(&reply)?,
             notifications: notifications.get(),
         })
     })();
@@ -582,6 +590,17 @@ fn run_acp_conversation(
             detail: "session/new が sessionId を返しませんでした".into(),
         })?;
     tracker.session_opened(session_id.to_owned());
+    super::config_options::apply_selections(
+        conn,
+        session_id,
+        &reply,
+        request
+            .provider
+            .acp
+            .as_ref()
+            .and_then(|config| config.selections.as_deref())
+            .unwrap_or(&[]),
+    )?;
 
     // Resume across runs is not implemented in v1: any caller-supplied id is
     // unknown by construction. The tracker reports that explicitly.
@@ -721,9 +740,15 @@ fn run_acp_conversation(
 /// Probe ACP initialization in a temporary directory and always reap the probe child.
 pub fn handshake_acp(argv: &AcpArgv) -> Result<AiTestResult, AiError> {
     validate_argv(argv)?;
-    let staging = std::env::temp_dir();
-    match agent_handshake(argv, &staging, HTTP_TEST_TIMEOUT) {
+    let staging = tempfile::Builder::new()
+        .prefix("marxen-acp-probe-")
+        .tempdir()
+        .map_err(|error| AiError::ConnectionFailed {
+            detail: format!("接続確認用フォルダーを作れません: {error}"),
+        })?;
+    match agent_handshake(argv, staging.path(), HTTP_TEST_TIMEOUT) {
         Ok(info) => Ok(AiTestResult {
+            config_options: Some(info.config_options),
             ok: true,
             detail: format!(
                 "ACP ハンドシェイクに成功しました (protocol {}, session {}, 通知 {} 件)",
@@ -731,6 +756,7 @@ pub fn handshake_acp(argv: &AcpArgv) -> Result<AiTestResult, AiError> {
             ),
         }),
         Err(error) => Ok(AiTestResult {
+            config_options: None,
             ok: false,
             detail: format!("ハンドシェイクに失敗しました: {}", error_detail(&error)),
         }),

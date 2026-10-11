@@ -469,6 +469,17 @@ describe("agent chat", () => {
     expect(screen.queryByText(/接続済み|接続成功/)).not.toBeInTheDocument();
     expect(screen.getByText("a.md")).toBeVisible();
   });
+
+  it("renders injected model controls without inventing model lists", () => {
+    render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} contextLabels={labels} modelControls={<div>モデル切替</div>} />);
+    expect(screen.getByText("モデル切替")).toBeVisible();
+    expect(mockStartPrompt).not.toHaveBeenCalled();
+  });
+
+  it("hides the model slot when no controls are injected", () => {
+    const { container } = render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} contextLabels={labels} />);
+    expect(container.querySelector(".ai-chat-model-slot")).toBeNull();
+  });
 });
 
 

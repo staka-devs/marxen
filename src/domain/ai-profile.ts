@@ -4,7 +4,7 @@
 // React, or browser globals: persistence lives in infrastructure storage and
 // secrets never touch this model.
 
-import type { AcpPreset, AiProviderKind } from "../contracts/ai-contracts";
+import type { AcpPreset, AiProviderKind, AcpSelection } from "../contracts/ai-contracts";
 import { DEFAULT_ENDPOINTS } from "./ai-config";
 
 /** Persisted non-secret AI provider profile. */
@@ -16,13 +16,14 @@ export interface AiProfile {
   endpoint: string;
   model: string;
   anthropicEnabled: boolean;
+  acpSelections?: AcpSelection[];
 }
 
 /** Valid provider kinds accepted from stored JSON. */
 const KINDS: AiProviderKind[] = ["acp", "openai_compatible", "anthropic"];
 
 /** Valid ACP presets accepted from stored JSON. */
-const PRESETS: AcpPreset[] = ["codex", "opencode", "custom"];
+const PRESETS: AcpPreset[] = ["codex", "opencode", "copilot", "custom"];
 
 /**
  * Create the default Codex profile for first-run settings.
@@ -60,5 +61,6 @@ export function sanitizeAiProfile(raw: unknown): AiProfile {
     endpoint: typeof record.endpoint === "string" && record.endpoint !== "" ? record.endpoint : fallback.endpoint,
     model: typeof record.model === "string" ? record.model : "",
     anthropicEnabled: record.anthropicEnabled === true,
+    acpSelections: Array.isArray(record.acpSelections) ? record.acpSelections.filter((item): item is AcpSelection => typeof item?.id === "string" && typeof item?.value === "string" && item.id.length <= 256 && item.value.length <= 256).slice(0, 8) : undefined,
   };
 }

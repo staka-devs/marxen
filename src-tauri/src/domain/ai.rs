@@ -86,6 +86,10 @@ pub fn preset_argv(preset: AcpPreset) -> AcpArgv {
             command: "opencode".into(),
             args: vec!["acp".into()],
         },
+        AcpPreset::Copilot => AcpArgv {
+            command: "copilot".into(),
+            args: vec!["--acp".into(), "--stdio".into()],
+        },
         AcpPreset::Custom => AcpArgv {
             command: String::new(),
             args: Vec::new(),
@@ -121,6 +125,19 @@ pub fn validate_argv(argv: &AcpArgv) -> Result<(), AiError> {
 /// Resolve the effective argv. Preset binaries are user-installed; a missing
 /// binary surfaces as MissingBinary only when actually spawned or probed.
 pub fn resolve_acp_argv(config: &AcpConfig) -> Result<AcpArgv, AiError> {
+    if let Some(selected) = &config.selections {
+        if selected.len() > 8 {
+            return Err(invalid("モデル設定が多すぎます"));
+        }
+        let mut ids = std::collections::HashSet::new();
+        for selection in selected {
+            validate_model(&selection.id)?;
+            validate_model(&selection.value)?;
+            if !ids.insert(&selection.id) {
+                return Err(invalid("モデル設定の ID が重複しています"));
+            }
+        }
+    }
     match config.preset {
         AcpPreset::Custom => match &config.argv {
             Some(argv) => {
