@@ -23,7 +23,7 @@ import type { Element, Properties, Root } from "hast";
 import type { Root as MdastRoot, Content as MdastContent } from "mdast";
 import type { VFile } from "vfile";
 import { highlightCode } from "./shiki";
-import { marxenSanitizeSchema } from "./sanitize-schema";
+import { CLOBBER_PREFIX, marxenSanitizeSchema } from "./sanitize-schema";
 import { isSpecialLanguage, type RenderDiagnostic, type RenderResult, type SourceBlock } from "./types";
 import {
   validateGeoJson,
@@ -176,6 +176,45 @@ const SPECIAL_CONTAINER_CLASS: Record<string, string> = {
   stl: "marxen-stl",
 };
 
+/**
+ * Repoint same-document `#fragment` links to their clobber-prefixed ids.
+ * Sanitization prefixes every id/name with `marxen-` but leaves hrefs
+ * alone, so without this pass footnote forward/back links and author
+ * anchors (`<h2 id="x">` + `<a href="#x">`) would dangle.
+ */
+function rehypeMatchFragmentLinks() {
+  return (tree: Root) => {
+    visit(tree, "element", (node: Element) => {
+      if (node.tagName !== "a") return;
+      const href = node.properties.href;
+      if (typeof href !== "string" || !href.startsWith("#") || href.length < 2) return;
+      const target = href.slice(1);
+      if (target.startsWith(CLOBBER_PREFIX)) return;
+      node.properties.href = `#${CLOBBER_PREFIX}${target}`;
+    });
+  };
+}
+
+/** Dangerous URL schemes, rejected anywhere a URL can execute. */
+const EXECUTABLE_SCHEME = /^\s*(javascript|vbscript|data)\s*:/i;
+
+/**
+ * Scrub executable links MathJax may emit (e.g. `\href{javascript:…}`).
+ * MathJax output is generated after sanitization, so its links need the
+ * same treatment author HTML gets from the sanitize pass.
+ */
+function rehypeScrubMathLinks() {
+  return (tree: Root) => {
+    visit(tree, "element", (node: Element) => {
+      if (node.tagName !== "a") return;
+      const href = node.properties.href;
+      if (typeof href === "string" && EXECUTABLE_SCHEME.test(href)) {
+        node.properties.href = undefined;
+      }
+    });
+  };
+}
+
 /** Post-MathJax pass: special fenced blocks and Shiki highlighting. */
 function rehypeMarxenBlocks() {
   return async (tree: Root, file: VFile) => {
@@ -304,8 +343,10 @@ function buildProcessor() {
     .use(remarkRehype, { allowDangerousHtml: true })
     .use(rehypeRaw)
     .use(rehypeSanitize, marxenSanitizeSchema() as never)
+    .use(rehypeMatchFragmentLinks)
     .use(rehypeValidateMath)
     .use(rehypeMathjax)
+    .use(rehypeScrubMathLinks)
     .use(rehypeMarxenBlocks)
     .use(rehypeSourceRanges)
     // Trusted `raw` nodes are generated after sanitization from escaped

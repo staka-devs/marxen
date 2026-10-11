@@ -25,6 +25,7 @@ Rust が Neovim RPC、保存、AI プロセス、HTTP を所有する。文書 I
 
 - 日本語 IME、絵文字、mapping 優先、モード切替、表示座標、GUI 編集と Vim Undo の共存を実 Neovim で検証する。
 - ライブ表示は本文内の非アクティブな Markdown ブロックをリッチ表示し、編集するブロックでは原文を扱う。ライブ / 原文 / 閲覧と分割表示で cursor / scroll / Undo を維持する。表示基準の縦移動・行頭末・選択、原文基準の単語・text object・macro を扱う。
+- Obsidian / VSCode を参考に、細いアクティビティバー、用途を切り替えるサイドバー、コンパクトなタブ、広い本文、最小限のステータスバーを使う。表示切替・書式・AI設定はメニューやパネルに収め、常時表示の操作欄を減らす。本文とパネルを独立してスクロールする。
 - .vimrc / vimrc / _vimrc / init.vim / init.lua を選択でき、エラーを表示する。専用設定が既定。画面依存 plugin 操作は Neovim 原文ビューで扱う。
 - tree、tabs、quick open、全文検索置換、outline、command palette、テーマ、相対画像、画像貼付、外部変更、保存競合、クラッシュ復元。
 - 共通 remark / rehype 基盤で GFM、highlight、5 Alerts、脚注、MathJax、Mermaid、HTML sanitize、GeoJSON / TopoJSON / ASCII STL。Shiki、MathJax、Mermaid、Leaflet / TopoJSON、Three.js はローカル配布。
