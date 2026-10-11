@@ -119,6 +119,11 @@ pub fn typescript() -> String {
         output.push('\n');
     }
     output
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

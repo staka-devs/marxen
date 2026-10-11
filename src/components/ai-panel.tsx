@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
 import {
@@ -38,11 +38,13 @@ export interface AiPanelProps {
   staging: StagingTarget | null;
   onRemoveContext?: (documentId: string) => void;
   /**
-   * Called once per completed run with the proposal text. The proposal never
-   * edits the document: review/apply belongs to the Issue #8 ReviewPanel,
-   * which consumes the same (proposal, sent) pair.
+   * Called once per completed run with the proposal text and the mode it was
+   * sent with. The proposal never edits the document: review/apply belongs
+   * to the Issue #8 ReviewPanel, which consumes the same (proposal, sent)
+   * pair via `stageProposal`. `ask` proposals display only and are refused
+   * by staging.
    */
-  onProposal?: (proposal: ProposalText, sent: ContextSummary[]) => void;
+  onProposal?: (proposal: ProposalText, sent: ContextSummary[], mode: PromptMode) => void;
 }
 
 const KIND_ORDER: AiProviderKind[] = ["acp", "openai_compatible", "anthropic"];
@@ -121,6 +123,8 @@ export default function AiPanel({ contexts, staging, onRemoveContext, onProposal
   const [streamError, setStreamError] = useState<AiError | null>(null);
   const [cancelled, setCancelled] = useState(false);
   const [stopFn, setStopFn] = useState<(() => Promise<void>) | null>(null);
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
 
   const provider: AiProviderConfig = buildProviderConfig({
     kind,
@@ -147,7 +151,7 @@ export default function AiPanel({ contexts, staging, onRemoveContext, onProposal
       case "done":
         setProposal(event.payload.proposal);
         setSent(event.payload.sent);
-        onProposal?.(event.payload.proposal, event.payload.sent);
+        onProposal?.(event.payload.proposal, event.payload.sent, modeRef.current);
         setRunning(false);
         setStopFn(null);
         break;

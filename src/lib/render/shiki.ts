@@ -53,7 +53,11 @@ export async function highlightCode(code: string, lang: string): Promise<string 
       const loaded = hl.getLoadedLanguages();
       if (!loaded.includes(normalized)) return null;
     }
-    return hl.codeToHtml(code, { lang: normalized, themes: { light: "github-light", dark: "github-dark" } });
+    return hl.codeToHtml(code, {
+      lang: normalized,
+      themes: { light: "github-light", dark: "github-dark" },
+      defaultColor: false,
+    });
   } catch {
     return null;
   }

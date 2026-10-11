@@ -4,7 +4,7 @@ import type { DocumentId, Revision, Utf16Range } from "./contracts";
 import type { IsolatedCopyId } from "./ai-contracts";
 export type IsolatedCopyDoc = { documentId: DocumentId, revision: Revision, path: string | null, ranges: Array<Utf16Range>, fullDocument: boolean, };
 export type IsolatedCopyInfo = { copyId: IsolatedCopyId, documents: Array<IsolatedCopyDoc>, };
-export type IsolationDiff = { documentId: DocumentId, path: string | null, range: Utf16Range, baseRevision: Revision, liveRevision: Revision, 
+export type IsolationDiff = { documentId: DocumentId, path: string | null, range: Utf16Range, baseRevision: Revision, liveRevision: Revision,
 /**
  * Live buffer moved since the copy; approve will refuse until resync.
  */

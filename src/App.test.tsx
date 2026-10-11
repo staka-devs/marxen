@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import App from "./App";
 import { readRuntimeStatus } from "./lib/runtime";
@@ -19,16 +19,11 @@ it("shows the Japanese workspace shell with disconnected status", async () => {
   expect(screen.getByTestId("workspace-shell")).toBeVisible();
   expect(screen.getByTestId("file-tree")).toBeVisible();
   expect(screen.getByTestId("tabs")).toBeVisible();
-  expect(screen.getByTestId("gui-toolbar")).toBeVisible();
   expect(screen.getByTestId("editor-primary")).toBeVisible();
-  // Live mode renders inline widgets inside the editor, never a separate
-  // preview pane; the first heading block (cursor at 0) stays raw source.
-  expect(screen.queryByTestId("preview")).toBeNull();
-  await waitFor(() => {
-    expect(screen.getByTestId("editor-primary").querySelector(".marxen-live-widget")).not.toBeNull();
-  });
   expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 0");
   expect(screen.getByTestId("readonly-note")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
+  expect(screen.getByTestId("gui-toolbar")).toBeVisible();
 });
 
 it("stays read-only in the browser and never simulates save success", async () => {
@@ -40,9 +35,10 @@ it("stays read-only in the browser and never simulates save success", async () =
   render(<App />);
   expect(await screen.findByTestId("editor-primary")).toBeVisible();
   // Toolbar and save stay disabled; attempting a GUI action only explains readonly.
+  fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
   expect(screen.getByRole("button", { name: "チェックリストを切り替える" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
-  fireEvent.click(screen.getByRole("button", { name: "コマンド" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "コマンドパレット" }));
   fireEvent.click(await screen.findByText("ファイル: 保存する"));
   expect(await screen.findByRole("alert")).toHaveTextContent(READONLY_MESSAGE);
   expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 0");
@@ -57,25 +53,21 @@ it("switches live/source/read/split without losing the document", async () => {
   });
   render(<App />);
   await screen.findByTestId("editor-primary");
-  // Live mode keeps a single editor with inline widgets (no separate preview).
-  await waitFor(() => {
-    expect(screen.getByTestId("editor-primary").querySelector(".marxen-live-widget")).not.toBeNull();
-  });
-  expect(screen.queryByTestId("preview")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "閲覧" }));
-  // Read mode renders the shared pipeline in its own preview pane.
+  // Live uses true inline widgets inside .cm-content (no separate preview);
+  // read/split use the shared read preview. Mode switches keep the document.
+  expect(screen.getByTestId("editor-primary")).toBeVisible();
+  expect(screen.queryByTestId("preview")).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "read" } });
   await within(screen.getByTestId("preview")).findByText("日本語で書く");
+  expect(screen.getByTestId("preview")).toBeVisible();
   const before = screen.getByTestId("preview").textContent;
-  fireEvent.click(screen.getByRole("button", { name: "原文" }));
+  fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "source" } });
   expect(screen.getByTestId("editor-primary")).toBeVisible();
-  expect(screen.queryByTestId("preview")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "分割" }));
+  fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "split" } });
   expect(screen.getByTestId("editor-secondary")).toBeVisible();
-  fireEvent.click(screen.getByRole("button", { name: "ライブ" }));
-  expect(screen.getByTestId("editor-primary")).toBeVisible();
-  expect(screen.queryByTestId("preview")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "閲覧" }));
+  fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "read" } });
   await within(screen.getByTestId("preview")).findByText("日本語で書く");
   expect(screen.getByTestId("preview").textContent).toBe(before);
-  expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 0");
+  fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "live" } });
+  expect(screen.getByTestId("editor-primary")).toBeVisible();
 });

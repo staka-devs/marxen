@@ -21,6 +21,7 @@ test("browser demo is read-only and Unicode-safe", async ({ page }) => {
   await expect(editor).toBeVisible();
   await expect(editor).toContainText("東京 😀");
   await expect(editor).toHaveAttribute("contenteditable", "false");
+  await page.getByRole("button", { name: "その他の操作" }).click();
   await expect(page.getByRole("button", { name: "チェックリストを切り替える" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "保存", exact: true }).first()).toBeDisabled();
 });
