@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { Bot, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight } from "lucide-react";
+import { Bot, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronDown, X } from "lucide-react";
 import { CodeMirrorEditor, type EditorSelection, type ExternalCursor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
 import AiPanel from "../ai-panel";
@@ -1643,7 +1643,6 @@ export function WorkspaceShell() {
       }
       if (mode === "ask") {
         // Questions display only; staging refuses ask.
-        setNotice("AI の回答を受け取りました。");
         setReviewStatus("質問モードは表示のみです。取り込みは行いません。");
         setReviewBusy(true);
         try {
@@ -1657,7 +1656,6 @@ export function WorkspaceShell() {
         }
         return;
       }
-      setNotice("AI の変更案を受け取りました。差分を確認してください。");
       setReviewBusy(true);
       try {
         await stageNonAskCopy(copyId, proposal, mode);
@@ -1992,7 +1990,7 @@ export function WorkspaceShell() {
 
   return (
     <div data-theme={theme} data-testid="workspace-shell" style={{ "--editor-font-size": `${preferences.fontSize}px`, "--editor-line-height": preferences.lineHeight } as CSSProperties} className="flex h-dvh overflow-hidden bg-background text-foreground">
-      <nav aria-label="アクティビティ" className="flex w-11 shrink-0 flex-col items-center gap-1 border-r border-border bg-card/50 py-2">
+      <nav aria-label="アクティビティ" className="marxen-activity flex w-11 shrink-0 flex-col items-center border-r border-border bg-card py-1">
         {(
           [
             { id: "explorer", label: "エクスプローラー", icon: <Files size={17} aria-hidden="true" /> },
@@ -2007,7 +2005,7 @@ export function WorkspaceShell() {
             aria-pressed={sideView === item.id}
             aria-label={item.label}
             title={item.label}
-            className={`rounded-md p-2 hover:bg-muted ${sideView === item.id ? "text-primary" : "text-muted-foreground"}`}
+            className={`relative flex h-10 w-full items-center justify-center border-l-2 hover:text-foreground ${sideView === item.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}
           >
             {item.icon}
           </button>
@@ -2019,7 +2017,7 @@ export function WorkspaceShell() {
             aria-pressed={showAi}
             aria-label="AI"
             title="AI 支援"
-            className={`rounded-md p-2 hover:bg-muted ${showAi ? "text-primary" : "text-muted-foreground"}`}
+            className={`relative flex h-10 w-full items-center justify-center border-l-2 hover:text-foreground ${showAi ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}
           >
             <Bot size={17} aria-hidden="true" />
           </button>
@@ -2029,17 +2027,17 @@ export function WorkspaceShell() {
           onClick={() => setSettings(true)}
           aria-label="設定表示切替"
           title="設定"
-          className="mt-auto rounded p-2 text-muted-foreground hover:bg-muted"
+          className="mt-auto flex h-10 w-full items-center justify-center text-muted-foreground hover:text-foreground"
         >
           <SettingsIcon size={17} aria-hidden="true" />
         </button>
       </nav>
       {sideView && (
-        <aside className="hidden w-60 shrink-0 flex-col overflow-y-auto border-r border-border bg-card/50 py-3 md:flex" aria-label="サイドバー">
+        <aside className="hidden w-56 shrink-0 flex-col overflow-y-auto border-r border-border bg-card md:flex" aria-label="サイドバー">
           {sideView === "explorer" && (
-            <div className="flex flex-col gap-2 px-2">
-              <div className="flex items-center gap-1 px-1">
-                <span className="min-w-0 flex-1 truncate text-xs font-semibold tracking-wider text-muted-foreground">エクスプローラー</span>
+            <div className="flex flex-col">
+              <div className="flex h-9 shrink-0 items-center gap-1 px-3">
+                <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground">エクスプローラー</span>
                 {desktop && (
                   <>
                     <button
@@ -2047,7 +2045,7 @@ export function WorkspaceShell() {
                       onClick={() => void pickFolderAndOpen()}
                       aria-label="フォルダーを開く"
                       title="フォルダーを開く"
-                      className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"
+                      className="rounded-sm p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
                       <FolderOpen size={15} aria-hidden="true" />
                     </button>
@@ -2057,15 +2055,15 @@ export function WorkspaceShell() {
                       aria-expanded={manualFolder}
                       aria-label="パスを入力する"
                       title="パスを入力する"
-                      className="rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted"
+                      className="rounded-sm p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
-                      パス
+                      <Ellipsis size={15} aria-hidden="true" />
                     </button>
                   </>
                 )}
               </div>
               {desktop && manualFolder && (
-                <div className="flex gap-1 px-1">
+                <div className="mb-2 flex gap-1 px-3">
                   <input
                     value={folderInput}
                     onChange={(event) => setFolderInput(event.target.value)}
@@ -2078,7 +2076,7 @@ export function WorkspaceShell() {
                   </button>
                 </div>
               )}
-              {desktop && wsRoot && <p className="flex items-center gap-1.5 px-2 text-xs font-medium" title={wsRoot}><FolderOpen size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" /><span className="truncate">{wsRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? wsRoot}</span></p>}
+              {desktop && wsRoot && <p className="flex h-7 items-center gap-1.5 px-2 text-xs font-semibold" title={wsRoot}><ChevronDown size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" /><FolderOpen size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" /><span className="truncate">{wsRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? wsRoot}</span></p>}
               <FileTree nodes={treeNodes} activePath={activeImage ?? active?.path ?? null} onOpenFile={(path) => void openFile(path)} />
               {desktop && !wsRoot && (
                 <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
@@ -2120,7 +2118,7 @@ export function WorkspaceShell() {
       )}
 
       <div className="relative flex min-w-0 flex-1 flex-col">
-        <header className="flex h-9 shrink-0 items-center gap-1 border-b border-border bg-card pr-2">
+        <header className="marxen-editor-header flex h-9 shrink-0 items-center gap-1 border-b border-border bg-card pr-2">
           <div className="min-w-0 flex-1">
             <Tabs tabs={tabItems} activeId={activeId} onSelect={setActiveId} onClose={(id) => void closeTab(id)} />
           </div>
@@ -2312,9 +2310,10 @@ export function WorkspaceShell() {
 
         <div className="min-h-0 shrink-0 space-y-2 overflow-y-auto empty:hidden">
           {notice && (
-            <span role="alert" className="mb-2 block truncate rounded-md border border-border px-2 py-1 text-xs">
-              {notice}
-            </span>
+            <div role="alert" className="flex min-h-7 items-center gap-2 border-b border-border bg-card px-3 text-xs">
+              <span className="min-w-0 flex-1 truncate" title={notice}>{notice}</span>
+              <button type="button" aria-label="通知を閉じる" onClick={() => setNotice(null)} className="shrink-0 rounded-sm p-1 text-muted-foreground hover:bg-muted"><X size={13} aria-hidden="true" /></button>
+            </div>
           )}
           {activeExternal && active && (
             <div role="alert" data-testid="external-banner" className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3 text-xs">
@@ -2548,18 +2547,23 @@ export function WorkspaceShell() {
           </div>
         )}
 
-        <footer className="flex h-[22px] shrink-0 items-center gap-3 overflow-hidden whitespace-nowrap border-t border-border px-2 text-[11px] text-muted-foreground">
-          <span className="min-w-0 flex-1 truncate">{activeImage ?? active?.path ?? "ファイルを開いてください"}</span>
-          {cursorPos && <span data-testid="cursor">カーソル {cursorPos}</span>}
-          {desktop && active && <span data-testid="vim-footer-mode">{MODE_JA[vimMode] ?? vimMode}</span>}
-          <span data-testid="revision">リビジョン {active?.revision ?? "—"}</span>
+        <footer className="flex h-6 shrink-0 items-center gap-3 whitespace-nowrap border-t border-border bg-card px-3 text-[11px] text-muted-foreground">
+          {desktop && active && <span data-testid="vim-footer-mode" className="flex h-5 shrink-0 items-center rounded-sm bg-primary/10 px-1.5 font-medium text-primary">{MODE_JA[vimMode] ?? vimMode}</span>}
+          <span className="min-w-0 flex-1 truncate" title={activeImage ?? active?.path ?? undefined}>{activeImage ?? active?.path ?? "ファイルを開いてください"}</span>
+          {cursorPos && <span data-testid="cursor" title="カーソル位置"><span className="sr-only">カーソル </span>{cursorPos}</span>}
           <span data-testid="dirty">{!active || active.dirty ? (active ? "未保存" : "—") : "保存済み"}</span>
-          {desktop && vimKeys !== "" && <span data-testid="vim-keys">Vim入力 {vimKeys}</span>}
-          {desktop && copyReady === activeId && <span data-testid="copy-ready">コピー: {Object.entries(copyKeys).map(([format, key]) => `${key} ${COPY_LABELS[format as keyof typeof COPY_LABELS]}`).join(" / ")}</span>}
+          {desktop && copyReady === activeId && <span data-testid="copy-ready" className="min-w-0 max-w-72 truncate" title={Object.entries(copyKeys).map(([format, key]) => `${key} ${COPY_LABELS[format as keyof typeof COPY_LABELS]}`).join(" / ")}>コピー形式を選択</span>}
           {!desktop && <span data-testid="readonly-note">ブラウザ表示は読み取り専用です</span>}
           <span role="status" className="shrink-0">
             {runtime ? (runtime.connection === "disconnected" ? "Neovim 未接続" : runtime.connection === "connected" ? "Neovim 接続済み" : runtime.detail) : "接続状態を確認中…"}
           </span>
+          <details className="relative shrink-0">
+            <summary aria-label="エディターの接続情報" title="エディターの接続情報" className="flex cursor-pointer list-none items-center rounded-sm p-0.5 hover:bg-muted"><Info size={13} aria-hidden="true" /></summary>
+            <div className="absolute bottom-7 right-0 z-20 min-w-44 rounded border border-border bg-card p-3 shadow-lg">
+              <span data-testid="revision" className="block">リビジョン {active?.revision ?? "—"}</span>
+              {desktop && vimKeys !== "" && <span data-testid="vim-keys" className="mt-1 block">Vim入力 {vimKeys}</span>}
+            </div>
+          </details>
         </footer>
 
         <QuickOpen
@@ -2631,7 +2635,7 @@ export function WorkspaceShell() {
           aria-hidden={!showAi}
           className={
             showAi
-              ? "flex w-80 max-w-[85vw] shrink-0 flex-col border-l border-border bg-card/50 p-3"
+              ? "marxen-ai-sidebar flex w-80 max-w-[85vw] shrink-0 flex-col border-l border-border bg-card"
               : "hidden"
           }
         >
@@ -2643,6 +2647,7 @@ export function WorkspaceShell() {
             provider={aiProvider}
             onProvider={setAiProvider}
             openSettingsToken={aiSettingsToken}
+            onClose={() => setShowAi(false)}
             contextLabels={contextLabels}
             disabled={inlineBusy}
             onBusyChange={setAgentChatBusy}
@@ -2650,7 +2655,7 @@ export function WorkspaceShell() {
             onProposal={handleProposal}
           />
           </div>
-          <div className="mt-3 max-h-64 min-h-0 overflow-y-auto">
+          <div className="max-h-72 min-h-0 overflow-y-auto">
             <ReviewPanel
               documentLabels={contextLabels}
               copyId={staging?.copyId ?? null}

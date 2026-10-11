@@ -151,7 +151,7 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
           EditorView.contentAttributes.of({ "aria-label": ariaLabel, role: "textbox", tabindex: "0" }),
           EditorView.theme({
             "&": { backgroundColor: "transparent", fontSize: "14px", height: "100%" },
-            ".cm-content": { fontFamily: "ui-monospace, monospace", padding: "12px 0" },
+            ".cm-content": { fontFamily: "inherit", padding: "20px 0 48px" },
             ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "var(--muted-foreground)" },
             ".cm-scroller": { overflow: "auto" },
             "&.cm-focused": { outline: "none" },
@@ -290,5 +290,5 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
     }
   }, [externalCursor]);
 
-  return <div ref={host} data-testid={testId ?? "editor"} data-vim-mode={vimMode} data-readonly={!editable} style={{ "--editor-font-size": `${preferences.fontSize}px`, "--editor-line-height": preferences.lineHeight } as CSSProperties} aria-label={ariaLabel} className="marxen-editor h-full min-h-0 flex-1 overflow-hidden" />;
+  return <div ref={host} data-testid={testId ?? "editor"} data-vim-mode={vimMode} data-live-preview={livePreview} data-readonly={!editable} style={{ "--editor-font-size": `${preferences.fontSize}px`, "--editor-line-height": preferences.lineHeight } as CSSProperties} aria-label={ariaLabel} className="marxen-editor h-full min-h-0 flex-1 overflow-hidden" />;
 }

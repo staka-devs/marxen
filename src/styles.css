@@ -52,6 +52,10 @@
 
 body { margin: 0; min-width: 320px; }
 button, a { -webkit-tap-highlight-color: transparent; }
+button, summary, select { cursor: pointer; }
+button:disabled, select:disabled { cursor: default; }
+button, input, select, textarea, summary { accent-color: var(--primary); }
+button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 1px solid var(--primary); outline-offset: 2px; }
 * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--foreground) 24%, transparent) transparent; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -60,6 +64,15 @@ button, a { -webkit-tap-highlight-color: transparent; }
 
 .marxen-editor .cm-activeLine { background: color-mix(in srgb, var(--primary) 7%, transparent); box-shadow: inset 2px 0 color-mix(in srgb, var(--primary) 55%, transparent); }
 .marxen-editor .cm-activeLineGutter { color: var(--foreground); background: color-mix(in srgb, var(--primary) 8%, transparent); }
+.marxen-editor .cm-scroller { font-family: "Cascadia Code", "Consolas", "Noto Sans Mono", monospace; }
+.marxen-editor[data-live-preview="true"] .cm-scroller { padding-inline: max(0px, calc((100% - 820px) / 2)); }
+.marxen-editor .cm-content { padding: 20px 0 48px; }
+.marxen-editor .cm-line { padding-left: 12px; padding-right: 20px; }
+.marxen-editor .cm-gutterElement { min-width: 32px; padding-right: 8px; }
+.marxen-editor .marxen-live-widget { padding-left: 12px; padding-right: 20px; }
+.marxen-editor .cm-cursorLayer { animation: none; }
+.marxen-editor-header button[aria-pressed="true"] { background: var(--muted); color: var(--foreground); }
+.marxen-activity button:focus-visible { outline-offset: -4px; }
 .marxen-editor .cm-cursor { border-left: none; width: 0.62em; background: color-mix(in srgb, var(--foreground) 55%, transparent); }
 .marxen-editor[data-vim-mode="insert"] .cm-cursor,
 .marxen-editor[data-vim-mode="command_line"] .cm-cursor { width: 2px; background: var(--primary); }
@@ -84,7 +97,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .marxen-md a { color: var(--primary); }
 
 /* Five GitHub alert kinds. */
-.marxen-md .markdown-alert { border: 1px solid var(--border); border-left-width: 4px; border-radius: 0.5rem; padding: 0.5em 0.9em; margin: 0.75em 0; }
+.marxen-md .markdown-alert { border-left: 3px solid var(--border); padding: 0.4em 0.9em; margin: 0.75em 0; background: color-mix(in srgb, var(--card) 45%, transparent); }
 .marxen-md .markdown-alert-title { display: flex; align-items: center; gap: 0.4em; font-weight: 700; margin: 0 0 0.25em; }
 .marxen-md .markdown-alert-title svg { fill: currentColor; flex-shrink: 0; }
 .marxen-md .markdown-alert-note { border-left-color: #0969da; }
@@ -97,6 +110,16 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .marxen-md .markdown-alert-warning .markdown-alert-title { color: #9a6700; }
 .marxen-md .markdown-alert-caution { border-left-color: #cf222e; }
 .marxen-md .markdown-alert-caution .markdown-alert-title { color: #cf222e; }
+[data-theme="dark"] .markdown-alert-note { border-left-color: #58a6ff; }
+[data-theme="dark"] .markdown-alert-note .markdown-alert-title { color: #58a6ff; }
+[data-theme="dark"] .markdown-alert-tip { border-left-color: #3fb950; }
+[data-theme="dark"] .markdown-alert-tip .markdown-alert-title { color: #3fb950; }
+[data-theme="dark"] .markdown-alert-important { border-left-color: #bc8cff; }
+[data-theme="dark"] .markdown-alert-important .markdown-alert-title { color: #bc8cff; }
+[data-theme="dark"] .markdown-alert-warning { border-left-color: #d29922; }
+[data-theme="dark"] .markdown-alert-warning .markdown-alert-title { color: #d29922; }
+[data-theme="dark"] .markdown-alert-caution { border-left-color: #f85149; }
+[data-theme="dark"] .markdown-alert-caution .markdown-alert-title { color: #f85149; }
 
 /* Footnotes and math. */
 .marxen-md section.footnotes { border-top: 1px solid var(--border); margin-top: 1em; font-size: 0.85em; color: var(--muted-foreground); }
@@ -133,6 +156,8 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .marxen-chat-body .marxen-md h3 { font-size: 1.05em; }
 .marxen-live-widget { padding: 2px 0; white-space: normal; }
 .marxen-live-widget .marxen-live-body { font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; }
+.marxen-live-widget .marxen-live-body > :first-child { margin-top: 0; }
+.marxen-live-widget .marxen-live-body > :last-child { margin-bottom: 0; }
 .marxen-live-widget .marxen-live-loading { color: var(--muted-foreground); font-size: 0.8em; padding: 0.25em 0; }
 .marxen-live-widget table { font-size: 0.9em; }
 .marxen-live-widget td, .marxen-live-widget th { cursor: pointer; }
