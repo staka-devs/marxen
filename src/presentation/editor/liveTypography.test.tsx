@@ -70,3 +70,39 @@ it("keeps preedit cursor positions out of Neovim and commits composition with it
   expect(onSelectionChange).not.toHaveBeenCalled();
   expect(onGuiEdits).toHaveBeenCalledWith([{ range: { start: 1, end: 1 }, text: "日本語😀" }], "前後", { anchor: 6, head: 6 });
 });
+
+it("retains native cursor ownership through an IME composition across an ACK", () => {
+  let pending = true;
+  const onGuiEdits = vi.fn();
+  const { rerender } = render(<CodeMirrorEditor value="前後" ariaLabel="検証" shouldUseNativeCursor={() => pending} onGuiEdits={onGuiEdits} />);
+  const view = editorView();
+  fireEvent.compositionStart(view.contentDOM);
+  pending = false;
+  rerender(<CodeMirrorEditor value="前\n後" ariaLabel="検証" shouldUseNativeCursor={() => pending} onGuiEdits={onGuiEdits} />);
+  act(() => view.dispatch({ changes: { from: 1, insert: "日本語" }, selection: { anchor: 4 } }));
+  expect(onGuiEdits).not.toHaveBeenCalled();
+  fireEvent.compositionEnd(view.contentDOM);
+  expect(onGuiEdits).toHaveBeenCalledWith([{ range: { start: 1, end: 1 }, text: "日本語" }], "前後", { anchor: 4, head: 4 }, undefined, true);
+});
+
+it("restores a rejected local edit when canonical text and revision are unchanged", () => {
+  const before = { documentId: "doc", revision: 0, text: "a😀b", dirty: false };
+  const { rerender } = render(<CodeMirrorEditor value={before.text} snapshot={before} ariaLabel="検証" />);
+  const view = editorView();
+  act(() => view.dispatch({ changes: { from: 1, insert: "X" }, selection: { anchor: 2 } }));
+  expect(view.state.doc.toString()).toBe("aX😀b");
+  rerender(<CodeMirrorEditor value={before.text} snapshot={{ ...before }} ariaLabel="検証" />);
+  expect(view.state.doc.toString()).toBe(before.text);
+});
+
+it("rejects composition if native mode stops permitting input before commit", () => {
+  const onGuiEdits = vi.fn();
+  const { rerender } = render(<CodeMirrorEditor value="前後" ariaLabel="検証" allowTextInput onGuiEdits={onGuiEdits} />);
+  const view = editorView();
+  fireEvent.compositionStart(view.contentDOM);
+  act(() => view.dispatch({ changes: { from: 1, insert: "日本語" }, selection: { anchor: 4 } }));
+  rerender(<CodeMirrorEditor value="前後" ariaLabel="検証" allowTextInput={false} onGuiEdits={onGuiEdits} />);
+  fireEvent.compositionEnd(view.contentDOM);
+  expect(onGuiEdits).not.toHaveBeenCalled();
+  expect(view.state.doc.toString()).toBe("前後");
+});

@@ -75,6 +75,8 @@ export interface DocumentGateway {
     keyNotation: string | null,
     text: string,
     range: { start: number; end: number },
+    beforeText?: string,
+    nativeCursor?: boolean,
   ): Promise<{ action: "vim"; snapshot: DocumentSnapshot } | { action: "gui"; snapshot: DocumentSnapshot }>;
   /** Undo through the native stack. */
   undo(documentId: DocumentId): Promise<DocumentSnapshot>;

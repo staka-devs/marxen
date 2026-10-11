@@ -369,6 +369,16 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
     }
   }, [mergeSnapshot]);
 
+  /** Reconcile rejected GUI input while preserving its actual validation error. */
+  const recoverGuiInput = useCallback(async (id: string, cause: unknown, gen: number) => {
+    if (cause instanceof StaleResync) mergeSnapshot(cause.snapshot);
+    else {
+      try { if (registry) mergeSnapshot(await registry.fetchSnapshot(id)); } catch { /* The original error remains the useful notice. */ }
+    }
+    await refreshModeCursor(id, gen);
+    setNotice(workspaceErrorText(cause));
+  }, [registry, mergeSnapshot, refreshModeCursor, notify]);
+
   /** Commit text at the native cursor when preceding keys have moved it. */
   const applyNativeText = useCallback(async (id: string, text: string) => {
     if (!registry || !docsRef.current[id] || text.length === 0) return;
@@ -378,10 +388,9 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       mergeSnapshot(await registry.insertNativeText(id, text));
       await refreshModeCursor(id, gen);
     } catch (cause) {
-      if (cause instanceof StaleResync) mergeSnapshot(cause.snapshot);
-      setNotice(workspaceErrorText(cause));
+      await recoverGuiInput(id, cause, gen);
     } finally { finishGuiInput(id); }
-  }, [registry, mergeSnapshot, refreshModeCursor, bumpSelectionGen, finishGuiInput, notify]);
+  }, [registry, mergeSnapshot, refreshModeCursor, bumpSelectionGen, finishGuiInput, recoverGuiInput]);
 
   /** Copy a yank via Rust and clear the ready indicator. */
   const writeYankToClipboard = useCallback(async (copy: YankCopy, id: string) => {
@@ -421,18 +430,14 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
           mergeSnapshot(snapshot);
         }
       } catch (cause) {
-        if (cause instanceof StaleResync) {
-          mergeSnapshot(cause.snapshot);
-          setNotice(cause.message);
-        }
-        else setNotice(workspaceErrorText(cause));
+        await recoverGuiInput(id, cause, gen);
       } finally {
         if (beforeText !== undefined) {
           finishGuiInput(id);
         }
       }
     },
-    [registry, mergeSnapshot, sayStale, bumpSelectionGen, writeYankToClipboard, refreshModeCursor, finishGuiInput, notify],
+    [registry, mergeSnapshot, sayStale, bumpSelectionGen, writeYankToClipboard, refreshModeCursor, finishGuiInput, recoverGuiInput],
   );
 
   /** Undo through the native stack for the active document. */

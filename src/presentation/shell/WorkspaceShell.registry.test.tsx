@@ -1090,3 +1090,16 @@ it("keeps Unicode committed immediately after Enter on the native cursor queue",
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 1, keys: "日本語" }));
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
 });
+
+it("retains the native cursor for composition started before Enter acknowledgement", async () => {
+  await openInsertDoc();
+  const view = EditorView.findFromDOM(screen.getByTestId("editor-primary").querySelector(".cm-editor") as HTMLElement)!;
+  fireEvent.keyDown(view.contentDOM, { key: "Enter" });
+  fireEvent.compositionStart(view.contentDOM);
+  act(() => view.dispatch({ changes: { from: 0, insert: "日本語" }, selection: { anchor: 3 } }));
+  await waitFor(() => expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 1"));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  fireEvent.compositionEnd(view.contentDOM);
+  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 1, keys: "日本語" }));
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+});

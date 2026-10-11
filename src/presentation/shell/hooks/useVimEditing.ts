@@ -59,8 +59,10 @@ export interface VimEditing {
   ) => Promise<void>;
   /** Route Vim keys natively with burst revision binding at execution. */
   routeVimKeys: (id: string, keys: string) => Promise<void>;
+  /** Report whether a native key transition still owns the next input cursor. */
+  isNativeInputPending: (id: string) => boolean;
   /** Route GUI input using native cursor semantics during pending key transitions. */
-  routeGuiEdits: (id: string, edits: TextEdit[], beforeText: string, selection?: EditorSelection, key?: string) => void;
+  routeGuiEdits: (id: string, edits: TextEdit[], beforeText: string, selection?: EditorSelection, key?: string, nativeCursor?: boolean) => void;
   /** Shell key router preserving IME, mappings, and display motion. */
   onEditorKeyDown: (event: React.KeyboardEvent) => void;
   /** Apply a range helper at the active selection as one edit. */
@@ -108,6 +110,9 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
   // Native edits can move the caret before their display acknowledgement.
   // Following printable keys stay native until that position is known.
   const pendingNativeInput = useRef<Record<string, number>>({});
+
+  /** Read the current native transition count for a composition capture. */
+  const isNativeInputPending = useCallback((id: string) => (pendingNativeInput.current[id] ?? 0) > 0, []);
 
   /** Capture the exact half-open range plus full source for one edit. */
   const takeRange = useCallback(
@@ -202,7 +207,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
       if (text === "") return;
       const gen = retried ? currentSelectionGen(id) : bumpSelectionGen(id);
       try {
-        const decision = await registry.routeCapturedPaste(id, keyNotation, text, range);
+        const decision = await registry.routeCapturedPaste(id, keyNotation, text, range, fullText, isNativeInputPending(id));
         if (decision.action === "vim") {
           mergeSnapshot(decision.snapshot);
           await refreshModeCursor(id, gen);
@@ -229,19 +234,19 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
         }
       }
     },
-    [registry, mergeSnapshot, refreshModeCursor, sayStale, echoCursor, correspondRange, bumpSelectionGen, currentSelectionGen, isSelectionGenCurrent, docsRef, caretRef, notify],
+    [registry, mergeSnapshot, refreshModeCursor, sayStale, echoCursor, correspondRange, bumpSelectionGen, currentSelectionGen, isSelectionGenCurrent, docsRef, caretRef, isNativeInputPending, notify],
   );
 
   /** Keep committed text on the native queue until its pending cursor is known. */
-  const routeGuiEdits = useCallback((id: string, edits: TextEdit[], beforeText: string, selection?: EditorSelection, key?: string) => {
+  const routeGuiEdits = useCallback((id: string, edits: TextEdit[], beforeText: string, selection?: EditorSelection, key?: string, nativeCursor = false) => {
     const edit = edits[0];
-    if ((pendingNativeInput.current[id] ?? 0) > 0 && selection && edits.length === 1 && edit.range.start === edit.range.end) {
-      pendingNativeInput.current[id] += 1;
+    if ((nativeCursor || isNativeInputPending(id)) && selection && edits.length === 1 && (nativeCursor || edit.range.start === edit.range.end)) {
+      pendingNativeInput.current[id] = (pendingNativeInput.current[id] ?? 0) + 1;
       void applyNativeText(id, edit.text).finally(() => { pendingNativeInput.current[id] -= 1; });
       return;
     }
     void applyEdits(id, edits, beforeText, selection, key);
-  }, [applyEdits, applyNativeText]);
+  }, [applyEdits, applyNativeText, isNativeInputPending]);
 
   // -- Vim key router (shell level; CodeMirror internals untouched) ---------
   //
@@ -379,6 +384,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
     routeCapturedPaste,
     routeVimKeys,
     routeGuiEdits,
+    isNativeInputPending,
     onEditorKeyDown,
     guiAtSelection,
   };

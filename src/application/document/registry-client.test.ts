@@ -771,3 +771,50 @@ describe("text after a queued native cursor transition", () => {
     expect(mockedInvoke.mock.calls.some(([command]) => command === "nvim_input")).toBe(false);
   });
 });
+
+describe("paste and GUI rejection preserve exact native state", () => {
+  it("inserts a captured paste at the cursor after queued Enter instead of its old GUI offset", async () => {
+    const client = new RegistryClient(workspaceApi);
+    client.noteSnapshot(snapshot("doc_1", 0, "ab"));
+    let revision = 0;
+    mockedInvoke.mockImplementation(async (command, args) => {
+      if (command === "nvim_input_with_copy") { revision = 1; return { snapshot: snapshot("doc_1", 1, "a\nb"), copy: null, copyReady: false }; }
+      if (command === "fetch_mode") return { mode: "insert", revision };
+      if (command === "fetch_cursor") return { documentId: "doc_1", revision, anchor: 2, head: 2 };
+      if (command === "apply_gui_edits") { expect(args).toEqual({ documentId: "doc_1", baseRevision: 1, edits: [{ range: { start: 2, end: 2 }, text: "XY" }] }); return snapshot("doc_1", ++revision, "a\nXYb"); }
+      if (command === "report_cursor") return { documentId: "doc_1", revision, anchor: 4, head: 4 };
+      throw new Error("Unexpected " + command);
+    });
+    const enter = client.vimInputWithCopy("doc_1", "<CR>", vi.fn());
+    const paste = client.routeCapturedPaste("doc_1", null, "XY", { start: 1, end: 1 }, "ab", true);
+    await enter;
+    expect((await paste).snapshot.text).toBe("a\nXYb");
+  });
+  it("rejects an old paste range when full source differs and no native transition owns it", async () => {
+    const client = new RegistryClient(workspaceApi);
+    client.noteSnapshot(snapshot("doc_1", 1, "a\nb"));
+    mockedInvoke.mockResolvedValue(snapshot("doc_1", 1, "a\nb"));
+    await expect(client.routeCapturedPaste("doc_1", null, "XY", { start: 1, end: 1 }, "ab")).rejects.toBeInstanceOf(StaleResync);
+    expect(mockedInvoke.mock.calls.map(([command]) => command)).toEqual(["fetch_snapshot"]);
+  });
+  it("preserves an actual range validation error instead of relabeling it stale", async () => {
+    const client = new RegistryClient(workspaceApi);
+    client.noteSnapshot(snapshot("doc_1", 0, "a😀b"));
+    const invalid = { code: "contract", error: { code: "split_surrogate_pair", offset: 2 } };
+    mockedInvoke.mockRejectedValue(invalid);
+    await expect(client.applyGuiEdits({ documentId: "doc_1", baseRevision: 0 }, "a😀b", [{ range: { start: 2, end: 2 }, text: "X" }])).rejects.toThrow(/surrogate/i);
+  });
+  it("feeds committed Unicode after a buffered insert mapping prefix through Neovim", async () => {
+    const client = new RegistryClient(workspaceApi);
+    client.noteSnapshot(snapshot("doc_1", 0, "本文"));
+    mockedInvoke.mockImplementation(async (command, args) => {
+      if (command === "fetch_mode") return { mode: "insert", revision: 0 };
+      if (command === "has_nvim_mapping") return true;
+      if (command === "nvim_input") return snapshot("doc_1", (args as { keys: string }).keys === "j" ? 0 : 1, (args as { keys: string }).keys === "j" ? "本文" : "j日本本文");
+      throw new Error("Unexpected " + command);
+    });
+    await client.routeCharKey("doc_1", "j", { start: 0, end: 0 }, undefined, "本文");
+    expect((await client.applyGuiEdits({ documentId: "doc_1", baseRevision: 0 }, "j本文", [{ range: { start: 1, end: 1 }, text: "日本" }], { anchor: 3, head: 3 })).text).toBe("j日本本文");
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+  });
+});

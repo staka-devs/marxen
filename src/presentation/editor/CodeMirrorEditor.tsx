@@ -4,7 +4,7 @@ import { EditorView, lineNumbers, drawSelection, highlightActiveLine, highlightA
 import { markdown } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
-import type { TextEdit } from "../../contracts/contracts";
+import type { DocumentSnapshot, TextEdit } from "../../contracts/contracts";
 import { createLivePreview, type LivePreviewCallbacks } from "./livePreview";
 import { blockCursorWidth } from "./cursorWidth";
 import type { ImageResolver } from "../../domain/image-sources";
@@ -28,11 +28,15 @@ export interface ExternalCursor {
 
 interface Props {
   value: string;
+  /** Canonical identity also reconciles rejected edits whose text/revision did not change. */
+  snapshot?: DocumentSnapshot;
+  /** Capture native cursor ownership at composition start, before its ACK returns. */
+  shouldUseNativeCursor?: () => boolean;
   editable?: boolean;
   ariaLabel: string;
   testId?: string;
   /** Emit committed document changes as wire range edits. */
-  onGuiEdits?: (edits: TextEdit[], beforeText: string, selection?: EditorSelection, key?: string) => void;
+  onGuiEdits?: (edits: TextEdit[], beforeText: string, selection?: EditorSelection, key?: string, nativeCursor?: boolean) => void;
   /** Report selection changes for cursor tracking. */
   onSelectionChange?: (selection: EditorSelection) => void;
   initialSelection?: EditorSelection | null;
@@ -102,7 +106,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   return [{ range: { start, end: endBefore }, text: after.slice(start, endAfter) }];
 }
 
-/** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true, focusRequest = 0 }: Props) {
+/** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, snapshot, shouldUseNativeCursor, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true, focusRequest = 0 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const editableRef = useRef(new Compartment());
@@ -113,11 +117,11 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   const printableKey = useRef<string | undefined>(undefined);
   const preComposition = useRef<string | null>(null);
   const preCompositionSelection = useRef<EditorSelection | null>(null);
-  const compositionAllowed = useRef(true);
+  const compositionNativeCursor = useRef(false);
   const allowTextInputRef = useRef(allowTextInput);
   allowTextInputRef.current = allowTextInput;
-  const callbacks = useRef({ onGuiEdits, onSelectionChange });
-  callbacks.current = { onGuiEdits, onSelectionChange };
+  const callbacks = useRef({ onGuiEdits, onSelectionChange, shouldUseNativeCursor });
+  callbacks.current = { onGuiEdits, onSelectionChange, shouldUseNativeCursor };
   const valueRef = useRef(value);
   valueRef.current = value;
   const editableRefValue = useRef(editable);
@@ -217,7 +221,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
       composing.current = true;
       preComposition.current = view.state.doc.toString();
       preCompositionSelection.current = { anchor: view.state.selection.main.anchor, head: view.state.selection.main.head };
-      compositionAllowed.current = allowTextInputRef.current;
+      compositionNativeCursor.current = callbacks.current.shouldUseNativeCursor?.() ?? false;
     };
     /** Commit composition once as a single range edit or revert disallowed input. */
     const onEnd = () => {
@@ -226,7 +230,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
       const before = preComposition.current ?? valueRef.current;
       const afterText = view.state.doc.toString();
       preComposition.current = null;
-      if (!compositionAllowed.current && !allowTextInputRef.current) {
+      if (!allowTextInputRef.current) {
         syncing.current = true;
         const prior = preCompositionSelection.current;
         const selection = prior ? { anchor: Math.min(prior.anchor, valueRef.current.length), head: Math.min(prior.head, valueRef.current.length) } : undefined;
@@ -236,7 +240,8 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
       }
       const edits = singleEditFromDiff(before, afterText);
       const sel = view.state.selection.main;
-      if (edits) callbacks.current.onGuiEdits?.(edits, before, { anchor: sel.anchor, head: sel.head });
+      if (edits && compositionNativeCursor.current) callbacks.current.onGuiEdits?.(edits, before, { anchor: sel.anchor, head: sel.head }, undefined, true);
+      else if (edits) callbacks.current.onGuiEdits?.(edits, before, { anchor: sel.anchor, head: sel.head });
       else callbacks.current.onSelectionChange?.({ anchor: sel.anchor, head: sel.head });
     };
     dom.addEventListener("keydown", onKeyDown, true);
@@ -280,7 +285,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
     } finally {
       syncing.current = false;
     }
-  }, [value]);
+  }, [value, snapshot]);
 
   useEffect(() => {
     const view = viewRef.current;
