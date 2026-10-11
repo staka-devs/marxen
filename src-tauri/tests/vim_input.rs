@@ -248,3 +248,83 @@ fn pending_cursor_cache_never_splits_a_new_surrogate_pair() {
     marxen_lib::validation::validate_cursor(&actor.snapshot(), &cursor).unwrap();
     key(&actor, "\u{1b}");
 }
+
+#[test]
+fn gui_visual_ranges_round_trip_and_native_delete_uses_exact_scope() {
+    for (exclusive, anchor, head) in [
+        (false, 1, 4),
+        (false, 4, 1),
+        (true, 1, 4),
+        (true, 4, 1),
+        (false, 0, 6),
+        (true, 0, 6),
+        (true, 6, 0),
+        (true, 6, 12),
+        (true, 12, 6),
+    ] {
+        let actor = DocumentActor::open(
+            DocumentId(format!("gui-scope-{exclusive}-{anchor}")),
+            "a😀日本\nsecond".into(),
+            None,
+        )
+        .unwrap();
+        if exclusive {
+            actor.nvim_command("set selection=exclusive").unwrap();
+        }
+        let update = marxen_lib::contracts::CursorUpdate {
+            document_id: actor.snapshot().document_id,
+            revision: Revision(0),
+            anchor: Utf16Offset(anchor),
+            head: Utf16Offset(head),
+        };
+        actor.set_cursor(update.clone()).unwrap();
+        let round_trip = actor.cursor().unwrap();
+        assert_eq!(
+            (round_trip.anchor, round_trip.head),
+            (update.anchor, update.head)
+        );
+        assert_eq!(actor.current_mode().unwrap().mode, VimMode::Visual);
+        key(&actor, "d");
+        let original = "a😀日本\nsecond";
+        let start = marxen_lib::validation::utf16_to_utf8(original, Utf16Offset(anchor.min(head)))
+            .unwrap()
+            .0 as usize;
+        let end = marxen_lib::validation::utf16_to_utf8(original, Utf16Offset(anchor.max(head)))
+            .unwrap()
+            .0 as usize;
+        assert_eq!(
+            actor.snapshot().text,
+            format!("{}{}", &original[..start], &original[end..])
+        );
+        key(&actor, "u");
+        assert_eq!(actor.snapshot().text, "a😀日本\nsecond");
+        actor
+            .nvim_command("lua assert(vim.wo.virtualedit == '')")
+            .unwrap();
+    }
+}
+
+#[test]
+fn gui_line_selection_repositions_both_native_endpoints() {
+    let actor = DocumentActor::open(
+        DocumentId("gui-line-scope".into()),
+        "abc\n日😀\nthird\nlast".into(),
+        None,
+    )
+    .unwrap();
+    key(&actor, "V");
+    actor
+        .set_cursor(marxen_lib::contracts::CursorUpdate {
+            document_id: actor.snapshot().document_id,
+            revision: Revision(0),
+            anchor: Utf16Offset(14),
+            head: Utf16Offset(4),
+        })
+        .unwrap();
+    let selection = actor.cursor().unwrap();
+    assert_eq!((selection.anchor.0, selection.head.0), (14, 4));
+    key(&actor, "d");
+    assert_eq!(actor.snapshot().text, "abc\nlast");
+    key(&actor, "u");
+    assert_eq!(actor.snapshot().text, "abc\n日😀\nthird\nlast");
+}

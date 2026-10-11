@@ -86,6 +86,7 @@ struct ActorState {
     saved: Vec<SaveResult>,
     save_requested: bool,
     last_cursor: (Utf16Offset, Utf16Offset),
+    gui_virtualedit: Option<String>,
 }
 
 /// Serialized owner of one document's Neovim buffer, snapshot, and file path.
@@ -172,6 +173,7 @@ impl DocumentActor {
                 saved: Vec::new(),
                 save_requested: false,
                 last_cursor: (Utf16Offset(0), Utf16Offset(0)),
+                gui_virtualedit: None,
             }),
         })
     }
@@ -647,6 +649,81 @@ impl DocumentActor {
         Self::require_ready(&state)?;
         Self::sync_locked(&mut state)?;
         validate_cursor(&state.snapshot, &update)?;
+        let (mode, _) = state.nvim.mode_state()?;
+        if mode == VimMode::VisualBlock && update.anchor != update.head {
+            return Err(ActorError::Nvim(
+                "矩形選択は Neovim 原文ビューで操作してください".into(),
+            ));
+        }
+        let visual = matches!(mode, VimMode::Visual | VimMode::VisualLine);
+        let install_selection = update.anchor != update.head
+            && matches!(
+                mode,
+                VimMode::Normal | VimMode::Visual | VimMode::VisualLine
+            );
+        if install_selection {
+            // GUI ranges are half-open. Native exclusive regions end after
+            // the selected text; inclusive regions end on its last character.
+            let previous = |offset: Utf16Offset| -> Result<Utf16Offset, ContractError> {
+                let byte =
+                    crate::validation::utf16_to_utf8(&state.snapshot.text, offset)?.0 as usize;
+                let width = state.snapshot.text[..byte]
+                    .chars()
+                    .next_back()
+                    .map(char::len_utf16)
+                    .unwrap_or(0);
+                Ok(Utf16Offset(offset.0 - width as u32))
+            };
+            let forward = update.anchor.0 < update.head.0;
+            let exclusive = state
+                .nvim
+                .client()
+                .call(
+                    "nvim_get_option_value",
+                    vec![rmpv::Value::from("selection"), rmpv::Value::Map(vec![])],
+                )?
+                .as_str()
+                == Some("exclusive");
+            let anchor = if forward || (exclusive && mode != VimMode::VisualLine) {
+                update.anchor
+            } else {
+                previous(update.anchor)?
+            };
+            let head = if forward && (mode == VimMode::VisualLine || !exclusive) {
+                previous(update.head)?
+            } else {
+                update.head
+            };
+            let (anchor_row, anchor_col) = global_utf16_to_line_byte(&state.snapshot.text, anchor)?;
+            let (head_row, head_col) = global_utf16_to_line_byte(&state.snapshot.text, head)?;
+            let kind = if mode == VimMode::VisualLine {
+                "V"
+            } else {
+                "v"
+            };
+            if state.gui_virtualedit.is_none() {
+                state.gui_virtualedit = Some(
+                    state
+                        .nvim
+                        .exec_lua("return vim.wo.virtualedit")?
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                );
+            }
+            state.nvim.exec_lua(&format!(
+                "vim.cmd('normal! ' .. string.char(27)); local ve = vim.wo.virtualedit; if not ve:find('onemore', 1, true) and not ve:find('all', 1, true) then vim.wo.virtualedit = ve == '' and 'onemore' or ve .. ',onemore' end; vim.api.nvim_win_set_cursor(0, {{{}, {}}}); vim.cmd('normal! {}'); vim.api.nvim_win_set_cursor(0, {{{}, {}}})",
+                anchor_row + 1, anchor_col, kind, head_row + 1, head_col,
+            ))?;
+            state.last_cursor = (update.anchor, update.head);
+            return Ok(update);
+        }
+        if visual {
+            state
+                .nvim
+                .exec_lua("vim.cmd('normal! ' .. string.char(27))")?;
+            Self::restore_gui_virtualedit(&mut state)?;
+        }
         let (row, col) = global_utf16_to_line_byte(&state.snapshot.text, update.head)?;
         state.nvim.client().call(
             "nvim_win_set_cursor",
@@ -726,6 +803,7 @@ impl DocumentActor {
             errors: nvim.config_report().errors.clone(),
         };
         state.nvim = nvim;
+        state.gui_virtualedit = None;
         state.grid.clear();
         Ok(result)
     }
@@ -811,8 +889,12 @@ impl DocumentActor {
     fn sync_locked(state: &mut ActorState) -> Result<bool, ActorError> {
         // Deferred API reads cannot answer while Vim waits for the next key.
         // Keep the acknowledged snapshot and leave input available to finish it.
-        if state.nvim.mode_state()?.1 {
+        let (mode, blocking) = state.nvim.mode_state()?;
+        if blocking {
             return Ok(false);
+        }
+        if !matches!(mode, VimMode::Visual | VimMode::VisualLine) {
+            Self::restore_gui_virtualedit(state)?;
         }
         let text = state.nvim.get_text()?;
         if text == state.snapshot.text {
@@ -829,6 +911,21 @@ impl DocumentActor {
         };
         Self::checkpoint_locked(state)?;
         Ok(true)
+    }
+
+    fn restore_gui_virtualedit(state: &mut ActorState) -> Result<(), ActorError> {
+        if let Some(original) = state.gui_virtualedit.as_ref() {
+            state.nvim.client().call(
+                "nvim_set_option_value",
+                vec![
+                    rmpv::Value::from("virtualedit"),
+                    rmpv::Value::from(original.as_str()),
+                    rmpv::Value::Map(vec![(rmpv::Value::from("win"), rmpv::Value::from(0))]),
+                ],
+            )?;
+            state.gui_virtualedit = None;
+        }
+        Ok(())
     }
 
     fn cached_cursor(state: &ActorState) -> CursorUpdate {

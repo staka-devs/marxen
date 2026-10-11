@@ -326,7 +326,12 @@ impl NeovimSession {
                 local last_line = vim.fn.getline(last[2])
                 local start_col = math.min(math.max(first[3] - 1, 0), #first_line)
                 local end_col = math.min(math.max(last_start[3] - 1, 0) + #text[#text], #last_line)
-                local newline = (kind == 'V' or last[3] > #last_line)
+                    local upper = anchor[2] > head[2] or (anchor[2] == head[2] and anchor[3] > head[3])
+                    local upper_pos = upper and anchor or head
+                    local exclusive = vim.o.selection == 'exclusive'
+                    local newline = (kind == 'V' or last[3] > #last_line
+                        or (not exclusive and upper_pos[2] == last[2] and upper_pos[3] > #last_line)
+                        or (exclusive and upper_pos[2] > last[2]))
                     and last[2] < vim.api.nvim_buf_line_count(0)
                 local forward = anchor[2] < head[2]
                     or (anchor[2] == head[2] and anchor[3] <= head[3])

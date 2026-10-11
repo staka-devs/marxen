@@ -97,7 +97,7 @@ test("Neovim screen exposes the read-only document grid", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "原文ビュー" }).click();
   await expect(page.getByTestId("raw-grid")).toBeVisible();
-  await expect(page.getByTestId("raw-grid")).toContainText("Neovim 原文ビュー");
+  await expect(page.getByTestId("raw-grid")).toHaveAttribute("role", "textbox");
 });
 
 test("read-only demo never simulates save success", async ({ page }) => {
