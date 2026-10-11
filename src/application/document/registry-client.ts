@@ -125,6 +125,20 @@ export class RegistryClient {
   }
 
   /**
+   * Replace a GUI range and install its resulting caret before the next queued key.
+   *
+   * Native buffer edits preserve the old Neovim cursor. The report belongs to
+   * this same task, at the committed revision, so Enter, mappings, and Escape
+   * cannot run between the text acknowledgement and its cursor update.
+   */
+  private async replaceGuiRange(documentId: DocumentId, revision: number, range: Utf16Range, text: string): Promise<DocumentSnapshot> {
+    const snapshot = this.bump(await this.transport.applyEdits({ documentId, baseRevision: revision }, [{ range, text }]));
+    const head = range.start + text.length;
+    await this.transport.reportCursor({ documentId, revision: snapshot.revision, anchor: head, head });
+    return snapshot;
+  }
+
+  /**
    * Apply GUI range edits serially, resyncing once on stale rejection.
    *
    * Rejects with `StaleResync` carrying the fresh snapshot when the base
@@ -232,9 +246,7 @@ export class RegistryClient {
         this.pendingPrefix.set(documentId, "");
         return {
           action: "gui" as const,
-          snapshot: this.bump(
-            await this.transport.applyEdits({ documentId, baseRevision: revision }, [{ range, text: key }]),
-          ),
+          snapshot: await this.replaceGuiRange(documentId, revision, range, key),
         };
       } catch (cause) {
         if (isStaleError(cause)) await this.resync(documentId);
@@ -286,9 +298,7 @@ export class RegistryClient {
       try {
         return {
           action: "gui" as const,
-          snapshot: this.bump(
-            await this.transport.applyEdits({ documentId, baseRevision: revision }, [{ range, text }]),
-          ),
+          snapshot: await this.replaceGuiRange(documentId, revision, range, text),
         };
       } catch (cause) {
         if (isStaleError(cause)) await this.resync(documentId);

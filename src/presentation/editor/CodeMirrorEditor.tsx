@@ -6,6 +6,7 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import type { TextEdit } from "../../contracts/contracts";
 import { createLivePreview, type LivePreviewCallbacks } from "./livePreview";
+import { blockCursorWidth } from "./cursorWidth";
 import type { ImageResolver } from "../../domain/image-sources";
 import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../domain/editor-preferences";
 
@@ -162,6 +163,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
             { tag: tags.monospace, fontFamily: '"Cascadia Code", "Consolas", monospace' },
           ])),
           drawSelection({ cursorBlinkRate: 0 }),
+          blockCursorWidth,
           appearanceRef.current.of([]),
           editableRef.current.of(EditorView.editable.of(editableRefValue.current)),
           liveRef.current.of([]),
@@ -175,22 +177,22 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
           }),
           EditorView.updateListener.of((update) => {
             if (syncing.current) return;
-            if (update.selectionSet) {
+            // Preedit positions belong to uncommitted text, so neither edits
+            // nor cursor reports may reach Neovim until composition ends.
+            if (composing.current) return;
+            if (update.docChanged) {
+              const edits: TextEdit[] = [];
+              update.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
+                edits.push({ range: { start: from, end: to }, text: inserted.toString() });
+              });
+              if (edits.length > 0) callbacks.current.onGuiEdits?.(edits);
+            }
+            // Enqueue the source change before reporting positions in that
+            // source. A following native key then sees both in queue order.
+            if (update.selectionSet || update.docChanged) {
               const sel = update.state.selection.main;
               callbacks.current.onSelectionChange?.({ anchor: sel.anchor, head: sel.head });
             }
-            if (!update.docChanged) return;
-            if (composing.current) {
-              // Buffer preedit: commit exactly once on compositionend.
-              return;
-            }
-            // Map the CodeMirror transaction to wire range edits without
-            // reserializing: one TextEdit per change range.
-            const edits: TextEdit[] = [];
-            update.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
-              edits.push({ range: { start: from, end: to }, text: inserted.toString() });
-            });
-            if (edits.length > 0) callbacks.current.onGuiEdits?.(edits);
           }),
         ],
       }),
@@ -221,6 +223,8 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
       }
       const edits = singleEditFromDiff(before, afterText);
       if (edits) callbacks.current.onGuiEdits?.(edits);
+      const sel = view.state.selection.main;
+      callbacks.current.onSelectionChange?.({ anchor: sel.anchor, head: sel.head });
     };
     dom.addEventListener("compositionstart", onStart);
     dom.addEventListener("compositionend", onEnd);

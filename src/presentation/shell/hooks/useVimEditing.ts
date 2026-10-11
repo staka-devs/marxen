@@ -101,6 +101,9 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
   // native WebView while normal paste works). The capture handler below
   // prevents default synchronously and routes exactly once.
   const pendingPasteRef = useRef<{ time: number; dropText: boolean } | null>(null);
+  // Native edits can move the caret before their display acknowledgement.
+  // Following printable keys stay native until that position is known.
+  const pendingNativeInput = useRef<Record<string, number>>({});
 
   /** Capture the exact half-open range plus full source for one edit. */
   const takeRange = useCallback(
@@ -242,6 +245,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
       if (!docsRef.current[id]) return;
       setVimKeys((prev) => (prev + keys).slice(-24));
       const gen = bumpSelectionGen(id);
+      pendingNativeInput.current[id] = (pendingNativeInput.current[id] ?? 0) + 1;
       try {
         // Revision binds at queue execution inside the client, so bursts
         // order against successive acknowledgements.
@@ -252,6 +256,8 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
       } catch (cause) {
         if (cause instanceof StaleResync) sayStale(cause.snapshot);
         else setNotice(workspaceErrorText(cause));
+      } finally {
+        pendingNativeInput.current[id] -= 1;
       }
     },
     [registry, mergeSnapshot, refreshModeCursor, sayStale, bumpSelectionGen, isSelectionGenCurrent, writeYankToClipboard, docsRef, activeRef, setVimKeys, session, notify],
@@ -303,7 +309,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
         event.stopPropagation();
         if (!docsRef.current[id]) return;
         const insertHint = vimModeRef.current === "insert" || vimModeRef.current === "replace";
-        if (!insertHint) {
+        if (!insertHint || (pendingNativeInput.current[id] ?? 0) > 0) {
           void routeVimKeys(id, event.key);
           return;
         }
