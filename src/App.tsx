@@ -28,6 +28,7 @@ export default function App() {
         aiProfileStore={composition.aiProfileStore}
         editorPreferencesStore={composition.editorPreferencesStore}
         imageLoader={composition.imageLoader}
+        vimSettingsGateway={composition.vimSettingsGateway}
       />
     </div>
   );

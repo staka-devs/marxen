@@ -24,6 +24,12 @@ interface Props {
   currentConfig: string | null;
   copyKeys?: Record<string, string>;
   aiSettings?: ReactNode;
+  /**
+   * Optional Vim detail editor (issue-55) rendered below the config apply row.
+   *
+   * Root wires `VimSettingsHost` here; the panel never imports infrastructure.
+   */
+  vimSettings?: ReactNode;
   /** Close the settings dialog. */
   onClose: () => void;
 }
@@ -43,7 +49,7 @@ function SettingRow({ label, children }: { label: string; children: ReactNode })
 }
 
 /** Searchable settings with shared AI fields, immediate preferences and a trapped dialog focus. */
-export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PREFERENCES, onPreferences, configPath, configError, onConfigPath, onBrowseConfig, onApplyConfig, applyingConfig, currentConfig, copyKeys, aiSettings, onClose }: Props) {
+export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PREFERENCES, onPreferences, configPath, configError, onConfigPath, onBrowseConfig, onApplyConfig, applyingConfig, currentConfig, copyKeys, aiSettings, vimSettings, onClose }: Props) {
   const [category, setCategory] = useState<Category | "all">("appearance");
   const [query, setQuery] = useState("");
   const dialog = useRef<HTMLDivElement>(null);
@@ -98,6 +104,7 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
                 {nameInvalid && <p role="alert" className="text-xs text-red-500">vimrc / _vimrc / .vimrc / init.vim / init.lua を指定してください。</p>}{configError && <p role="alert" className="whitespace-pre-wrap text-xs text-red-500">{configError}</p>}
                 <button type="button" onClick={onApplyConfig} disabled={applyingConfig || nameInvalid} aria-label="設定を適用して再起動する" className="rounded-sm bg-primary px-3 py-2 text-xs text-primary-foreground disabled:opacity-50">{applyingConfig ? "適用中…" : "設定を適用"}</button>
                 <p className="text-xs leading-5 text-muted-foreground">Neovim を再起動して適用します。未保存の本文は保持し、Undo 履歴と Vim モードは初期化します。</p>
+                {vimSettings}
               </div>}
               {id === "copy" && <div className="space-y-3">
                 <p className="text-xs leading-5 text-muted-foreground">yy / yw / 選択して y の直後に形式キーを押します。</p>

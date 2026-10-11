@@ -18,6 +18,10 @@ pub fn document_services() -> DocumentServices {
         buffers: Arc::new(infrastructure::neovim::buffer::NativeBufferFactory),
     }
 }
+/// Construct the native vim-settings file adapter for guarded config access.
+pub fn vim_settings_files() -> Arc<dyn application::vim_settings::VimSettingsFiles> {
+    Arc::new(infrastructure::vim_settings::NativeVimSettingsFiles)
+}
 /// Open a real authoritative document with isolated configuration and native storage.
 pub fn open_document(
     id: DocumentId,
@@ -69,6 +73,9 @@ pub fn run() {
         ))
         .manage(presentation::isolation::IsolationState::new(
             open_isolation(&std::env::temp_dir().join("marxen-staging")).expect("staging dir"),
+        ))
+        .manage(presentation::vim_settings::VimSettingsState::new(
+            vim_settings_files(),
         ))
         .manage(application::ai::service::AiService {
             keyring: Arc::new(infrastructure::ai::credentials::OsKeyring),
@@ -158,7 +165,10 @@ pub fn run() {
             presentation::isolation::isolation_approve,
             presentation::isolation::isolation_reject,
             presentation::isolation::isolation_cancel,
-            presentation::document::configure_document
+            presentation::document::configure_document,
+            presentation::vim_settings::vim_settings_read,
+            presentation::vim_settings::vim_settings_write_managed,
+            presentation::vim_settings::vim_settings_write_raw
         ])
         .run(tauri::generate_context!())
         .expect("Marxen desktop runtime failed");

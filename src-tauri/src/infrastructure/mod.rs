@@ -5,3 +5,4 @@ pub mod clipboard;
 pub mod neovim;
 pub mod staging;
 pub mod storage;
+pub mod vim_settings;

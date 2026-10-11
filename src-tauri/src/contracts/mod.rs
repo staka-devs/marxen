@@ -1,6 +1,7 @@
 //! Wire contract v1. Rust owns this definition; export-contracts generates TypeScript.
 pub mod ai;
 pub mod isolation;
+pub mod vim_settings;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use ts_rs::TS;

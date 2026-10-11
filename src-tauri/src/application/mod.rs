@@ -4,4 +4,5 @@ pub mod clipboard;
 pub mod document;
 pub mod isolation;
 pub mod ports;
+pub mod vim_settings;
 pub mod workspace;

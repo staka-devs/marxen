@@ -17,6 +17,7 @@ import { clipboardGateway } from "./infrastructure/clipboard/clipboard-writer";
 import { aiProfileStore } from "./infrastructure/storage/ai-profile-store";
 import { editorPreferencesStore } from "./infrastructure/storage/editor-preferences-store";
 import { imageLoader } from "./infrastructure/images/image-loader";
+import { vimSettingsGateway } from "./infrastructure/vim-settings/tauri-vim-settings";
 import type {
   DocumentGateway,
   DocumentTransport,
@@ -51,6 +52,7 @@ export function createComposition() {
     aiProfileStore,
     editorPreferencesStore,
     imageLoader,
+    vimSettingsGateway: desktop ? vimSettingsGateway : undefined,
   };
 }
 

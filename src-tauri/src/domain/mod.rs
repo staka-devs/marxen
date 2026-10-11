@@ -6,3 +6,4 @@ pub mod coordinates;
 pub mod isolation;
 pub mod storage;
 pub mod validation;
+pub mod vim_settings;
