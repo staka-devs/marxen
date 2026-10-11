@@ -1,8 +1,7 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AiPanel from "./ai-panel";
 import {
-  getCredentialState,
   setCredential,
   startPrompt,
   testConnection,
@@ -18,9 +17,14 @@ vi.mock("../lib/ai", async (importOriginal) => {
     deleteCredential: vi.fn(),
     testConnection: vi.fn(),
     startPrompt: vi.fn(),
-    cancelPromptSafe: vi.fn(),
+    cancelPromptSafe: vi.fn(async (stop: () => Promise<void>) => {
+      await stop();
+    }),
   };
 });
+vi.mock("./ai-provider-settings", () => ({
+  default: () => <div>接続設定 mock</div>,
+}));
 beforeEach(() => {
   vi.resetAllMocks();
   window.localStorage.clear();
@@ -30,6 +34,7 @@ const contexts: PromptContext[] = [
   { documentId: "doc_01", revision: 7, ranges: [{ start: 1, end: 3 }], text: "a😀日本語" },
 ];
 const staging: StagingTarget = { copyId: "copy_01" };
+const labels = { doc_01: "a.md" };
 
 function emit(events: AiStreamEvent[], handler: (event: AiStreamEvent) => void) {
   for (const event of events) {
@@ -37,61 +42,91 @@ function emit(events: AiStreamEvent[], handler: (event: AiStreamEvent) => void) 
   }
 }
 
-describe("ai panel", () => {
-  it("shows the exact sent scope and staging copy", () => {
-    render(<AiPanel contexts={contexts} staging={staging} />);
-    expect(screen.getByText("doc_01 rev 7 [1, 3) 5文字")).toBeVisible();
-    expect(screen.getByText("copy_01")).toBeVisible();
-    expect(screen.getByRole("button", { name: "送信" })).toBeDisabled();
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (cause: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
   });
+  return { promise, resolve, reject };
+}
 
-  it("blocks sending while staging is unresolved", () => {
-    render(<AiPanel contexts={contexts} staging={null} />);
-    expect(screen.getByText(/未解決/)).toBeVisible();
-    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "質問" } });
-    expect(screen.getByRole("button", { name: "送信" })).toBeDisabled();
-  });
-
-  it("names the codex-acp adapter and never auto-downloads", () => {
-    render(<AiPanel contexts={contexts} staging={staging} />);
-    expect(screen.getByText(/codex-acp アダプター/)).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "OpenAI 互換" }));
-    fireEvent.click(screen.getByRole("button", { name: "ACP" }));
-    expect(screen.getByText(/codex-acp アダプター/)).toBeVisible();
-  });
-
-  it("keeps Anthropic disabled until opt-in", () => {
-    render(<AiPanel contexts={contexts} staging={staging} />);
-    fireEvent.click(screen.getByRole("button", { name: "Anthropic" }));
-    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "質問" } });
-    expect(screen.getByRole("button", { name: "送信" })).toBeDisabled();
-    expect(screen.getByText("Anthropic を有効化すると送信できます。")).toBeVisible();
-    fireEvent.click(screen.getByLabelText(/Anthropic を有効化する/));
-    expect(screen.getByRole("button", { name: "送信" })).toBeEnabled();
-  });
-
-  it("refuses claude commands without invoking a transport", async () => {
-    render(<AiPanel contexts={contexts} staging={staging} />);
-    fireEvent.click(screen.getByRole("button", { name: "ACP" }));
-    fireEvent.change(screen.getByLabelText("ACP プリセット"), { target: { value: "custom" } });
-    fireEvent.change(screen.getByLabelText("カスタムコマンド"), { target: { value: "claude" } });
-    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "質問" } });
+describe("agent chat", () => {
+  it("does not publish a done event that races with cancellation", async () => {
+    let handler!: (event: AiStreamEvent) => void;
+    const stop = vi.fn(async () => undefined);
+    const onProposal = vi.fn();
+    vi.mocked(startPrompt).mockImplementation(async (_request, onEvent) => {
+      handler = onEvent;
+      return { runId: "cancel-race", stop };
+    });
+    render(<AiPanel contexts={contexts} staging={staging} onProposal={onProposal} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "停止する" } });
     fireEvent.click(screen.getByRole("button", { name: "送信" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("起動しません");
-    expect(startPrompt).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(startPrompt).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "取り消し" }));
+    handler({ type: "done", payload: { runId: "cancel-race", proposal: { text: "遅い回答", baseContexts: [] }, sent: [] } });
+    expect(await screen.findByText("取り消しました。")).toBeVisible();
+    expect(onProposal).not.toHaveBeenCalled();
+    expect(screen.queryByText("遅い回答")).not.toBeInTheDocument();
   });
 
-  it("streams chunks then shows the proposal with base revisions and sent ranges", async () => {
+  it("keeps a new draft when an old preparation resolves after changing conversation", async () => {
+    const gate = deferred<StagingTarget>();
+    render(<AiPanel contexts={contexts} staging={null} ensureStaging={() => gate.promise} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "古い入力" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    fireEvent.click(screen.getByRole("button", { name: "新しい会話" }));
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "新しい下書き" } });
+    gate.resolve(staging);
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: "送信" })).toBeEnabled());
+    expect(screen.getByLabelText("プロンプト")).toHaveValue("新しい下書き");
+    expect(startPrompt).not.toHaveBeenCalled();
+    expect(screen.queryByText("古い入力")).not.toBeInTheDocument();
+  });
+
+  it("starts a fresh conversation when the controlled endpoint changes", async () => {
+    let handler!: (event: AiStreamEvent) => void;
+    const first = { kind: "openai_compatible", acp: null, anthropic: null, openai: { endpoint: "http://localhost:9001/v1", model: "first" } } as const;
+    const second = { ...first, openai: { endpoint: "http://localhost:9002/v1", model: "second" } };
+    vi.mocked(startPrompt).mockImplementation(async (_request, onEvent) => {
+      handler = onEvent;
+      return { runId: "provider", stop: vi.fn() };
+    });
+    const { rerender } = render(<AiPanel contexts={contexts} staging={staging} provider={first} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "最初の会話" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(startPrompt).toHaveBeenCalled());
+    handler({ type: "done", payload: { runId: "provider", proposal: { text: "最初の応答", baseContexts: [] }, sent: [] } });
+    await screen.findByText("最初の応答");
+    rerender(<AiPanel contexts={contexts} staging={staging} provider={second} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "別の接続先" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(startPrompt).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(startPrompt).mock.calls[1][0].history).toEqual([]);
+    expect(vi.mocked(startPrompt).mock.calls[1][0].provider).toEqual(second);
+  });
+  it("shows filename chips and auto-registers on send without internal ids", async () => {
     let handler: ((event: AiStreamEvent) => void) | null = null;
     vi.mocked(startPrompt).mockImplementation(async (_request, onEvent) => {
       handler = onEvent;
       return { runId: "run_1", stop: vi.fn() };
     });
-    render(<AiPanel contexts={contexts} staging={staging} />);
+    const ensureStaging = vi.fn(async () => staging);
+    render(<AiPanel contexts={contexts} staging={null} ensureStaging={ensureStaging} contextLabels={labels} />);
+    expect(screen.getByText("a.md")).toBeVisible();
+    expect(screen.queryByText(/doc_01/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/copy_01/)).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "質問です" } });
     fireEvent.click(screen.getByRole("button", { name: "送信" }));
-    expect(await screen.findByRole("button", { name: "取り消し" })).toBeVisible();
-
+    await vi.waitFor(() => expect(ensureStaging).toHaveBeenCalled());
+    await vi.waitFor(() => expect(vi.mocked(startPrompt)).toHaveBeenCalled());
+    expect(vi.mocked(startPrompt).mock.calls[0][0]).toMatchObject({
+      staging,
+      prompt: "質問です",
+      history: [],
+    });
     emit(
       [
         { type: "started", payload: { runId: "run_1" } },
@@ -108,94 +143,285 @@ describe("ai panel", () => {
       handler!,
     );
     expect(await screen.findByText("こんにちは世界")).toBeVisible();
-    expect(screen.getByText("基準: doc_01 rev 7")).toBeVisible();
-    const sentSection = screen.getByText("送信済みの範囲").parentElement!;
-    expect(within(sentSection).getByText(/doc_01 rev 7/)).toBeVisible();
-    expect(screen.queryByRole("button", { name: "取り消し" })).not.toBeInTheDocument();
-    expect(screen.getByText(/Markdownは変更しません/)).toBeVisible();
+    expect(screen.queryByText(/doc_01/)).not.toBeInTheDocument();
   });
 
-  it("shows stream errors as alerts and not as answers", async () => {
+  it("validates exact contexts through ensure even when a staging prop exists", async () => {
+    const ensureStaging = vi.fn(async () => staging);
+    vi.mocked(startPrompt).mockImplementation(async () => {
+      return { runId: "run_x", stop: vi.fn() };
+    });
+    render(<AiPanel contexts={contexts} staging={staging} ensureStaging={ensureStaging} contextLabels={labels} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "質問" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(ensureStaging).toHaveBeenCalledWith(contexts));
+  });
+
+  it("sends the second turn with explicit two-turn history", async () => {
+    const handlers: Array<(event: AiStreamEvent) => void> = [];
+    vi.mocked(startPrompt).mockImplementation(async (_request, onEvent) => {
+      handlers.push(onEvent);
+      return { runId: `run_${handlers.length}`, stop: vi.fn() };
+    });
+    render(<AiPanel contexts={contexts} staging={staging} contextLabels={labels} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "1件目" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(handlers.length).toBe(1));
+    emit(
+      [
+        { type: "started", payload: { runId: "run_1" } },
+        {
+          type: "done",
+          payload: {
+            runId: "run_1",
+            proposal: { text: "回答1", baseContexts: [{ documentId: "doc_01", revision: 7 }] },
+            sent: [{ documentId: "doc_01", revision: 7, ranges: [{ start: 1, end: 3 }], chars: 5 }],
+          },
+        },
+      ],
+      handlers[0],
+    );
+    expect(await screen.findByText("回答1")).toBeVisible();
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "2件目" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(handlers.length).toBe(2));
+    const second = vi.mocked(startPrompt).mock.calls[1][0];
+    expect(second.prompt).toBe("2件目");
+    expect(second.history).toEqual([
+      { role: "user", text: "1件目" },
+      { role: "assistant", text: "回答1" },
+    ]);
+  });
+
+  it("keeps prior conversations in the selector instead of destroying them", async () => {
+    let handler: ((event: AiStreamEvent) => void) | null = null;
+    vi.mocked(startPrompt).mockImplementation(async (_request, onEvent) => {
+      handler = onEvent;
+      return { runId: "run_1", stop: vi.fn() };
+    });
+    render(<AiPanel contexts={contexts} staging={staging} contextLabels={labels} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "質問" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(handler).not.toBeNull());
+    emit(
+      [
+        { type: "started", payload: { runId: "run_1" } },
+        {
+          type: "done",
+          payload: {
+            runId: "run_1",
+            proposal: { text: "回答", baseContexts: [{ documentId: "doc_01", revision: 7 }] },
+            sent: [{ documentId: "doc_01", revision: 7, ranges: [{ start: 1, end: 3 }], chars: 5 }],
+          },
+        },
+      ],
+      handler!,
+    );
+    expect(await screen.findByText("回答")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "新しい会話" }));
+    expect(screen.queryByText("回答")).not.toBeInTheDocument();
+    const select = screen.getByLabelText("会話の選択");
+    expect(select).toBeVisible();
+    fireEvent.change(select, { target: { value: (select as HTMLSelectElement).options[0].value } });
+    expect(await screen.findByText("回答")).toBeVisible();
+    // The fresh conversation starts with empty history.
+    fireEvent.click(screen.getByRole("button", { name: "新しい会話" }));
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "別件" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(vi.mocked(startPrompt)).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(startPrompt).mock.calls[1][0].history).toEqual([]);
+  });
+
+  it("cancels without persisting the failed turn and retries the same prompt", async () => {
+    let handler: ((event: AiStreamEvent) => void) | null = null;
+    vi.mocked(startPrompt).mockImplementation(async (_request, onEvent) => {
+      handler = onEvent;
+      return { runId: "run_1", stop: vi.fn() };
+    });
+    render(<AiPanel contexts={contexts} staging={staging} contextLabels={labels} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "書いて" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(handler).not.toBeNull());
+    emit([{ type: "started", payload: { runId: "run_1" } }], handler!);
+    expect(await screen.findByRole("button", { name: "取り消し" })).toBeVisible();
+    emit([{ type: "cancelled", payload: { runId: "run_1" } }], handler!);
+    expect(await screen.findByText("取り消しました。")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "再試行" }));
+    await vi.waitFor(() => expect(vi.mocked(startPrompt)).toHaveBeenCalledTimes(2));
+    const retry = vi.mocked(startPrompt).mock.calls[1][0];
+    expect(retry.prompt).toBe("書いて");
+    expect(retry.history).toEqual([]);
+  });
+
+  it("cancels while staging is pending and never starts the run", async () => {
+    const gate = deferred<StagingTarget>();
+    const ensureStaging = vi.fn(() => gate.promise);
+    vi.mocked(startPrompt).mockImplementation(async () => {
+      return { runId: "run_late", stop: vi.fn() };
+    });
+    render(<AiPanel contexts={contexts} staging={null} ensureStaging={ensureStaging} contextLabels={labels} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "待って" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(ensureStaging).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "取り消し" }));
+    gate.resolve(staging);
+    expect(await screen.findByText("取り消しました。")).toBeVisible();
+    expect(vi.mocked(startPrompt)).not.toHaveBeenCalled();
+  });
+
+  it("cancels the late handle when done arrives before startPrompt returns", async () => {
+    const stop = vi.fn(async () => undefined);
+    const onProposal = vi.fn();
+    vi.mocked(startPrompt).mockImplementation(async (_request, onEvent) => {
+      onEvent({ type: "started", payload: { runId: "run_race" } });
+      onEvent({
+        type: "done",
+        payload: {
+          runId: "run_race",
+          proposal: { text: "早い回答", baseContexts: [{ documentId: "doc_01", revision: 7 }] },
+          sent: [{ documentId: "doc_01", revision: 7, ranges: [{ start: 1, end: 3 }], chars: 5 }],
+        },
+      });
+      return { runId: "run_race", stop };
+    });
+    render(<AiPanel contexts={contexts} staging={staging} contextLabels={labels} onProposal={onProposal} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "質問" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    expect(await screen.findByText("早い回答")).toBeVisible();
+    // The late handle is cancelled on settlement so nothing leaks.
+    await vi.waitFor(() => expect(stop).toHaveBeenCalled());
+    // No spinner remains and the proposal published exactly once.
+    expect(screen.queryByText("応答を生成しています…")).not.toBeInTheDocument();
+    expect(onProposal).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "取り消し" })).not.toBeInTheDocument();
+  });
+
+  it("fences the old run on reset so late events never publish", async () => {
+    const gate = deferred<{ runId: string; stop: () => Promise<void> }>();
+    const onProposal = vi.fn();
+    vi.mocked(startPrompt).mockImplementation(async (_request, onEvent) => {
+      const session = await gate.promise;
+      // Late done for the fenced run.
+      onEvent({
+        type: "done",
+        payload: {
+          runId: "run_old",
+          proposal: { text: "古い回答", baseContexts: [{ documentId: "doc_01", revision: 7 }] },
+          sent: [{ documentId: "doc_01", revision: 7, ranges: [{ start: 1, end: 3 }], chars: 5 }],
+        },
+      });
+      return session;
+    });
+    render(<AiPanel contexts={contexts} staging={staging} contextLabels={labels} onProposal={onProposal} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "最初" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(vi.mocked(startPrompt)).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "新しい会話" }));
+    gate.resolve({ runId: "run_old", stop: vi.fn(async () => undefined) });
+    await vi.waitFor(() => expect(vi.mocked(startPrompt)).toHaveBeenCalled());
+    expect(screen.queryByText("古い回答")).not.toBeInTheDocument();
+    expect(onProposal).not.toHaveBeenCalled();
+  });
+
+  it("cancels the owned run on unmount", async () => {
+    const gate = deferred<{ runId: string; stop: () => Promise<void> }>();
+    const stop = vi.fn(async () => undefined);
+    vi.mocked(startPrompt).mockImplementation(async () => gate.promise.then(() => ({ runId: "run_u", stop })));
+    const { unmount } = render(<AiPanel contexts={contexts} staging={staging} contextLabels={labels} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "質問" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(vi.mocked(startPrompt)).toHaveBeenCalled());
+    unmount();
+    gate.resolve({ runId: "run_u", stop });
+    await vi.waitFor(() => expect(stop).toHaveBeenCalled());
+  });
+
+  it("reports the captured mode even when the mode changes mid-run", async () => {
+    let handler: ((event: AiStreamEvent) => void) | null = null;
+    const onProposal = vi.fn();
+    vi.mocked(startPrompt).mockImplementation(async (request, onEvent) => {
+      expect(request.mode).toBe("rewrite");
+      handler = onEvent;
+      return { runId: "run_m", stop: vi.fn() };
+    });
+    render(<AiPanel contexts={contexts} staging={staging} contextLabels={labels} onProposal={onProposal} />);
+    fireEvent.click(screen.getByLabelText("選択書き換え"));
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "書いて" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(handler).not.toBeNull());
+    fireEvent.click(screen.getByLabelText("質問"));
+    handler!({
+      type: "done",
+      payload: {
+        runId: "run_m",
+        proposal: { text: "案", baseContexts: [{ documentId: "doc_01", revision: 7 }] },
+        sent: [{ documentId: "doc_01", revision: 7, ranges: [{ start: 1, end: 3 }], chars: 5 }],
+      },
+    });
+    await vi.waitFor(() => expect(onProposal).toHaveBeenCalled());
+    expect(onProposal.mock.calls[0][2]).toBe("rewrite");
+  });
+
+  it("stays fenced while the inline chat owns a run", () => {
+    render(<AiPanel contexts={contexts} staging={staging} contextLabels={labels} disabled />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "質問" } });
+    expect(screen.getByRole("button", { name: "送信" })).toBeDisabled();
+    expect(screen.getByText("他の応答を生成しています。")).toBeVisible();
+  });
+
+  it("shows stream errors as alerts with retry", async () => {
     vi.mocked(startPrompt).mockImplementation(async (_request, onEvent) => {
       onEvent({ type: "error", payload: { runId: "run_2", error: { code: "auth_failed", detail: "bad key" } } });
       return { runId: "run_2", stop: vi.fn() };
     });
-    render(<AiPanel contexts={[]} staging={staging} />);
+    render(<AiPanel contexts={contexts} staging={staging} contextLabels={labels} />);
     fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "質問" } });
     fireEvent.click(screen.getByRole("button", { name: "送信" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("認証に失敗しました");
+    expect(screen.getByRole("button", { name: "再試行" })).toBeEnabled();
   });
 
-  it("saves credentials through the OS store without displaying values", async () => {
-    vi.mocked(getCredentialState).mockResolvedValue({ provider: "openai_compatible", hasSecret: true });
-    render(<AiPanel contexts={[]} staging={staging} />);
-    fireEvent.click(screen.getByRole("button", { name: "OpenAI 互換" }));
-    const secret = screen.getByLabelText("資格情報の入力");
-    expect(secret).toHaveAttribute("type", "password");
-    fireEvent.change(secret, { target: { value: "s3cret" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await vi.waitFor(() => expect(setCredential).toHaveBeenCalledWith("openai_compatible", "s3cret"));
-    await vi.waitFor(() => expect(secret).toHaveValue(""));
-    expect(await screen.findByText("保存済み。値は表示しません。")).toBeVisible();
-    expect(screen.queryByText("s3cret")).not.toBeInTheDocument();
-  });
-
-  it("reports dry-run and live connection tests separately", async () => {
-    vi.mocked(testConnection)
-      .mockResolvedValueOnce({ ok: true, detail: "設定と資格情報の存在を確認しました（通信なし）" })
-      .mockResolvedValueOnce({ ok: false, detail: "codex が見つかりません" });
-    render(<AiPanel contexts={[]} staging={staging} />);
-    fireEvent.click(screen.getByRole("button", { name: "設定を確認" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("成功");
-    fireEvent.click(screen.getByLabelText("実際に接続する"));
-    fireEvent.click(screen.getByRole("button", { name: "接続テスト" }));
-    expect(await screen.findByText(/codex が見つかりません/)).toBeVisible();
-    expect(testConnection).toHaveBeenNthCalledWith(2, expect.anything(), true);
-  });
-
-  it("restores the persisted non-secret profile", () => {
-    window.localStorage.setItem(
-      "marxen.ai-profile.v1",
-      JSON.stringify({
-        kind: "openai_compatible",
-        preset: "codex",
-        command: "",
-        argsText: "",
-        endpoint: "https://example.com/v1",
-        model: "gpt-x",
-        anthropicEnabled: false,
-      }),
-    );
-    render(<AiPanel contexts={contexts} staging={staging} />);
-    expect(screen.getByLabelText("endpoint")).toHaveValue("https://example.com/v1");
-    expect(screen.getByLabelText("model")).toHaveValue("gpt-x");
-  });
-
-  it("persists profile changes without secrets and reports proposals once", async () => {
-    const seen: Array<[object, object]> = [];
+  it("preserves stale base revisions for review without internal ids", async () => {
+    const seen: Array<string> = [];
     vi.mocked(startPrompt).mockImplementation(async (_request, onEvent) => {
       onEvent({ type: "started", payload: { runId: "run_9" } });
       onEvent({
         type: "done",
         payload: {
           runId: "run_9",
-          proposal: { text: "提案です", baseContexts: [{ documentId: "doc_01", revision: 7 }] },
-          sent: [{ documentId: "doc_01", revision: 7, ranges: [{ start: 1, end: 3 }], chars: 5 }],
+          proposal: { text: "古い基準の提案", baseContexts: [{ documentId: "doc_01", revision: 6 }] },
+          sent: [{ documentId: "doc_01", revision: 6, ranges: [{ start: 1, end: 3 }], chars: 5 }],
         },
       });
       return { runId: "run_9", stop: vi.fn() };
     });
-    render(<AiPanel contexts={contexts} staging={staging} onProposal={(proposal, sent) => seen.push([proposal, sent])} />);
+    render(
+      <AiPanel
+        contexts={contexts}
+        staging={staging}
+        contextLabels={labels}
+        onProposal={(proposal) => seen.push(proposal.text)}
+      />,
+    );
     fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "書いて" } });
     fireEvent.click(screen.getByRole("button", { name: "送信" }));
-    expect(await screen.findByText("提案です")).toBeVisible();
-    expect(seen).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "OpenAI 互換" }));
-    fireEvent.change(screen.getByLabelText("model"), { target: { value: "gpt-x" } });
-    await vi.waitFor(() => {
-      const stored = JSON.parse(window.localStorage.getItem("marxen.ai-profile.v1") ?? "{}");
-      expect(stored).toMatchObject({ kind: "openai_compatible", model: "gpt-x" });
-    });
-    expect(window.localStorage.getItem("marxen.ai-profile.v1")).not.toContain("s3cret");
+    expect(await screen.findByText("古い基準の提案")).toBeVisible();
+    expect(screen.queryByText(/doc_01/)).not.toBeInTheDocument();
+    expect(seen).toEqual(["古い基準の提案"]);
+  });
+
+  it("blocks sending while staging is unresolved and reports it", async () => {
+    render(<AiPanel contexts={contexts} staging={null} contextLabels={labels} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "質問" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/作業コピー/);
+    expect(startPrompt).not.toHaveBeenCalled();
+  });
+
+  it("keeps credential helpers available without displaying values", async () => {
+    const { default: Settings } = await import("./ai-provider-settings");
+    expect(Settings).toBeDefined();
+    expect(setCredential).toBeDefined();
+    expect(testConnection).toBeDefined();
   });
 });

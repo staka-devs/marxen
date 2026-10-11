@@ -24,6 +24,11 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), isTauri: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 beforeEach(() => vi.resetAllMocks());
 
+it("shows native workspace errors received during chat preparation", () => {
+  expect(describeInvokeError({ code: "io", detail: "送信した内容が対象範囲と一致しません" }))
+    .toBe("送信した内容が対象範囲と一致しません");
+});
+
 function sseDataPayloads(raw: string): string[] {
   return raw
     .split("\n")
@@ -125,6 +130,7 @@ describe("ai transport", () => {
       contexts: [],
       staging: { copyId: "copy_1" },
       sessionId: null,
+      history: [],
     } as AiPromptRequest;
     const session = await startPrompt(request, (event) => seen.push(event));
     expect(session.runId).toBe("run_9");
@@ -138,6 +144,30 @@ describe("ai transport", () => {
     await session.stop();
     expect(invoke).toHaveBeenCalledWith("ai_prompt_cancel", { runId: "run_9" });
     expect(unlisten).toHaveBeenCalled();
+  });
+
+  it("buffers early events until the IPC run id is known and releases completed listeners", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    let handler!: (event: { payload: AiStreamEvent }) => void;
+    const unlisten = vi.fn();
+    vi.mocked(listen).mockImplementation(async (_name, callback) => {
+      handler = callback as typeof handler;
+      return unlisten;
+    });
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command !== "ai_prompt_stream") throw new Error(`unexpected ${command}`);
+      handler({ payload: { type: "cancelled", payload: { runId: "previous" } } });
+      handler({ payload: { type: "chunk", payload: { runId: "current", text: "早い" } } });
+      handler({ payload: { type: "done", payload: { runId: "current", proposal: { text: "早い回答", baseContexts: [] }, sent: [] } } });
+      return "current";
+    });
+    const seen: AiStreamEvent[] = [];
+    const request = { provider: defaultProviderConfig("acp"), mode: "ask", prompt: "質問", contexts: [], staging: { copyId: "copy" }, sessionId: null, history: [] } satisfies AiPromptRequest;
+    const session = await startPrompt(request, (event) => seen.push(event));
+    expect(seen.map((event) => event.type)).toEqual(["chunk", "done"]);
+    expect(unlisten).toHaveBeenCalledTimes(1);
+    await session.stop();
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 
   it("shares the SSE wire fixtures with the Rust integration tests", () => {

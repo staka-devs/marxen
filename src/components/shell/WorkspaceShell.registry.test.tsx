@@ -420,8 +420,8 @@ it("mounts the AI panel with the exact document scope", async () => {
   await screen.findByText("# A");
   fireEvent.click(screen.getByRole("button", { name: "AI 支援" }));
   const sidebar = await screen.findByTestId("ai-sidebar");
-  expect(within(sidebar).getByText(/doc_a rev 0/)).toBeVisible();
-  expect(within(sidebar).getByText(/未解決/)).toBeVisible();
+  expect(within(sidebar).getByText("a.md")).toBeVisible();
+  expect(within(sidebar).getByLabelText("Agent チャット")).toBeVisible();
 });
 
 it("keeps display-basis arrows in the editor and routes Vim keys natively", async () => {
