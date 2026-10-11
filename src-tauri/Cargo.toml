@@ -76,3 +76,10 @@ keyring = { version = "=3.6.3", features = ["apple-native"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "=3.6.3", features = ["sync-secret-service", "crypto-rust"] }
+# Keep application stack traces while avoiding full symbols for third-party crates.
+[profile.dev]
+debug = 1
+
+[profile.dev.package."*"]
+debug = 0
+
