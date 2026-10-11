@@ -90,6 +90,8 @@ function describeWorkspaceError(cause: unknown): string {
       return "ワークスペースの外には操作できません。";
     case "not_markdown":
       return "Markdown ファイル（.md / .markdown）のみ開けます。";
+    case "not_text":
+      return "対応する UTF-8 テキストファイルのみ開けます。";
     case "invalid_utf8":
       return "UTF-8 ではないため開けません。";
     case "invalid_path":
@@ -464,6 +466,30 @@ export class RegistryClient {
 
   configure(request: SaveRequest, path: string | null): Promise<NvimConfig> {
     return this.enqueue(request.documentId, () => workspaceApi.configure(request, path));
+  }
+
+  insertWorkspaceImage(request: SaveRequest, path: string, range: Utf16Range) {
+    return this.enqueue(request.documentId, async () => {
+      try {
+        return this.bump(await workspaceApi.insertWorkspaceImage(request, path, range));
+      } catch (cause) {
+        if (isStaleError(cause)) await this.resync(request.documentId);
+        throw cause;
+      }
+    });
+  }
+
+  importExternalImage(request: SaveRequest, path: string, range: Utf16Range) {
+    return this.enqueue(request.documentId, async () => {
+      try {
+        const result = await workspaceApi.importExternalImage(request, path, range);
+        this.bump(result.snapshot);
+        return result;
+      } catch (cause) {
+        if (isStaleError(cause)) await this.resync(request.documentId);
+        throw cause;
+      }
+    });
   }
 
   pasteImage(args: PasteImageArgs) {

@@ -12,6 +12,8 @@ Tauri v2 の Linux ビルドは WebKitGTK / GTK 等の OS 依存パッケージ�
 
 Linux 用 devcontainer に Rust、Node、WebKitGTK / GTK、Neovim と検証ツールを用意し、README に起動手順を記載する。依存ロックファイルと CI のプラットフォーム別ビルドで再現性を確認する。
 
+Docker のビルドコンテキストから依存物、生成した配布資源、ローカル検証用キャッシュ・ログ、テスト結果を除く。実行環境の生成に必要なソースと設定だけを送り、検証用データがイメージへ混入しないようにする。
+
 Windows の WebView2 / IME、macOS の WebKit / IME は実 OS で別途検証する。コンテナのテスト成功を各 OS の実 WebView / IME の成功へ読み替えない。
 
 ## 結果

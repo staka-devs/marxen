@@ -286,9 +286,13 @@ pub fn validate_prompt_request(request: &AiPromptRequest) -> Result<(), AiError>
 
 fn mode_instruction(mode: PromptMode) -> &'static str {
     match mode {
-        PromptMode::Ask => "文書について質問に回答してください。原文は変更しません。",
-        PromptMode::Generate => "文書の続きや新規文書を生成してください。原文は変更しません。",
-        PromptMode::Rewrite => "指定範囲の書き換え案を提示してください。原文は変更しません。",
+        PromptMode::Ask => "文書について質問に回答してください。編集中の文書は変更しません。",
+        PromptMode::Generate => {
+            "文書の続きや新規文書を生成してください。編集中の文書は変更しません。"
+        }
+        PromptMode::Rewrite => {
+            "指定範囲の書き換え案を提示してください。編集中の文書は変更しません。"
+        }
         PromptMode::Workspace => {
             "作業コピー内の修正案を提示してください。提案テキストのみを返し、直接書き込みません。"
         }
@@ -2397,7 +2401,7 @@ fn scope_error(request: &AiPromptRequest, error: crate::contracts::WorkspaceErro
             copy_id: request.staging.copy_id.clone(),
         },
         W::Contract { error } => AiError::InvalidConfig {
-            detail: format!("送信範囲が原文と一致しません: {error:?}"),
+            detail: format!("送信範囲が文書と一致しません: {error:?}"),
         },
         W::Conflict { path } => AiError::InvalidConfig {
             detail: format!("ディスクが変更されています。再同期してください: {path}"),
@@ -2905,7 +2909,7 @@ mod tests {
         let message = compose_user_message(PromptMode::Ask, "これは何ですか", &[context()]);
         assert_eq!(
             message,
-            "文書について質問に回答してください。原文は変更しません。\n\
+            "文書について質問に回答してください。編集中の文書は変更しません。\n\
              --- context document=doc_01 revision=7 ranges=[1, 3) ---\n\
              a😀日本語\n\
              --- prompt ---\n\

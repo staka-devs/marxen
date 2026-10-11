@@ -1,6 +1,6 @@
-# Marxen 初期版の実装契約
+# Marxen の実装契約
 
-ユーザー指定: Rust / Tauri v2、React / TypeScript / Vite / Tailwind / shadcn/ui、CodeMirror 6、同梱した実 Neovim を文書の正本にする。日本語 UI、ライブプレビュー、Vim の移動 Vim 操作を既定とする。
+Rust / Tauri v2、React / TypeScript / Vite / Tailwind / shadcn/ui、CodeMirror 6 を使い、同梱した実 Neovim を文書の正本にする。日本語 UI、ライブプレビュー、Vim 操作を既定とする。
 
 ## 作業と担当
 
@@ -14,6 +14,9 @@
 | ACP・直接 API・AI パネル | OpenCode | IPC |
 | AI 変更の隔離・差分適用 | OpenCode（Codex がレビュー・統合） | 保存・AI 接続 |
 | 統合・回帰・配布 | Codex / OpenCode | 全機能 |
+| ヤンク後の形式別コピー・画像入りリッチテキスト (#11) | Codex | 編集・描画 |
+| ファイル一覧・画像操作・カーソル・設定 (#12) | Codex | 保存・UI |
+| インラインチャット・Agent 会話履歴 (#13) | OpenCode（Codex がレビュー・統合） | AI・隔離・UI |
 
 Orca で Issue ごとの子ワークスペースとブランチを管理し、依存順に統合する。OpenCode は **MuseSpark1.3 Contributor / Xhigh** の実効設定を確認してから起動する。指定モデルが利用できなければ OpenCode の担当は停止して報告し、別モデルへ自動変更しない。Claude Code を起動・委任・接続検証しない。Anthropic Messages API は独立した接続先として利用者の認証設定後に有効化する。
 
@@ -24,14 +27,16 @@ Rust が Neovim RPC、保存、AI プロセス、HTTP を所有する。文書 I
 ## 受入条件
 
 - 日本語 IME、絵文字、mapping 優先、モード切替、表示座標、GUI 編集と Vim Undo の共存を実 Neovim で検証する。
-- ライブ表示は本文内の非アクティブな Markdown ブロックをリッチ表示し、編集するブロックではMarkdownを扱う。ライブ / Markdown / 閲覧と分割表示で cursor / scroll / Undo を維持する。表示基準の縦移動・行頭末・選択、Vim の移動の単語・text object・macro を扱う。
+- ライブ表示は本文内の非アクティブな Markdown ブロックを描画し、編集中のブロックでは記法とカーソルを表示する。ライブ / Markdown / 閲覧と左右の分割表示で cursor / scroll / Undo を維持する。分割幅を変更でき、折り返し行に沿う移動と実 Neovim の単語・text object・macro を扱う。
 - Obsidian / VSCode を参考に、細いアクティビティバー、用途を切り替えるサイドバー、コンパクトなタブ、広い本文、最小限のステータスバーを使う。表示切替・書式・AI設定はメニューやパネルに収め、常時表示の操作欄を減らす。本文とパネルを独立してスクロールする。
 - .vimrc / vimrc / _vimrc / init.vim / init.lua を選択でき、エラーを表示する。専用設定が既定。画面依存 plugin 操作は Neovim 画面で扱う。
 - 標準のヤンク完了後に Markdown / 装飾なし / リッチテキスト / HTML ソースを選んでコピーできる。形式キーは vimrc で変更・無効化でき、既存マッピングを優先する。相対画像を HTML と画像入り RTF に埋め込んで外部アプリへ渡す。
-- tree、tabs、quick open、全文検索置換、outline、command palette、テーマ、相対画像、画像貼付、外部変更、保存競合、クラッシュ復元。
+- フォルダー・Markdown・テキスト・対応画像を種類別アイコンで表示する。テキスト編集、画像タブのフィット・実サイズ・拡大縮小、内部画像と外部画像の本文へのドラッグを扱う。
+- tabs、quick open、全文検索置換、outline、command palette、相対画像、画像貼付、外部変更、保存競合、クラッシュ復元。設定は外観・エディター・Vim・コピー・AI に分け、文字サイズ・行間・折り返し・行番号・行強調を保持する。
 - 共通 remark / rehype 基盤で GFM、highlight、5 Alerts、脚注、MathJax、Mermaid、HTML sanitize、GeoJSON / TopoJSON / ASCII STL。Shiki、MathJax、Mermaid、Leaflet / TopoJSON、Three.js はローカル配布。
 - ACP (Codex / OpenCode / 任意コマンド)、OpenAI 互換 Chat Completions、Anthropic Messages、stream / cancel / test / error、OS 資格情報ストア。
 - AI 送信対象の表示、質問 / 生成 / 選択 rewrite / workspace 修正、隔離コピーと diff 承認、revision 競合・却下・取消。
+- Agent チャットは複数ターン、会話の切替、新規、再試行、取消、非表示中の保持に対応する。履歴は完了した会話だけを送り、接続先の変更で分離する。インラインチャットは選択または段落を対象に Ctrl+Shift+I / Cmd+Shift+I で開き、Vim の Ctrl+I と共存する。回答は共通 Markdown 描画を使う。
 - Rust / TypeScript / Vitest / Playwright CI。AI モック、認証済みのみ実接続。Windows x64、macOS arm64 / x64、Linux x64 package と操作説明。
 - 各 OS 実 WebView / IME の確認結果を区別する。未実施を成功と記載しない。署名 / 公証は資格情報がある場合のみ。
 
