@@ -1168,6 +1168,75 @@ mod regression {
         assert_eq!(std::fs::read_to_string(&inside).unwrap(), "hello staging");
     }
 
+    /// Reject absent destinations below outside-pointing symlinked parents.
+    ///
+    /// A symlinked staging parent resolving outside the owned root must refuse
+    /// creation with no outside file created or modified, while an ordinary
+    /// absent-file write and a permitted internal alias succeed verbatim. The
+    /// scratch directory is uniquely owned. Symlink creation needs privilege
+    /// on Windows, so those branches only execute on Unix; public macOS/Linux
+    /// CI verifies them and Windows reports them as unexecuted.
+    #[test]
+    fn agentic_write_rejects_absent_file_below_outside_symlink() {
+        let scratch = tempfile::tempdir().expect("scratch dir");
+        let staging = scratch.path().join("staging");
+        std::fs::create_dir_all(staging.join("sub")).expect("staging dir");
+        let outside = scratch.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        std::fs::write(outside.join("keep.md"), "keep\n").expect("sentinel");
+        // An ordinary absent-file write succeeds verbatim, nested or not.
+        for rel in ["new.md", "sub/nested.md"] {
+            let dest = staging.join(rel).to_string_lossy().into_owned();
+            serve_fs_write(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": dest, "content": "hello staging"}),
+                PromptMode::Workspace,
+            )
+            .unwrap_or_else(|_| panic!("ordinary write for {rel}"));
+            assert_eq!(
+                std::fs::read_to_string(staging.join(rel)).unwrap(),
+                "hello staging"
+            );
+        }
+        // Symlink branches need link privilege: Unix-only execution.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            // An outside-pointing parent refuses creation and modifies nothing.
+            let link = staging.join("link");
+            symlink(&outside, &link).expect("outside symlink");
+            let evil = link.join("evil.md").to_string_lossy().into_owned();
+            assert!(serve_fs_write(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": evil, "content": "pwned"}),
+                PromptMode::Workspace,
+            )
+            .is_err());
+            assert!(!outside.join("evil.md").exists());
+            assert_eq!(
+                std::fs::read_to_string(outside.join("keep.md")).unwrap(),
+                "keep\n"
+            );
+            // A permitted internal alias writes inside verbatim.
+            let inner = staging.join("inner");
+            symlink(staging.join("sub"), &inner).expect("internal symlink");
+            let note = inner.join("note.md").to_string_lossy().into_owned();
+            serve_fs_write(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": note, "content": "inside"}),
+                PromptMode::Workspace,
+            )
+            .expect("internal alias write");
+            assert_eq!(
+                std::fs::read_to_string(staging.join("sub").join("note.md")).unwrap(),
+                "inside"
+            );
+        }
+    }
+
     /// Refuse prompts before a session opens, concurrent prompts, and foreign
     /// session IDs; allow the recorded session again after prompt completion.
     #[test]

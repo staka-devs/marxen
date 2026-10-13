@@ -147,6 +147,22 @@ pub(crate) fn staging_path_allowed(staging_dir: &Path, abs_path: &str) -> bool {
     }
 }
 
+/// Find the nearest existing ancestor of a not-yet-created path.
+///
+/// Walks up from the candidate until an existing file or directory is found.
+/// Yields `None` only when no ancestor exists. Callers canonicalize the
+/// result to detect symlinked parents resolving outside the owned staging
+/// root before creating any directory or file.
+fn nearest_existing_ancestor(candidate: &Path) -> Option<PathBuf> {
+    let mut current = candidate;
+    loop {
+        if current.exists() {
+            return Some(current.to_path_buf());
+        }
+        current = current.parent()?;
+    }
+}
+
 /// Build a JSON-RPC error envelope for rejected agent file/permission requests.
 /// Wrong sessions and outside paths are rejected without touching the filesystem.
 fn agent_request_error(id: &Value, code: i64, message: &str) -> Value {
@@ -326,11 +342,13 @@ pub(crate) fn serve_fs_read(
 
 /// Serve `fs/write_text_file` into the authorized staging directory.
 ///
-/// Validates the claimed session and containment, creates parent directories,
-/// and writes UTF-8 text. `Ask` mode is read-only and rejects writes.
-/// Markdown-only enforcement happens at review time; the transport contains
-/// the write but never applies it to live buffers. Wrong sessions and outside
-/// paths yield a JSON-RPC error.
+/// Validates the claimed session and containment, resolves the nearest
+/// existing ancestor before creating anything, and writes UTF-8 text.
+/// `Ask` mode is read-only and rejects writes. Markdown-only enforcement
+/// happens at review time; the transport contains the write but never applies
+/// it to live buffers. Wrong sessions, outside paths, symlinked parents
+/// resolving outside the owned root, and unresolvable ancestors yield a
+/// JSON-RPC error before any directory or file is created.
 pub(crate) fn serve_fs_write(
     staging_dir: &Path,
     expected_session: &str,
@@ -381,6 +399,28 @@ pub(crate) fn serve_fs_write(
         ));
     }
     let target = Path::new(path);
+    // Resolve the nearest existing ancestor before creating anything: a
+    // symlinked parent outside the owned root must refuse creation even when
+    // the destination itself does not exist yet. Unresolvable ancestors fail
+    // closed with the same outside-path error.
+    let ancestor = nearest_existing_ancestor(target).ok_or_else(|| {
+        agent_request_error(
+            &Value::Null,
+            -32602,
+            "path is outside the authorized staging copy",
+        )
+    })?;
+    let resolved_inside = staging_dir
+        .canonicalize()
+        .and_then(|root| ancestor.canonicalize().map(|leaf| leaf.starts_with(&root)))
+        .unwrap_or(false);
+    if !resolved_inside {
+        return Err(agent_request_error(
+            &Value::Null,
+            -32602,
+            "path is outside the authorized staging copy",
+        ));
+    }
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|_| {
             agent_request_error(&Value::Null, -32602, "staging parent cannot be created")
