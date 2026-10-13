@@ -1658,6 +1658,63 @@ mod regression {
         assert!(registry.get(&AiRunId("run_bound_0".into())).is_none());
     }
 
+    /// Keep context/cost and undefined-scope token observations separate through final response.
+    #[test]
+    fn usage_registry_retains_context_after_prompt_response() {
+        let registry = UsageRegistry::new();
+        let run = AiRunId("run_sources".into());
+        let context = parse_usage_update_notification(
+            &usage_note(
+                "session_a",
+                serde_json::json!(100),
+                serde_json::json!(1000),
+                Some(serde_json::json!({"amount": 1.25, "currency": "USD"})),
+            ),
+            "session_a",
+            AiProviderKind::Acp,
+            Some(AcpPreset::Codex),
+            &run,
+            10,
+        )
+        .unwrap();
+        let tokens = parse_prompt_response_usage(
+            &prompt_body("end_turn", Some(prompt_usage(12, 4, 16))),
+            AiProviderKind::Acp,
+            Some(AcpPreset::Codex),
+            &run,
+            "session_a",
+            20,
+        )
+        .unwrap();
+        registry.record(context.clone());
+        registry.record(tokens.clone());
+        assert_eq!(registry.snapshot(), vec![context, tokens]);
+
+        registry.record(registry_usage("run_other", "session_b", 30));
+        registry.record(registry_usage("run_sources", "session_other", 40));
+        assert_eq!(registry.snapshot().len(), 4);
+        registry.reset_for_run(&run);
+        let remaining = registry.snapshot();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].run_id.0, "run_other");
+    }
+
+    /// Serialize safe counters as JSON numbers and omit unreported fields without zero filling.
+    #[test]
+    fn usage_ipc_counters_are_json_numbers() {
+        let mut usage = registry_usage("run_numbers", "session_a", 1234);
+        usage.used = Some(JS_SAFE_INTEGER_MAX);
+        let value = serde_json::to_value(&usage).unwrap();
+        assert_eq!(value["used"].as_u64(), Some(JS_SAFE_INTEGER_MAX));
+        assert_eq!(value["receivedMs"].as_u64(), Some(1234));
+        assert!(value.get("inputTokens").is_none());
+        assert!(value.get("cost").is_none());
+        assert_eq!(
+            serde_json::from_value::<ReportedUsage>(value).unwrap(),
+            usage
+        );
+    }
+
     /// Stream usage events live without settling the run; done, error, and
     /// cancelled remain the only single terminal deliveries.
     #[test]

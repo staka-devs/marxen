@@ -1,9 +1,9 @@
 //! In-memory latest-usage registry for the ACP usage popup (Issue #59).
 //!
-//! The registry keeps only the latest reported usage per run, bounded to a
-//! small fixed capacity. It never accumulates token counters, never derives
+//! The registry keeps the latest observations per run, session, and source within
+//! a fixed capacity. It never accumulates token counters, never derives
 //! quota or cost figures, and never touches the network or the filesystem.
-use crate::contracts::ai::{AiRunId, ReportedUsage};
+use crate::contracts::ai::{AcpUsageSource, AiRunId, ReportedUsage};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -11,11 +11,10 @@ use std::sync::Mutex;
 /// first, so popup refresh stays bounded without a history database.
 pub const MAX_USAGE_ENTRIES: usize = 32;
 
-/// Thread-safe store of the latest reported usage per run.
-/// Keys are run identifiers; each value already carries its public
-/// provider/run/session triple plus source, scope, and receipt time.
+/// Thread-safe latest observations per run, wire session, and report source.
+/// Context/session-cost updates and prompt token reports retain their separate scopes.
 pub struct UsageRegistry {
-    entries: Mutex<HashMap<String, ReportedUsage>>,
+    entries: Mutex<HashMap<(String, String, AcpUsageSource), ReportedUsage>>,
 }
 
 impl UsageRegistry {
@@ -26,12 +25,17 @@ impl UsageRegistry {
         }
     }
 
-    /// Record the latest report for its run, replacing any previous report for
-    /// the same run without summing counters. Evict oldest reports by receipt
+    /// Replace the latest observation for the same run, session, and source without
+    /// summing counters or erasing the other source. Evict oldest reports by receipt
     /// time when the bounded capacity would be exceeded.
     pub fn record(&self, usage: ReportedUsage) {
         let mut entries = self.entries.lock().expect("usage registry lock");
-        entries.insert(usage.run_id.0.clone(), usage);
+        let key = (
+            usage.run_id.0.clone(),
+            usage.session_id.0.clone(),
+            usage.source,
+        );
+        entries.insert(key, usage);
         while entries.len() > MAX_USAGE_ENTRIES {
             let oldest = entries
                 .iter()
@@ -52,15 +56,17 @@ impl UsageRegistry {
         self.entries
             .lock()
             .expect("usage registry lock")
-            .remove(&run_id.0);
+            .retain(|(run, _, _), _| run != &run_id.0);
     }
 
-    /// Clone the latest report for one run, if any.
+    /// Clone the newest observation for one run without combining report scopes.
     pub fn get(&self, run_id: &AiRunId) -> Option<ReportedUsage> {
         self.entries
             .lock()
             .expect("usage registry lock")
-            .get(&run_id.0)
+            .values()
+            .filter(|usage| usage.run_id == *run_id)
+            .max_by_key(|usage| usage.received_ms)
             .cloned()
     }
 

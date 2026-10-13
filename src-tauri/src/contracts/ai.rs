@@ -1,10 +1,10 @@
-//! AI IPC schema v1. Owned by Issue #7; kept separate from contracts.rs (owned by #3).
+//! AI IPC data exported separately from document contracts.
 //!
 //! Rust owns this definition; export-ai-contracts generates TypeScript into
-//! src/shared/ai-contracts.ts. JSON fields are camelCase, enum values are
+//! src/contracts/ai-contracts.ts. JSON fields are camelCase, enum values are
 //! snake_case. AI schema version is independent from the document contract.
 //!
-//! Rules enforced by this schema and src/ai.rs:
+//! Rules enforced by these contracts and the AI use cases:
 //! - There is no Claude Code preset and no preset may launch it.
 //! - Transports take argv arrays; no shell interpolation happens anywhere.
 //! - Agents only see isolated staging copies (see #8); live documents and
@@ -250,7 +250,7 @@ pub struct StreamCancelled {
 
 /// Where a usage report was observed on the ACP wire. Only official fields
 /// are recorded; arbitrary `_meta` names are never scraped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum AcpUsageSource {
     UsageUpdate,
@@ -299,41 +299,42 @@ pub struct ReportedUsage {
     pub scope: AcpUsageScope,
     /// Tokens currently in context (`usage_update.used`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional, type = "number")]
     pub used: Option<u64>,
     /// Total context window size in tokens (`usage_update.size`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional, type = "number")]
     pub size: Option<u64>,
     /// Reported input tokens (`PromptResponse.usage.inputTokens`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional, type = "number")]
     pub input_tokens: Option<u64>,
     /// Reported output tokens (`PromptResponse.usage.outputTokens`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional, type = "number")]
     pub output_tokens: Option<u64>,
     /// Reported total tokens (`PromptResponse.usage.totalTokens`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional, type = "number")]
     pub total_tokens: Option<u64>,
     /// Reported cache-read tokens (`PromptResponse.usage.cachedReadTokens`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional, type = "number")]
     pub cached_read_tokens: Option<u64>,
     /// Reported cache-write tokens (`PromptResponse.usage.cachedWriteTokens`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional, type = "number")]
     pub cached_write_tokens: Option<u64>,
     /// Reported reasoning tokens (official `thoughtTokens`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional, type = "number")]
     pub reasoning_tokens: Option<u64>,
     /// Cumulative session cost exactly as reported in `usage_update.cost`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub cost: Option<UsageCost>,
     /// Unix milliseconds when Rust received the report.
+    #[ts(type = "number")]
     pub received_ms: u64,
 }
 
@@ -357,7 +358,7 @@ pub enum AiStreamEvent {
     Cancelled(StreamCancelled),
 }
 
-/// Explicit machine-readable failures. The panel maps each code to Japanese.
+/// Explicit machine-readable failures mapped to display text by the UI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum AiError {
