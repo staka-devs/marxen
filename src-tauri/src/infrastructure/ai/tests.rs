@@ -949,4 +949,249 @@ mod regression {
         assert_eq!(messages[0]["content"], "1件目の質問");
         assert_eq!(messages[1]["content"], "1件目の回答");
     }
+
+    /// Preserve `PATHEXT` order while dropping empties, dots, and non-alphanumeric noise.
+    #[test]
+    fn pathext_parsing_preserves_order_and_drops_noise() {
+        let parsed = parse_windows_pathext(".COM;.EXE;.BAT;.CMD;;.PS1;BAD-EXT;.JS");
+        assert_eq!(parsed, vec!["com", "exe", "bat", "cmd", "ps1", "js"]);
+        assert!(!default_windows_pathext().is_empty());
+        assert!(is_windows_script_extension("CMD"));
+        assert!(is_windows_script_extension("ps1"));
+        assert!(!is_windows_script_extension("exe"));
+    }
+
+    /// Treat only `.exe`/`.com` as directly runnable; shims and bare wrappers need resolution.
+    #[test]
+    fn direct_executable_detection_rejects_shims() {
+        assert!(is_direct_windows_executable(Path::new("agent.EXE")));
+        assert!(is_direct_windows_executable(Path::new(
+            "C:\\tools\\run.com"
+        )));
+        assert!(!is_direct_windows_executable(Path::new("codex-acp.cmd")));
+        assert!(!is_direct_windows_executable(Path::new("codex-acp.ps1")));
+        assert!(!is_direct_windows_executable(Path::new("codex-acp")));
+        assert!(!is_direct_windows_executable(Path::new("agent.js")));
+    }
+
+    /// Classify authentication markers as `AuthFailed` with terminal guidance,
+    /// keeping other agent errors as `StreamFailed` with bounded context.
+    #[test]
+    fn auth_markers_map_to_actionable_failures() {
+        assert!(is_auth_required_message("auth_required: need login"));
+        assert!(is_auth_required_message("HTTP 401 unauthorized"));
+        assert!(!is_auth_required_message("model not found"));
+        match map_acp_rpc_error("prompt に失敗しました", None, "auth_required: login") {
+            AiError::AuthFailed { detail } => assert!(detail.contains("利用する CLI")),
+            other => panic!("expected auth, got {other:?}"),
+        }
+        match map_acp_rpc_error("initialize が失敗しました", Some(-32603), "busy") {
+            AiError::StreamFailed { detail } => assert!(detail.contains("initialize")),
+            other => panic!("expected stream, got {other:?}"),
+        }
+        assert!(missing_binary_hint("codex-acp").contains("@agentclientprotocol/codex-acp"));
+        assert!(missing_binary_hint("opencode").contains("opencode"));
+        let error = AiError::MissingBinary {
+            command: "codex-acp".into(),
+        };
+        assert!(error_detail(&error).contains("codex-acp"));
+        assert!(matches!(
+            map_acp_rpc_error("session/new", Some(-32000), "ログインしてください"),
+            AiError::AuthFailed { .. }
+        ));
+        assert!(matches!(
+            map_acp_rpc_error(
+                "session/new",
+                Some(-32603),
+                "authentication service unavailable"
+            ),
+            AiError::StreamFailed { .. }
+        ));
+    }
+
+    /// Report a definitely absent executable as `MissingBinary` without spawning.
+    #[test]
+    fn resolve_missing_binary_is_actionable_without_spawn() {
+        let argv = AcpArgv {
+            command: "marxen-definitely-missing-binary".into(),
+            args: vec![],
+        };
+        match resolve_acp_launch(&argv) {
+            Err(AiError::MissingBinary { command }) => {
+                assert_eq!(command, "marxen-definitely-missing-binary");
+                assert!(missing_binary_hint(&command).contains("PATH"));
+            }
+            other => panic!("expected missing, got {other:?}"),
+        }
+        assert!(matches!(
+            spawn_acp(&argv, Path::new("/tmp")),
+            Err(AiError::MissingBinary { .. })
+        ));
+    }
+
+    /// Refuse Claude Code commands during resolution before any process starts.
+    #[test]
+    fn resolve_refuses_claude_without_spawning() {
+        let argv = AcpArgv {
+            command: "claude".into(),
+            args: vec![],
+        };
+        assert!(matches!(
+            resolve_acp_launch(&argv),
+            Err(AiError::ClaudeCodeRefused { .. })
+        ));
+    }
+
+    /// Freeze a relative executable path while preserving arguments before spawn changes cwd.
+    #[test]
+    fn resolve_relative_executable_to_absolute_path() {
+        let cwd = std::env::current_dir().unwrap();
+        let root = tempfile::tempdir_in(&cwd).unwrap();
+        let exe = root.path().join("agent.exe");
+        std::fs::write(&exe, b"fixture").unwrap();
+        let relative = exe.strip_prefix(&cwd).unwrap();
+        let argv = AcpArgv {
+            command: relative.to_string_lossy().into_owned(),
+            args: vec!["a b 日本語".into()],
+        };
+        let launch = resolve_acp_launch(&argv).unwrap();
+        assert!(launch.program.is_absolute());
+        assert_eq!(launch.program, exe);
+        assert_eq!(launch.args, argv.args);
+    }
+
+    /// Keep both Node and the adapter script absolute when the npm shim path is relative.
+    #[cfg(windows)]
+    #[test]
+    fn resolve_relative_codex_shim_keeps_script_absolute() {
+        let cwd = std::env::current_dir().unwrap();
+        let root = tempfile::tempdir_in(&cwd).unwrap();
+        let dist = root
+            .path()
+            .join("node_modules")
+            .join("@agentclientprotocol")
+            .join("codex-acp")
+            .join("dist");
+        std::fs::create_dir_all(&dist).unwrap();
+        let script = dist.join("index.js");
+        std::fs::write(&script, b"fixture").unwrap();
+        let node = root.path().join("node.exe");
+        std::fs::write(&node, b"fixture").unwrap();
+        let shim = root.path().join("codex-acp.cmd");
+        std::fs::write(&shim, b"@ECHO off").unwrap();
+        let argv = AcpArgv {
+            command: shim
+                .strip_prefix(&cwd)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            args: vec!["--stdio".into()],
+        };
+        let launch = resolve_acp_launch(&argv).unwrap();
+        assert_eq!(launch.program, node);
+        assert_eq!(
+            launch.args,
+            vec![script.to_string_lossy().into_owned(), "--stdio".into()]
+        );
+    }
+
+    /// Resolve an explicit `opencode.cmd` shim with spaces to its bundled `.exe`
+    /// without a shell, preserving the original `acp` argument.
+    #[cfg(windows)]
+    #[test]
+    fn resolve_explicit_opencode_shim_with_space_path() {
+        let root = tempfile::tempdir().unwrap();
+        let npm_root = root.path().join("npm root with space");
+        let bin = npm_root
+            .join("node_modules")
+            .join("@opencode")
+            .join("cli")
+            .join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let exe = bin.join("opencode.exe");
+        std::fs::write(&exe, b"fake").unwrap();
+        let shim = npm_root.join("opencode.cmd");
+        std::fs::write(&shim, b"@ECHO off").unwrap();
+        let argv = AcpArgv {
+            command: shim.to_string_lossy().into_owned(),
+            args: vec!["acp".into()],
+        };
+        let launch = resolve_acp_launch(&argv).unwrap();
+        assert_eq!(launch.program, exe);
+        assert_eq!(launch.args, vec!["acp".to_owned()]);
+        // Direct `.exe` paths with spaces also resolve without interpolation.
+        let direct = AcpArgv {
+            command: exe.to_string_lossy().into_owned(),
+            args: vec!["acp".into()],
+        };
+        let launch = resolve_acp_launch(&direct).unwrap();
+        assert_eq!(launch.program, exe);
+    }
+
+    /// Resolve an explicit `codex-acp.cmd` shim with spaces to `node <script>`
+    /// without a shell, keeping bundled script first and original args after.
+    #[cfg(windows)]
+    #[test]
+    fn resolve_explicit_codex_shim_with_space_path_to_node() {
+        let root = tempfile::tempdir().unwrap();
+        let npm_root = root.path().join("npm root with space");
+        let dist = npm_root
+            .join("node_modules")
+            .join("@agentclientprotocol")
+            .join("codex-acp")
+            .join("dist");
+        std::fs::create_dir_all(&dist).unwrap();
+        let script = dist.join("index.js");
+        std::fs::write(&script, b"console.log(1)").unwrap();
+        let node = npm_root.join("node.exe");
+        std::fs::write(&node, b"fake").unwrap();
+        let shim = npm_root.join("codex-acp.cmd");
+        std::fs::write(&shim, b"@ECHO off").unwrap();
+        let argv = AcpArgv {
+            command: shim.to_string_lossy().into_owned(),
+            args: vec![],
+        };
+        let launch = resolve_acp_launch(&argv).unwrap();
+        assert_eq!(launch.program, node);
+        assert_eq!(launch.args.len(), 1);
+        assert_eq!(launch.args[0], script.to_string_lossy());
+    }
+
+    /// Keep a stale explicit shim without its bundled target as missing rather
+    /// than falling back to an arbitrary shell.
+    #[cfg(windows)]
+    #[test]
+    fn resolve_shim_without_bundled_target_is_missing() {
+        let root = tempfile::tempdir().unwrap();
+        let shim = root.path().join("codex-acp.cmd");
+        std::fs::write(&shim, b"@ECHO off").unwrap();
+        let argv = AcpArgv {
+            command: shim.to_string_lossy().into_owned(),
+            args: vec![],
+        };
+        assert!(matches!(
+            resolve_acp_launch(&argv),
+            Err(AiError::MissingBinary { .. })
+        ));
+    }
+
+    /// Probe the installed Codex adapter through native resolution without sending a prompt.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires the user's installed and already authenticated Codex adapter"]
+    fn installed_codex_acp_handshake() {
+        let result = handshake_acp(&preset_argv(AcpPreset::Codex)).unwrap();
+        assert!(result.ok, "{}", result.detail);
+        assert!(result.config_options.is_some());
+    }
+
+    /// Probe the installed OpenCode adapter through native resolution without model inference.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires the user's installed and already authenticated OpenCode adapter"]
+    fn installed_opencode_acp_handshake() {
+        let result = handshake_acp(&preset_argv(AcpPreset::Opencode)).unwrap();
+        assert!(result.ok, "{}", result.detail);
+        assert!(result.config_options.is_some());
+    }
 }

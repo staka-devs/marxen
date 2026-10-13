@@ -13,9 +13,18 @@ pub struct AcpRunParams {
     pub staging_dir: PathBuf,
     pub timeout: Duration,
 }
+/// Directly spawnable ACP program with its final argument list.
+/// On Windows this already resolves npm `.cmd`/`.ps1` shims to an `.exe` or
+/// to `node <script>`; no shell or string interpolation is involved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedAcpLaunch {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+}
 pub trait AiTransport: Send + Sync {
-    /// Find a configured executable without spawning an agent or reading credentials.
-    fn find_binary(&self, command: &str) -> Option<PathBuf>;
+    /// Resolve configured argv to a directly spawnable program and final args.
+    /// Returns `MissingBinary` with an actionable hint when no runnable target exists.
+    fn resolve_launch(&self, argv: &AcpArgv) -> Result<ResolvedAcpLaunch, AiError>;
     /// Probe an explicitly requested ACP handshake in a temporary native staging directory.
     fn handshake(&self, argv: &AcpArgv) -> Result<AiTestResult, AiError>;
     /// Perform the explicitly requested HTTP probe using an already resolved credential.
