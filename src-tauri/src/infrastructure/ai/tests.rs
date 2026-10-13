@@ -3,7 +3,7 @@ use super::acp::*;
 use super::credentials::*;
 use crate::application::ai::credentials::*;
 use crate::application::ai::runs::*;
-use crate::application::ai::usage::UsageRegistry;
+use crate::application::ai::usage::{UsageRegistry, MAX_USAGE_ENTRIES};
 use crate::contracts::ai::*;
 use crate::domain::ai::*;
 use std::path::Path;

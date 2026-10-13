@@ -48,8 +48,60 @@ export type StreamError = { runId: AiRunId | null, error: AiError, };
 export type StreamCancelled = { runId: AiRunId, };
 export type AcpUsageSource = "usage_update" | "prompt_response";
 export type AcpUsageScope = "session" | "prompt_response_undefined";
-export type UsageCost = { amount: string, currency: string, };
-export type ReportedUsage = { provider: AiProviderKind, preset?: AcpPreset, runId: AiRunId, sessionId: AcpSessionId, source: AcpUsageSource, scope: AcpUsageScope, used?: number, size?: number, inputTokens?: number, outputTokens?: number, totalTokens?: number, cachedReadTokens?: number, cachedWriteTokens?: number, reasoningTokens?: number, cost?: UsageCost, receivedMs: number, };
+export type UsageCost = { 
+/**
+ * Decimal amount text from the validated wire number (for example `"12.34"`).
+ */
+amount: string, 
+/**
+ * ISO 4217 code as reported (for example `"USD"`).
+ */
+currency: string, };
+export type ReportedUsage = { provider: AiProviderKind, 
+/**
+ * ACP preset that produced the report, when the provider is ACP.
+ */
+preset?: AcpPreset, runId: AiRunId, sessionId: AcpSessionId, source: AcpUsageSource, scope: AcpUsageScope, 
+/**
+ * Tokens currently in context (`usage_update.used`).
+ */
+used?: bigint, 
+/**
+ * Total context window size in tokens (`usage_update.size`).
+ */
+size?: bigint, 
+/**
+ * Reported input tokens (`PromptResponse.usage.inputTokens`).
+ */
+inputTokens?: bigint, 
+/**
+ * Reported output tokens (`PromptResponse.usage.outputTokens`).
+ */
+outputTokens?: bigint, 
+/**
+ * Reported total tokens (`PromptResponse.usage.totalTokens`).
+ */
+totalTokens?: bigint, 
+/**
+ * Reported cache-read tokens (`PromptResponse.usage.cachedReadTokens`).
+ */
+cachedReadTokens?: bigint, 
+/**
+ * Reported cache-write tokens (`PromptResponse.usage.cachedWriteTokens`).
+ */
+cachedWriteTokens?: bigint, 
+/**
+ * Reported reasoning tokens (official `thoughtTokens`).
+ */
+reasoningTokens?: bigint, 
+/**
+ * Cumulative session cost exactly as reported in `usage_update.cost`.
+ */
+cost?: UsageCost, 
+/**
+ * Unix milliseconds when Rust received the report.
+ */
+receivedMs: bigint, };
 export type AiStreamEvent = { "type": "started", "payload": StreamStarted } | { "type": "chunk", "payload": StreamChunk } | { "type": "usage", "payload": StreamUsage } | { "type": "done", "payload": StreamDone } | { "type": "error", "payload": StreamError } | { "type": "cancelled", "payload": StreamCancelled };
 export type AiError = { "code": "invalid_config", detail: string, } | { "code": "missing_credentials", provider: AiProviderKind, } | { "code": "missing_binary", command: string, } | { "code": "spawn_failed", detail: string, } | { "code": "connection_failed", detail: string, } | { "code": "auth_failed", detail: string, } | { "code": "stream_failed", detail: string, } | { "code": "request_cancelled" } | { "code": "session_required" } | { "code": "session_busy" } | { "code": "unknown_session" } | { "code": "staging_unresolved", copy_id: IsolatedCopyId, } | { "code": "live_target_rejected", detail: string, } | { "code": "unsupported_protocol", version: number, } | { "code": "claude_code_refused", command: string, } | { "code": "credential_store_failed", detail: string, };
 export type CredentialRef = { provider: AiProviderKind, hasSecret: boolean, };
