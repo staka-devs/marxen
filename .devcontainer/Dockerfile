@@ -2,7 +2,7 @@ FROM node:22.23.2-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config curl ca-certificates git file xz-utils \
-    libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libssl-dev \
+    libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libssl-dev libdbus-1-dev \
     libayatana-appindicator3-dev librsvg2-dev libxdo-dev xvfb fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 

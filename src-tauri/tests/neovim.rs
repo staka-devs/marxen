@@ -354,6 +354,7 @@ fn config_errors_surface_instead_of_silent_fallback() {
         "expected config errors, got: {report:?}"
     );
     // Session still speaks RPC after a bad user config.
+    attach(session.client(), 80, 24).unwrap();
     assert_eq!(session.mode().unwrap(), VimMode::Normal);
 
     // Isolated default stays clean.

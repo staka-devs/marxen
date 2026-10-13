@@ -3,10 +3,22 @@ import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, lineNumbers } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 import type { TextEdit } from "../../shared/contracts";
+import { MarkdownPreview } from "../preview/MarkdownPreview";
 
 export interface EditorSelection {
   anchor: number;
   head: number;
+}
+
+/**
+ * Vim cursor echo from the shell. Each echo carries a dedicated shell-side
+ * sequence token so non-edit navigation applies even when the snapshot
+ * revision is unchanged. No revision arithmetic is used here.
+ */
+export interface ExternalCursor {
+  anchor: number;
+  head: number;
+  seq: number;
 }
 
 interface Props {
@@ -17,6 +29,13 @@ interface Props {
   onGuiEdits?: (edits: TextEdit[]) => void;
   onSelectionChange?: (selection: EditorSelection) => void;
   initialSelection?: EditorSelection | null;
+  externalCursor?: ExternalCursor | null;
+  /**
+   * Inline live preview switch (shell-owned layout only). When true the
+   * shared Issue #6 preview renders under the editor from the same `value`;
+   * decorations, hydration, and the editing pipeline stay untouched.
+   */
+  livePreview?: boolean;
 }
 
 /** Common prefix/suffix diff as a single wire range edit. */
@@ -45,7 +64,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   return [{ range: { start, end: endBefore }, text: after.slice(start, endAfter) }];
 }
 
-export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection }: Props) {
+export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const editableRef = useRef(new Compartment());
@@ -156,5 +175,37 @@ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, on
     view.dispatch({ effects: editableRef.current.reconfigure(EditorView.editable.of(editable)) });
   }, [editable]);
 
-  return <div ref={host} data-testid={testId ?? "editor"} aria-label={ariaLabel} className="h-full min-h-50 overflow-hidden rounded-lg border border-border bg-card" />;
+  // Vim cursor echo: apply once per sequence token without disturbing
+  // composition or the user's active selection gestures. The programmatic
+  // dispatch is guarded, so it never echoes back through onSelectionChange.
+  const appliedCursorSeq = useRef<number | null>(null);
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !externalCursor) return;
+    if (composing.current) return;
+    if (appliedCursorSeq.current === externalCursor.seq) return;
+    appliedCursorSeq.current = externalCursor.seq;
+    const len = view.state.doc.length;
+    const anchor = Math.min(Math.max(0, externalCursor.anchor), len);
+    const head = Math.min(Math.max(0, externalCursor.head), len);
+    const sel = view.state.selection.main;
+    if (sel.anchor === anchor && sel.head === head) return;
+    syncing.current = true;
+    try {
+      view.dispatch({ selection: { anchor, head }, scrollIntoView: true });
+    } finally {
+      syncing.current = false;
+    }
+  }, [externalCursor]);
+
+  return (
+    <div className="flex h-full min-h-50 flex-col gap-3">
+      <div ref={host} data-testid={testId ?? "editor"} aria-label={ariaLabel} className="min-h-50 flex-1 overflow-hidden rounded-lg border border-border bg-card" />
+      {livePreview && (
+        <div className="min-h-50 flex-1">
+          <MarkdownPreview text={value} label="ライブプレビュー" />
+        </div>
+      )}
+    </div>
+  );
 }

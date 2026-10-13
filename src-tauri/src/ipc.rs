@@ -239,6 +239,17 @@ mod desktop {
         with_workspace(&state, |w| Ok(w.actor(&document_id)?.current_mode()?))
     }
     #[tauri::command(async)]
+    pub fn has_nvim_mapping(
+        state: tauri::State<'_, ActorState>,
+        document_id: String,
+        mode: String,
+        lhs: String,
+    ) -> Result<bool, WorkspaceError> {
+        with_workspace(&state, |w| {
+            Ok(w.actor(&document_id)?.has_user_mapping(&mode, &lhs)?)
+        })
+    }
+    #[tauri::command(async)]
     pub fn undo_document(
         state: tauri::State<'_, ActorState>,
         document_id: String,

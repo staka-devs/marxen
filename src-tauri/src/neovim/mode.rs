@@ -10,10 +10,7 @@ use crate::neovim::rpc::RpcError;
 use rmpv::Value;
 
 /// Interpret one `nvim_get_mode()` response value (map with `mode` key).
-/// Kept for completeness; live sessions use [`fetch_via_eval`] because
-/// `nvim_get_mode` does not answer on this project's headless embed channel
-/// (verified: `nvim_get_current_buf` / `nvim_eval("mode()")` answer, the map
-/// call times out even in Normal with no UI attached).
+/// Live sessions attach an embedded UI before using this fast API.
 pub fn parse_mode(value: &Value) -> Result<VimMode, RpcError> {
     let map = match value {
         Value::Map(entries) => entries,
@@ -43,10 +40,22 @@ pub fn parse_mode(value: &Value) -> Result<VimMode, RpcError> {
 }
 
 /// Interpret a short `mode()` string (`n`, `i`, `V`, `\x16`, `c`, `t`, ...).
-/// Live sessions fetch this via `nvim_call_function("mode")`; see [`parse_mode`].
+/// Also used to interpret short codes in redraw notifications.
 pub fn from_short(short: &str) -> Result<VimMode, RpcError> {
     // Control-V arrives as "\u{16}".
     short_to_mode(short).ok_or_else(|| RpcError::Invalid(format!("unknown Neovim mode: {short:?}")))
+}
+
+pub fn parse_blocking(value: &Value) -> Result<bool, RpcError> {
+    value
+        .as_map()
+        .and_then(|entries| {
+            entries
+                .iter()
+                .find(|(key, _)| key.as_str() == Some("blocking"))
+                .and_then(|(_, value)| value.as_bool())
+        })
+        .ok_or_else(|| RpcError::Invalid("nvim_get_mode lacks boolean blocking".into()))
 }
 
 fn short_to_mode(short: &str) -> Option<VimMode> {
