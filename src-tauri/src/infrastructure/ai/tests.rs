@@ -788,20 +788,39 @@ mod regression {
     /// `\\?\...` versus the drive-letter form. The domain rule stays purely
     /// lexical, but the infrastructure gate must fall back to canonical
     /// comparison for absolute existing paths so the mock's
-    /// `fs/read_text_file` round-trip succeeds. Outside, relative, and
-    /// symlink-escape paths stay rejected through every alias form.
+    /// `fs/read_text_file` round-trip succeeds. Traversal (`..`) is rejected
+    /// before either acceptance even when it resolves inside, and outside,
+    /// relative, and symlink-escape paths stay rejected through every alias
+    /// form. The scratch directory is uniquely owned: nothing shared is
+    /// created or deleted.
     #[test]
     fn agentic_staging_paths_accept_canonical_aliases() {
-        let staging = std::env::temp_dir().join("marxen-staging-alias-test");
-        let _ = std::fs::remove_dir_all(&staging);
-        std::fs::create_dir_all(&staging).expect("staging dir");
+        let scratch = tempfile::tempdir().expect("scratch dir");
+        let staging = scratch.path().join("staging");
+        std::fs::create_dir_all(staging.join("subdir")).expect("staging dir");
         std::fs::write(staging.join("a.md"), "# Seed\n").expect("seed file");
-        let outside = std::env::temp_dir().join("marxen-staging-alias-other.md");
-        std::fs::write(&outside, "other\n").expect("outside file");
+        std::fs::write(scratch.path().join("other.md"), "other\n").expect("outside file");
+        let lexical_inside = staging.join("a.md").to_string_lossy().into_owned();
+        // Traversal is never authorized even when it resolves inside staging.
+        let inner_traversal = staging
+            .join("subdir")
+            .join("..")
+            .join("a.md")
+            .to_string_lossy()
+            .into_owned();
+        assert!(!staging_path_allowed(&staging, &inner_traversal));
+        let escaping_traversal = staging
+            .join("..")
+            .join("other.md")
+            .to_string_lossy()
+            .into_owned();
+        assert!(!staging_path_allowed(&staging, &escaping_traversal));
+        // The exact IPC read refuses traversal with the outside-path error.
+        let params = serde_json::json!({"sessionId": "sess_1", "path": inner_traversal});
+        assert!(serve_fs_read(&staging, "sess_1", &params).is_err());
         let canonical_root = staging.canonicalize().expect("canonical staging");
         let alias_inside = canonical_root.join("a.md");
         let alias_str = alias_inside.to_string_lossy().into_owned();
-        let lexical_inside = staging.join("a.md").to_string_lossy().into_owned();
         if alias_str != lexical_inside {
             // Lexically different alias: the domain rule stays strict while
             // the infrastructure gate resolves the identical file.
@@ -820,18 +839,17 @@ mod regression {
             // Canonical escapes through the alias stay rejected.
             let alias_outside = canonical_root
                 .join("..")
-                .join("marxen-staging-alias-other.md")
+                .join("other.md")
                 .to_string_lossy()
                 .into_owned();
             assert!(!staging_path_allowed(&staging, &alias_outside));
         }
         // Symlink aliases resolve the same way on Unix; the link lives in the
-        // same parent so `..` escapes through it stay rejected as well.
+        // owned scratch directory so nothing shared is touched.
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
-            let link = std::env::temp_dir().join("marxen-staging-alias-link");
-            let _ = std::fs::remove_file(&link);
+            let link = scratch.path().join("link");
             symlink(&staging, &link).expect("staging symlink");
             let linked = link.join("a.md").to_string_lossy().into_owned();
             assert!(staging_path_allowed(&staging, &linked));
@@ -843,16 +861,13 @@ mod regression {
             );
             let link_outside = link
                 .join("..")
-                .join("marxen-staging-alias-other.md")
+                .join("other.md")
                 .to_string_lossy()
                 .into_owned();
             assert!(!staging_path_allowed(&staging, &link_outside));
-            let _ = std::fs::remove_file(&link);
         }
         // The plain lexical path keeps working and guards stay intact.
         assert!(staging_path_allowed(&staging, &lexical_inside));
-        let _ = std::fs::remove_dir_all(&staging);
-        let _ = std::fs::remove_file(&outside);
     }
 
     /// Bind permission replies to exact run/request IDs and offered options.

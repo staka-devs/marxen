@@ -108,16 +108,26 @@ fn emit_agentic_notification(
 
 /// Check whether an absolute wire path stays inside the authorized staging directory.
 ///
-/// Lexical containment from the domain rules plus a canonical filesystem
-/// check when the file exists: symlinks escaping the root fail even when
-/// their names look contained. Platform aliases (macOS `/var` versus
-/// `/private/var` reported by `current_dir`, Windows UNC `\\?\` versus the
-/// drive-letter form) differ lexically but resolve identically, so a lexical
-/// miss falls back to canonical comparison for absolute existing paths.
+/// Traversal (`..`) is never authorized even when it resolves inside: it is
+/// rejected before either lexical or canonical acceptance, matching the
+/// method docs and the domain containment contract. Lexical containment from
+/// the domain rules plus a canonical filesystem check when the file exists:
+/// symlinks escaping the root fail even when their names look contained.
+/// Platform aliases (macOS `/var` versus `/private/var` reported by
+/// `current_dir`, Windows UNC `\\?\` versus the drive-letter form) differ
+/// lexically but resolve identically, so a lexical miss falls back to
+/// canonical comparison for absolute existing alias paths without `..`.
 /// Absolute outside paths, relative paths, and traversal yield false without
 /// touching the filesystem beyond these two reads.
 pub(crate) fn staging_path_allowed(staging_dir: &Path, abs_path: &str) -> bool {
+    use std::path::Component;
     let candidate = Path::new(abs_path);
+    if candidate
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return false;
+    }
     if staging_path_is_contained(staging_dir, abs_path) {
         if candidate.exists() {
             if let (Ok(canonical_root), Ok(canonical)) =
