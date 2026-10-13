@@ -8,6 +8,8 @@ import { expect, test } from "@playwright/test";
 test("live/source/read/split retain the document without editing it", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("revision")).toHaveText("リビジョン 0");
+  // The Issue #6 preview renders asynchronously; wait for content first.
+  await expect(page.getByTestId("preview")).toContainText("日本語で書く");
   const before = await page.getByTestId("preview").textContent();
 
   await page.getByRole("button", { name: "閲覧", exact: true }).click();
@@ -20,6 +22,7 @@ test("live/source/read/split retain the document without editing it", async ({ p
   await expect(page.locator('[data-testid="editor-secondary"] .cm-content')).toBeVisible();
 
   await page.getByRole("button", { name: "ライブ", exact: true }).click();
+  await expect(page.getByTestId("preview")).toContainText("日本語で書く");
   expect(await page.getByTestId("preview").textContent()).toBe(before);
   await expect(page.getByTestId("revision")).toHaveText("リビジョン 0");
 

@@ -92,6 +92,32 @@ fn read_http_head(stream: &mut std::net::TcpStream) -> String {
     head_text
 }
 
+/// Accept one connection with a real deadline: a client that never connects
+/// (for example a run cancelled before its first byte) must not hang the
+/// server thread's join forever.
+fn accept_bounded(listener: &TcpListener) -> Option<std::net::TcpStream> {
+    listener.set_nonblocking(true).expect("nonblocking");
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                let _ = listener.set_nonblocking(false);
+                // The accepted socket inherits nonblocking mode: restore
+                // blocking I/O before the bounded read/write helpers use it.
+                let _ = stream.set_nonblocking(false);
+                return Some(stream);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if std::time::Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("accept: {error}"),
+        }
+    }
+}
+
 /// Serve staged replies on one connection: each stage is (delay_ms, bytes).
 fn serve(stages: Vec<(u64, Vec<u8>)>) -> MockHttp {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
@@ -101,7 +127,9 @@ fn serve(stages: Vec<(u64, Vec<u8>)>) -> MockHttp {
     );
     let (seen_tx, seen_rx) = std::sync::mpsc::channel();
     let done = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept");
+        let Some(mut stream) = accept_bounded(&listener) else {
+            return;
+        };
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
             .expect("timeout");
@@ -281,15 +309,30 @@ async fn http_errors_map_to_auth_and_connection_failures() {
     server.done.take().expect("join").join().expect("server");
 }
 
+/// Cancelling an in-flight HTTP prompt stops the stream without a `Done` event.
+///
+/// The first stage carries the mock SSE stream through its first real content
+/// chunk; the wait below is deadline-bounded so a missing chunk fails fast
+/// instead of hanging, and the driver await is bounded so cancel must settle
+/// promptly after the flag is set.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn http_cancel_midstream_stops_without_done() {
     let body = include_str!("../../tests/fixtures/ai_sse_openai.txt").replace("\r\n", "\n");
-    // Deliver the first event, then stall so the client must cancel mid-stream.
-    let split = body.find("\n\n").expect("sse events") + 2;
-    let (first, rest) = body.split_at(split);
+    // Deliver through the first content chunk ("Hello, "), then stall so the
+    // client must cancel mid-stream. The fixture opens with a ping comment
+    // and a role-only delta, neither of which emits a Chunk, so the split
+    // must fall after real content.
+    let mut ends = body.match_indices("\n\n").map(|(index, _)| index + 2);
+    let (_ping, _role, hello) = (
+        ends.next().expect("ping"),
+        ends.next().expect("role"),
+        ends.next().expect("hello"),
+    );
+    let (first, rest) = body.split_at(hello);
+    assert!(first.contains("Hello, "));
     let mut server = serve(vec![
         (0, sse_reply_chunked(first)),
-        (10_000, rest.as_bytes().to_vec()),
+        (3_000, rest.as_bytes().to_vec()),
     ]);
     let request = openai_request(&server.base);
     let run_id = AiRunId("run_cancel".into());
@@ -314,20 +357,29 @@ async fn http_cancel_midstream_stops_without_done() {
         )
         .await
     });
-    // Wait for the first chunk, then cancel.
-    for _ in 0..500 {
-        let has_chunk = events
-            .lock()
-            .expect("events lock")
-            .iter()
-            .any(|event| matches!(event, AiStreamEvent::Chunk(_)));
-        if has_chunk {
-            break;
+    // Wait for the first chunk with a real deadline, then cancel: a blind
+    // yield loop would let a missing chunk slip through and weaken the proof.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let has_chunk = events
+                .lock()
+                .expect("events lock")
+                .iter()
+                .any(|event| matches!(event, AiStreamEvent::Chunk(_)));
+            if has_chunk {
+                break;
+            }
+            tokio::task::yield_now().await;
         }
-        tokio::task::yield_now().await;
-    }
+    })
+    .await
+    .expect("first streamed chunk");
     cancel.store(true, Ordering::SeqCst);
-    driver.await.expect("driver").unwrap();
+    tokio::time::timeout(Duration::from_secs(15), driver)
+        .await
+        .expect("driver settles after cancel")
+        .expect("driver")
+        .unwrap();
     let events = events.lock().expect("events lock").clone();
     let (_, done, cancelled) = events_of(&events);
     assert!(cancelled && !done);
