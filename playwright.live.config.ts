@@ -33,7 +33,7 @@ export default defineConfig({
   // The first navigation compiles the live harness's local renderers. Allow
   // cold-cache startup without changing the 5s assertion timeout or retries.
   timeout: 90_000,
-  use: { baseURL: `http://127.0.0.1:${port}`, trace: "retain-on-failure" },
+  use: { baseURL: `http://127.0.0.1:${port}`, locale: "ja-JP", trace: "retain-on-failure" },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
     command: `npm run dev:live -- --port ${port} --strictPort`,

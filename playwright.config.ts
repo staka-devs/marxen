@@ -10,7 +10,7 @@ export default defineConfig({
   workers: 2,
   testDir: "./tests/e2e",
   outputDir: "./test-results/product",
-  use: { baseURL, trace: "retain-on-failure" },
+  use: { baseURL, locale: "ja-JP", trace: "retain-on-failure" },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
     command: `${process.env.MARXEN_E2E_PREBUILT === "1" ? "" : "npm run build && "}npm run preview -- --port ${port} --strictPort`,
