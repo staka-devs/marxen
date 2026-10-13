@@ -1,0 +1,6 @@
+{
+  "documentId": "doc_01",
+  "baseRevision": 7,
+  "source": "gui",
+  "edits": [{ "range": { "start": 1, "end": 3 }, "text": "日本語" }]
+}

@@ -1,0 +1,53 @@
+{
+  "name": "marxen",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test",
+    "test:bundling": "node --test scripts/*.test.mjs",
+    "contracts:generate": "cargo run --manifest-path src-tauri/Cargo.toml --no-default-features --bin export-contracts --",
+    "contracts:check": "npm run contracts:generate -- --check",
+    "bundle:neovim": "node scripts/bundle-neovim.mjs",
+    "verify:neovim": "node scripts/verify-neovim.mjs",
+    "tauri": "tauri",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "npm run bundle:neovim && tauri build --config src-tauri/tauri.bundle.conf.json"
+  },
+  "dependencies": {
+    "@codemirror/lang-markdown": "6.5.0",
+    "@codemirror/state": "6.5.2",
+    "@codemirror/view": "6.38.8",
+    "@radix-ui/react-slot": "1.2.3",
+    "@tauri-apps/api": "2.12.1",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "lucide-react": "0.468.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "tailwind-merge": "3.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@tailwindcss/vite": "4.3.3",
+    "@tauri-apps/cli": "2.12.1",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.0",
+    "@types/node": "22.19.0",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@vitejs/plugin-react": "6.1.2",
+    "jsdom": "27.2.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vite": "8.3.3",
+    "vitest": "5.0.3"
+  }
+}

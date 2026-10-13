@@ -1,0 +1,8 @@
+{
+  "name": "Marxen Linux foundation",
+  "build": { "dockerfile": "Dockerfile", "context": ".." },
+  "remoteUser": "node",
+  "forwardPorts": [1420],
+  "postCreateCommand": "npm ci && npm run bundle:neovim && npm run verify:neovim",
+  "customizations": { "vscode": { "extensions": ["rust-lang.rust-analyzer", "tauri-apps.tauri-vscode", "bradlc.vscode-tailwindcss"] } }
+}
