@@ -26,6 +26,14 @@ path = "src/bin/export-ai-contracts.rs"
 name = "mock-acp-agent"
 path = "src/bin/mock-acp-agent.rs"
 
+[[bin]]
+name = "export-isolation-contracts"
+path = "src/bin/export-isolation-contracts.rs"
+
+[[bin]]
+name = "mock-isolation-agent"
+path = "src/bin/mock-isolation-agent.rs"
+
 [features]
 default = ["desktop"]
 desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog"]
