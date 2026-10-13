@@ -90,13 +90,15 @@ pub struct IsolationManager {
 
 /// Original workspace binding of one approved copy with its pending imports.
 ///
-/// `root` is the workspace the copy was approved from; `pending` holds the
-/// relative paths of staged new files not yet successfully imported. Both are
-/// captured at approval before the staging directory is consumed.
+/// `root` is the workspace the copy was approved from; `pending` maps each
+/// not-yet-imported staged new file to its authoritative content captured at
+/// approval. Both are captured before the staging directory is consumed, so
+/// later import requests are validated against Rust-owned state instead of
+/// trusting caller-supplied paths and content.
 #[derive(Debug, Clone)]
 struct RetiredCopy {
     root: PathBuf,
-    pending: HashSet<String>,
+    pending: HashMap<String, String>,
 }
 
 impl IsolationManager {
@@ -946,6 +948,13 @@ impl IsolationManager {
             }
             staged
         };
+        // Capture importable new files with their authoritative content before
+        // any mutation: a listing failure refuses approval here with its detail,
+        // never silently approving while losing the new-file capture.
+        let pending_imports: HashMap<String, String> = {
+            let copy = self.get_active(copy_id)?;
+            self.importable_staged_files(copy)?.into_iter().collect()
+        };
 
         struct Plan {
             index: usize,
@@ -1109,28 +1118,18 @@ impl IsolationManager {
             }
             self.consume(copy_id, CopyStatus::Failed);
         } else {
-            // Remember the original workspace root with its not-yet-imported
-            // staged files before consumption, so staged new-file imports stay
-            // bound to the approving workspace even after the copy is gone; a
-            // later folder switch cannot redirect them elsewhere. Capture is
-            // best-effort: buffers already applied, so a listing failure must
-            // never fail the approval itself.
-            let retired = if let Some(copy) = self.copies.get(&copy_id.0) {
-                let pending: HashSet<String> = self
-                    .importable_staged_files(copy)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|(rel, _)| rel)
-                    .collect();
-                Some(RetiredCopy {
-                    root: copy.workspace_root.clone(),
-                    pending,
-                })
-            } else {
-                None
-            };
-            if let Some(record) = retired {
-                self.retired_imports.insert(copy_id.0.clone(), record);
+            // Remember the original workspace root with the new files captured
+            // before any mutation above, so staged new-file imports stay bound
+            // to the approving workspace even after the copy is gone; a later
+            // folder switch cannot redirect them elsewhere.
+            if let Some(copy) = self.copies.get(&copy_id.0) {
+                self.retired_imports.insert(
+                    copy_id.0.clone(),
+                    RetiredCopy {
+                        root: copy.workspace_root.clone(),
+                        pending: pending_imports,
+                    },
+                );
             }
             self.consume(copy_id, CopyStatus::Approved);
         }
@@ -1149,13 +1148,16 @@ impl IsolationManager {
     /// still matches. The approved copy's recorded workspace root is checked
     /// under the caller's workspace lock, so a folder switch since approval
     /// fails with `OutsideWorkspace` before any file is created. Each file
-    /// must be contained Markdown refused when existing, so live files are
-    /// never overwritten; successes carry the opened snapshot for session
-    /// registration and drain the pending set. Continues per file so one
-    /// refusal never hides the rest. Empty requests retain the record; the
-    /// record clears only once a non-empty request drains every pending file
-    /// with all outcomes successful, so unfinished imports stay retryable and
-    /// retries never reapply document edits. Unknown copies never import.
+    /// must name a still-pending staged path with content exactly equal to
+    /// the authoritative capture: unknown, already-imported, forbidden, and
+    /// content-drifted requests are refused per file without touching live
+    /// files, so callers can neither invent unstaged paths nor alter approved
+    /// content. Successes carry the opened snapshot for session registration
+    /// and drain the pending set. Continues per file so one refusal never
+    /// hides the rest. Empty requests retain the record; the record clears
+    /// only once a non-empty request drains every pending file with all
+    /// outcomes successful, so unfinished imports stay retryable and retries
+    /// never reapply document edits. Unknown copies never import.
     pub fn import_new_files(
         &mut self,
         workspace: &mut Workspace,
@@ -1193,6 +1195,29 @@ impl IsolationManager {
                 });
                 continue;
             }
+            // Validate against the Rust-owned capture before any mutation:
+            // only still-pending staged paths with unaltered content import.
+            let approved = self
+                .retired_imports
+                .get(&copy_id.0)
+                .and_then(|record| record.pending.get(&file.rel))
+                .cloned();
+            let Some(approved) = approved else {
+                outcomes.push(StagedImportOutcome {
+                    rel: file.rel.clone(),
+                    snapshot: None,
+                    error: Some(format!("{:?}", WorkspaceError::InvalidPath)),
+                });
+                continue;
+            };
+            if approved != file.content {
+                outcomes.push(StagedImportOutcome {
+                    rel: file.rel.clone(),
+                    snapshot: None,
+                    error: Some("staged content differs from the approved copy".into()),
+                });
+                continue;
+            }
             match workspace.create(&file.rel, &file.content) {
                 Ok(opened) => {
                     succeeded.push(file.rel.clone());
@@ -1209,7 +1234,7 @@ impl IsolationManager {
                 }),
             }
         }
-        // Drain only actually-pending files; unstaged extras never poison it.
+        // Drain only the pending files this request imported.
         if let Some(record) = self.retired_imports.get_mut(&copy_id.0) {
             for rel in &succeeded {
                 record.pending.remove(rel);

@@ -1327,53 +1327,79 @@ fn document_id_type_is_shared() {
 #[test]
 /// Bind staged imports to the approved copy's original workspace.
 ///
-/// Approval retires the copy with its workspace root; importing against a
-/// switched workspace root refuses before any file is created. Importing
-/// against the original root creates exact content, refuses duplicates
-/// without touching the original, and reports every file. Retired records
-/// clear once every file imports, so fully imported copies never import
-/// again and unknown copies never import at all.
+/// Approval retires the copy with its workspace root and the authoritative
+/// staged content; importing against a switched workspace root refuses before
+/// any file is created. Only still-pending staged paths with unaltered
+/// content import: arbitrary extra paths and changed content are refused per
+/// file without creating anything, and the pre-existing workspace file stays
+/// untouched. The retired record clears once every pending file imports, so
+/// fully imported copies never import again and unknown copies never import
+/// at all.
 fn import_new_files_stays_bound_to_the_approved_workspace() {
     use marxen_lib::contracts::isolation::ImportFileRequest;
-    let (_root_a, _recovery_a, _staging, mut workspace_a, mut manager) = setup();
+    let (root_a, _recovery_a, _staging, mut workspace_a, mut manager) = setup();
     let doc = workspace_a.create("a.md", "aaa").unwrap();
     let note = workspace_a.create("note.md", "# Original\n").unwrap();
     let copy = manager
         .create_copy(&workspace_a, &[ctx(&doc.snapshot, &[(0, 3)])])
         .unwrap();
-    // Unchanged staging still approves and retires the workspace root.
+    // The agent stages one new file; approval captures its content natively.
+    let staging_dir = manager.resolve(&copy.copy_id).unwrap();
+    std::fs::write(staging_dir.join("fresh.md"), "# Fresh\n").unwrap();
     manager.approve(&workspace_a, &copy.copy_id).unwrap();
-    let files = vec![
-        ImportFileRequest {
-            rel: "note.md".into(),
-            content: "# Agent\n".into(),
-        },
-        ImportFileRequest {
-            rel: "fresh.md".into(),
-            content: "# Fresh\n".into(),
-        },
-    ];
+    let approved = vec![ImportFileRequest {
+        rel: "fresh.md".into(),
+        content: "# Fresh\n".into(),
+    }];
     // A switched workspace root refuses before creating anything.
     let other_root = tempfile::tempdir().unwrap();
     let other_recovery = tempfile::tempdir().unwrap();
     let mut workspace_b =
         marxen_lib::open_workspace(other_root.path(), other_recovery.path()).unwrap();
-    let refused = manager.import_new_files(&mut workspace_b, &copy.copy_id, &files);
+    let refused = manager.import_new_files(&mut workspace_b, &copy.copy_id, &approved);
     assert!(
         matches!(refused, Err(WorkspaceError::OutsideWorkspace)),
         "wrong workspace must refuse, got {refused:?}"
     );
-    assert!(!other_root.path().join("note.md").exists());
     assert!(!other_root.path().join("fresh.md").exists());
-    // The original workspace imports exact content and registers it, while
-    // the duplicate refuses without touching the original file.
-    let outcomes = manager
-        .import_new_files(&mut workspace_a, &copy.copy_id, &files)
+    // An unstaged extra path is refused without creating anything.
+    let extra = manager
+        .import_new_files(
+            &mut workspace_a,
+            &copy.copy_id,
+            &[ImportFileRequest {
+                rel: "evil.md".into(),
+                content: "# Evil\n".into(),
+            }],
+        )
         .unwrap();
-    assert_eq!(outcomes.len(), 2);
-    assert!(outcomes[0].error.is_some());
-    assert!(outcomes[1].error.is_none());
-    let snapshot = outcomes[1].snapshot.clone().expect("opened snapshot");
+    assert!(extra[0].error.is_some());
+    assert!(!root_a.path().join("evil.md").exists());
+    // Changed content for a pending path is refused without creating it.
+    let drifted = manager
+        .import_new_files(
+            &mut workspace_a,
+            &copy.copy_id,
+            &[ImportFileRequest {
+                rel: "fresh.md".into(),
+                content: "# Tampered\n".into(),
+            }],
+        )
+        .unwrap();
+    assert!(drifted[0].error.is_some());
+    assert!(drifted[0]
+        .error
+        .as_deref()
+        .is_some_and(|detail| detail.contains("differs")));
+    assert!(!root_a.path().join("fresh.md").exists());
+    // The exact approved content imports and registers its snapshot, while
+    // the pre-existing workspace file stays untouched.
+    let outcomes = manager
+        .import_new_files(&mut workspace_a, &copy.copy_id, &approved)
+        .unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert!(outcomes[0].error.is_none());
+    let snapshot = outcomes[0].snapshot.clone().expect("opened snapshot");
     assert_eq!(
         workspace_a
             .actor(&note.snapshot.document_id.0)
@@ -1390,37 +1416,14 @@ fn import_new_files_stays_bound_to_the_approved_workspace() {
             .text,
         "# Fresh\n"
     );
-    // Retry still refuses the duplicate while the record is retained.
-    let again = manager
-        .import_new_files(&mut workspace_a, &copy.copy_id, &files[0..1])
-        .unwrap();
-    assert!(again[0].error.is_some());
-    // A fully successful import clears the retired record afterwards.
-    let clean = manager
-        .import_new_files(
-            &mut workspace_a,
-            &copy.copy_id,
-            &[ImportFileRequest {
-                rel: "fresh2.md".into(),
-                content: "# Fresh 2\n".into(),
-            }],
-        )
-        .unwrap();
-    assert!(clean[0].error.is_none());
-    let gone = manager.import_new_files(
-        &mut workspace_a,
-        &copy.copy_id,
-        &[ImportFileRequest {
-            rel: "fresh3.md".into(),
-            content: "# Fresh 3\n".into(),
-        }],
-    );
+    // The drained record is gone: already-imported paths never mutate again.
+    let gone = manager.import_new_files(&mut workspace_a, &copy.copy_id, &approved);
     assert!(matches!(gone, Err(WorkspaceError::NotFound)));
     // Unknown copies never import.
     let unknown = manager.import_new_files(
         &mut workspace_a,
         &IsolatedCopyId("copy_missing".into()),
-        &files[0..1],
+        &approved,
     );
     assert!(matches!(unknown, Err(WorkspaceError::NotFound)));
 }
