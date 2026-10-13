@@ -56,6 +56,7 @@ const scenario = {
   imageBytes: new Map<string, { mime: string; bytes: number[] }>(),
   pasteImageStaleOnce: false,
   pastedImages: [] as Array<{ documentId: string; name: string; range: { start: number; end: number } }>,
+  recovery: [] as Array<{ documentId: string; path: string; revision: number; conflict: boolean }>,
 };
 
 /** Reset the fake native backend to three sample documents. */ function resetBackend() {
@@ -79,6 +80,7 @@ const scenario = {
   scenario.imageBytes = new Map();
   scenario.pasteImageStaleOnce = false;
   scenario.pastedImages = [];
+  scenario.recovery = [];
 }
 
 /** Find a backend document by ID, rejecting unknown documents. */ function docById(id: string): BackendDoc {
@@ -215,7 +217,7 @@ const scenario = {
       case "poll_workspace_events":
         return Promise.resolve([]);
       case "list_recovery":
-        return Promise.resolve([]);
+        return Promise.resolve(scenario.recovery);
       case "fetch_mode": {
         const doc = docById(a.documentId as string);
         if (scenario.deferNextMode) {
@@ -419,6 +421,29 @@ it("keeps text and shows the conflict UI when save loses", async () => {
   await screen.findByTestId("conflict-banner");
   expect(screen.getByTestId("conflict-banner")).toHaveTextContent("本文は保持");
   expect(screen.getByTestId("dirty")).toHaveTextContent("未保存");
+});
+
+it("shows save success outside the editor", async () => {
+  await openWorkspace(); fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await screen.findByTestId("editor-primary");
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  const toast = await screen.findByTestId("notification-toast");
+  expect(toast).toHaveTextContent("保存しました。"); expect(toast).toHaveAttribute("role", "status");
+  expect(toast.parentElement).toBe(document.body);
+  expect(screen.getByTestId("workspace-shell")).not.toContainElement(toast);
+});
+
+it("can postpone recovery without discarding documents and reopen the dialog", async () => {
+  scenario.recovery = [{ documentId: "doc_a", path: "メモ/a.md", revision: 2, conflict: false }];
+  await openWorkspace();
+  const dialog = await screen.findByRole("dialog", { name: "未保存の文書を復元" });
+  expect(dialog).toHaveAttribute("aria-modal", "true");
+  fireEvent.click(within(dialog).getByRole("button", { name: "後で" }));
+  expect(screen.queryByRole("dialog", { name: "未保存の文書を復元" })).not.toBeInTheDocument();
+  expect(mockedInvoke.mock.calls.some(([command]) => command === "discard_recovery")).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "復旧一覧" }));
+  await screen.findByRole("dialog", { name: "未保存の文書を復元" });
 });
 
 it("opens the natively picked folder instead of a typed prompt", async () => {

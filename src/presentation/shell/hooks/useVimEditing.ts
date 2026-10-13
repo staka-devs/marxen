@@ -23,7 +23,7 @@ export interface VimEditingArgs {
   /** Cursor motion basis for display-basis arrow handling. */
   navBasis: NavBasis;
   /** Surface a notice without importing shell state. */
-  notify: (message: string | null) => void;
+  notify: (message: string | null, kind?: import("../../workspace/Notifications").NoticeKind) => void;
   /** Document session owning docs, selections, cursors, and mutations. */
   session: DocumentSession;
 }
@@ -179,7 +179,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
             if (fresh) await routeCharKey(id, key, fresh, cause.snapshot.text, true);
           }
         } else {
-          setNotice(workspaceErrorText(cause));
+          setNotice(workspaceErrorText(cause), "error");
         }
       }
     },
@@ -230,7 +230,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
             if (fresh) await routeCapturedPaste(id, keyNotation, text, fresh, cause.snapshot.text, true);
           }
         } else {
-          setNotice(workspaceErrorText(cause));
+          setNotice(workspaceErrorText(cause), "error");
         }
       }
     },
@@ -275,7 +275,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
         await refreshModeCursor(id, gen);
       } catch (cause) {
         if (cause instanceof StaleResync) sayStale(cause.snapshot);
-        else setNotice(workspaceErrorText(cause));
+        else setNotice(workspaceErrorText(cause), "error");
       } finally {
         pendingNativeInput.current[id] -= 1;
       }
