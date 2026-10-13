@@ -49,6 +49,7 @@ export function AiModelControls({ provider, onProvider, options, loading, discov
     if (!provider.acp) return;
     const option = options.find((item) => item.id === id);
     const current = provider.acp.selections ?? [];
+    if ((current.find((item) => item.id === id)?.value ?? option?.currentValue) === value) return;
     // A model change invalidates its dependent reasoning override.
     const preserved = current.filter((item) => item.id !== id && (option?.category !== "model" || options.find((entry) => entry.id === item.id)?.category !== "thought_level"));
     onProvider({ ...provider, acp: { ...provider.acp, selections: [...preserved, { id, value }] } });

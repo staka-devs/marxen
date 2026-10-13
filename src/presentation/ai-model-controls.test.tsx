@@ -26,6 +26,17 @@ function choose(label: string, name: string) {
   fireEvent.click(screen.getByRole("option", { name }));
 }
 describe("chat model selection", () => {
+  it("preserves model and reasoning overrides when the same provider or model is chosen again", () => {
+    const provider = defaultProviderConfig("acp");
+    provider.acp!.selections = [{ id: "model", value: "fixture-a" }, { id: "reasoning", value: "xhigh" }];
+    const onProvider = vi.fn();
+    const onRefresh = vi.fn();
+    render(<AiModelControls provider={provider} onProvider={onProvider} options={options} loading={false} discovered error={null} onRefresh={onRefresh} />);
+    choose("チャットの接続先", "Codex");
+    choose("チャットのモデル", "Fixture A");
+    expect(onProvider).not.toHaveBeenCalled(); expect(onRefresh).not.toHaveBeenCalled();
+    expect(provider.acp!.selections).toHaveLength(2);
+  });
   it("only discovers on request, stores advertised model/effort, and clears dependent effort", async () => {
     const testConnection = vi.fn().mockResolvedValue({ ok: true, detail: "fixture", configOptions: options });
     render(<Harness gateway={{ testConnection } as unknown as AiGateway} />);

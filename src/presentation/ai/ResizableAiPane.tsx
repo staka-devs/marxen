@@ -55,7 +55,7 @@ export function ResizableAiPane({ visible, width, onWidth, children }: Props) {
         const step = AI_CHAT_WIDTH.step * (event.shiftKey ? 4 : 1);
         const next = event.key === "ArrowLeft" ? effectiveWidth + step : event.key === "ArrowRight" ? effectiveWidth - step : event.key === "Home" ? min : event.key === "End" ? max : event.key === "Enter" ? AI_CHAT_WIDTH.default : null;
         if (next === null) return;
-        event.preventDefault(); event.stopPropagation(); onWidth(clampAiChatWidth(next, available));
+        event.preventDefault(); event.stopPropagation(); onWidth(event.key === "Enter" ? AI_CHAT_WIDTH.default : clampAiChatWidth(next, available));
       }} />
     {children}
   </aside>;

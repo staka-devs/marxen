@@ -53,6 +53,7 @@ describe("right chat resizing", () => {
     const { rerender } = render(<ResizableAiPane visible width={600} onWidth={onWidth}><input aria-label="Draft" defaultValue="draft" /></ResizableAiPane>);
     vi.stubGlobal("innerWidth", 320); fireEvent(window, new Event("resize"));
     expect(screen.getByTestId("ai-sidebar")).toHaveStyle({ width: "320px" }); expect(onWidth).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByRole("separator"), { key: "Enter" }); expect(onWidth).toHaveBeenLastCalledWith(360);
     rerender(<ResizableAiPane visible={false} width={600} onWidth={onWidth}><input aria-label="Draft" defaultValue="draft" /></ResizableAiPane>);
     expect(screen.getByTestId("ai-sidebar")).toHaveAttribute("aria-hidden", "true");
     rerender(<ResizableAiPane visible width={600} onWidth={onWidth}><input aria-label="Draft" defaultValue="draft" /></ResizableAiPane>);
