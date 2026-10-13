@@ -108,23 +108,59 @@ fn emit_agentic_notification(
 
 /// Check whether an absolute wire path stays inside the authorized staging directory.
 ///
-/// Lexical containment from the domain rules plus a canonical filesystem
-/// check when the file exists: symlinks escaping the root fail even when
-/// their names look contained. Absolute outside paths and traversal yield
-/// false without touching the filesystem beyond these two reads.
+/// Traversal (`..`) is never authorized even when it resolves inside: it is
+/// rejected before either lexical or canonical acceptance, matching the
+/// method docs and the domain containment contract. Lexical containment from
+/// the domain rules plus a canonical filesystem check when the file exists:
+/// symlinks escaping the root fail even when their names look contained.
+/// Platform aliases (macOS `/var` versus `/private/var` reported by
+/// `current_dir`, Windows UNC `\\?\` versus the drive-letter form) differ
+/// lexically but resolve identically, so a lexical miss falls back to
+/// canonical comparison for absolute existing alias paths without `..`.
+/// Absolute outside paths, relative paths, and traversal yield false without
+/// touching the filesystem beyond these two reads.
 pub(crate) fn staging_path_allowed(staging_dir: &Path, abs_path: &str) -> bool {
-    if !staging_path_is_contained(staging_dir, abs_path) {
+    use std::path::Component;
+    let candidate = Path::new(abs_path);
+    if candidate
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
         return false;
     }
-    let candidate = Path::new(abs_path);
-    if candidate.exists() {
-        if let (Ok(canonical_root), Ok(canonical)) =
-            (staging_dir.canonicalize(), candidate.canonicalize())
-        {
-            return canonical.starts_with(&canonical_root);
+    if staging_path_is_contained(staging_dir, abs_path) {
+        if candidate.exists() {
+            if let (Ok(canonical_root), Ok(canonical)) =
+                (staging_dir.canonicalize(), candidate.canonicalize())
+            {
+                return canonical.starts_with(&canonical_root);
+            }
         }
+        return true;
     }
-    true
+    if !candidate.is_absolute() || !candidate.exists() {
+        return false;
+    }
+    match (staging_dir.canonicalize(), candidate.canonicalize()) {
+        (Ok(canonical_root), Ok(canonical)) => canonical.starts_with(&canonical_root),
+        _ => false,
+    }
+}
+
+/// Find the nearest existing ancestor of a not-yet-created path.
+///
+/// Walks up from the candidate until an existing file or directory is found.
+/// Yields `None` only when no ancestor exists. Callers canonicalize the
+/// result to detect symlinked parents resolving outside the owned staging
+/// root before creating any directory or file.
+fn nearest_existing_ancestor(candidate: &Path) -> Option<PathBuf> {
+    let mut current = candidate;
+    loop {
+        if current.exists() {
+            return Some(current.to_path_buf());
+        }
+        current = current.parent()?;
+    }
 }
 
 /// Build a JSON-RPC error envelope for rejected agent file/permission requests.
@@ -306,11 +342,13 @@ pub(crate) fn serve_fs_read(
 
 /// Serve `fs/write_text_file` into the authorized staging directory.
 ///
-/// Validates the claimed session and containment, creates parent directories,
-/// and writes UTF-8 text. `Ask` mode is read-only and rejects writes.
-/// Markdown-only enforcement happens at review time; the transport contains
-/// the write but never applies it to live buffers. Wrong sessions and outside
-/// paths yield a JSON-RPC error.
+/// Validates the claimed session and containment, resolves the nearest
+/// existing ancestor before creating anything, and writes UTF-8 text.
+/// `Ask` mode is read-only and rejects writes. Markdown-only enforcement
+/// happens at review time; the transport contains the write but never applies
+/// it to live buffers. Wrong sessions, outside paths, symlinked parents
+/// resolving outside the owned root, and unresolvable ancestors yield a
+/// JSON-RPC error before any directory or file is created.
 pub(crate) fn serve_fs_write(
     staging_dir: &Path,
     expected_session: &str,
@@ -361,6 +399,28 @@ pub(crate) fn serve_fs_write(
         ));
     }
     let target = Path::new(path);
+    // Resolve the nearest existing ancestor before creating anything: a
+    // symlinked parent outside the owned root must refuse creation even when
+    // the destination itself does not exist yet. Unresolvable ancestors fail
+    // closed with the same outside-path error.
+    let ancestor = nearest_existing_ancestor(target).ok_or_else(|| {
+        agent_request_error(
+            &Value::Null,
+            -32602,
+            "path is outside the authorized staging copy",
+        )
+    })?;
+    let resolved_inside = staging_dir
+        .canonicalize()
+        .and_then(|root| ancestor.canonicalize().map(|leaf| leaf.starts_with(&root)))
+        .unwrap_or(false);
+    if !resolved_inside {
+        return Err(agent_request_error(
+            &Value::Null,
+            -32602,
+            "path is outside the authorized staging copy",
+        ));
+    }
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|_| {
             agent_request_error(&Value::Null, -32602, "staging parent cannot be created")
@@ -1111,6 +1171,35 @@ fn cancelled_or_timed_out(
     }
 }
 
+/// Write one agent-request reply, settling explicit cancellation when the agent is already gone.
+///
+/// Killing a cancelled child closes its stdio pipes, so the next reply write
+/// fails on strict platforms while lenient ones still accept it. An
+/// explicitly cancelled run must settle as cancelled either way, never as a
+/// stream error. Non-cancel write failures keep their error. Returns true
+/// when the run settled as cancelled and the caller must stop the loop.
+#[allow(clippy::too_many_arguments)]
+fn write_agent_reply_or_settle_cancelled(
+    conn: &mut AgentConn,
+    reply: &Value,
+    run_id: &AiRunId,
+    registry: &RunRegistry,
+    cancel: &AtomicBool,
+    cancel_sent: bool,
+    tracker: &mut AcpSessionTracker,
+    emit: &mut (dyn FnMut(AiStreamEvent) + Send),
+) -> Result<bool, AiError> {
+    match conn.write(reply) {
+        Ok(()) => Ok(false),
+        Err(_error) if cancel.load(Ordering::SeqCst) || cancel_sent => {
+            cancelled_or_timed_out(run_id, registry, emit);
+            tracker.prompt_finished();
+            Ok(true)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Run an authorized scoped ACP prompt with cancellation, child ownership and streamed events.
 pub fn run_acp_prompt(
     params: &AcpRunParams,
@@ -1367,7 +1456,18 @@ fn run_acp_conversation(
                             envelope
                         }
                     };
-                    conn.write(&reply)?;
+                    if write_agent_reply_or_settle_cancelled(
+                        conn,
+                        &reply,
+                        run_id,
+                        registry,
+                        cancel,
+                        cancel_sent,
+                        &mut tracker,
+                        emit,
+                    )? {
+                        return Ok(());
+                    }
                 } else if req_method == "fs/write_text_file" {
                     let reply = match serve_fs_write(
                         &params.staging_dir,
@@ -1384,9 +1484,20 @@ fn run_acp_conversation(
                             envelope
                         }
                     };
-                    conn.write(&reply)?;
+                    if write_agent_reply_or_settle_cancelled(
+                        conn,
+                        &reply,
+                        run_id,
+                        registry,
+                        cancel,
+                        cancel_sent,
+                        &mut tracker,
+                        emit,
+                    )? {
+                        return Ok(());
+                    }
                 } else if req_method == "session/request_permission" {
-                    answer_permission_interactive(
+                    match answer_permission_interactive(
                         conn,
                         run_id,
                         registry,
@@ -1399,7 +1510,15 @@ fn run_acp_conversation(
                         &req_params,
                         request.mode == PromptMode::Ask,
                         emit,
-                    )?;
+                    ) {
+                        Ok(()) => {}
+                        Err(_error) if cancel.load(Ordering::SeqCst) || cancel_sent => {
+                            cancelled_or_timed_out(run_id, registry, emit);
+                            tracker.prompt_finished();
+                            return Ok(());
+                        }
+                        Err(error) => return Err(error),
+                    }
                 } else {
                     // Terminals, elicitation, and unknown methods stay
                     // unimplemented: no external window is ever created.
@@ -1408,7 +1527,15 @@ fn run_acp_conversation(
                     } else {
                         PermissionAnswer::Deny
                     };
-                    conn.answer_agent_request(&req_id, &req_method, &req_params, mode)?;
+                    match conn.answer_agent_request(&req_id, &req_method, &req_params, mode) {
+                        Ok(()) => {}
+                        Err(_error) if cancel.load(Ordering::SeqCst) || cancel_sent => {
+                            cancelled_or_timed_out(run_id, registry, emit);
+                            tracker.prompt_finished();
+                            return Ok(());
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
             }
         }

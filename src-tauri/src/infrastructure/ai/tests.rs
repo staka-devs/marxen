@@ -781,6 +781,95 @@ mod regression {
         let _ = Path::new("/tmp");
     }
 
+    /// Accept staging paths that differ lexically but resolve canonically.
+    ///
+    /// macOS reports the agent `current_dir` as `/private/var/...` while the
+    /// test `temp_dir` keeps `/var/...`; Windows canonicalizes to UNC
+    /// `\\?\...` versus the drive-letter form. The domain rule stays purely
+    /// lexical, but the infrastructure gate must fall back to canonical
+    /// comparison for absolute existing paths so the mock's
+    /// `fs/read_text_file` round-trip succeeds. Traversal (`..`) is rejected
+    /// before either acceptance even when it resolves inside, and outside,
+    /// relative, and symlink-escape paths stay rejected through every alias
+    /// form. The scratch directory is uniquely owned: nothing shared is
+    /// created or deleted.
+    #[test]
+    fn agentic_staging_paths_accept_canonical_aliases() {
+        let scratch = tempfile::tempdir().expect("scratch dir");
+        let staging = scratch.path().join("staging");
+        std::fs::create_dir_all(staging.join("subdir")).expect("staging dir");
+        std::fs::write(staging.join("a.md"), "# Seed\n").expect("seed file");
+        std::fs::write(scratch.path().join("other.md"), "other\n").expect("outside file");
+        let lexical_inside = staging.join("a.md").to_string_lossy().into_owned();
+        // Traversal is never authorized even when it resolves inside staging.
+        let inner_traversal = staging
+            .join("subdir")
+            .join("..")
+            .join("a.md")
+            .to_string_lossy()
+            .into_owned();
+        assert!(!staging_path_allowed(&staging, &inner_traversal));
+        let escaping_traversal = staging
+            .join("..")
+            .join("other.md")
+            .to_string_lossy()
+            .into_owned();
+        assert!(!staging_path_allowed(&staging, &escaping_traversal));
+        // The exact IPC read refuses traversal with the outside-path error.
+        let params = serde_json::json!({"sessionId": "sess_1", "path": inner_traversal});
+        assert!(serve_fs_read(&staging, "sess_1", &params).is_err());
+        let canonical_root = staging.canonicalize().expect("canonical staging");
+        let alias_inside = canonical_root.join("a.md");
+        let alias_str = alias_inside.to_string_lossy().into_owned();
+        if alias_str != lexical_inside {
+            // Lexically different alias: the domain rule stays strict while
+            // the infrastructure gate resolves the identical file.
+            assert!(
+                !staging_path_is_contained(&staging, &alias_str),
+                "alias must differ lexically, got {alias_str}"
+            );
+            assert!(staging_path_allowed(&staging, &alias_str));
+            // The exact IPC read succeeds through the alias with verbatim bytes.
+            let params = serde_json::json!({"sessionId": "sess_1", "path": alias_str});
+            let reply = serve_fs_read(&staging, "sess_1", &params).expect("alias read");
+            assert_eq!(
+                reply.get("content").and_then(|content| content.as_str()),
+                Some("# Seed\n")
+            );
+            // Canonical escapes through the alias stay rejected.
+            let alias_outside = canonical_root
+                .join("..")
+                .join("other.md")
+                .to_string_lossy()
+                .into_owned();
+            assert!(!staging_path_allowed(&staging, &alias_outside));
+        }
+        // Symlink aliases resolve the same way on Unix; the link lives in the
+        // owned scratch directory so nothing shared is touched.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let link = scratch.path().join("link");
+            symlink(&staging, &link).expect("staging symlink");
+            let linked = link.join("a.md").to_string_lossy().into_owned();
+            assert!(staging_path_allowed(&staging, &linked));
+            let params = serde_json::json!({"sessionId": "sess_1", "path": linked});
+            let reply = serve_fs_read(&staging, "sess_1", &params).expect("link read");
+            assert_eq!(
+                reply.get("content").and_then(|content| content.as_str()),
+                Some("# Seed\n")
+            );
+            let link_outside = link
+                .join("..")
+                .join("other.md")
+                .to_string_lossy()
+                .into_owned();
+            assert!(!staging_path_allowed(&staging, &link_outside));
+        }
+        // The plain lexical path keeps working and guards stay intact.
+        assert!(staging_path_allowed(&staging, &lexical_inside));
+    }
+
     /// Bind permission replies to exact run/request IDs and offered options.
     ///
     /// Unknown runs, stale requests, and unoffered options fail without
@@ -1077,6 +1166,75 @@ mod regression {
         .unwrap();
         assert_eq!(body["content"], "hello staging");
         assert_eq!(std::fs::read_to_string(&inside).unwrap(), "hello staging");
+    }
+
+    /// Reject absent destinations below outside-pointing symlinked parents.
+    ///
+    /// A symlinked staging parent resolving outside the owned root must refuse
+    /// creation with no outside file created or modified, while an ordinary
+    /// absent-file write and a permitted internal alias succeed verbatim. The
+    /// scratch directory is uniquely owned. Symlink creation needs privilege
+    /// on Windows, so those branches only execute on Unix; public macOS/Linux
+    /// CI verifies them and Windows reports them as unexecuted.
+    #[test]
+    fn agentic_write_rejects_absent_file_below_outside_symlink() {
+        let scratch = tempfile::tempdir().expect("scratch dir");
+        let staging = scratch.path().join("staging");
+        std::fs::create_dir_all(staging.join("sub")).expect("staging dir");
+        let outside = scratch.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        std::fs::write(outside.join("keep.md"), "keep\n").expect("sentinel");
+        // An ordinary absent-file write succeeds verbatim, nested or not.
+        for rel in ["new.md", "sub/nested.md"] {
+            let dest = staging.join(rel).to_string_lossy().into_owned();
+            serve_fs_write(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": dest, "content": "hello staging"}),
+                PromptMode::Workspace,
+            )
+            .unwrap_or_else(|_| panic!("ordinary write for {rel}"));
+            assert_eq!(
+                std::fs::read_to_string(staging.join(rel)).unwrap(),
+                "hello staging"
+            );
+        }
+        // Symlink branches need link privilege: Unix-only execution.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            // An outside-pointing parent refuses creation and modifies nothing.
+            let link = staging.join("link");
+            symlink(&outside, &link).expect("outside symlink");
+            let evil = link.join("evil.md").to_string_lossy().into_owned();
+            assert!(serve_fs_write(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": evil, "content": "pwned"}),
+                PromptMode::Workspace,
+            )
+            .is_err());
+            assert!(!outside.join("evil.md").exists());
+            assert_eq!(
+                std::fs::read_to_string(outside.join("keep.md")).unwrap(),
+                "keep\n"
+            );
+            // A permitted internal alias writes inside verbatim.
+            let inner = staging.join("inner");
+            symlink(staging.join("sub"), &inner).expect("internal symlink");
+            let note = inner.join("note.md").to_string_lossy().into_owned();
+            serve_fs_write(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": note, "content": "inside"}),
+                PromptMode::Workspace,
+            )
+            .expect("internal alias write");
+            assert_eq!(
+                std::fs::read_to_string(staging.join("sub").join("note.md")).unwrap(),
+                "inside"
+            );
+        }
     }
 
     /// Refuse prompts before a session opens, concurrent prompts, and foreign
