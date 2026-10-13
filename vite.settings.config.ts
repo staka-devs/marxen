@@ -7,6 +7,6 @@ export default mergeConfig(base, {
   optimizeDeps: { entries: ["tests/fixtures/settings-preview.html"] },
   build: {
     outDir: ".local/settings-site",
-    rollupOptions: { input: "tests/fixtures/settings-preview.html" },
+    rolldownOptions: { input: "tests/fixtures/settings-preview.html" },
   },
 });
