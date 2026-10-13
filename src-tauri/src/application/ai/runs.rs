@@ -273,29 +273,29 @@ impl RunRegistry {
                 detail: "権限の選択肢が正しくありません".into(),
             });
         }
+        // Lock order is always entries, then permissions: `reply_permission`
+        // and `remove` use the same order so concurrent calls never deadlock.
         let key = permission_key(run_id, request_id);
-        self.pending_permissions
-            .lock()
-            .expect("permission lock")
-            .insert(
-                key.clone(),
-                PendingPermission {
-                    session_id: session_id.to_owned(),
-                    options,
-                },
-            );
-        self.permission_replies
-            .lock()
-            .expect("permission lock")
-            .remove(&key);
+        let mut pending = self.pending_permissions.lock().expect("permission lock");
+        let mut replies = self.permission_replies.lock().expect("permission lock");
+        pending.insert(
+            key.clone(),
+            PendingPermission {
+                session_id: session_id.to_owned(),
+                options,
+            },
+        );
+        replies.remove(&key);
         Ok(())
     }
 
     /// Record the chat user's explicit choice for a pending permission request.
     ///
-    /// Validates the run is still registered, the request is still pending for
-    /// that exact run, and the option is one the agent actually offered.
-    /// Stale, foreign, or invented IDs fail without touching the agent.
+    /// Acceptance is atomic per exact pending request: the run must still be
+    /// registered, the request must still be pending for that run, the option
+    /// must be one the agent offered, and no choice may be recorded yet. The
+    /// first valid choice wins; duplicates, late replies after cleanup, and
+    /// cancelled-run replies fail without touching the agent.
     pub fn reply_permission(
         &self,
         run_id: &AiRunId,
@@ -313,6 +313,10 @@ impl RunRegistry {
                 detail: "権限の選択肢が正しくありません".into(),
             });
         }
+        // One lock scope for the whole check-and-record so two concurrent
+        // choices cannot both pass validation before either is stored. Lock
+        // order stays entries-then-permissions, matching `register_permission`
+        // and `remove`, so concurrent calls never deadlock.
         if !self
             .entries
             .lock()
@@ -322,16 +326,12 @@ impl RunRegistry {
             return Err(AiError::UnknownSession);
         }
         let key = permission_key(run_id, request_id);
-        let pending = self
-            .pending_permissions
-            .lock()
-            .expect("permission lock")
-            .get(&key)
-            .cloned();
-        let Some(pending) = pending else {
+        let mut pending = self.pending_permissions.lock().expect("permission lock");
+        let mut replies = self.permission_replies.lock().expect("permission lock");
+        let Some(record) = pending.get(&key) else {
             return Err(AiError::UnknownSession);
         };
-        if !pending
+        if !record
             .options
             .iter()
             .any(|option| option.option_id == option_id)
@@ -340,10 +340,12 @@ impl RunRegistry {
                 detail: "存在しない権限の選択肢です".into(),
             });
         }
-        self.permission_replies
-            .lock()
-            .expect("permission lock")
-            .insert(key, option_id.to_owned());
+        if replies.contains_key(&key) {
+            return Err(AiError::InvalidConfig {
+                detail: "権限の回答は既に受け付けています".into(),
+            });
+        }
+        replies.insert(key, option_id.to_owned());
         Ok(())
     }
 

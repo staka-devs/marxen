@@ -275,8 +275,17 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     imageLoader,
     loadEntries: workspace.loadEntries,
   });
+  /** Refresh Explorer listings after AI imports register new documents. */
+  const refreshAfterImport = useCallback(() => { void workspace.loadEntries(); }, [workspace]);
   /** AI review and inline flow with shared staging exclusion. */
-  const staging = useAiStaging({ desktop, notify: setNotice, session, isolationGateway, workspaceGateway });
+  const staging = useAiStaging({
+    desktop,
+    notify: setNotice,
+    session,
+    isolationGateway,
+    workspaceGateway,
+    onWorkspaceChanged: refreshAfterImport,
+  });
   const modelControls = <AiModelControls provider={aiProvider} onProvider={setAiProvider} {...aiModels} preferences={aiView.preferences} onManageVisibility={() => setAiVisibilityOpen(true)} onRefresh={() => void aiModels.refresh()} disabled={staging.agentBusy || staging.inlineBusy} />;
   // Read-through aliases for narrowing-heavy JSX; ownership stays in hooks.
   /** Active document for pane rendering. */
@@ -1128,6 +1137,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               copyId={staging.staging?.copyId ?? null}
               diffs={staging.diffs}
               newFiles={staging.newFiles}
+              importOutcomes={staging.importOutcomes}
               applied={staging.applied}
               outcomes={staging.outcomes}
               busy={staging.reviewBusy || staging.agentBusy || staging.inlineBusy}
@@ -1139,6 +1149,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               onApprove={() => void staging.approveStaging()}
               onReject={() => void staging.rejectStaging()}
               onCancel={() => void staging.cancelStaging()}
+              onRetryImports={staging.importOutcomes.some((item) => !item.ok) ? () => void staging.retryImports() : null}
             />
           </div>
           {staging.aiDismissed && active && (

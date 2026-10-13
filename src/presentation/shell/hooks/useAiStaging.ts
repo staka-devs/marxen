@@ -25,12 +25,18 @@ import { describeIsolationError } from "../../../domain/isolation-errors";
 import { READONLY_MESSAGE } from "../../../domain/document-errors";
 import {
   askOnlyStatus,
+  approveAndSaveStagedCopy,
   ensureStagingCopy,
+  reviewPorts,
+  retryFailedImports,
   stageNonAskProposal,
   summarizeApproveResult,
   summarizeSavedResult,
   toAiProposal,
+  type ImportOutcome,
+  type ReviewApplyPorts,
 } from "../../../application/isolation/staging-service";
+import { docFromOpen } from "../../../application/document/document-helpers";
 import type { IsolationGateway, WorkspaceGateway } from "../../../application/ports";
 import type { DocumentSession } from "./useDocumentSession";
 
@@ -46,6 +52,8 @@ export interface AiStagingArgs {
   isolationGateway?: IsolationGateway;
   /** Workspace files for new Markdown import; wired by the shell when available. */
   workspaceGateway?: WorkspaceGateway;
+  /** Refresh file listings after imports register new documents. */
+  onWorkspaceChanged?: () => void;
 }
 
 /** AI staging state and review operations. */
@@ -80,6 +88,8 @@ export interface AiStaging {
   diffs: IsolationDiff[];
   /** New agent-created Markdown files for import. */
   newFiles: import("../../../contracts/isolation-contracts").StagedNewFile[];
+  /** Per-file import outcomes with retained content for retry. */
+  importOutcomes: ImportOutcome[];
   /** Whether the last apply-and-save retired approval actions. */
   applied: boolean;
   /** Latest approve outcomes for review. */
@@ -106,6 +116,8 @@ export interface AiStaging {
   closeInlineChat: () => void;
   /** Fetch review diffs for the staged copy with drift detection. */
   fetchReviewDiff: () => Promise<void>;
+  /** Retry failed new-file imports without reapplying document edits. */
+  retryImports: () => Promise<void>;
   /** Clear the shared staging slot and its review state. */
   clearStaging: () => void;
   /** Apply and save the staged copy in one natural action, then resync views. */
@@ -124,7 +136,7 @@ export interface AiStaging {
  */
 export function useAiStaging(args: AiStagingArgs): AiStaging {
   const { t, message } = useI18n();
-  const { desktop, notify, session, isolationGateway, workspaceGateway } = args;
+  const { desktop, notify, session, isolationGateway, workspaceGateway, onWorkspaceChanged } = args;
   const setNotice = notify;
   const {
     registry,
@@ -135,6 +147,8 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     selections,
     mergeSnapshot,
     refreshModeCursor,
+    setDocs,
+    setTabs,
   } = session;
 
   const [aiDismissed, setAiDismissed] = useState(false);
@@ -171,6 +185,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
   const [inlineKind, setInlineKind] = useState<"selection" | "paragraph">("selection");
   const [diffs, setDiffs] = useState<IsolationDiff[]>([]);
   const [newFiles, setNewFiles] = useState<import("../../../contracts/isolation-contracts").StagedNewFile[]>([]);
+  const [importOutcomes, setImportOutcomes] = useState<ImportOutcome[]>([]);
   const [applied, setApplied] = useState(false);
   const [outcomes, setOutcomes] = useState<ApproveDocOutcome[]>([]);
   const [reviewBusy, setReviewBusy] = useState(false);
@@ -214,6 +229,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     } catch {
       setNewFiles([]);
     }
+    setImportOutcomes([]);
     setApplied(false);
   }
 
@@ -323,6 +339,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
       if (result.isNew) {
         setDiffs([]);
         setNewFiles([]);
+        setImportOutcomes([]);
         setApplied(false);
         setOutcomes([]);
         setReviewMessage(null);
@@ -437,6 +454,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     setStaging(null);
     setDiffs([]);
     setNewFiles([]);
+    setImportOutcomes([]);
     setApplied(false);
     setOutcomes([]);
     setReviewMessage(null);
@@ -444,13 +462,33 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
   }, []);
 
   /**
+   * Register successfully imported documents into the live session.
+   *
+   * Merges each returned document into the docs map, adds background tabs,
+   * and refreshes file listings so Explorer and tabs reflect the new files.
+   * Failures stay in `importOutcomes` with their staged content for retry.
+   */
+  const registerImports = useCallback((imports: ImportOutcome[]) => {
+    let registered = 0;
+    for (const item of imports) {
+      if (!item.ok || !item.opened) continue;
+      if (registry) registry.noteSnapshot(item.opened.snapshot);
+      const doc = docFromOpen(item.opened);
+      setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
+      setTabs((prev) => (prev.includes(doc.documentId) ? prev : [...prev, doc.documentId]));
+      registered += 1;
+    }
+    if (registered > 0) onWorkspaceChanged?.();
+  }, [registry, setDocs, setTabs, onWorkspaceChanged]);
+
+  /**
    * Apply and save the staged copy in one natural action, then resync views.
    *
-   * Refuses drifted diffs before calling; applied buffers pull fresh
-   * snapshots so the shell shows the same text, then refreshes mode/cursor.
-   * Each applied document saves at its new revision; new Markdown files
-   * import through the workspace gateway when wired. Applied changes retire
-   * approval actions; the final status reflects actual saved/failed files.
+   * Delegates approval, exact-revision saves, and imports to the application
+   * use case; this hook only merges snapshots, registers imported documents,
+   * and reports. Applied changes retire approval actions; partial and
+   * new-only import failures report as failures with a retry that never
+   * reapplies document edits.
    */
   const approveStaging = useCallback(async () => {
     const copyId = stagingRef.current;
@@ -461,57 +499,31 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     }
     setReviewBusy(true);
     try {
-      if (!isolationGateway) throw new LocalizedError(READONLY_MESSAGE);
-      const result = await isolationGateway.approveCopy(copyId);
-      // Applied buffers moved in Neovim; pull fresh snapshots so the shell
-      // shows the same text, then refresh mode/cursor.
-      if (registry) {
-        for (const outcome of result.outcomes) {
-          if (!outcome.applied) continue;
-          try {
-            mergeSnapshot(await registry.fetchSnapshot(outcome.documentId));
-          } catch {
-            // Snapshot fetch failure leaves text as-is; outcome already
-            // records the applied revision.
-          }
-        }
-        if (activeRef.current) await refreshModeCursor(activeRef.current);
-      }
-      const summary = summarizeApproveResult(result, t);
-      // Import new agent files when the shell wired the workspace gateway;
-      // otherwise they stay visible as new without touching disk.
-      let importedCount = 0;
-      if (workspaceGateway) {
-        for (const file of newFiles) {
-          try {
-            await workspaceGateway.createMarkdown(file.rel, file.content);
-            importedCount += 1;
-          } catch {
-            // Per-file import failures surface via the saved summary below.
-          }
-        }
-      }
-      // Save every applied document at its new revision; dirty user text is
-      // preserved because saves bind the exact applied revision.
-      const savedOutcomes: Array<{ documentId: string; saved: boolean; error?: string }> = [];
-      if (registry) {
-        for (const outcome of result.outcomes) {
-          if (!outcome.applied) continue;
-          try {
-            const current = docsRef.current[outcome.documentId];
-            await registry.save({ documentId: outcome.documentId, baseRevision: current?.revision ?? outcome.revision });
-            savedOutcomes.push({ documentId: outcome.documentId, saved: true });
-          } catch (cause: unknown) {
-            savedOutcomes.push({
-              documentId: outcome.documentId,
-              saved: false,
-              error: cause instanceof Error ? cause.message : String(cause),
-            });
-          }
-        }
-      }
-      const saved = summarizeSavedResult(savedOutcomes);
+      if (!isolationGateway || !registry) throw new LocalizedError(READONLY_MESSAGE);
+      const applied = await approveAndSaveStagedCopy(
+        reviewPorts(
+          (id) => isolationGateway.approveCopy(id),
+          (documentId) => registry.fetchSnapshot(documentId),
+          (request) => registry.save(request),
+          workspaceGateway
+            ? (path, text) => workspaceGateway.createMarkdown(path, text)
+            : () => Promise.reject(new LocalizedError(READONLY_MESSAGE)),
+        ),
+        copyId,
+        newFiles,
+      );
+      for (const snapshot of applied.snapshots) mergeSnapshot(snapshot);
+      if (activeRef.current) await refreshModeCursor(activeRef.current);
+      registerImports(applied.imports);
+      const summary = summarizeApproveResult(applied.approve, t);
+      const saved = summarizeSavedResult(applied.saved.map((entry) => ({
+        documentId: entry.documentId,
+        saved: entry.saved,
+        error: entry.error,
+      })));
+      const failedImports = applied.imports.filter((item) => !item.ok);
       setOutcomes(summary.outcomes);
+      setImportOutcomes(applied.imports);
       setStaging(null);
       setApplied(true);
       setAiProposal(null);
@@ -519,12 +531,14 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
         setReviewMessage(summary.messages.reviewMessage);
         setReviewStatus(summary.messages.status);
         setNotice(summary.messages.notice);
-      } else if (saved.failedCount > 0) {
-        setReviewMessage(saved.status);
-        setReviewStatus(saved.status);
-        setNotice(saved.notice);
+      } else if (saved.failedCount > 0 || failedImports.length > 0) {
+        const failed = message("保存に失敗しました（{{value0}}件）。", { value0: saved.failedCount + failedImports.length });
+        setReviewMessage(failed);
+        setReviewStatus(failed);
+        setNotice(failed);
       } else {
-        const total = savedOutcomes.length + importedCount;
+        const total = applied.saved.filter((entry) => entry.saved).length
+          + applied.imports.filter((item) => item.ok).length;
         const doneMessage = total > 0
           ? message("保存しました（{{value0}}件）。", { value0: total })
           : summary.messages.status;
@@ -543,7 +557,53 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     } finally {
       setReviewBusy(false);
     }
-  }, [diffs, newFiles, registry, docsRef, mergeSnapshot, refreshModeCursor, isolationGateway, workspaceGateway, activeRef, notify]);
+  }, [diffs, newFiles, registry, mergeSnapshot, refreshModeCursor, registerImports, isolationGateway, workspaceGateway, activeRef, notify]);
+
+  /**
+   * Retry failed new-file imports without reapplying document edits.
+   *
+   * Reruns only creation for entries still failing with their retained
+   * staged content; approval and document saves never rerun, so already
+   * applied edits stay exactly as saved.
+   */
+  const retryImports = useCallback(async () => {
+    const failed = importOutcomes.filter((item) => !item.ok);
+    if (failed.length === 0) return;
+    setReviewBusy(true);
+    try {
+      const create: ReviewApplyPorts["createMarkdown"] = workspaceGateway
+        ? (path, text) => workspaceGateway.createMarkdown(path, text)
+        : () => Promise.reject(new LocalizedError(READONLY_MESSAGE));
+      // Retry never reapplies: approval and saves stay settled, only failed
+      // creations rerun with their retained content.
+      const ports = reviewPorts(
+        () => Promise.reject(new LocalizedError("承認済みのため再適用しません。")),
+        () => Promise.reject(new LocalizedError("承認済みのため再取得しません。")),
+        () => Promise.reject(new LocalizedError("承認済みのため再保存しません。")),
+        create,
+      );
+      const retried = await retryFailedImports(ports, failed);
+      const merged = importOutcomes.map((item) => retried.find((next) => next.rel === item.rel) ?? item);
+      setImportOutcomes(merged);
+      registerImports(retried);
+      const remaining = merged.filter((item) => !item.ok).length;
+      if (remaining > 0) {
+        const failedMessage = message("保存に失敗しました（{{value0}}件）。", { value0: remaining });
+        setReviewMessage(failedMessage);
+        setReviewStatus(failedMessage);
+        setNotice(failedMessage);
+      } else {
+        const doneMessage = message("保存しました（{{value0}}件）。", { value0: merged.length });
+        setReviewMessage(null);
+        setReviewStatus(doneMessage);
+        setNotice(doneMessage);
+      }
+    } catch (cause) {
+      setReviewMessage(localizedFailure(cause, describeIsolationError));
+    } finally {
+      setReviewBusy(false);
+    }
+  }, [importOutcomes, workspaceGateway, registerImports, notify]);
 
   /** Reject the staged copy without touching disk. */
   const rejectStaging = useCallback(async () => {
@@ -595,6 +655,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     inlineKind,
     diffs,
     newFiles,
+    importOutcomes,
     applied,
     outcomes,
     reviewBusy,
@@ -608,6 +669,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     inlineAnchor,
     closeInlineChat,
     fetchReviewDiff,
+    retryImports,
     clearStaging,
     approveStaging,
     rejectStaging,

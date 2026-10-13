@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ChangedFileList, PermissionCard, PlanCard, ToolCard } from "./agent-cards";
+import { ChangedFileList, displayUnifiedDiff, PermissionCard, PlanCard, ToolCard } from "./agent-cards";
 
 describe("agent cards", () => {
   it("shows real tool progress without internal ids", () => {
@@ -93,5 +93,96 @@ describe("agent cards", () => {
     expect(screen.getByTestId("changed-file-list")).toBeVisible();
     expect(screen.getByTestId("changed-file-a.md")).toBeVisible();
     expect(screen.getByTestId("changed-file-agentic-note.md")).toBeVisible();
+  });
+
+  it("rewrites raw unified headers to the real filename", () => {
+    expect(displayUnifiedDiff("--- live:a.md [0, 5)\n+++ staging:a.md [0, 5)\n-old\n+new\n", "a.md"))
+      .toBe("--- a.md\n+++ a.md\n-old\n+new\n");
+    expect(displayUnifiedDiff("--- live:doc_99.md\n+++ staging:doc_99.md\n-x\n", "a.md"))
+      .toBe("--- a.md\n+++ a.md\n-x\n");
+    expect(displayUnifiedDiff("承認できません: staging の形式が壊れています", "a.md"))
+      .toBe("承認できません: staging の形式が壊れています");
+  });
+
+  it("hides live and staging identifiers from rendered diffs", () => {
+    render(
+      <ChangedFileList
+        diffs={[
+          {
+            documentId: "doc_08",
+            path: "メモ/a.md",
+            range: { start: 0, end: 5 },
+            baseRevision: 3,
+            liveRevision: 3,
+            drifted: false,
+            changed: true,
+            unified: "--- live:メモ/a.md [0, 5)\n+++ staging:メモ/a.md [0, 5)\n-old\n+new\n",
+            stagingChars: 3,
+            liveChars: 3,
+          },
+        ]}
+        newFiles={[]}
+        documentLabels={{ doc_08: "a.md" }}
+      />,
+    );
+    const card = screen.getByTestId("changed-file-a.md");
+    expect(card).toHaveTextContent("--- a.md");
+    expect(card).not.toHaveTextContent("live:");
+    expect(card).not.toHaveTextContent("staging:");
+    expect(card).not.toHaveTextContent("doc_08");
+  });
+
+  it("sends one choice on double click and disables while awaiting", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    /** Single-flight choice handler holding the reply promise. */
+    const onChoose = vi.fn(() => gate);
+    render(
+      <PermissionCard
+        permission={{
+          requestId: "902",
+          runId: "run_1",
+          title: "mock tool",
+          options: [
+            { optionId: "mock_allow", name: "許可", kind: "allow_once" },
+            { optionId: "mock_reject", name: "拒否", kind: "reject_once" },
+          ],
+          state: "pending",
+          interactive: true,
+        }}
+        onChoose={onChoose}
+      />,
+    );
+    const allow = screen.getByRole("button", { name: "許可" });
+    fireEvent.click(allow);
+    fireEvent.click(allow);
+    fireEvent.click(screen.getByRole("button", { name: "拒否" }));
+    expect(onChoose).toHaveBeenCalledTimes(1);
+    expect(onChoose).toHaveBeenCalledWith("mock_allow");
+    expect(screen.getByRole("button", { name: "許可" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "拒否" })).toBeDisabled();
+    release();
+    await gate;
+  });
+
+  it("re-enables options when the reply fails recoverably", async () => {
+    /** Failing choice handler releasing the buttons for retry. */
+    const onChoose = vi.fn(async () => { throw new Error("stale"); });
+    render(
+      <PermissionCard
+        permission={{
+          requestId: "903",
+          runId: "run_1",
+          title: "mock tool",
+          options: [{ optionId: "mock_reject", name: "拒否", kind: "reject_once" }],
+          state: "pending",
+          interactive: true,
+        }}
+        onChoose={onChoose}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "拒否" }));
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: "拒否" })).toBeEnabled());
+    expect(onChoose).toHaveBeenCalledTimes(1);
   });
 });

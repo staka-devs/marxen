@@ -836,6 +836,88 @@ mod regression {
         ));
     }
 
+    /// Bound one permission wait to the remaining overall prompt budget.
+    ///
+    /// A late permission never restarts the full run deadline: a nearly spent
+    /// budget waits almost nothing, while a fresh long budget caps at the
+    /// interactive 120-second ceiling.
+    #[test]
+    fn agentic_permission_wait_uses_remaining_prompt_budget() {
+        use std::time::{Duration, Instant};
+        let started = Instant::now();
+        // Nearly spent overall budget: the wait ends with the run deadline.
+        let late = started + Duration::from_secs(29);
+        let until = permission_wait_until(started, Duration::from_secs(30), late);
+        assert!(until >= late);
+        assert!(until <= started + Duration::from_secs(30) + Duration::from_millis(10));
+        // Fresh long budget: capped at the interactive ceiling, not restarted.
+        let fresh = permission_wait_until(started, Duration::from_secs(300), started);
+        assert!(fresh <= started + Duration::from_secs(120) + Duration::from_millis(10));
+        assert!(fresh > started + Duration::from_secs(100));
+    }
+
+    /// Accept exactly one choice per pending request across concurrent replies.
+    ///
+    /// The first valid choice wins; duplicates, late replies after delivery,
+    /// and replies after run settlement all fail without touching the agent.
+    #[test]
+    fn agentic_permission_accepts_at_most_one_concurrent_choice() {
+        use std::sync::Arc;
+        let registry = Arc::new(RunRegistry::new());
+        let (run_id, _) = registry.register();
+        let options = || {
+            vec![
+                PermissionOption {
+                    option_id: "mock_allow".into(),
+                    name: "allow".into(),
+                    kind: PermissionOptionKind::AllowOnce,
+                },
+                PermissionOption {
+                    option_id: "mock_reject".into(),
+                    name: "deny".into(),
+                    kind: PermissionOptionKind::RejectOnce,
+                },
+            ]
+        };
+        registry.register_permission(&run_id, "900", "sess_1", options()).unwrap();
+        let first = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let handles: Vec<_> = ["mock_allow", "mock_reject"]
+            .into_iter()
+            .map(|choice| {
+                let registry = Arc::clone(&registry);
+                let run_id = run_id.clone();
+                let first = Arc::clone(&first);
+                std::thread::spawn(move || {
+                    let outcome = registry.reply_permission(&run_id, "900", choice);
+                    first.lock().expect("result lock").push((choice, outcome.is_ok()));
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("reply thread");
+        }
+        let outcomes = first.lock().expect("result lock");
+        assert_eq!(
+            outcomes.iter().filter(|(_, ok)| *ok).count(),
+            1,
+            "exactly one concurrent choice wins, got {outcomes:?}"
+        );
+        // A second choice before delivery is a duplicate and fails.
+        assert!(matches!(
+            registry.reply_permission(&run_id, "900", "mock_reject"),
+            Err(AiError::InvalidConfig { .. })
+        ));
+        // The recorded choice delivers exactly once.
+        assert!(registry.take_permission_reply(&run_id, "900").is_some());
+        assert_eq!(registry.take_permission_reply(&run_id, "900"), None);
+        // Late replies after driver cleanup fail as stale.
+        registry.drop_permission(&run_id, "900");
+        assert!(matches!(
+            registry.reply_permission(&run_id, "900", "mock_allow"),
+            Err(AiError::UnknownSession)
+        ));
+    }
+
     /// Reject unauthorized staged file access without touching the filesystem.
     ///
     /// Wrong sessions, outside paths, and `ask`-mode writes fail; a contained

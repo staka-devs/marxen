@@ -116,6 +116,18 @@ fn agent_request_error(id: &Value, code: i64, message: &str) -> Value {
     })
 }
 
+/// Bound one permission wait to the remaining overall prompt budget.
+///
+/// Returns the earlier of the run deadline (`run_started + timeout`) and a
+/// 120-second interactive cap from `now`, so a permission choice never
+/// restarts the full run deadline while still bounding a dead UI.
+pub fn permission_wait_until(run_started: Instant, timeout: Duration, now: Instant) -> Instant {
+    std::cmp::min(
+        run_started.checked_add(timeout).unwrap_or(now),
+        now.checked_add(Duration::from_secs(120)).unwrap_or(now),
+    )
+}
+
 /// Answer one `session/request_permission` with the chat user's explicit choice.
 ///
 /// Registers the pending request, surfaces it as a chat event, then waits
@@ -131,7 +143,8 @@ fn answer_permission_interactive(
     registry: &RunRegistry,
     cancel: &AtomicBool,
     cancel_sent: bool,
-    deadline: Duration,
+    run_started: Instant,
+    timeout: Duration,
     session_id: &str,
     req_id: &Value,
     req_params: &Value,
@@ -197,17 +210,15 @@ fn answer_permission_interactive(
         title: parsed.title.clone(),
         options,
     }));
-    let wait = std::cmp::min(deadline, Duration::from_secs(120));
-    let start = Instant::now();
+    let wait_until = permission_wait_until(run_started, timeout, Instant::now());
     loop {
         if cancel.load(Ordering::SeqCst) {
+            // Settle cancellation through the EOF path exactly once: the
+            // killed child closes stdout and `cancelled_or_timed_out` emits
+            // the single terminal. Writing an answer here could race the
+            // child's death and turn a clean cancel into a stream error.
             registry.drop_permission(run_id, &request_id);
-            let reply = serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": answer_permission_by_id("", true),
-            });
-            return conn.write(&reply);
+            return Ok(());
         }
         if let Some(option_id) = registry.take_permission_reply(run_id, &request_id) {
             registry.drop_permission(run_id, &request_id);
@@ -218,7 +229,7 @@ fn answer_permission_interactive(
             });
             return conn.write(&reply);
         }
-        if start.elapsed() >= wait {
+        if Instant::now() >= wait_until {
             registry.drop_permission(run_id, &request_id);
             return conn.answer_agent_request(
                 req_id,
@@ -1076,6 +1087,9 @@ pub fn run_acp_prompt(
     cancel: &AtomicBool,
     emit: &mut (dyn FnMut(AiStreamEvent) + Send),
 ) -> Result<(), AiError> {
+    // The overall prompt budget starts here: permission waits below use the
+    // remainder of this same deadline instead of restarting it per request.
+    let run_started = Instant::now();
     emit(AiStreamEvent::Started(StreamStarted {
         run_id: run_id.clone(),
     }));
@@ -1112,7 +1126,7 @@ pub fn run_acp_prompt(
         watchdog_registry.timeout_cancel(&watchdog_id);
     });
 
-    let outcome = run_acp_conversation(params, request, run_id, registry, cancel, emit, &mut conn);
+    let outcome = run_acp_conversation(params, request, run_id, registry, cancel, run_started, emit, &mut conn);
     let outcome = outcome.map_err(|error| with_stderr(error, &stderr_captured));
     // Reap exactly once on every path. Graceful turns (Done or a cooperating
     // cancel) shut the agent down by closing stdin; kill paths already reaped
@@ -1145,6 +1159,7 @@ fn run_acp_conversation(
     run_id: &AiRunId,
     registry: &RunRegistry,
     cancel: &AtomicBool,
+    run_started: Instant,
     emit: &mut (dyn FnMut(AiStreamEvent) + Send),
     conn: &mut AgentConn,
 ) -> Result<(), AiError> {
@@ -1330,6 +1345,7 @@ fn run_acp_conversation(
                         registry,
                         cancel,
                         cancel_sent,
+                        run_started,
                         params.timeout,
                         session_id,
                         &req_id,

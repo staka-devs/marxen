@@ -689,7 +689,11 @@ export const japaneseMessages = {
   "質問は読み取りのみです。": "質問は読み取りのみです。",
   "許可の選択": "許可の選択",
   "選択しました: {{value0}}": "選択しました: {{value0}}",
-  "許可を待っています…": "許可を待っています…"
+  "許可を待っています…": "許可を待っています…",
+  "取込結果": "取込結果",
+  "承認済みのため再適用しません。": "承認済みのため再適用しません。",
+  "承認済みのため再取得しません。": "承認済みのため再取得しません。",
+  "承認済みのため再保存しません。": "承認済みのため再保存しません。"
 } as const;
 
 /** Complete English catalog checked against every Japanese key. */
@@ -1383,7 +1387,11 @@ export const englishMessages = {
   "質問は読み取りのみです。": "Questions are read-only.",
   "許可の選択": "Permission choice",
   "選択しました: {{value0}}": "Selected: {{value0}}.",
-  "許可を待っています…": "Waiting for permission…"
+  "許可を待っています…": "Waiting for permission…",
+  "取込結果": "Import results",
+  "承認済みのため再適用しません。": "Already applied; will not reapply.",
+  "承認済みのため再取得しません。": "Already applied; will not refetch.",
+  "承認済みのため再保存しません。": "Already applied; will not save again."
 } satisfies Record<keyof typeof japaneseMessages, string>;
 
 /** Regional overlays reviewed per message; all other keys use standard Japanese. */

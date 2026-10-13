@@ -17,7 +17,147 @@ import type {
   IsolatedCopyId,
 } from "../../contracts/ai-contracts";
 import type { ApproveResult, IsolationDiff } from "../../contracts/isolation-contracts";
+import type {
+  DocumentSnapshot,
+  OpenDocument,
+  SaveRequest,
+  SaveResult,
+} from "../../contracts/contracts";
 import type { IsolationGateway } from "../ports";
+
+/** Narrow ports for review apply/save orchestration, bound by the caller. */
+export interface ReviewApplyPorts {
+  /** Approve and apply the staged copy with scoped rollback. */
+  approveCopy(copyId: IsolatedCopyId): Promise<ApproveResult>;
+  /** Fetch the authoritative snapshot for an applied document. */
+  fetchSnapshot(documentId: string): Promise<DocumentSnapshot>;
+  /** Save one document at an exact base revision. */
+  saveDocument(request: SaveRequest): Promise<SaveResult>;
+  /** Create one Markdown document, refusing existing paths. */
+  createMarkdown(path: string, text?: string): Promise<OpenDocument>;
+}
+
+/**
+ * Bind review ports from their four operations for hook injection.
+ *
+ * Keeps call sites to anonymous closures so orchestration stays in the
+ * shared use case instead of growing presentation hooks.
+ */
+export function reviewPorts(
+  approveCopy: ReviewApplyPorts["approveCopy"],
+  fetchSnapshot: ReviewApplyPorts["fetchSnapshot"],
+  saveDocument: ReviewApplyPorts["saveDocument"],
+  createMarkdown: ReviewApplyPorts["createMarkdown"],
+): ReviewApplyPorts {
+  return { approveCopy, fetchSnapshot, saveDocument, createMarkdown };
+}
+
+/** Per-document save outcome keyed by the approved revision. */
+export interface AppliedSaveOutcome {
+  documentId: string;
+  saved: boolean;
+  error?: string;
+}
+
+/** Per-file import outcome carrying the staged content for retry. */
+export interface ImportOutcome {
+  rel: string;
+  content: string;
+  ok: boolean;
+  documentId?: string;
+  opened?: OpenDocument;
+  error?: string;
+}
+
+/** Structured result of one apply-and-save orchestration. */
+export interface ApplyAndSaveResult {
+  approve: ApproveResult;
+  /** Fresh post-apply snapshots for applied documents. */
+  snapshots: DocumentSnapshot[];
+  /** Save outcomes bound to exact approved revisions. */
+  saved: AppliedSaveOutcome[];
+  /** Import outcomes with staged content retained for retry. */
+  imports: ImportOutcome[];
+}
+
+/**
+ * Describe an unknown failure without losing backend details or paths.
+ *
+ * Preserves `Error` messages and backend detail strings verbatim so review
+ * surfaces stay actionable.
+ */
+export function describeSaveFailure(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/**
+ * Approve a staged copy, then save applied documents and import new files.
+ *
+ * Saves bind the exact approved outcome revision, so a user edit interleaved
+ * after application fails stale with the user text left dirty instead of
+ * saving over it. Snapshot-fetch failures record per-document save failures
+ * without attempting a save. New-file imports record per-file outcomes with
+ * their staged content retained, and existing files stay untouched because
+ * creation refuses duplicates. Throws only when approval itself fails.
+ */
+export async function approveAndSaveStagedCopy(
+  ports: ReviewApplyPorts,
+  copyId: IsolatedCopyId,
+  newFiles: Array<{ rel: string; content: string }>,
+): Promise<ApplyAndSaveResult> {
+  const approve = await ports.approveCopy(copyId);
+  const snapshots: DocumentSnapshot[] = [];
+  const saved: AppliedSaveOutcome[] = [];
+  for (const outcome of approve.outcomes) {
+    if (!outcome.applied) continue;
+    let snapshot: DocumentSnapshot;
+    try {
+      snapshot = await ports.fetchSnapshot(outcome.documentId);
+    } catch (cause: unknown) {
+      saved.push({ documentId: outcome.documentId, saved: false, error: describeSaveFailure(cause) });
+      continue;
+    }
+    snapshots.push(snapshot);
+    try {
+      await ports.saveDocument({ documentId: outcome.documentId, baseRevision: outcome.revision });
+      saved.push({ documentId: outcome.documentId, saved: true });
+    } catch (cause: unknown) {
+      saved.push({ documentId: outcome.documentId, saved: false, error: describeSaveFailure(cause) });
+    }
+  }
+  const imports: ImportOutcome[] = [];
+  for (const file of newFiles) {
+    try {
+      const opened = await ports.createMarkdown(file.rel, file.content);
+      imports.push({ rel: file.rel, content: file.content, ok: true, documentId: opened.snapshot.documentId, opened });
+    } catch (cause: unknown) {
+      imports.push({ rel: file.rel, content: file.content, ok: false, error: describeSaveFailure(cause) });
+    }
+  }
+  return { approve, snapshots, saved, imports };
+}
+
+/**
+ * Retry only failed new-file imports without reapplying document edits.
+ *
+ * Takes previously failed entries with their retained staged content and
+ * returns fresh outcomes; approval and document saves never rerun.
+ */
+export async function retryFailedImports(
+  ports: ReviewApplyPorts,
+  failed: Array<{ rel: string; content: string }>,
+): Promise<ImportOutcome[]> {
+  const imports: ImportOutcome[] = [];
+  for (const file of failed) {
+    try {
+      const opened = await ports.createMarkdown(file.rel, file.content);
+      imports.push({ rel: file.rel, content: file.content, ok: true, documentId: opened.snapshot.documentId, opened });
+    } catch (cause: unknown) {
+      imports.push({ rel: file.rel, content: file.content, ok: false, error: describeSaveFailure(cause) });
+    }
+  }
+  return imports;
+}
 
 /** Registered staging state pinned by Rust until stream settlement. */
 export interface StagingRegistration {

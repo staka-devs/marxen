@@ -17,6 +17,8 @@ export interface ReviewPanelProps {
   diffs: IsolationDiff[];
   /** New agent-created Markdown files for import in one action. */
   newFiles?: StagedNewFile[];
+  /** Per-file import outcomes with retained errors for retry. */
+  importOutcomes?: Array<{ rel: string; ok: boolean; error?: string }>;
   /** True after apply-and-save retired approval actions. */
   applied?: boolean;
   outcomes: ApproveDocOutcome[];
@@ -33,6 +35,8 @@ export interface ReviewPanelProps {
   onReject: () => void;
   /** Cancel the copy after runs settle. */
   onCancel: () => void;
+  /** Retry failed new-file imports without reapplying document edits. */
+  onRetryImports?: (() => void) | null;
   documentLabels?: Record<string, string>;
 }
 
@@ -41,6 +45,7 @@ export default function ReviewPanel({
   copyId,
   diffs,
   newFiles = [],
+  importOutcomes = [],
   applied = false,
   outcomes,
   busy,
@@ -52,16 +57,18 @@ export default function ReviewPanel({
   onApprove,
   onReject,
   onCancel,
+  onRetryImports,
   documentLabels,
 }: ReviewPanelProps) {
   const { t } = useI18n();
   /** Map a document ID to its visible label without internal IDs. */
   const label = (documentId: string) => documentLabels ? documentLabels[documentId] ?? t("文書") : documentId;
+  const failedImports = importOutcomes.filter((item) => !item.ok);
   const hasChanges = diffs.some((diff) => diff.changed) || newFiles.length > 0;
-  if (!hasChanges && outcomes.length === 0 && !message && !onStageProposal) {
+  if (!hasChanges && outcomes.length === 0 && failedImports.length === 0 && !message && !onStageProposal) {
     return null;
   }
-  const completed = (!copyId && !onStageProposal && !message && outcomes.length > 0) || applied;
+  const completed = ((!copyId && !onStageProposal && !message && outcomes.length > 0) || applied) && failedImports.length === 0;
   const allApplied = outcomes.every((outcome) => !outcome.error && !outcome.rollbackError && !outcome.rolledBack);
   if (completed && allApplied) {
     return <section aria-label={t("変更の確認")} className="border-t border-border px-3 py-2 text-xs">
@@ -126,6 +133,23 @@ export default function ReviewPanel({
         </ul>
       )}
       <ChangedFileList diffs={diffs} newFiles={newFiles} documentLabels={documentLabels} />
+      {failedImports.length > 0 && (
+        <div className="mt-2 rounded-sm border border-border p-2">
+          <ul className="space-y-1" aria-label={t("取込結果")}>
+            {importOutcomes.map((item) => (
+              <li key={item.rel} data-testid={`import-file-${item.rel}`} className="text-xs">
+                {item.rel}{" "}
+                {item.ok ? t("適用") : t("未適用")}
+                {!item.ok && item.error ? t(" 失敗: {{value0}}", { value0: (item.error) }) : ""}
+              </li>
+            ))}
+          </ul>
+          {onRetryImports && (
+            <Button variant="outline" size="sm" className="mt-2" onClick={onRetryImports} disabled={busy}>
+              {t("再試行")}</Button>
+          )}
+        </div>
+      )}
     </section>
   );
 }

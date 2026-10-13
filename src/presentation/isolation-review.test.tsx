@@ -154,4 +154,40 @@ describe("review panel", () => {
     render(<ReviewPanel {...baseProps()} />);
     expect(screen.queryByText(/ファイルの保存は別操作です/)).not.toBeInTheDocument();
   });
+
+  it("retries failed imports without approval actions", () => {
+    const onRetryImports = vi.fn();
+    render(
+      <ReviewPanel
+        {...baseProps()}
+        copyId={null}
+        onStageProposal={null}
+        applied
+        status="保存に失敗しました（1件）。"
+        outcomes={[{ documentId: "doc_08", applied: true, revision: 5, error: null, rolledBack: false, rollbackError: null }]}
+        importOutcomes={[{ rel: "note.md", ok: false, error: "already exists: note.md" }]}
+        onRetryImports={onRetryImports}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "適用して保存" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("import-file-note.md")).toHaveTextContent("note.md");
+    expect(screen.getByTestId("import-file-note.md")).toHaveTextContent(/already exists/);
+    fireEvent.click(screen.getByRole("button", { name: "再試行" }));
+    expect(onRetryImports).toHaveBeenCalledOnce();
+  });
+
+  it("collapses only fully applied reviews without import failures", () => {
+    render(
+      <ReviewPanel
+        {...baseProps()}
+        copyId={null}
+        onStageProposal={null}
+        applied
+        status="保存しました（1件）。"
+        outcomes={[{ documentId: "doc_08", applied: true, revision: 5, error: null, rolledBack: false, rollbackError: null }]}
+        importOutcomes={[{ rel: "note.md", ok: true }]}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "再試行" })).not.toBeInTheDocument();
+  });
 });

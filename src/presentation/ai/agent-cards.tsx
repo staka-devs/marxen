@@ -1,8 +1,27 @@
+import { useRef, useState } from "react";
+import { FileText } from "lucide-react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { Translator } from "../../contracts/localization";
 import type { ChatPermission, ChatTool } from "../../domain/conversation/ai-conversation";
 import type { PlanEntry } from "../../contracts/ai-contracts";
 import type { IsolationDiff, StagedNewFile } from "../../contracts/isolation-contracts";
+
+/**
+ * Rewrite raw unified headers to the visible filename.
+ *
+ * Production diffs carry `--- live:<scope>` / `+++ staging:<scope>` headers
+ * naming internal mechanics and scoped ranges. Display replaces both headers
+ * with the real filename so no live/staging identifiers or opaque document
+ * IDs leak; hunk lines and backend error rows without headers pass through
+ * verbatim with their details preserved.
+ */
+export function displayUnifiedDiff(unified: string, label: string): string {
+  const lines = unified.split("\n");
+  if (lines.length >= 2 && lines[0].startsWith("--- ") && lines[1].startsWith("+++ ")) {
+    return [`--- ${label}`, `+++ ${label}`, ...lines.slice(2)].join("\n");
+  }
+  return unified;
+}
 
 /**
  * Status label for one tool call without exposing internal run IDs.
@@ -88,7 +107,7 @@ export interface PermissionCardProps {
   /** Surfaced request with actual options and settlement state. */
   permission: ChatPermission;
   /** Answer the pending request with the exact chosen option ID. */
-  onChoose?: (optionId: string) => void;
+  onChoose?: (optionId: string) => void | Promise<void>;
 }
 
 /**
@@ -102,7 +121,28 @@ export interface PermissionCardProps {
  */
 export function PermissionCard({ permission, onChoose }: PermissionCardProps) {
   const { t } = useI18n();
+  const busyRef = useRef(false);
+  const [submitted, setSubmitted] = useState<string | null>(null);
   const chosen = permission.options.find((option) => option.optionId === permission.resolvedOptionId);
+  const actionable = permission.state === "pending" && permission.interactive;
+  /**
+   * Submit one choice exactly once while its reply is in flight.
+   *
+   * A ref guard (not state) blocks double clicks in the same tick; all
+   * options disable while awaiting the reply and re-enable only when the
+   * reply fails recoverably.
+   */
+  async function choose(optionId: string) {
+    if (!actionable || busyRef.current) return;
+    busyRef.current = true;
+    setSubmitted(optionId);
+    try {
+      await onChoose?.(optionId);
+    } catch {
+      busyRef.current = false;
+      setSubmitted(null);
+    }
+  }
   return (
     <div data-testid={`permission-card-${permission.requestId}`} className="ai-permission-card mt-1 rounded border border-amber-500/40 px-2 py-1.5 text-xs">
       <p className="font-medium">{permission.title}</p>
@@ -114,8 +154,9 @@ export function PermissionCard({ permission, onChoose }: PermissionCardProps) {
               type="button"
               aria-label={option.name}
               title={option.name}
-              className="ai-permission-option rounded border border-border px-1.5 py-0.5 hover:bg-muted"
-              onClick={() => onChoose?.(option.optionId)}
+              disabled={submitted !== null}
+              className="ai-permission-option rounded border border-border px-1.5 py-0.5 hover:bg-muted disabled:opacity-50"
+              onClick={() => void choose(option.optionId)}
             >
               {option.name}
             </button>
@@ -146,8 +187,9 @@ export function PermissionCard({ permission, onChoose }: PermissionCardProps) {
 /**
  * Changed-file card for one reviewed scope or new agent file.
  *
- * Shows the visible filename and change state with a diff preview; never
- * shows internal copy, document, or staging IDs.
+ * Shows the visible filename and change state with a diff preview whose
+ * headers name the real file; never shows internal copy, document, or
+ * staging IDs.
  */
 export function ChangedFileCard({
   label,
@@ -162,12 +204,12 @@ export function ChangedFileCard({
   return (
     <div data-testid={`changed-file-${label}`} className="ai-changed-file mt-1 rounded border border-border px-2 py-1.5 text-xs">
       <p className="flex items-center gap-1.5">
-        <span aria-hidden="true">📄</span>
+        <FileText size={13} aria-hidden="true" className="shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
         <span className="shrink-0 text-muted-foreground">{state}</span>
       </p>
       {unified && (
-        <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap text-[11px] text-muted-foreground">{unified}</pre>
+        <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap text-[11px] text-muted-foreground">{displayUnifiedDiff(unified, label)}</pre>
       )}
       {!unified && <p className="mt-1 text-muted-foreground">{t("新規ファイル")}</p>}
     </div>
