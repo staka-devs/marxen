@@ -1,3 +1,4 @@
+import { localizedFailure } from "../../domain/localization";
 import type { LocalizedText } from "../../contracts/localization";
 import type { LabelKey } from "../../contracts/localization";
 import { useI18n } from "../i18n/I18nProvider";
@@ -664,7 +665,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   try {
                     void session.applyEdits(id, tableAddRow(current.text, Math.min(sel.head, current.text.length)));
                   } catch (cause) {
-                    setNotice(workspaceErrorText(cause, t));
+                    setNotice(localizedFailure(cause, workspaceErrorText));
                   }
                 }}
                 onTableColumn={() => {
@@ -679,7 +680,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   try {
                     void session.applyEdits(id, tableAddColumn(current.text, Math.min(sel.head, current.text.length)));
                   } catch (cause) {
-                    setNotice(workspaceErrorText(cause, t));
+                    setNotice(localizedFailure(cause, workspaceErrorText));
                   }
                 }}
                 onLink={() => vim.guiAtSelection((text, start, end) => insertLink(text, start, end, "https://example.com"))}
@@ -785,7 +786,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                       session.setConflictDoc(null);
                       setNotice(message("最新のMarkdownに再読込しました（未保存の変更は破棄）。"));
                     } catch (cause) {
-                      setNotice(workspaceErrorText(cause, t));
+                      setNotice(localizedFailure(cause, workspaceErrorText));
                     }
                   })();
                 }}
@@ -996,7 +997,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         <footer className="marxen-status flex h-6 shrink-0 items-center gap-3 whitespace-nowrap border-t border-border bg-card px-3 text-[11px] text-muted-foreground">
           {desktop && active && <span data-testid="vim-footer-mode" className="flex h-5 shrink-0 items-center rounded-sm bg-primary/10 px-1.5 font-medium text-primary">{MODE_JA[vimMode] ? t(MODE_JA[vimMode] as LabelKey) : vimMode}</span>}
           <span className="min-w-0 flex-1 truncate">{workspace.wsRoot?.split(/[\\/]/).filter(Boolean).at(-1) ?? ""}</span>
-          {cursorPos && <span data-testid="cursor" title={t("カーソル位置")}><span className="sr-only">{t("カーソル")}</span>{cursorPos}</span>}
+          {cursorPos && <span data-testid="cursor" title={t("カーソル位置")}><span className="sr-only">{t("カーソル")}{" "}</span>{cursorPos}</span>}
           <span data-testid="dirty">{!active || active.dirty ? (active ? t("未保存") : "—") : t("保存済み")}</span>
           {desktop && session.copyReady === activeId && <span data-testid="copy-ready" className="min-w-0 max-w-72 truncate" title={Object.entries(workspace.copyKeys).map(([format, key]) => `${key} ${t(COPY_LABELS[format as keyof typeof COPY_LABELS] as LabelKey)}`).join(" / ")}>{t("コピー形式を選択")}</span>}
           {!desktop && <span data-testid="readonly-note">{t("ブラウザ表示は読み取り専用です")}</span>}

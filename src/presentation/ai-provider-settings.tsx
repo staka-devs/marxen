@@ -378,7 +378,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
             )}
             <label className="block text-xs">
               {t("API エンドポイント")}<input
-                aria-label="endpoint"
+                aria-label={t("API エンドポイント")}
                 className="mt-1 block w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
                 value={endpoint}
                 onChange={(event) => setEndpoint(event.target.value)}
@@ -387,7 +387,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
             </label>
             <label className="block text-xs">
               {t("モデル")}<input
-                aria-label="model"
+                aria-label={t("モデル")}
                 className="mt-1 block w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
                 value={model}
                 onChange={(event) => setModel(event.target.value)}

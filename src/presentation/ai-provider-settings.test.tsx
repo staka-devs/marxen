@@ -57,9 +57,9 @@ describe("provider settings", () => {
     render(<AiProviderSettings provider={openai} onProvider={onProvider} openToken={0} />);
     fireEvent.click(screen.getByRole("button", { name: /接続設定/ }));
     expect(screen.getByRole("dialog", { name: "接続設定" })).toBeVisible();
-    expect(screen.getByLabelText("model")).toHaveValue("local-model");
-    fireEvent.change(screen.getByLabelText("model"), { target: { value: "typed-model" } });
-    expect(screen.getByLabelText("model")).toHaveValue("typed-model");
+    expect(screen.getByLabelText("モデル")).toHaveValue("local-model");
+    fireEvent.change(screen.getByLabelText("モデル"), { target: { value: "typed-model" } });
+    expect(screen.getByLabelText("モデル")).toHaveValue("typed-model");
   });
 
   it("closes with Escape and restores focus to the trigger", () => {

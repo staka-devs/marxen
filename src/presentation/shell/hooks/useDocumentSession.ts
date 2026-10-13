@@ -1,4 +1,5 @@
-import type { LocalizedText } from "../../../contracts/localization";
+import { localizedFailure } from "../../../domain/localization";
+import type { LabelKey, LocalizedText } from "../../../contracts/localization";
 import { useI18n } from "../../i18n/I18nProvider";
 // Revision-aware document session for the shell (presentation).
 //
@@ -149,7 +150,7 @@ export interface DocumentSession {
  * returned refs and callbacks with explicit ports.
  */
 export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
-  const { t, message } = useI18n();
+  const { message } = useI18n();
   const { desktop, documentGateway, workspaceGateway, clipboardGateway, notify } = args;
   const setNotice = notify;
   /** Serial registry when desktop with an injected gateway; null stays read-only. */
@@ -238,7 +239,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       if (!doc || snapshot.revision < doc.revision) return prev;
       return { ...prev, [id]: applySnapshot(doc, snapshot) };
     });
-    setNotice(new StaleResync(snapshot).message, "error");
+    setNotice(localizedFailure(new StaleResync(snapshot), workspaceErrorText), "error");
   }, [notify]);
 
   /** Merge an authoritative snapshot keeping newer-or-equal revisions. */
@@ -380,7 +381,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       try { if (registry) mergeSnapshot(await registry.fetchSnapshot(id)); } catch { /* The original error remains the useful notice. */ }
     }
     await refreshModeCursor(id, gen);
-    setNotice(workspaceErrorText(cause, t), "error");
+    setNotice(localizedFailure(cause, workspaceErrorText), "error");
   }, [registry, mergeSnapshot, refreshModeCursor, notify]);
 
   /** Commit text at the native cursor when preceding keys have moved it. */
@@ -400,7 +401,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
   const writeYankToClipboard = useCallback(async (copy: YankCopy, id: string) => {
     try {
       await clipboardGateway!.copyYank(copy, id);
-      setNotice(message("{{value0}}をコピーしました。", { value0: (COPY_LABELS[copy.format]) }));
+      setNotice(message("{{value0}}をコピーしました。", { value0: message(COPY_LABELS[copy.format] as LabelKey) }));
     } finally {
       setCopyReady((ready) => ready === id ? null : ready);
     }
@@ -456,7 +457,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       mergeSnapshot(await registry.undo(id));
       await refreshModeCursor(id, gen);
     } catch (cause) {
-      setNotice(workspaceErrorText(cause, t), "error");
+      setNotice(localizedFailure(cause, workspaceErrorText), "error");
     }
   }, [registry, mergeSnapshot, refreshModeCursor, bumpSelectionGen, notify]);
 
@@ -472,7 +473,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       mergeSnapshot(await registry.redo(id));
       await refreshModeCursor(id, gen);
     } catch (cause) {
-      setNotice(workspaceErrorText(cause, t), "error");
+      setNotice(localizedFailure(cause, workspaceErrorText), "error");
     }
   }, [registry, mergeSnapshot, refreshModeCursor, bumpSelectionGen, notify]);
 
@@ -499,7 +500,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       if (typeof record === "object" && record !== null && record.code === "conflict") {
         setConflictDoc(id);
       }
-      setNotice(workspaceErrorText(cause, t), "error");
+      setNotice(localizedFailure(cause, workspaceErrorText), "error");
     }
   }, [registry, sayStale, notify]);
 
@@ -522,7 +523,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       });
       setNotice(message("最新のMarkdownに再読込しました。"));
     } catch (cause) {
-      setNotice(workspaceErrorText(cause, t), "error");
+      setNotice(localizedFailure(cause, workspaceErrorText), "error");
     }
   }, [registry, mergeSnapshot, notify]);
 
@@ -554,7 +555,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       try {
         await workspaceGateway!.closeDocument({ documentId: id, baseRevision: current?.revision ?? 0 }, "discard");
       } catch (cause) {
-        setNotice(workspaceErrorText(cause, t), "error");
+        setNotice(localizedFailure(cause, workspaceErrorText), "error");
         return;
       }
       setTabs((prev) => {
@@ -586,7 +587,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
           return;
         }
       } catch (cause) {
-        setNotice(workspaceErrorText(cause, t), "error");
+        setNotice(localizedFailure(cause, workspaceErrorText), "error");
         return;
       }
       setTabs((prev) => {
@@ -634,7 +635,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
         });
         await refreshModeCursor(doc.documentId);
       } catch (cause) {
-        setNotice(workspaceErrorText(cause, t), "error");
+        setNotice(localizedFailure(cause, workspaceErrorText), "error");
       }
     },
     [registry, workspaceGateway, refreshModeCursor, notify],

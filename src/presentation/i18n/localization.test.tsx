@@ -12,7 +12,8 @@ import type { TextEdit } from "../../contracts/contracts";
 import type { AiGateway } from "../../application/ports";
 import type { AiStreamEvent } from "../../contracts/ai-contracts";
 import { NotificationToast } from "../workspace/Notifications";
-import { localizedMessage } from "../../domain/localization";
+import { localizedFailure, localizedMessage } from "../../domain/localization";
+import { workspaceErrorText } from "../../domain/document-errors";
 
 interface EditingSurfaceProps {
   language: Language;
@@ -50,6 +51,17 @@ describe("language switching", () => {
     expect(screen.getByRole("status")).toHaveTextContent("画像を挿入しました（/日本語/画像.png）。");
     view.rerender(<I18nProvider language="en-US" createTranslator={createTranslator}><NotificationToast notice={notice} onDismiss={() => {}} /></I18nProvider>);
     expect(screen.getByRole("status")).toHaveTextContent("Image inserted (/日本語/画像.png).");
+  });
+  it("retranslates retained structured failures and nested frontend labels", () => {
+    const failure = { id: 1, kind: "error" as const, message: localizedFailure({ code: "io", detail: "詳細 /日本語/a.md" }, workspaceErrorText) };
+    const copy = { id: 2, kind: "info" as const, message: localizedMessage("{{value0}}をコピーしました。", { value0: localizedMessage("リッチテキスト") }) };
+    const notices = <><NotificationToast notice={failure} onDismiss={() => {}} /><NotificationToast notice={copy} onDismiss={() => {}} /></>;
+    const view = render(<I18nProvider language="ja-JP" createTranslator={createTranslator}>{notices}</I18nProvider>);
+    expect(screen.getByRole("alert")).toHaveTextContent("入出力エラー: 詳細 /日本語/a.md");
+    expect(screen.getByRole("status")).toHaveTextContent("リッチテキストをコピーしました。");
+    view.rerender(<I18nProvider language="en-US" createTranslator={createTranslator}>{notices}</I18nProvider>);
+    expect(screen.getByRole("alert")).toHaveTextContent("I/O error: 詳細 /日本語/a.md");
+    expect(screen.getByRole("status")).toHaveTextContent("Copied Rich text.");
   });
   it("renders English settings and aria without recreating the dirty editor or changing its selection", () => {
     render(<EditingHarness />);

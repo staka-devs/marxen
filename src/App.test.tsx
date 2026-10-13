@@ -101,6 +101,11 @@ it("renders English menus from the OS locale and restores an explicit Japanese c
   const first = render(<App />);
   await screen.findByTestId("editor-primary");
   expect(screen.getByRole("navigation", { name: "Activity" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+  expect(screen.getByRole("menuitem", { name: "Quick open" })).toBeVisible();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Command palette" }));
+  expect(await screen.findByText("File: Save")).toBeVisible();
+  fireEvent.keyDown(screen.getByLabelText("Filter commands"), { key: "Escape" });
   fireEvent.click(screen.getByRole("button", { name: "Toggle settings" }));
   fireEvent.change(screen.getByLabelText("Search settings"), { target: { value: "font size" } });
   expect(screen.getByLabelText("Font size")).toBeVisible();

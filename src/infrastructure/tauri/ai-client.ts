@@ -22,7 +22,7 @@ import { cancelPromptSafe as cancelPromptSafeCore } from "../../application/ai/a
 import type { AiGateway } from "../../application/ports";
 
 /**
- * Require the desktop transport, throwing a Japanese message in the browser.
+ * Require the desktop transport, throwing a localizable error in the browser.
  *
  * AI features never run in the read-only browser demo.
  */

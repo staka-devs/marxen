@@ -1,3 +1,4 @@
+import { localizedFailure } from "../../../domain/localization";
 import type { LocalizedText } from "../../../contracts/localization";
 import { useI18n } from "../../i18n/I18nProvider";
 // Image attachments for the shell editor (presentation).
@@ -65,7 +66,7 @@ export interface ImageAttachments {
  * keeps all React state and the Vim hook owns range capture.
  */
 export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachments {
-  const { t, message } = useI18n();
+  const { message } = useI18n();
   const { desktop, notify, session, vim, workspaceGateway, imageLoader, loadEntries } = args;
   const setNotice = notify;
   const {
@@ -201,7 +202,7 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
           // A stale range rejects without applying: surface it once and
           // never retry a file write that might already have landed.
           if (cause instanceof StaleResync) sayStale(cause.snapshot);
-          else setNotice(workspaceErrorText(cause, t), "error");
+          else setNotice(localizedFailure(cause, workspaceErrorText), "error");
         }
       }
     },
@@ -295,7 +296,7 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
         setNotice(message("画像を挿入しました。"));
       } catch (cause) {
         if (cause instanceof StaleResync) sayStale(cause.snapshot);
-        else setNotice(workspaceErrorText(cause, t), "error");
+        else setNotice(localizedFailure(cause, workspaceErrorText), "error");
       }
     })();
   }, [registry, pasteImageFiles, bumpSelectionGen, mergeSnapshot, isSelectionGenCurrent, echoCursor, loadEntries, sayStale, docsRef, activeRef, caretRef, setSelections, notify]);

@@ -9,12 +9,23 @@ import { LocalizableError } from "./localized-error";
 // shapes and the shell shows these messages.
 
 /**
- * Describe an isolation failure in Japanese for review notices.
+ * Localize an isolation failure while preserving backend details, paths and unknown fields.
  *
  * Covers conflict/stale/outside/not-found/path/markdown/IO/Neovim codes;
- * unknown codes fall back to their raw code instead of `undefined`.
+ * Unknown wire shapes remain visible as JSON for forward compatibility.
  */
 export function describeIsolationError(cause: unknown, t: Translator = japaneseTranslator): string {
+  if (cause instanceof Error || typeof cause !== "object" || cause === null) return describeIsolationCode(cause, t);
+  const record = cause as { code?: unknown; detail?: unknown; path?: unknown };
+  if (!["conflict", "stale_revision", "outside_workspace", "not_found", "invalid_path", "not_markdown", "io", "neovim"].includes(String(record.code))) return JSON.stringify(cause);
+  const explanation = describeIsolationCode(cause, t);
+  const detail = typeof record.detail === "string" && record.detail && record.code !== "io" && record.code !== "neovim" ? ` ${record.detail}` : "";
+  const path = typeof record.path === "string" && record.path && record.code !== "conflict" ? ` (${record.path})` : "";
+  return `${explanation}${detail}${path}`;
+}
+
+/** Explain a known isolation code using the injected translator and retain opaque transport errors. */
+function describeIsolationCode(cause: unknown, t: Translator): string {
   if (cause instanceof LocalizableError) return renderLocalizedText(cause.localized, t);
   if (typeof cause === "object" && cause !== null && "code" in cause) {
     const record = cause as { code: string; detail?: string; path?: string };

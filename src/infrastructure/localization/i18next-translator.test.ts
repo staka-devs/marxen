@@ -8,6 +8,7 @@ import { languagePreferenceStore } from "../storage/language-preference-store";
 import { createLanguageService } from "../../application/language/language-service";
 import type { Language } from "../../contracts/language";
 import { LocalizedError } from "../../domain/localized-error";
+import { describeIsolationError } from "../../domain/isolation-errors";
 
 /** Return each named interpolation slot exactly once for catalog comparison. */
 function parameters(template: string): string[] {
@@ -73,5 +74,10 @@ describe("localization contracts", () => {
     expect(workspaceErrorText(new Error("Rust detail retained"), t)).toBe("Rust detail retained");
     expect(workspaceErrorText(new LocalizedError("コピー画像の変換に失敗しました。"), t)).toBe("Unable to convert the copied image.");
     expect(describeAiError({ code: "connection_failed", detail: "HTTP 403: 詳細" }, t)).toBe("Unable to connect: HTTP 403: 詳細");
+    const isolation = describeIsolationError({ code: "invalid_path", detail: "Rust details", path: "/日本語/copy" }, t);
+    expect(isolation).toContain("Rust details");
+    expect(isolation).toContain("/日本語/copy");
+    const unknown = { code: "future_isolation_code", detail: "Backend detail", payload: { revision: 9 } };
+    expect(describeIsolationError(unknown, t)).toBe(JSON.stringify(unknown));
   });
 });

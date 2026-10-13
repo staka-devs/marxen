@@ -1,3 +1,4 @@
+import { localizedFailure } from "../../../domain/localization";
 import type { LocalizedText } from "../../../contracts/localization";
 import { useI18n } from "../../i18n/I18nProvider";
 // Vim key routing for the shell editor (presentation).
@@ -78,7 +79,7 @@ export interface VimEditing {
  * image attachment hook; the document session keeps all React state.
  */
 export function useVimEditing(args: VimEditingArgs): VimEditing {
-  const { t, message } = useI18n();
+  const { message } = useI18n();
   const { desktop, navBasis, notify, session } = args;
   const setNotice = notify;
   const {
@@ -182,7 +183,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
             if (fresh) await routeCharKey(id, key, fresh, cause.snapshot.text, true);
           }
         } else {
-          setNotice(workspaceErrorText(cause, t), "error");
+          setNotice(localizedFailure(cause, workspaceErrorText), "error");
         }
       }
     },
@@ -233,7 +234,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
             if (fresh) await routeCapturedPaste(id, keyNotation, text, fresh, cause.snapshot.text, true);
           }
         } else {
-          setNotice(workspaceErrorText(cause, t), "error");
+          setNotice(localizedFailure(cause, workspaceErrorText), "error");
         }
       }
     },
@@ -278,7 +279,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
         await refreshModeCursor(id, gen);
       } catch (cause) {
         if (cause instanceof StaleResync) sayStale(cause.snapshot);
-        else setNotice(workspaceErrorText(cause, t), "error");
+        else setNotice(localizedFailure(cause, workspaceErrorText), "error");
       } finally {
         pendingNativeInput.current[id] -= 1;
       }

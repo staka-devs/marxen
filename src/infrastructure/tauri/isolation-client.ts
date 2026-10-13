@@ -23,7 +23,7 @@ import type { IsolationGateway } from "../../application/ports";
 /**
  * Require the desktop transport for isolation copies.
  *
- * Throws a Japanese message in the browser demo, which never stages.
+ * Throws a localizable error in the browser demo, which never stages.
  */
 export function requireDesktop(): void {
   if (!isTauri()) {
