@@ -301,9 +301,9 @@ it("preserves document IDs across tabs and tracks revisions", async () => {
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
   await waitFor(() => expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 0"));
   fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
-  await screen.findByText("# B");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# B"));
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   const opens = mockedInvoke.mock.calls.filter(([command]) => command === "open_markdown");
   expect(opens.map(([, args]) => (args as Record<string, unknown>).path)).toEqual(["メモ/a.md", "メモ/b.md", "メモ/a.md"]);
   // Same registry ID every time; tabs show both files.
@@ -314,7 +314,7 @@ it("preserves document IDs across tabs and tracks revisions", async () => {
 it("sends GUI edits with the live revision and native undo reverts them", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   // Cursor at document start: line 0 is the "# A" heading, checkbox toggles by prefixing.
   fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
   fireEvent.click(screen.getByRole("button", { name: "チェックリストを切り替える" }));
@@ -330,7 +330,7 @@ it("sends GUI edits with the live revision and native undo reverts them", async 
 it("resyncs stale revisions from the fresh snapshot", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   // Simulate Vim-side drift behind the shell's back.
   const doc = scenario.files.get("メモ/a.md")!;
   doc.text += "drift\n";
@@ -345,7 +345,7 @@ it("resyncs stale revisions from the fresh snapshot", async () => {
 it("routes Vim keys serially with the live revision", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   const editor = screen.getByTestId("editor-primary");
   fireEvent.keyDown(editor, { key: "j" });
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("nvim_input_with_copy", { documentId: "doc_a", baseRevision: 0, keys: "j" }));
@@ -355,7 +355,7 @@ it("routes Vim keys serially with the live revision", async () => {
 it("asks save/discard/cancel before closing a dirty tab", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
   fireEvent.click(screen.getByRole("button", { name: "チェックリストを切り替える" }));
   await waitFor(() => expect(screen.getByTestId("dirty")).toHaveTextContent("未保存"));
@@ -371,7 +371,7 @@ it("asks save/discard/cancel before closing a dirty tab", async () => {
 it("keeps text and shows the conflict UI when save loses", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
   fireEvent.click(screen.getByRole("button", { name: "チェックリストを切り替える" }));
   await waitFor(() => expect(screen.getByTestId("dirty")).toHaveTextContent("未保存"));
@@ -389,7 +389,7 @@ it("opens the natively picked folder instead of a typed prompt", async () => {
   fireEvent.click(screen.getAllByRole("button", { name: "フォルダーを開く" })[0]);
   await screen.findByRole("button", { name: "メモ/a.md" });
   expect(mockedInvoke).toHaveBeenCalledWith("open_workspace", { path: "/picked/ws" });
-  expect(screen.getByText("ws")).toBeVisible();
+  expect(screen.getByRole("button", { name: "ワークスペースのフォルダー" })).toBeVisible();
   expect(screen.getByTitle("/picked/ws")).toHaveTextContent("ws");
 });
 
@@ -398,7 +398,7 @@ it("picks the config file natively and applies it with restart", async () => {
   vi.mocked(open).mockResolvedValueOnce("/cfg/init.lua");
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   fireEvent.click(screen.getByRole("button", { name: "設定表示切替" }));
   fireEvent.click(screen.getByRole("button", { name: /^Vim$/ }));
   fireEvent.click(screen.getByRole("button", { name: "設定ファイルを参照する" }));
@@ -435,7 +435,7 @@ it("refreshes the runtime status when documents open", async () => {
 it("mounts the AI panel with the exact document scope", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   fireEvent.click(screen.getByRole("button", { name: "AI 支援" }));
   const sidebar = await screen.findByTestId("ai-sidebar");
   expect(within(sidebar).getByText("a.md")).toBeVisible();
@@ -445,7 +445,7 @@ it("mounts the AI panel with the exact document scope", async () => {
 it("keeps display-basis arrows in the editor and routes Vim keys natively", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
   fireEvent.click(screen.getByRole("button", { name: "表示行" }));
   const editor = screen.getByTestId("editor-primary");
@@ -461,7 +461,7 @@ it("keeps display-basis arrows in the editor and routes Vim keys natively", asyn
 it("routes claimed insert keys natively and unclaimed keys as GUI inserts", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   scenario.mode = "insert";
   // Refresh the shell's mode snapshot through any mutation.
   fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
@@ -490,7 +490,7 @@ it("routes claimed insert keys natively and unclaimed keys as GUI inserts", asyn
 it("keeps fast insert bursts in source order", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   scenario.mode = "insert";
   fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
@@ -582,7 +582,7 @@ it("keeps rapid input ordered at EOF before any acknowledgment", async () => {
 it("types immediately after i without waiting for the mode echo", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   // Still Normal on screen: no mode echo has run since opening.
   expect(screen.getByTestId("vim-footer-mode")).toHaveTextContent("ノーマル");
   const editor = screen.getByTestId("editor-primary");
@@ -604,7 +604,7 @@ it("types immediately after i without waiting for the mode echo", async () => {
 async function openInsertDoc() {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   scenario.mode = "insert";
   fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
@@ -876,7 +876,7 @@ it("retries a stale text range once without duplicating", async () => {
 it("writes nothing when a concurrent edit shifts the text under a collapsed caret", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   scenario.mode = "insert";
   fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
@@ -898,7 +898,7 @@ it("writes nothing when a concurrent edit shifts the text under a collapsed care
 it("retries once when only the revision moved but the source is identical", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   scenario.mode = "insert";
   fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
@@ -941,7 +941,7 @@ it("surfaces a stale image range once without a duplicate file write", async () 
 it("keeps normal-mode Ctrl+V as native visual-block without a mapping query", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   const editor = screen.getByTestId("editor-primary");
   fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
   await waitFor(() =>
@@ -973,7 +973,7 @@ it("binds read image hydration to the document and never reuses another doc byte
   scenario.imageBytes.set("doc_b:img.png", { mime: "image/png", bytes: [9, 8, 7, 6, 5] });
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "read" } });
+  fireEvent.change(await screen.findByLabelText("表示モード"), { target: { value: "read" } });
   await waitFor(() =>
     expect(mockedInvoke).toHaveBeenCalledWith("load_relative_image", { documentId: "doc_a", path: "img.png" }),
   );
@@ -1005,7 +1005,7 @@ it("binds read image hydration to the document and never reuses another doc byte
 
 it("routes display-basis arrows natively in Visual so x-mode mappings fire", async () => {  await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  await screen.findByText("# A");
+  await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
   // Native Visual install (740d5d5): refresh the shell mode snapshot.
   scenario.mode = "visual";
   fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));

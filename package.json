@@ -37,8 +37,10 @@
   },
   "dependencies": {
     "@codemirror/lang-markdown": "6.5.0",
+    "@codemirror/language": "6.12.4",
     "@codemirror/state": "6.5.2",
     "@codemirror/view": "6.38.8",
+    "@lezer/highlight": "1.2.5",
     "@radix-ui/react-slot": "1.2.3",
     "@tauri-apps/api": "2.12.1",
     "@tauri-apps/plugin-dialog": "^2.8.1",

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { History, Plus, RotateCcw, Send, Square, X } from "lucide-react";
 import { Button } from "./ui/button";
 import "./ai-chat.css";
-import AiProviderSettings from "./ai-provider-settings";
+import AiProviderSettings, { describeProviderSummary } from "./ai-provider-settings";
 import { MarkdownPreview } from "./preview/MarkdownPreview";
 import {
   MODE_LABELS,
@@ -89,6 +89,17 @@ const MODE_ORDER: PromptMode[] = ["ask", "generate", "rewrite", "workspace"];
 
 // Single-sourced in domain; re-exported for existing label imports.
 export { MODE_LABELS };
+
+/**
+ * Empty-chat examples filling the composer when clicked.
+ *
+ * Kept as plain prompts (never sent automatically) so keyboard and
+ * screen-reader users can review before sending.
+ */
+const EMPTY_EXAMPLES: readonly string[] = [
+  "この文書の要点を3行で教えてください。",
+  "選択範囲を読みやすく書き直してください。",
+] as const;
 
 // Kept for existing imports; the implementation lives in domain.
 export { buildProviderConfig };
@@ -446,13 +457,14 @@ export default function AiPanel({
   }
 
   if (!conversation) return null;
+  const providerSummary = describeProviderSummary(provider);
 
   return (
-    <div aria-label="Agent チャット" className="ai-chat-panel flex h-full min-h-0 flex-col gap-1.5">
+    <div aria-label="Agent チャット" className="ai-chat-panel flex h-full min-h-0 flex-col">
       <div className="ai-chat-header flex shrink-0 items-center gap-1">
-        <h2 id="ai-panel-title" className="min-w-0 flex-1 truncate text-xs font-semibold">Agent チャット</h2>
+        <h2 id="ai-panel-title" className="min-w-0 flex-1 truncate text-[13px] font-semibold">Agent チャット</h2>
         {conversations.length > 1 && (
-          <label className="flex min-w-0 max-w-[55%] items-center gap-0.5 text-muted-foreground" title="会話の履歴">
+          <label className="flex min-w-0 max-w-[52%] items-center gap-0.5 text-muted-foreground" title="会話の履歴">
             <History size={13} aria-hidden="true" className="shrink-0" />
             <select
               aria-label="会話の選択"
@@ -483,15 +495,14 @@ export default function AiPanel({
           </button>
         )}
       </div>
-      <div className="ai-chat-chips flex shrink-0 flex-wrap gap-1" aria-label="送信対象">
+      <div className="ai-chat-chips flex shrink-0 flex-wrap items-center gap-1" aria-label="送信対象">
         {contexts.length === 0 ? (
           <span className="text-[11px] text-muted-foreground">送信対象がありません。</span>
         ) : (
           contexts.map((context) => (
-            <span key={context.documentId} className="inline-flex max-w-full items-center gap-0.5 rounded border border-border bg-card px-1.5 py-px text-[11px] leading-5">
+            <span key={context.documentId} title={`rev ${context.revision} • ${providerSummary}`} className="ai-chat-chip inline-flex max-w-full items-center gap-0.5 rounded border border-border px-1.5 py-px text-[11px] leading-5 text-muted-foreground">
               <span
                 className="truncate"
-                title={`rev ${context.revision}`}
               >
                 {labelFor(contextLabels, context.documentId)}
               </span>
@@ -500,7 +511,7 @@ export default function AiPanel({
                   type="button"
                   aria-label={`${labelFor(contextLabels, context.documentId)}を外す`}
                   title="外す"
-                  className="rounded px-0.5 leading-none hover:bg-muted"
+                  className="rounded px-0.5 leading-none hover:bg-muted hover:text-foreground"
                   onClick={() => onRemoveContext(context.documentId)}
                 >
                   ×
@@ -510,48 +521,64 @@ export default function AiPanel({
           ))
         )}
       </div>
-      <div ref={transcriptRef} aria-live="polite" aria-label="会話" className="min-h-0 flex-1 space-y-3 overflow-y-auto py-1.5">
-        {conversation.messages.length === 0 && (
-          <p className="text-[11px] text-muted-foreground">質問や生成指示を下に入力して送信します。</p>
-        )}
-        {conversation.messages.map((message) =>
-          message.role === "user" ? (
-            <div key={message.id} className="border-l-2 border-primary/50 pl-3 text-xs">
-              <p className="font-medium">あなた・{MODE_LABELS[message.mode ?? mode]}</p>
-              <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap">{message.text}</p>
+      <div ref={transcriptRef} aria-live="polite" aria-label="会話" className="ai-chat-transcript min-h-0 flex-1 overflow-y-auto py-1.5">
+        {conversation.messages.length === 0 ? (
+          <div className="ai-chat-empty px-1 py-2">
+            <p className="text-xs leading-6 text-muted-foreground">文書を添えて質問や書き換えを頼めます。結果は差分確認のうえで取り込みます。</p>
+            <div className="mt-2 flex flex-col gap-1.5">
+              {EMPTY_EXAMPLES.map((example) => (
+                <button
+                  key={example}
+                  type="button"
+                  title="クリックで入力に入れる"
+                  className="ai-chat-example rounded border border-border px-2 py-1.5 text-left text-xs leading-5 hover:bg-muted"
+                  onClick={() => setPrompt(example)}
+                >
+                  {example}
+                </button>
+              ))}
             </div>
-          ) : (
-            <div key={message.id} className="text-xs">
-              <p className="font-medium">
-                AI{message.state === "streaming" ? "・生成中…" : message.state === "cancelled" ? "・取消済み" : message.state === "error" ? "・失敗" : ""}
-              </p>
-              {message.text && (message.state === "done"
-                ? <div className="marxen-chat-body mt-2"><MarkdownPreview text={message.text} label="AI の回答" testId={`chat-response-${message.id}`} /></div>
-                : <p className="mt-1 whitespace-pre-wrap">{message.text}</p>)}
-              {message.proposal && message.mode !== "ask" && (
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  変更は差分を確認して適用できます。
+          </div>
+        ) : (
+          conversation.messages.map((message) =>
+            message.role === "user" ? (
+              <div key={message.id} className="ai-chat-message ai-chat-user border-l-2 border-primary/40 pl-2.5 text-[13px]">
+                <p className="ai-chat-role text-[11px] text-muted-foreground">あなた・{MODE_LABELS[message.mode ?? mode]}</p>
+                <p className="ai-chat-text mt-0.5 max-h-40 overflow-y-auto whitespace-pre-wrap leading-6">{message.text}</p>
+              </div>
+            ) : (
+              <div key={message.id} className="ai-chat-message text-[13px]">
+                <p className="ai-chat-role text-[11px] text-muted-foreground">
+                  AI{message.state === "streaming" ? "・生成中…" : message.state === "cancelled" ? "・取消済み" : message.state === "error" ? "・失敗" : ""}
                 </p>
-              )}
-              {message.state === "error" && message.error && (
-                <p role="alert" className="mt-1 font-medium text-red-600">{describeAiError(message.error)}</p>
-              )}
-              {message.state === "cancelled" && <p className="mt-1">取り消しました。</p>}
-            </div>
-          ),
+                {message.text && (message.state === "done"
+                  ? <div className="marxen-chat-body mt-1"><MarkdownPreview text={message.text} label="AI の回答" testId={`chat-response-${message.id}`} /></div>
+                  : <p className="ai-chat-text mt-0.5 whitespace-pre-wrap leading-6">{message.text}</p>)}
+                {message.proposal && message.mode !== "ask" && (
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    変更は差分を確認して適用できます。
+                  </p>
+                )}
+                {message.state === "error" && message.error && (
+                  <p role="alert" className="mt-1 text-xs font-medium text-red-600">{describeAiError(message.error)}</p>
+                )}
+                {message.state === "cancelled" && <p className="mt-1 text-xs text-muted-foreground">取り消しました。</p>}
+              </div>
+            ),
+          )
         )}
         {streamError && (
-          <p role="alert" className="text-xs font-medium text-red-600">{describeAiError(streamError)}</p>
+          <p role="alert" className="ai-chat-message text-xs font-medium text-red-600">{describeAiError(streamError)}</p>
         )}
         {running && (
-          <p className="text-[11px] text-muted-foreground">応答を生成しています…</p>
+          <p className="ai-chat-message text-[11px] text-muted-foreground">応答を生成しています…</p>
         )}
       </div>
       <div className="ai-chat-composer shrink-0 border-t border-border pt-1.5">
         <div className="ai-chat-composer-box px-1.5 pb-1.5 pt-1">
           <textarea
             aria-label="プロンプト"
-            className="ai-chat-composer-input block max-h-40 min-h-14 w-full overflow-y-auto px-1 py-1 text-xs"
+            className="ai-chat-composer-input block max-h-40 min-h-14 w-full overflow-y-auto px-1 py-1 text-[13px] leading-6"
             rows={3}
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
@@ -561,7 +588,7 @@ export default function AiPanel({
             <div role="group" aria-label="プロンプトの種類" className="min-w-0 flex-1">
               <select
                 aria-label="モード"
-                title="プロンプトの種類"
+                title={`プロンプトの種類 • ${providerSummary}`}
                 className="ai-chat-mode-select w-full min-w-0 truncate"
                 value={mode}
                 onChange={(event) => setMode(event.target.value as PromptMode)}

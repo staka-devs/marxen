@@ -100,8 +100,8 @@ npm run desktop:build -- --bundles nsis
 
 CI は Windows x64 (NSIS)、macOS arm64 / x64 (app / DMG)、Linux x64 (deb / AppImage) の native build、3種類の IPC 契約、Rust / TypeScript / unit / E2E を設定します。配布版は未署名です。署名・公証は対応する資格情報のある環境で別途実施します。
 
-実施済みの回帰・Windows 配布確認と、未実施の OS・WebView・日本語 IME・署名の範囲は [Issue #9 統合検証報告](docs/reports/issue-9-integration.md) に記載します。他 OS の package 操作、実 WebView / IME、署名・公証をブラウザや Windows の成功から推定しません。devcontainer の GUI にはホストの表示サーバーが必要です。
+実施済みの回帰・Windows 配布確認と、未実施の OS・WebView・日本語 IME・署名の範囲は [Issue #9](https://github.com/staka-devs/marxen/issues/9) で報告します。他 OS の package 操作、実 WebView / IME、署名・公証をブラウザや Windows の成功から推定しません。devcontainer の GUI にはホストの表示サーバーが必要です。
 
-[実装契約](docs/implementation.md)、[文書 IPC](docs/foundation.md)、[AI 接続の検証](docs/reports/issue-7-ai.md)、[隔離・承認](docs/isolation.md)、[AnyDR](docs/adr/README.md) を参照してください。
+[実装契約](docs/implementation.md)、[文書 IPC](docs/foundation.md)、[AI 接続の検証](https://github.com/staka-devs/marxen/issues/7)、[隔離・承認](docs/isolation.md)、[AnyDR](docs/adr/README.md) を参照してください。
 
 製品コードは Rust / TypeScript とも `domain / application / contracts / infrastructure / presentation` に分けます。内側はユースケースと利用する port を所有し、composition root が具体的な adapter を注入します。[依存方向とメソッド文書の規約](docs/adr/ADR-0103-五層の依存方向とメソッドの文書を検査する.md) に従い、公開・非公開の名前付き関数・メソッド・trait 操作へ Rustdoc / JSDoc を付けます。`npm run architecture:check` は配置・依存・文書の欠落を検査し、`npm run test:bundling` は検査スクリプトの回帰も実行します。

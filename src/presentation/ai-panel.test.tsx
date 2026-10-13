@@ -7,7 +7,8 @@ import type { AiGateway } from "../application/ports";
 
 const mockStartPrompt = vi.fn<AiGateway["startPrompt"]>();
 
-vi.mock("./ai-provider-settings", () => ({
+vi.mock("./ai-provider-settings", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./ai-provider-settings")>(),
   /** Mocked settings subview for chat tests. */
   default: () => <div>接続設定 mock</div>,
 }));
@@ -451,6 +452,22 @@ describe("agent chat", () => {
     expect(Settings).toBeDefined();
     expect(setCredential).toBeDefined();
     expect(testConnection).toBeDefined();
+  });
+
+  it("fills the composer when an empty-chat example is clicked", () => {
+    render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} contextLabels={labels} />);
+    expect(screen.getByLabelText("プロンプト")).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "この文書の要点を3行で教えてください。" }));
+    expect(screen.getByLabelText("プロンプト")).toHaveValue("この文書の要点を3行で教えてください。");
+    expect(mockStartPrompt).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "選択範囲を読みやすく書き直してください。" }));
+    expect(screen.getByLabelText("プロンプト")).toHaveValue("選択範囲を読みやすく書き直してください。");
+  });
+
+  it("shows quiet dividers without fake connection success", () => {
+    render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} contextLabels={labels} />);
+    expect(screen.queryByText(/接続済み|接続成功/)).not.toBeInTheDocument();
+    expect(screen.getByText("a.md")).toBeVisible();
   });
 });
 

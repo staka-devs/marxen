@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, type CSSProperties } from "react";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, lineNumbers, drawSelection, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
 import type { TextEdit } from "../../contracts/contracts";
 import { createLivePreview, type LivePreviewCallbacks } from "./livePreview";
 import type { ImageResolver } from "../../domain/image-sources";
@@ -49,6 +51,8 @@ interface Props {
   preferences?: EditorPreferences;
   vimMode?: string;
   allowTextInput?: boolean;
+  /** Positive ticket to focus a committed pane after file navigation. */
+  focusRequest?: number;
 }
 
 /** Common prefix/suffix diff as a single wire range edit. */
@@ -97,7 +101,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   return [{ range: { start, end: endBefore }, text: after.slice(start, endAfter) }];
 }
 
-/** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true }: Props) {
+/** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true, focusRequest = 0 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const editableRef = useRef(new Compartment());
@@ -149,6 +153,14 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
         selection: initialSelection ? { anchor: initialSelection.anchor, head: initialSelection.head } : undefined,
         extensions: [
           markdown(),
+          syntaxHighlighting(HighlightStyle.define([
+            { tag: tags.heading, fontWeight: "600" },
+            { tag: tags.strong, fontWeight: "600" },
+            { tag: tags.emphasis, fontStyle: "italic" },
+            { tag: [tags.link, tags.url], color: "var(--primary)" },
+            { tag: [tags.meta, tags.processingInstruction], color: "var(--muted-foreground)" },
+            { tag: tags.monospace, fontFamily: '"Cascadia Code", "Consolas", monospace' },
+          ])),
           drawSelection({ cursorBlinkRate: 0 }),
           appearanceRef.current.of([]),
           editableRef.current.of(EditorView.editable.of(editableRefValue.current)),
@@ -156,7 +168,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
           EditorView.contentAttributes.of({ "aria-label": ariaLabel, role: "textbox", tabindex: "0" }),
           EditorView.theme({
             "&": { backgroundColor: "transparent", fontSize: "14px", height: "100%" },
-            ".cm-content": { fontFamily: "inherit", padding: "20px 0 48px" },
+            ".cm-content": { fontFamily: "inherit", padding: "32px 0 80px" },
             ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "var(--muted-foreground)" },
             ".cm-scroller": { overflow: "auto" },
             "&.cm-focused": { outline: "none" },
@@ -221,6 +233,11 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
     // Mount once; value/editable sync below. ariaLabel/testId are static per pane.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (focusRequest <= 0 || document.querySelector('[aria-modal="true"]')) return;
+    viewRef.current?.focus();
+  }, [focusRequest]);
 
   // Sync external snapshot text (undo, Vim sync, tab switch, GUI commit ack).
   useEffect(() => {

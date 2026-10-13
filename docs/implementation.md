@@ -18,6 +18,7 @@ Rust / Tauri v2、React / TypeScript / Vite / Tailwind / shadcn/ui、CodeMirror 
 | ファイル一覧・画像操作・カーソル・設定 (#12) | Codex | 保存・UI |
 | インラインチャット・Agent 会話履歴 (#13) | OpenCode（Codex がレビュー・統合） | AI・隔離・UI |
 | 編集画面・チャットの UI 整理 (#17) | Codex / OpenCode | UI・チャット |
+| 文字組み・ファイル検索・チャット・設定の再設計 (#20) | Codex / OpenCode | UI・チャット |
 | Rust の五層分離・port・メソッド文書 (#18) | Codex | 文書・保存・AI・隔離 |
 | TypeScript の五層分離・Shell 責務・メソッド文書 (#19) | OpenCode（Codex がレビュー・統合） | 編集・チャット・UI |
 

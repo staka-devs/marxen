@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import { Bot, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronDown, X } from "lucide-react";
+import { Bot, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronDown, ChevronRight, FileText, FilePlus2, X } from "lucide-react";
 import { CodeMirrorEditor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
 import AiPanel from "../ai-panel";
@@ -38,7 +38,7 @@ import {
 } from "../../domain/document-errors";
 import { COPY_LABELS } from "../../domain/clipboard-text";
 import { offsetToLineCol } from "../../domain/coordinates/utf16";
-import { normalizeEditorPreferences, type EditorPreferences } from "../../domain/editor-preferences";
+import { DEFAULT_EDITOR_PREFERENCES, normalizeEditorPreferences, type EditorPreferences } from "../../domain/editor-preferences";
 import { entryKind } from "../../domain/workspace-files";
 import { docFromOpen, fileLabel } from "../../application/document/document-helpers";
 import type {
@@ -149,6 +149,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   const [showAi, setShowAi] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [manualFolder, setManualFolder] = useState(false);
+  const [rootCollapsed, setRootCollapsed] = useState(false);
   const [aiProvider, setAiProvider] = useState<AiProviderConfig>(() => {
     try {
       const saved = aiProfileStore?.load();
@@ -161,9 +162,9 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
 
   const [preferences, setPreferences] = useState(() => {
     try {
-      return editorPreferencesStore?.load() ?? { theme: "dark", fontSize: 15, lineHeight: 1.7, wordWrap: true, lineNumbers: true, highlightActiveLine: true } as EditorPreferences;
+      return editorPreferencesStore?.load() ?? { ...DEFAULT_EDITOR_PREFERENCES };
     } catch {
-      return { theme: "dark", fontSize: 15, lineHeight: 1.7, wordWrap: true, lineNumbers: true, highlightActiveLine: true } as EditorPreferences;
+      return { ...DEFAULT_EDITOR_PREFERENCES };
     }
   });
   const theme = preferences.theme;
@@ -195,6 +196,12 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   const [notice, setNotice] = useState<string | null>(null);
   /** Revision-aware document session: docs, tabs, selections, and mutations. */
   const session = useDocumentSession({ desktop, documentGateway, workspaceGateway, clipboardGateway, notify: setNotice });
+  const [editorFocus, setEditorFocus] = useState<{ path: string; sequence: number } | null>(null);
+  /** Open a file and request editor focus after React commits the active pane. */
+  async function openFileForEditing(path: string) {
+    await session.openFile(path);
+    setEditorFocus((previous) => ({ path, sequence: (previous?.sequence ?? 0) + 1 }));
+  }
   /** Vim key routing with optimistic ranges and mapping-first execution. */
   const vim = useVimEditing({ desktop, navBasis, notify: setNotice, session });
   /** Workspace lifecycle: entries, search, events, runtime, grid, config. */
@@ -210,7 +217,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     settingsOpen: settings,
     routeVimKeys: vim.routeVimKeys,
     /** Reset folder UI after a workspace opens. */
-    onWorkspaceOpened: () => setManualFolder(false),
+    onWorkspaceOpened: () => { setManualFolder(false); setRootCollapsed(false); },
   });
   /** Image attachments: resolvers, paste capture, and drop routing. */
   const image = useImageAttachments({
@@ -351,6 +358,9 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       } else if (mod && event.key.toLowerCase() === "p" && event.shiftKey) {
         event.preventDefault();
         setPalette((value) => !value);
+      } else if (mod && event.key === ",") {
+        event.preventDefault();
+        setSettings(true);
       } else if (mod && event.key.toLowerCase() === "s") {
         event.preventDefault();
         void session.handleSave();
@@ -383,8 +393,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   /** Collect deduplicated quick-open paths from docs and entries. */ const quickPaths = useMemo(() => {
     const fromEntries = workspace.entries.filter((entry) => !entry.directory && entryKind(entry)).map((entry) => entry.path);
     const fromDocs = Object.values(session.docs).map((doc) => doc.path).filter((path): path is string => path !== null);
-    return Array.from(new Set([...fromDocs, ...fromEntries, ...Object.keys(session.demo)]));
-  }, [workspace.entries, session.docs, session.demo]);
+    return Array.from(new Set([...fromDocs, ...fromEntries, ...(desktop ? [] : Object.keys(session.demo))]));
+  }, [desktop, workspace.entries, session.docs, session.demo]);
 
   /** Format the cursor as 1-based line:column or null. */ const cursorPos = useMemo(() => {
     if (!session.active) return null;
@@ -415,13 +425,13 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
 
 
   return (
-    <div data-theme={theme} data-testid="workspace-shell" style={{ "--editor-font-size": `${preferences.fontSize}px`, "--editor-line-height": preferences.lineHeight } as CSSProperties} className="flex h-dvh overflow-hidden bg-background text-foreground">
-      <nav aria-label="アクティビティ" className="marxen-activity flex w-11 shrink-0 flex-col items-center border-r border-border bg-card py-1">
+    <div data-theme={theme} data-testid="workspace-shell" style={{ "--editor-font-size": `${preferences.fontSize}px`, "--editor-line-height": preferences.lineHeight } as CSSProperties} className="marxen-workspace relative flex h-dvh overflow-hidden bg-background text-foreground">
+      <nav aria-label="アクティビティ" className="marxen-activity flex w-12 shrink-0 flex-col items-center border-r border-border bg-card py-1">
         {(
           [
-            { id: "explorer", label: "エクスプローラー", icon: <Files size={17} aria-hidden="true" /> },
-            { id: "search", label: "検索", icon: <Search size={17} aria-hidden="true" /> },
-            { id: "outline", label: "アウトライン", icon: <ListTree size={17} aria-hidden="true" /> },
+            { id: "explorer", label: "エクスプローラー", icon: <Files size={19} aria-hidden="true" /> },
+            { id: "search", label: "検索", icon: <Search size={19} aria-hidden="true" /> },
+            { id: "outline", label: "アウトライン", icon: <ListTree size={19} aria-hidden="true" /> },
           ] as Array<{ id: SideView; label: string; icon: ReactNode }>
         ).map((item) => (
           <button
@@ -431,7 +441,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             aria-pressed={sideView === item.id}
             aria-label={item.label}
             title={item.label}
-            className={`relative flex h-10 w-full items-center justify-center border-l-2 hover:text-foreground ${sideView === item.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}
+            className={`relative flex h-11 w-full items-center justify-center border-l-2 hover:text-foreground ${sideView === item.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}
           >
             {item.icon}
           </button>
@@ -445,7 +455,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             title="AI 支援"
             className={`relative flex h-10 w-full items-center justify-center border-l-2 hover:text-foreground ${showAi ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}
           >
-            <Bot size={17} aria-hidden="true" />
+            <Bot size={19} aria-hidden="true" />
           </button>
         )}
         <button
@@ -453,19 +463,20 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           onClick={() => setSettings(true)}
           aria-label="設定表示切替"
           title="設定"
-          className="mt-auto flex h-10 w-full items-center justify-center text-muted-foreground hover:text-foreground"
+          className="mt-auto flex h-11 w-full items-center justify-center text-muted-foreground hover:text-foreground"
         >
-          <SettingsIcon size={17} aria-hidden="true" />
+          <SettingsIcon size={19} aria-hidden="true" />
         </button>
       </nav>
       {sideView && (
         <WorkspaceSidebar>
           {sideView === "explorer" && (
             <div className="flex flex-col">
-              <div className="flex h-9 shrink-0 items-center gap-1 px-3">
+              <div className="flex h-10 shrink-0 items-center gap-1 px-4">
                 <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground">エクスプローラー</span>
                 {desktop && (
                   <>
+                    <button type="button" aria-label="新しいファイル" title="新しいファイル" disabled={!workspace.wsRoot} onClick={() => { workspace.setNewFilePath(""); workspace.setNewFileOpen(true); }} className="rounded-sm p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"><FilePlus2 size={15} aria-hidden="true" /></button>
                     <button
                       type="button"
                       onClick={() => void workspace.pickFolderAndOpen()}
@@ -502,20 +513,9 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   </button>
                 </div>
               )}
-              {desktop && workspace.wsRoot && <p className="flex h-7 items-center gap-1.5 px-2 text-xs font-semibold" title={workspace.wsRoot}><ChevronDown size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" /><FolderOpen size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" /><span className="truncate">{workspace.wsRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace.wsRoot}</span></p>}
-              <FileTree desktop={desktop} nodes={treeNodes} activePath={activeImage ?? active?.path ?? null} onOpenFile={(path) => void session.openFile(path)} />
-              {desktop && !workspace.wsRoot && (
-                <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
-                  <p className="mb-2">フォルダーを開いてください。</p>
-                  <button
-                    type="button"
-                    onClick={() => void workspace.pickFolderAndOpen()}
-                    className="w-full rounded-md border border-border px-2 py-1.5"
-                  >
-                    フォルダーを開く
-                  </button>
-                </div>
-              )}
+              {desktop && workspace.wsRoot && <button type="button" onClick={() => setRootCollapsed((value) => !value)} aria-expanded={!rootCollapsed} aria-label="ワークスペースのフォルダー" className="flex h-8 w-full items-center gap-1.5 px-3 text-left text-xs font-semibold hover:bg-muted/50" title={workspace.wsRoot}>{rootCollapsed ? <ChevronRight size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" /> : <ChevronDown size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />}<FolderOpen size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" /><span className="truncate">{workspace.wsRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace.wsRoot}</span></button>}
+              {(!desktop || !rootCollapsed) && <FileTree desktop={desktop} nodes={treeNodes} activePath={activeImage ?? active?.path ?? null} onOpenFile={(path) => { void openFileForEditing(path); if (window.innerWidth < 768) setSideView(null); }} />}
+              {desktop && !workspace.wsRoot && <p className="px-4 py-3 text-xs leading-5 text-muted-foreground">フォルダーが選択されていません。</p>}
             </div>
           )}
           {sideView === "search" && (
@@ -544,10 +544,39 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       )}
 
       <div className="relative flex min-w-0 flex-1 flex-col">
-        <header className="marxen-editor-header flex h-9 shrink-0 items-center gap-1 border-b border-border bg-card pr-2">
+        <header className="marxen-editor-header flex h-10 shrink-0 items-center gap-1 border-b border-border bg-card pr-2">
           <div className="min-w-0 flex-1">
-            <Tabs tabs={tabItems} activeId={activeId} onSelect={session.setActiveId} onClose={(id) => void session.closeTab(id)} />
+            <Tabs tabs={tabItems} activeId={activeId} onSelect={(id) => { session.setActiveId(id); const path = session.docsRef.current[id]?.path; if (path) setEditorFocus((previous) => ({ path, sequence: (previous?.sequence ?? 0) + 1 })); }} onClose={(id) => void session.closeTab(id)} />
           </div>
+          <button
+            type="button"
+            onClick={() => void session.handleSave()}
+            disabled={!desktop || !active}
+            title={desktop ? "保存" : READONLY_MESSAGE}
+            aria-label="保存"
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted disabled:opacity-50"
+          >
+            <Save size={15} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setMoreOpen((value) => !value)}
+            aria-expanded={moreOpen}
+            aria-label="その他の操作"
+            title="その他の操作"
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"
+          >
+            <Ellipsis size={15} aria-hidden="true" />
+          </button>
+        </header>
+        {(active || activeImage) && <div className="marxen-context-bar flex h-8 shrink-0 items-center gap-2 border-b border-border px-4 text-xs text-muted-foreground">
+          <nav aria-label="ファイルの場所" className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden" title={activeImage ?? active?.path ?? undefined}>
+            {(activeImage ?? active?.path ?? "無題").split(/[\\/]/).filter(Boolean).map((part, index, parts) => <span key={index} className="flex min-w-0 items-center gap-1">
+              {index > 0 && <ChevronRight size={12} className="shrink-0 opacity-50" aria-hidden="true" />}
+              {index === parts.length - 1 && <FileText size={13} className="shrink-0 text-primary/70" aria-hidden="true" />}
+              <span className={index === parts.length - 1 ? "truncate text-foreground/80" : "truncate max-sm:hidden"}>{part}</span>
+            </span>)}
+          </nav>
           <label className="sr-only" htmlFor="view-mode-select">表示モード</label>
           <select
             id="view-mode-select"
@@ -574,27 +603,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           >
             <PanelsLeftRight size={16} aria-hidden="true" />
           </button>
-          <button
-            type="button"
-            onClick={() => void session.handleSave()}
-            disabled={!desktop || !active}
-            title={desktop ? "保存" : READONLY_MESSAGE}
-            aria-label="保存"
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted disabled:opacity-50"
-          >
-            <Save size={15} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setMoreOpen((value) => !value)}
-            aria-expanded={moreOpen}
-            aria-label="その他の操作"
-            title="その他の操作"
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"
-          >
-            <Ellipsis size={15} aria-hidden="true" />
-          </button>
-        </header>
+
+        </div>}
         {moreOpen && (
           <EditorActionsPopover onClose={() => setMoreOpen(false)}>
             <p className="px-2 pb-1 pt-2 text-[11px] text-muted-foreground">書式</p>
@@ -868,6 +878,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   editable={desktop}
                   ariaLabel={`${active.path ?? active.documentId}の${activeIsMarkdown ? "Markdown" : "テキスト"}エディタ`}
                   testId="editor-primary"
+                  focusRequest={editorFocus?.path === active.path ? editorFocus.sequence : 0}
                   initialSelection={selections[active.documentId] ?? null}
                   externalCursor={cursorEcho[active.documentId] ?? null}
                   livePreview
@@ -895,6 +906,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   editable={desktop}
                   ariaLabel={`${active.path ?? active.documentId}の${activeIsMarkdown ? "Markdown" : "テキスト"}エディタ`}
                   testId="editor-primary"
+                  focusRequest={editorFocus?.path === active.path ? editorFocus.sequence : 0}
                   preferences={preferences}
                   vimMode={vimMode}
                   allowTextInput={vimMode === "insert" || vimMode === "replace"}
@@ -907,8 +919,17 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               </ImageDropZone>
             )
           ) : (
-            <div className="rounded-md border border-dashed border-border p-4 text-xs text-muted-foreground">
-              フォルダーを開き、ツリーからファイルを開いてください。
+            <div className="flex h-full items-center justify-center p-8">
+              <div className="w-full max-w-sm">
+                <FileText size={36} strokeWidth={1} className="mb-5 text-muted-foreground/40" aria-hidden="true" />
+                <h1 className="text-2xl font-semibold tracking-tight">Marxen</h1>
+                <p className="mt-2 text-sm text-muted-foreground">Markdown を書くためのワークスペース</p>
+                <div className="mt-8 flex flex-col gap-1">
+                  {desktop && <button type="button" onClick={() => void workspace.pickFolderAndOpen()} className="flex h-10 items-center gap-3 rounded px-2 text-left text-sm text-primary hover:bg-muted"><FolderOpen size={16} />フォルダーを開く</button>}
+                  <button type="button" onClick={() => setQuickOpen(true)} className="flex h-10 items-center justify-between rounded px-2 text-left text-sm hover:bg-muted"><span className="flex items-center gap-3"><Search size={16} className="text-muted-foreground" />ファイルを探す</span><kbd className="text-xs text-muted-foreground">Ctrl+P</kbd></button>
+                  <button type="button" onClick={() => setPalette(true)} className="flex h-10 items-center justify-between rounded px-2 text-left text-sm hover:bg-muted"><span className="flex items-center gap-3"><Ellipsis size={16} className="text-muted-foreground" />コマンドを実行</span><kbd className="text-xs text-muted-foreground">Ctrl+Shift+P</kbd></button>
+                </div>
+              </div>
             </div>
           )}
           {effectiveViewMode === "read" && activeIsMarkdown && active && (
@@ -963,9 +984,9 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           </div>
         )}
 
-        <footer className="flex h-6 shrink-0 items-center gap-3 whitespace-nowrap border-t border-border bg-card px-3 text-[11px] text-muted-foreground">
+        <footer className="marxen-status flex h-6 shrink-0 items-center gap-3 whitespace-nowrap border-t border-border bg-card px-3 text-[11px] text-muted-foreground">
           {desktop && active && <span data-testid="vim-footer-mode" className="flex h-5 shrink-0 items-center rounded-sm bg-primary/10 px-1.5 font-medium text-primary">{MODE_JA[vimMode] ?? vimMode}</span>}
-          <span className="min-w-0 flex-1 truncate" title={activeImage ?? active?.path ?? undefined}>{activeImage ?? active?.path ?? "ファイルを開いてください"}</span>
+          <span className="min-w-0 flex-1 truncate">{workspace.wsRoot?.split(/[\\/]/).filter(Boolean).at(-1) ?? ""}</span>
           {cursorPos && <span data-testid="cursor" title="カーソル位置"><span className="sr-only">カーソル </span>{cursorPos}</span>}
           <span data-testid="dirty">{!active || active.dirty ? (active ? "未保存" : "—") : "保存済み"}</span>
           {desktop && session.copyReady === activeId && <span data-testid="copy-ready" className="min-w-0 max-w-72 truncate" title={Object.entries(workspace.copyKeys).map(([format, key]) => `${key} ${COPY_LABELS[format as keyof typeof COPY_LABELS]}`).join(" / ")}>コピー形式を選択</span>}
@@ -987,7 +1008,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           paths={quickPaths}
           label="クイックオープン"
           testId="quick-open"
-          onSelect={(path) => void session.openFile(path)}
+          onSelect={(path) => void openFileForEditing(path)}
           onClose={() => setQuickOpen(false)}
         />
           {staging.inlineOpen && staging.inlineSnapshot && active && staging.inlineSnapshot.documentId === active.documentId && (
@@ -1052,7 +1073,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           aria-hidden={!showAi}
           className={
             showAi
-              ? "marxen-ai-sidebar flex w-80 max-w-[85vw] shrink-0 flex-col border-l border-border bg-card"
+              ? "marxen-ai-sidebar flex w-[340px] max-w-[85vw] shrink-0 flex-col border-l border-border bg-card"
               : "hidden"
           }
         >

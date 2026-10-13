@@ -51,13 +51,13 @@ test("live/source/read/split retain the document without editing it", async ({ p
   await expect.poll(() => page.getByTestId("preview").textContent()).toBe(before);
 
   await setViewMode(page, "live");
-  await page.screenshot({ path: "docs/reports/issue-5-ui/live.png" });
+  await page.screenshot({ path: "test-results/screenshots/issue-5-ui/live.png" });
   await setViewMode(page, "read");
-  await page.screenshot({ path: "docs/reports/issue-5-ui/read.png" });
+  await page.screenshot({ path: "test-results/screenshots/issue-5-ui/read.png" });
   await setViewMode(page, "source");
-  await page.screenshot({ path: "docs/reports/issue-5-ui/source.png" });
+  await page.screenshot({ path: "test-results/screenshots/issue-5-ui/source.png" });
   await setViewMode(page, "split");
-  await page.screenshot({ path: "docs/reports/issue-5-ui/split.png" });
+  await page.screenshot({ path: "test-results/screenshots/issue-5-ui/split.png" });
 });
 
 test("invalid fixtures render safely without executing", async ({ page }) => {
@@ -90,8 +90,9 @@ test("tree/tabs/quick-open/search/outline/palette/themes work in Japanese", asyn
   await page.getByRole("menuitem", { name: "クイックオープン" }).click();
   await expect(page.getByTestId("quick-open")).toBeVisible();
   await page.getByTestId("quick-open").getByLabel("ファイル名で絞り込む").fill("はじめ");
-  await expect(page.getByTestId("quick-open")).toContainText("メモ/はじめに.md");
-  await page.getByTestId("quick-open").getByRole("button", { name: "閉じる (Esc)" }).click();
+  await expect(page.getByTestId("quick-open").getByRole("button", { name: "メモ/はじめに.md" })).toBeVisible();
+  await page.getByTestId("quick-open").getByLabel("ファイル名で絞り込む").press("Escape");
+  await expect(page.getByTestId("quick-open")).not.toBeVisible();
 
   await page.getByRole("button", { name: "検索", exact: true }).click();
   await expect(page.getByTestId("search-panel")).toBeVisible();
@@ -104,9 +105,11 @@ test("tree/tabs/quick-open/search/outline/palette/themes work in Japanese", asyn
   await page.getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name: "コマンドパレット" }).click();
   await expect(page.getByTestId("command-palette")).toBeVisible();
-  await page.screenshot({ path: "docs/reports/issue-5-ui/palette.png" });
+  await page.screenshot({ path: "test-results/screenshots/issue-5-ui/palette.png" });
   await page.getByTestId("command-palette").getByLabel("コマンドで絞り込む").fill("保存");
   await expect(page.getByTestId("command-palette")).toContainText("ファイル: 保存する");
+  await page.getByTestId("command-palette").getByLabel("コマンドで絞り込む").press("Escape");
+  await expect(page.getByTestId("command-palette")).not.toBeVisible();
 
   await page.getByRole("button", { name: "設定表示切替" }).click();
   await expect(page.getByTestId("settings")).toBeVisible();
@@ -114,7 +117,7 @@ test("tree/tabs/quick-open/search/outline/palette/themes work in Japanese", asyn
   await expect(page.getByTestId("workspace-shell")).toHaveAttribute("data-theme", "light");
   await page.getByLabel("カラーテーマ").selectOption("dark");
   await expect(page.getByTestId("workspace-shell")).toHaveAttribute("data-theme", "dark");
-  await page.screenshot({ path: "docs/reports/issue-5-ui/settings-dark.png" });
+  await page.screenshot({ path: "test-results/screenshots/issue-5-ui/settings-dark.png" });
 });
 
 test("Neovim screen exposes the read-only document grid", async ({ page }) => {
@@ -148,6 +151,6 @@ test("clean chrome at laptop sizes with no body scrollbar", async ({ page }) => 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     // Slender rail, single sidebar, compact tabs, single canvas, slim status.
     expect(await page.evaluate(() => document.querySelector("nav[aria-label='アクティビティ']")?.clientWidth ?? 999)).toBeLessThan(60);
-    await page.screenshot({ path: `docs/reports/issue-5-ui/${name}.png` });
+    await page.screenshot({ path: `test-results/screenshots/issue-5-ui/${name}.png` });
   }
 });

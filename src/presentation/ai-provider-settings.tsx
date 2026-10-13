@@ -34,6 +34,30 @@ export interface AiProviderSettingsProps {
 const KIND_ORDER: AiProviderKind[] = ["acp", "openai_compatible", "anthropic"];
 
 /**
+ * Describe the active connection in one neutral line without claiming success.
+ *
+ * Shows the preset or model/endpoint fragment only; liveness comes from an
+ * explicit connection test and is never invented here.
+ */
+export function describeProviderSummary(provider: AiProviderConfig): string {
+  if (provider.kind === "acp") {
+    if (provider.acp?.preset === "custom") {
+      const command = provider.acp.argv?.command?.trim() ?? "";
+      return command === "" ? "カスタム" : `カスタム • ${command}`;
+    }
+    return PRESET_LABELS[provider.acp?.preset ?? "codex"] ?? "ACP";
+  }
+  if (provider.kind === "openai_compatible") {
+    const model = provider.openai?.model?.trim() ?? "";
+    return model === "" ? "OpenAI互換" : `OpenAI互換 • ${model}`;
+  }
+  const model = provider.anthropic?.model?.trim() ?? "";
+  const enabled = provider.anthropic?.enabled ?? false;
+  if (!enabled) return model === "" ? "Anthropic（無効）" : `Anthropic • ${model}（無効）`;
+  return model === "" ? "Anthropic" : `Anthropic • ${model}`;
+}
+
+/**
  * Build the initial provider config from the injected store or defaults.
  *
  * Falls back to Codex defaults when no store is wired (tests, browser demo).
@@ -207,9 +231,10 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
   }
 
   const claudeBlocked = kind === "acp" && preset === "custom" && isClaudeCommand(command);
+  const summary = describeProviderSummary(provider);
 
   const fields = (
-      <div className={embedded ? "space-y-4" : "space-y-3 border-t border-border p-2"}>
+      <div className={embedded ? "space-y-4" : "space-y-2.5 border-t border-border px-2.5 py-2"}>
         <div role="group" aria-label="接続先">
           {KIND_ORDER.map((candidate) => (
             <Button
@@ -265,7 +290,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
                     rows={2}
                     value={argsText}
                     onChange={(event) => setArgsText(event.target.value)}
-                    placeholder={"--stdio\n--model mock"}
+                    placeholder="--stdio"
                   />
                 </label>
                 {claudeBlocked && <p className="text-xs text-red-600">Claude コマンドは起動しません。</p>}
@@ -350,7 +375,10 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
   );
   return embedded ? <div data-testid="ai-provider-settings">{fields}</div> : (
     <details ref={detailsRef} data-testid="ai-provider-settings" className="max-h-[45dvh] overflow-y-auto rounded-sm border border-border">
-      <summary className="cursor-pointer px-2 py-1.5 text-xs font-medium">接続設定</summary>
+      <summary className="flex cursor-pointer items-center gap-1.5 px-2 py-1.5 text-xs" title={summary}>
+        <span className="shrink-0 font-medium">接続設定</span>
+        <span className="min-w-0 flex-1 truncate text-[11px] font-normal text-muted-foreground">• {summary}</span>
+      </summary>
       {fields}
     </details>
   );

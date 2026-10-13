@@ -1,5 +1,8 @@
 import { useMemo, useState } from "react";
+import { FileText, Image } from "lucide-react";
 import { filterPaths } from "../../domain/workspace-content";
+import { isImagePath } from "../../domain/workspace-files";
+import { QuickPicker } from "./QuickPicker";
 
 interface Props {
   open: boolean;
@@ -12,43 +15,19 @@ interface Props {
   onClose: () => void;
 }
 
-/** Fuzzy file quick-open dialog, closing on select. */ export function QuickOpen({ open, paths, label, testId, onSelect, onClose }: Props) {
-  const [query, setQuery] = useState("");
-  const hits = useMemo(() => filterPaths(paths, query).slice(0, 20), [paths, query]);
-  if (!open) return null;
-  return (
-    <div data-testid={testId} role="dialog" aria-label={label} className="absolute inset-x-0 top-12 z-20 mx-auto max-w-lg rounded-lg border border-border bg-card p-3 shadow-lg">
-      <input
-        autoFocus
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        placeholder="ファイル名を入力…"
-        aria-label="ファイル名で絞り込む"
-        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-      />
-      <ul className="mt-2 max-h-60 overflow-auto">
-        {hits.map((path) => (
-          <li key={path}>
-            <button
-              type="button"
-              onClick={() => {
-                onSelect(path);
-                setQuery("");
-                onClose();
-              }}
-              className="w-full truncate rounded px-3 py-2 text-left text-sm hover:bg-muted"
-            >
-              {path}
-            </button>
-          </li>
-        ))}
-        {hits.length === 0 && <li className="px-3 py-2 text-sm text-muted-foreground">一致するファイルがありません</li>}
-      </ul>
-      <button type="button" onClick={onClose} className="mt-2 w-full rounded-md border border-border px-3 py-1 text-xs text-muted-foreground">
-        閉じる (Esc)
-      </button>
-    </div>
-  );
+/** Mount the shared file picker only while open, resetting each search session. */
+export function QuickOpen({ open, ...props }: Props) {
+  return open ? <FilePicker {...props} /> : null;
 }
 
-
+/** Search workspace paths with filename, folder, and type icon in separate columns. */
+function FilePicker({ paths, label, testId, onSelect, onClose }: Omit<Props, "open">) {
+  const [query, setQuery] = useState("");
+  const items = useMemo(() => filterPaths(paths, query).slice(0, 20).map((path) => {
+    const normalized = path.replaceAll("\\", "/");
+    const at = normalized.lastIndexOf("/");
+    const Icon = isImagePath(path) ? Image : FileText;
+    return { id: path, accessibleLabel: path, label: normalized.slice(at + 1), detail: at < 0 ? "" : normalized.slice(0, at), icon: <Icon size={14} className="shrink-0 text-primary/70" aria-hidden="true" /> };
+  }), [paths, query]);
+  return <QuickPicker label={label} inputLabel="ファイル名で絞り込む" placeholder="ファイル名を入力…" testId={testId} query={query} items={items} emptyText="一致するファイルがありません" onQuery={setQuery} onSelect={onSelect} onClose={onClose} />;
+}

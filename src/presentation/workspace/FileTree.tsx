@@ -114,11 +114,11 @@ function Node({ node, activePath, onOpenFile, depth, desktop = false }: NodeProp
           event.dataTransfer.effectAllowed = "copy";
           event.dataTransfer.setData(WORKSPACE_IMAGE_DRAG, node.path);
         }}
-        className={`flex h-6 w-full items-center gap-1.5 truncate border-l-2 pr-2 text-left text-[13px] hover:bg-muted ${selected ? "border-primary bg-muted text-foreground" : "border-transparent text-foreground/85"}`}
+        className={`marxen-tree-row flex h-7 w-full items-center gap-1.5 truncate border-l-2 pr-3 text-left text-xs hover:bg-muted/50 ${selected ? "border-primary bg-primary/10 text-foreground" : "border-transparent text-foreground/85"}`}
         style={{ paddingLeft: 6 + depth * 16 }}
       >
         {node.directory ? (open ? <ChevronDown size={12} aria-hidden /> : <ChevronRight size={12} aria-hidden />) : <span className="w-3 shrink-0" />}
-        <Icon size={15} aria-hidden data-file-icon={node.directory ? (open ? "folder-open" : "folder") : node.kind} className={`shrink-0 ${node.directory ? "text-muted-foreground" : node.markdown ? "text-primary/80" : "text-muted-foreground"}`} />
+        <Icon size={15} aria-hidden data-file-icon={node.directory ? (open ? "folder-open" : "folder") : node.kind} className={`shrink-0 ${node.directory ? "text-[#bdad87]" : node.markdown ? "text-primary/70" : "text-muted-foreground"}`} />
         <span className="truncate">{node.name}</span>
       </button>
       {node.directory && open && <ul role="group" className="marxen-tree-children" style={{ "--tree-indent": `${20 + depth * 16}px` } as React.CSSProperties}>{(node.children ?? []).map(child =>

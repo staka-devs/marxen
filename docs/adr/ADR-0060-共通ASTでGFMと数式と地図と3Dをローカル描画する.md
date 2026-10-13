@@ -18,5 +18,5 @@
 
 ## 結果・制約・確認方法
 
-- Vitest（`src/domain/render/*.test.ts`）で GFM、5 Alerts、脚注リンク整合、Shiki、MathJax、不正・消毒・Markdown 保持・範囲・CDN 無しを検証する。Playwright（`tests/e2e/rendering.spec.ts`）で Chromium の実描画と `docs/reports/issue-6-rendering/` の画像を検証する。`検証/GitHub記法.md` に fixture 全文を `?raw` 同梱した。
+- Vitest（`src/domain/render/*.test.ts`）で GFM、5 Alerts、脚注リンク整合、Shiki、MathJax、不正・消毒・Markdown 保持・範囲・CDN 無しを検証する。Playwright（`tests/e2e/rendering.spec.ts`）で Chromium の実描画を検証する。画像は `test-results/screenshots/issue-6-rendering/` に出力され追跡対象外とする。`検証/GitHub記法.md` に fixture 全文を `?raw` 同梱した。
 - 未実施として残す。各 OS の実 WebView における MathJax / Mermaid / Leaflet / Three.js の表示確認（Chromium の成功から推定しない）。macOS / Linux の native package での同梱量と起動の確認。バイナリ STL、外部タイル地図、数式の編集支援は対象外。
