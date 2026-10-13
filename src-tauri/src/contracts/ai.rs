@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// Independent version of the AI IPC schema.
-pub const AI_CONTRACT_VERSION: u32 = 3;
+pub const AI_CONTRACT_VERSION: u32 = 4;
 
 /// OS credential store layout. Secrets are addressed, never transferred.
 pub const SECRET_SERVICE: &str = "dev.staka.marxen";
@@ -248,11 +248,110 @@ pub struct StreamCancelled {
     pub run_id: AiRunId,
 }
 
+/// Where a usage report was observed on the ACP wire. Only official fields
+/// are recorded; arbitrary `_meta` names are never scraped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum AcpUsageSource {
+    UsageUpdate,
+    PromptResponse,
+}
+
+/// Honestly reported scope of a usage figure. `Session` covers cumulative
+/// session figures from `usage_update` (context occupancy plus session cost).
+/// `PromptResponseUndefined` marks unstable `PromptResponse.usage`, whose
+/// turn-versus-session scope differs across implementations (official ACP
+/// issue #1860); such reports are never summed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum AcpUsageScope {
+    Session,
+    PromptResponseUndefined,
+}
+
+/// Cumulative session cost exactly as reported. The decimal amount is kept as
+/// text so the `Eq` contract holds without binary float rounding; it is never
+/// derived from token counters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageCost {
+    /// Decimal amount text from the validated wire number (for example `"12.34"`).
+    pub amount: String,
+    /// ISO 4217 code as reported (for example `"USD"`).
+    pub currency: String,
+}
+
+/// Latest reported usage for one public provider/run/session. Every optional
+/// counter is absent when unreported, never zero-filled or estimated. Quota,
+/// reset time, credit consumption, and Copilot credits have no standardized
+/// ACP fields and stay absent here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportedUsage {
+    pub provider: AiProviderKind,
+    /// ACP preset that produced the report, when the provider is ACP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub preset: Option<AcpPreset>,
+    pub run_id: AiRunId,
+    pub session_id: AcpSessionId,
+    pub source: AcpUsageSource,
+    pub scope: AcpUsageScope,
+    /// Tokens currently in context (`usage_update.used`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub used: Option<u64>,
+    /// Total context window size in tokens (`usage_update.size`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub size: Option<u64>,
+    /// Reported input tokens (`PromptResponse.usage.inputTokens`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub input_tokens: Option<u64>,
+    /// Reported output tokens (`PromptResponse.usage.outputTokens`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub output_tokens: Option<u64>,
+    /// Reported total tokens (`PromptResponse.usage.totalTokens`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub total_tokens: Option<u64>,
+    /// Reported cache-read tokens (`PromptResponse.usage.cachedReadTokens`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cached_read_tokens: Option<u64>,
+    /// Reported cache-write tokens (`PromptResponse.usage.cachedWriteTokens`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cached_write_tokens: Option<u64>,
+    /// Reported reasoning tokens (official `thoughtTokens`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reasoning_tokens: Option<u64>,
+    /// Cumulative session cost exactly as reported in `usage_update.cost`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cost: Option<UsageCost>,
+    /// Unix milliseconds when Rust received the report.
+    pub received_ms: u64,
+}
+
+/// Nonterminal usage payload. Delivery never settles a run; `Done`, `Error`,
+/// and `Cancelled` remain the only terminal events.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StreamUsage {
+    pub run_id: AiRunId,
+    pub usage: ReportedUsage,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum AiStreamEvent {
     Started(StreamStarted),
     Chunk(StreamChunk),
+    Usage(StreamUsage),
     Done(StreamDone),
     Error(StreamError),
     Cancelled(StreamCancelled),
@@ -328,9 +427,14 @@ pub fn typescript() -> String {
         ContextSummary::decl(&cfg),
         StreamStarted::decl(&cfg),
         StreamChunk::decl(&cfg),
+        StreamUsage::decl(&cfg),
         StreamDone::decl(&cfg),
         StreamError::decl(&cfg),
         StreamCancelled::decl(&cfg),
+        AcpUsageSource::decl(&cfg),
+        AcpUsageScope::decl(&cfg),
+        UsageCost::decl(&cfg),
+        ReportedUsage::decl(&cfg),
         AiStreamEvent::decl(&cfg),
         AiError::decl(&cfg),
         CredentialRef::decl(&cfg),

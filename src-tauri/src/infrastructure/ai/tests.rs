@@ -3,6 +3,7 @@ use super::acp::*;
 use super::credentials::*;
 use crate::application::ai::credentials::*;
 use crate::application::ai::runs::*;
+use crate::application::ai::usage::UsageRegistry;
 use crate::contracts::ai::*;
 use crate::domain::ai::*;
 use std::path::Path;
@@ -1193,5 +1194,506 @@ mod regression {
         let result = handshake_acp(&preset_argv(AcpPreset::Opencode)).unwrap();
         assert!(result.ok, "{}", result.detail);
         assert!(result.config_options.is_some());
+    }
+
+    /// Build one official `usage_update` notification for the given session,
+    /// context occupancy, and optional cost object.
+    fn usage_note(
+        session: &str,
+        used: serde_json::Value,
+        size: serde_json::Value,
+        cost: Option<serde_json::Value>,
+    ) -> serde_json::Value {
+        let mut update = serde_json::json!({
+            "sessionUpdate": "usage_update",
+            "used": used,
+            "size": size,
+        });
+        if let Some(cost) = cost {
+            update["cost"] = cost;
+        }
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": { "sessionId": session, "update": update }
+        })
+    }
+
+    /// Build one `session/prompt` response body with the supplied stop reason
+    /// and optional unstable `usage` object.
+    fn prompt_body(stop: &str, usage: Option<serde_json::Value>) -> serde_json::Value {
+        let mut result = serde_json::json!({ "stopReason": stop });
+        if let Some(usage) = usage {
+            result["usage"] = usage;
+        }
+        serde_json::json!({ "result": result })
+    }
+
+    /// Build one unstable prompt usage object with required token counters and
+    /// the supplied optional reasoning/cache counters.
+    fn prompt_usage(input: u64, output: u64, total: u64) -> serde_json::Value {
+        serde_json::json!({
+            "inputTokens": input,
+            "outputTokens": output,
+            "totalTokens": total,
+        })
+    }
+
+    /// Accept exact integer counters within the JavaScript-safe range while
+    /// rejecting negative, fractional, string, and out-of-range values.
+    #[test]
+    fn token_counters_reject_dishonest_values() {
+        assert_eq!(validate_token_counter(&serde_json::json!(12u64)), Some(12));
+        assert_eq!(validate_token_counter(&serde_json::json!(0u64)), Some(0));
+        assert_eq!(
+            validate_token_counter(&serde_json::json!(JS_SAFE_INTEGER_MAX)),
+            Some(JS_SAFE_INTEGER_MAX)
+        );
+        for bad in [
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("12"),
+            serde_json::json!(JS_SAFE_INTEGER_MAX + 1),
+            serde_json::Value::Null,
+        ] {
+            assert_eq!(validate_token_counter(&bad), None, "{bad}");
+        }
+    }
+
+    /// Accept finite non-negative cost amounts within the safe range as decimal
+    /// text while rejecting negative, string, null, and out-of-range values.
+    #[test]
+    fn cost_amounts_render_as_decimal_text() {
+        assert_eq!(
+            validate_cost_amount(&serde_json::json!(12u64)),
+            Some("12".to_owned())
+        );
+        assert_eq!(
+            validate_cost_amount(&serde_json::json!(12.5)),
+            Some("12.5".to_owned())
+        );
+        for bad in [
+            serde_json::json!(-0.5),
+            serde_json::json!(-1),
+            serde_json::json!("12.5"),
+            serde_json::Value::Null,
+        ] {
+            assert_eq!(validate_cost_amount(&bad), None, "{bad}");
+        }
+        assert_eq!(
+            validate_cost_amount(&serde_json::json!(9_007_199_254_740_992u64)),
+            None
+        );
+    }
+
+    /// Accept three ASCII letters as an ISO 4217 code with uppercase
+    /// normalization while rejecting empty, long, and non-letter codes.
+    #[test]
+    fn currency_codes_require_three_letters() {
+        assert_eq!(validate_currency_code("USD"), Some("USD".to_owned()));
+        assert_eq!(validate_currency_code("usd"), Some("USD".to_owned()));
+        for bad in ["", "US", "USDD", "U$D", "12A", "usd "] {
+            assert_eq!(validate_currency_code(bad), None, "{bad}");
+        }
+    }
+
+    /// Parse one official `usage_update` with context occupancy and cumulative
+    /// session cost, preserving provider, preset, run, session, and receipt time.
+    #[test]
+    fn usage_update_reports_context_and_session_cost() {
+        let run = AiRunId("run_usage_1".into());
+        let note = usage_note(
+            "sess_usage_1",
+            serde_json::json!(120u64),
+            serde_json::json!(1000u64),
+            Some(serde_json::json!({ "amount": 1.25, "currency": "USD" })),
+        );
+        let usage = parse_usage_update_notification(
+            &note,
+            "sess_usage_1",
+            AiProviderKind::Acp,
+            Some(AcpPreset::Codex),
+            &run,
+            111,
+        )
+        .expect("valid usage_update");
+        assert_eq!(usage.provider, AiProviderKind::Acp);
+        assert_eq!(usage.preset, Some(AcpPreset::Codex));
+        assert_eq!(usage.run_id, run);
+        assert_eq!(usage.session_id, AcpSessionId("sess_usage_1".into()));
+        assert_eq!(usage.source, AcpUsageSource::UsageUpdate);
+        assert_eq!(usage.scope, AcpUsageScope::Session);
+        assert_eq!(usage.used, Some(120));
+        assert_eq!(usage.size, Some(1000));
+        assert_eq!(usage.input_tokens, None);
+        assert_eq!(usage.cost.as_ref().expect("cost").currency, "USD");
+        assert_eq!(usage.cost.as_ref().expect("cost").amount, "1.25");
+        assert_eq!(usage.received_ms, 111);
+    }
+
+    /// Reject notifications for foreign sessions, other methods, and other
+    /// update kinds so costs never mix across sessions.
+    #[test]
+    fn usage_update_rejects_foreign_sessions() {
+        let run = AiRunId("run_usage_2".into());
+        let note = usage_note(
+            "sess_other",
+            serde_json::json!(5u64),
+            serde_json::json!(10u64),
+            None,
+        );
+        assert!(parse_usage_update_notification(
+            &note,
+            "sess_expected",
+            AiProviderKind::Acp,
+            None,
+            &run,
+            1,
+        )
+        .is_none());
+        let mut wrong_method = usage_note(
+            "sess_expected",
+            serde_json::json!(5u64),
+            serde_json::json!(10u64),
+            None,
+        );
+        wrong_method["method"] = serde_json::json!("session/other");
+        assert!(parse_usage_update_notification(
+            &wrong_method,
+            "sess_expected",
+            AiProviderKind::Acp,
+            None,
+            &run,
+            1,
+        )
+        .is_none());
+        let chunk = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "sess_expected",
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": { "type": "text", "text": "hi" }
+                }
+            }
+        });
+        assert!(parse_usage_update_notification(
+            &chunk,
+            "sess_expected",
+            AiProviderKind::Acp,
+            None,
+            &run,
+            1,
+        )
+        .is_none());
+    }
+
+    /// Reject malformed context counters while keeping a valid report when only
+    /// the optional cost is dishonest.
+    #[test]
+    fn usage_update_handles_malformed_counters_and_cost() {
+        let run = AiRunId("run_usage_3".into());
+        for (used, size) in [
+            (serde_json::json!(-1), serde_json::json!(10u64)),
+            (serde_json::json!(1.5), serde_json::json!(10u64)),
+            (
+                serde_json::json!(9_007_199_254_740_992u64),
+                serde_json::json!(10u64),
+            ),
+            (serde_json::json!(5u64), serde_json::Value::Null),
+        ] {
+            let note = usage_note("sess_m", used, size, None);
+            assert!(parse_usage_update_notification(
+                &note,
+                "sess_m",
+                AiProviderKind::Acp,
+                None,
+                &run,
+                1,
+            )
+            .is_none());
+        }
+        let bad_cost = usage_note(
+            "sess_m",
+            serde_json::json!(5u64),
+            serde_json::json!(10u64),
+            Some(serde_json::json!({ "amount": -1.0, "currency": "USD" })),
+        );
+        let usage = parse_usage_update_notification(
+            &bad_cost,
+            "sess_m",
+            AiProviderKind::Acp,
+            None,
+            &run,
+            2,
+        )
+        .expect("context survives a bad cost");
+        assert_eq!(usage.used, Some(5));
+        assert_eq!(usage.cost, None);
+        let bad_currency = usage_note(
+            "sess_m",
+            serde_json::json!(5u64),
+            serde_json::json!(10u64),
+            Some(serde_json::json!({ "amount": 1.0, "currency": "XX" })),
+        );
+        let usage = parse_usage_update_notification(
+            &bad_currency,
+            "sess_m",
+            AiProviderKind::Acp,
+            None,
+            &run,
+            3,
+        )
+        .expect("context survives a bad currency");
+        assert_eq!(usage.cost, None);
+        let no_cost = usage_note(
+            "sess_m",
+            serde_json::json!(5u64),
+            serde_json::json!(10u64),
+            None,
+        );
+        let usage =
+            parse_usage_update_notification(&no_cost, "sess_m", AiProviderKind::Acp, None, &run, 4)
+                .expect("cost stays absent");
+        assert_eq!(usage.cost, None);
+    }
+
+    /// Parse unstable prompt usage with required and optional token counters,
+    /// honestly labeled with the undefined scope and no context or cost fields.
+    #[test]
+    fn prompt_response_usage_reports_tokens_with_undefined_scope() {
+        let run = AiRunId("run_usage_4".into());
+        let mut usage = prompt_usage(10, 20, 30);
+        usage["thoughtTokens"] = serde_json::json!(4u64);
+        usage["cachedReadTokens"] = serde_json::json!(6u64);
+        usage["cachedWriteTokens"] = serde_json::json!(7u64);
+        let body = prompt_body("end_turn", Some(usage));
+        let report = parse_prompt_response_usage(
+            &body,
+            AiProviderKind::Acp,
+            Some(AcpPreset::Opencode),
+            &run,
+            "sess_p1",
+            222,
+        )
+        .expect("valid prompt usage");
+        assert_eq!(report.source, AcpUsageSource::PromptResponse);
+        assert_eq!(report.scope, AcpUsageScope::PromptResponseUndefined);
+        assert_eq!(report.used, None);
+        assert_eq!(report.size, None);
+        assert_eq!(report.input_tokens, Some(10));
+        assert_eq!(report.output_tokens, Some(20));
+        assert_eq!(report.total_tokens, Some(30));
+        assert_eq!(report.reasoning_tokens, Some(4));
+        assert_eq!(report.cached_read_tokens, Some(6));
+        assert_eq!(report.cached_write_tokens, Some(7));
+        assert_eq!(report.cost, None);
+        assert_eq!(report.session_id, AcpSessionId("sess_p1".into()));
+        assert_eq!(report.received_ms, 222);
+    }
+
+    /// Treat absent prompt usage as no report while rejecting malformed present
+    /// usage instead of recording partial counters.
+    #[test]
+    fn prompt_response_usage_rejects_malformed_reports() {
+        let run = AiRunId("run_usage_5".into());
+        assert!(parse_prompt_response_usage(
+            &prompt_body("end_turn", None),
+            AiProviderKind::Acp,
+            None,
+            &run,
+            "sess_p",
+            1,
+        )
+        .is_none());
+        assert!(parse_prompt_response_usage(
+            &prompt_body("end_turn", Some(serde_json::Value::Null)),
+            AiProviderKind::Acp,
+            None,
+            &run,
+            "sess_p",
+            1,
+        )
+        .is_none());
+        for bad in [
+            serde_json::json!({ "outputTokens": 1u64, "totalTokens": 1u64 }),
+            serde_json::json!({ "inputTokens": -1, "outputTokens": 1u64, "totalTokens": 1u64 }),
+            serde_json::json!({ "inputTokens": 1.5, "outputTokens": 1u64, "totalTokens": 1u64 }),
+            serde_json::json!({
+                "inputTokens": 9_007_199_254_740_992u64,
+                "outputTokens": 1u64,
+                "totalTokens": 1u64,
+            }),
+            serde_json::json!({
+                "inputTokens": 1u64,
+                "outputTokens": 1u64,
+                "totalTokens": 1u64,
+                "thoughtTokens": -2,
+            }),
+        ] {
+            assert!(
+                parse_prompt_response_usage(
+                    &prompt_body("end_turn", Some(bad.clone())),
+                    AiProviderKind::Acp,
+                    None,
+                    &run,
+                    "sess_p",
+                    1,
+                )
+                .is_none(),
+                "{bad}"
+            );
+        }
+        let mut minimal = prompt_usage(1, 2, 3);
+        assert!(parse_prompt_response_usage(
+            &prompt_body("cancelled", Some(minimal.clone())),
+            AiProviderKind::Acp,
+            None,
+            &run,
+            "sess_p",
+            5,
+        )
+        .is_some());
+        minimal["thoughtTokens"] = serde_json::Value::Null;
+        assert!(parse_prompt_response_usage(
+            &prompt_body("cancelled", Some(minimal)),
+            AiProviderKind::Acp,
+            None,
+            &run,
+            "sess_p",
+            6,
+        )
+        .expect("null optional stays absent")
+        .reasoning_tokens
+        .is_none());
+    }
+
+    /// Map wire sources to their honest scopes and read the ACP preset from the
+    /// request provider without touching wire metadata.
+    #[test]
+    fn usage_source_scope_and_preset_labels() {
+        assert_eq!(
+            usage_scope_for_source(AcpUsageSource::UsageUpdate),
+            AcpUsageScope::Session
+        );
+        assert_eq!(
+            usage_scope_for_source(AcpUsageSource::PromptResponse),
+            AcpUsageScope::PromptResponseUndefined
+        );
+        let acp = AiProviderConfig {
+            kind: AiProviderKind::Acp,
+            acp: Some(AcpConfig {
+                preset: AcpPreset::Copilot,
+                argv: None,
+                selections: None,
+            }),
+            openai: None,
+            anthropic: None,
+        };
+        assert_eq!(acp_preset_of(&acp), Some(AcpPreset::Copilot));
+        let http = AiProviderConfig {
+            kind: AiProviderKind::OpenaiCompatible,
+            acp: None,
+            openai: Some(OpenAiConfig {
+                endpoint: "https://api.example.com/v1".into(),
+                model: "m".into(),
+            }),
+            anthropic: None,
+        };
+        assert_eq!(acp_preset_of(&http), None);
+    }
+
+    /// Build one minimal session-scoped usage report for registry tests.
+    fn registry_usage(run: &str, session: &str, received: u64) -> ReportedUsage {
+        ReportedUsage {
+            provider: AiProviderKind::Acp,
+            preset: Some(AcpPreset::Codex),
+            run_id: AiRunId(run.into()),
+            session_id: AcpSessionId(session.into()),
+            source: AcpUsageSource::UsageUpdate,
+            scope: AcpUsageScope::Session,
+            used: Some(9),
+            size: Some(11),
+            input_tokens: None,
+            output_tokens: None,
+            total_tokens: None,
+            cached_read_tokens: None,
+            cached_write_tokens: None,
+            reasoning_tokens: None,
+            cost: None,
+            received_ms: received,
+        }
+    }
+
+    /// Replace the latest report per run without summing, reset new runs to a
+    /// fresh scope, and keep snapshots ordered and bounded.
+    #[test]
+    fn usage_registry_replaces_resets_and_bounds() {
+        let registry = UsageRegistry::new();
+        let run = AiRunId("run_store_1".into());
+        registry.record(registry_usage("run_store_1", "sess_a", 10));
+        let mut second = registry_usage("run_store_1", "sess_a", 20);
+        second.used = Some(30);
+        registry.record(second);
+        let kept = registry.get(&run).expect("latest");
+        assert_eq!(kept.used, Some(30));
+        assert_eq!(kept.received_ms, 20);
+        registry.reset_for_run(&run);
+        assert!(registry.get(&run).is_none());
+        registry.record(registry_usage("run_store_1", "sess_a", 30));
+        assert!(registry.get(&run).is_some());
+        for index in 0..(MAX_USAGE_ENTRIES + 5) {
+            registry.record(registry_usage(
+                &format!("run_bound_{index}"),
+                &format!("sess_{index}"),
+                100 + index as u64,
+            ));
+        }
+        let snapshot = registry.snapshot();
+        assert_eq!(snapshot.len(), MAX_USAGE_ENTRIES);
+        assert!(snapshot
+            .windows(2)
+            .all(|pair| pair[0].received_ms <= pair[1].received_ms));
+        assert!(registry.get(&AiRunId("run_bound_0".into())).is_none());
+    }
+
+    /// Stream usage events live without settling the run; done, error, and
+    /// cancelled remain the only single terminal deliveries.
+    #[test]
+    fn terminal_gate_keeps_usage_nonterminal() {
+        let run_id = AiRunId("run_usage_gate".into());
+        let usage = registry_usage("run_usage_gate", "sess_g", 1);
+        let mut gate = TerminalGate::new();
+        let mut live = Vec::new();
+        gate.push(
+            AiStreamEvent::Started(StreamStarted {
+                run_id: run_id.clone(),
+            }),
+            &mut |event| live.push(event),
+        );
+        gate.push(
+            AiStreamEvent::Usage(StreamUsage {
+                run_id: run_id.clone(),
+                usage: usage.clone(),
+            }),
+            &mut |event| live.push(event),
+        );
+        assert_eq!(live.len(), 2);
+        assert!(matches!(live[1], AiStreamEvent::Usage(_)));
+        gate.push(gate_done(&run_id), &mut |event| live.push(event));
+        assert_eq!(live.len(), 2);
+        let terminal = gate.settle(&Ok(()), &run_id);
+        assert!(matches!(terminal, AiStreamEvent::Done(_)));
+        let roundtrip: AiStreamEvent = serde_json::from_value(
+            serde_json::to_value(AiStreamEvent::Usage(StreamUsage {
+                run_id: run_id.clone(),
+                usage,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(roundtrip, AiStreamEvent::Usage(_)));
+        assert!(!matches!(roundtrip, AiStreamEvent::Done(_)));
     }
 }

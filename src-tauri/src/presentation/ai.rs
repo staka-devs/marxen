@@ -64,3 +64,9 @@ pub fn ai_prompt_cancel(
 ) -> Result<bool, AiError> {
     service.cancel(run_id)
 }
+#[tauri::command]
+/// Return the latest reported ACP usage for popup refresh.
+/// This is read-only: it never sends a prompt or starts inference.
+pub fn ai_usage_snapshot(service: tauri::State<'_, AiService>) -> Vec<ReportedUsage> {
+    service.usage_snapshot()
+}

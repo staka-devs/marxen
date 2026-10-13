@@ -1,5 +1,5 @@
 // Generated from src-tauri/src/contracts/ai.rs. Run npm run ai-contracts:generate.
-// Do not edit by hand. AI IPC schema version 3.
+// Do not edit by hand. AI IPC schema version 4.
 import type { DocumentId, Revision, Utf16Range } from "./contracts";
 export type AiProviderKind = "acp" | "openai_compatible" | "anthropic";
 export type AcpPreset = "codex" | "opencode" | "copilot" | "custom";
@@ -42,10 +42,15 @@ export type ProposalText = { text: string, baseContexts: Array<ContextRef>, };
 export type ContextSummary = { documentId: DocumentId, revision: Revision, ranges: Array<Utf16Range>, chars: number, };
 export type StreamStarted = { runId: AiRunId, };
 export type StreamChunk = { runId: AiRunId, text: string, };
+export type StreamUsage = { runId: AiRunId, usage: ReportedUsage, };
 export type StreamDone = { runId: AiRunId, proposal: ProposalText, sent: Array<ContextSummary>, };
 export type StreamError = { runId: AiRunId | null, error: AiError, };
 export type StreamCancelled = { runId: AiRunId, };
-export type AiStreamEvent = { "type": "started", "payload": StreamStarted } | { "type": "chunk", "payload": StreamChunk } | { "type": "done", "payload": StreamDone } | { "type": "error", "payload": StreamError } | { "type": "cancelled", "payload": StreamCancelled };
+export type AcpUsageSource = "usage_update" | "prompt_response";
+export type AcpUsageScope = "session" | "prompt_response_undefined";
+export type UsageCost = { amount: string, currency: string, };
+export type ReportedUsage = { provider: AiProviderKind, preset?: AcpPreset, runId: AiRunId, sessionId: AcpSessionId, source: AcpUsageSource, scope: AcpUsageScope, used?: number, size?: number, inputTokens?: number, outputTokens?: number, totalTokens?: number, cachedReadTokens?: number, cachedWriteTokens?: number, reasoningTokens?: number, cost?: UsageCost, receivedMs: number, };
+export type AiStreamEvent = { "type": "started", "payload": StreamStarted } | { "type": "chunk", "payload": StreamChunk } | { "type": "usage", "payload": StreamUsage } | { "type": "done", "payload": StreamDone } | { "type": "error", "payload": StreamError } | { "type": "cancelled", "payload": StreamCancelled };
 export type AiError = { "code": "invalid_config", detail: string, } | { "code": "missing_credentials", provider: AiProviderKind, } | { "code": "missing_binary", command: string, } | { "code": "spawn_failed", detail: string, } | { "code": "connection_failed", detail: string, } | { "code": "auth_failed", detail: string, } | { "code": "stream_failed", detail: string, } | { "code": "request_cancelled" } | { "code": "session_required" } | { "code": "session_busy" } | { "code": "unknown_session" } | { "code": "staging_unresolved", copy_id: IsolatedCopyId, } | { "code": "live_target_rejected", detail: string, } | { "code": "unsupported_protocol", version: number, } | { "code": "claude_code_refused", command: string, } | { "code": "credential_store_failed", detail: string, };
 export type CredentialRef = { provider: AiProviderKind, hasSecret: boolean, };
 export type AiTestResult = { 

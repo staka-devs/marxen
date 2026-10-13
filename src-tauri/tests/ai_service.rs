@@ -3,6 +3,7 @@ use marxen_lib::application::ai::{
     runs::RunRegistry,
     service::AiService,
     transport::{AiFuture, TaskSpawner},
+    usage::UsageRegistry,
 };
 use marxen_lib::contracts::ai::*;
 use marxen_lib::infrastructure::ai::{credentials::MemoryKeyring, transport::NativeAiTransport};
@@ -32,6 +33,7 @@ fn service(kind: AiProviderKind) -> AiService {
         transport: Arc::new(NativeAiTransport),
         spawner: Arc::new(ProbeOnlySpawner),
         runs: Arc::new(RunRegistry::new()),
+        usage: Arc::new(UsageRegistry::new()),
     }
 }
 

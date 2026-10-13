@@ -3,3 +3,4 @@ pub mod credentials;
 pub mod runs;
 pub mod service;
 pub mod transport;
+pub mod usage;

@@ -82,6 +82,7 @@ pub fn run() {
             transport: Arc::new(infrastructure::ai::transport::NativeAiTransport),
             spawner: Arc::new(infrastructure::ai::transport::NativeTaskSpawner),
             runs: Arc::new(application::ai::runs::RunRegistry::new()),
+            usage: Arc::new(application::ai::usage::UsageRegistry::new()),
         })
         .setup(|app| {
             infrastructure::neovim::configure_resource_dir(app.path().resource_dir()?);
@@ -160,6 +161,7 @@ pub fn run() {
             presentation::ai::ai_test_connection,
             presentation::ai::ai_prompt_stream,
             presentation::ai::ai_prompt_cancel,
+            presentation::ai::ai_usage_snapshot,
             presentation::isolation::isolation_create,
             presentation::isolation::isolation_diff,
             presentation::isolation::isolation_stage_proposal,

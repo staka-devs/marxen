@@ -11,6 +11,67 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::time::Instant;
+/// Return Unix milliseconds for usage receipt stamps.
+/// Clock failures fall back to zero rather than failing the owning run.
+fn usage_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+/// Emit one validated `usage_update` notification as a nonterminal usage event.
+/// Foreign sessions and malformed reports yield no event; text and terminal
+/// handling stay unchanged.
+fn emit_usage_notification(
+    note: &serde_json::Value,
+    session_id: &str,
+    request: &AiPromptRequest,
+    run_id: &AiRunId,
+    emit: &mut (dyn FnMut(AiStreamEvent) + Send),
+) {
+    let usage = parse_usage_update_notification(
+        note,
+        session_id,
+        request.provider.kind,
+        acp_preset_of(&request.provider),
+        run_id,
+        usage_now_ms(),
+    );
+    if let Some(usage) = usage {
+        emit(AiStreamEvent::Usage(StreamUsage {
+            run_id: run_id.clone(),
+            usage,
+        }));
+    }
+}
+
+/// Emit validated unstable `PromptResponse.usage` as a nonterminal usage event.
+/// Absent usage yields no event; malformed usage is dropped without affecting
+/// the terminal settlement that follows.
+fn emit_prompt_response_usage(
+    body: &serde_json::Value,
+    session_id: &str,
+    request: &AiPromptRequest,
+    run_id: &AiRunId,
+    emit: &mut (dyn FnMut(AiStreamEvent) + Send),
+) {
+    let usage = parse_prompt_response_usage(
+        body,
+        request.provider.kind,
+        acp_preset_of(&request.provider),
+        run_id,
+        session_id,
+        usage_now_ms(),
+    );
+    if let Some(usage) = usage {
+        emit(AiStreamEvent::Usage(StreamUsage {
+            run_id: run_id.clone(),
+            usage,
+        }));
+    }
+}
+
 /// Read `PATHEXT` order for executable probing, falling back to the bundled
 /// Windows default when the variable is absent or unparsable.
 /// Appends `ps1` after `PATHEXT` when missing so official npm shims resolve
@@ -904,6 +965,7 @@ fn run_acp_conversation(
                 if let Some(error) = rpc_error("prompt に失敗しました", &body) {
                     return Err(error);
                 }
+                emit_prompt_response_usage(&body, session_id, request, run_id, emit);
                 match parse_stop_reason(&body)? {
                     StopReason::Cancelled => {
                         emit(AiStreamEvent::Cancelled(StreamCancelled {
@@ -934,6 +996,7 @@ fn run_acp_conversation(
                         text,
                     }));
                 }
+                emit_usage_notification(&note, session_id, request, run_id, emit);
                 // Other updates (tool calls, file edits inside the staging
                 // copy) stay in the isolated copy for #8 to diff; only text
                 // is proposed.
