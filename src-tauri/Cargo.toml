@@ -17,25 +17,32 @@ required-features = ["desktop"]
 [[bin]]
 name = "export-contracts"
 path = "src/bin/export-contracts.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "export-ai-contracts"
 path = "src/bin/export-ai-contracts.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "mock-acp-agent"
 path = "src/bin/mock-acp-agent.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "export-isolation-contracts"
 path = "src/bin/export-isolation-contracts.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "mock-isolation-agent"
 path = "src/bin/mock-isolation-agent.rs"
+required-features = ["dev-tools"]
 
 [features]
 default = ["desktop"]
+# Contract generators and independent protocol fixtures never ship in the app.
+dev-tools = []
 desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:arboard", "dep:clipboard-win", "dep:objc2-app-kit", "dep:objc2-foundation"]
 
 [dependencies]

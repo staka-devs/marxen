@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterPaths, fuzzyMatch, isSupportedConfigName, outlineFromMarkdown, replaceAll, replaceEdits, searchWorkspace } from "./workspace";
+import { filterPaths, fuzzyMatch, isSupportedConfigName, outlineFromMarkdown, replaceEdits, searchWorkspace } from "./workspace";
 import { applyTextEdits } from "./utf16";
 
 describe("workspace helpers", () => {
@@ -19,7 +19,9 @@ describe("workspace helpers", () => {
   it("searches and replaces literally", () => {
     const files = [{ path: "a.md", text: "東京\n東京タワー\n大阪" }];
     expect(searchWorkspace(files, "東京")).toHaveLength(2);
-    expect(replaceAll("aaa", "a", "b")).toEqual({ text: "bbb", count: 3 });
+    const { edits, count } = replaceEdits("aaa", "a", "b");
+    expect(applyTextEdits("aaa", edits)).toBe("bbb");
+    expect(count).toBe(3);
   });
 
   it("expresses revision-aware replace as ascending range edits", () => {

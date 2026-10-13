@@ -10,10 +10,21 @@ import type { Root, RootContent } from "hast";
 import type { CopyFormat, YankCopy } from "../shared/contracts";
 import { renderMarkdownDocument } from "./render/pipeline";
 import { marxenSanitizeSchema } from "./render/sanitize-schema";
-import { decodeImageSrc, isRelativeImageSrc } from "../components/preview/images";
+import { decodeImageSrc, isRelativeImageSrc } from "./preview-images";
 import { htmlToRtf } from "./clipboard-rtf";
 import { visit } from "unist-util-visit";
 import { validateMathContent } from "./render/validate";
+import { workspaceApi } from "./workspace";
+
+/** Encode image bytes in chunks to avoid exceeding the argument limit. */
+export function bytesToDataUrl(mime: string, bytes: ArrayLike<number>): string {
+  let binary = "";
+  const list = Array.from(bytes);
+  for (let offset = 0; offset < list.length; offset += 0x8000) {
+    binary += String.fromCharCode(...list.slice(offset, offset + 0x8000));
+  }
+  return `data:${mime};base64,${btoa(binary)}`;
+}
 
 export const COPY_LABELS: Record<CopyFormat, string> = {
   markdown: "Markdown",
@@ -115,12 +126,8 @@ export async function prepareClipboard(copy: YankCopy, resolveImage?: (path: str
  * and does not depend on a browser's transient key activation permission. */
 export async function copyYankToClipboard(copy: YankCopy, documentId: string): Promise<void> {
   const payload = await prepareClipboard(copy, async (path) => {
-    const data = await invoke<{ mime: string; bytes: number[] }>("load_relative_image", { documentId, path });
-    let binary = "";
-    for (let offset = 0; offset < data.bytes.length; offset += 0x8000) {
-      binary += String.fromCharCode(...data.bytes.slice(offset, offset + 0x8000));
-    }
-    return `data:${data.mime};base64,${btoa(binary)}`;
+    const data = await workspaceApi.loadImage(documentId, path);
+    return bytesToDataUrl(data.mime, data.bytes);
   });
   await invoke<void>("write_clipboard", payload as unknown as Record<string, unknown>);
 }
