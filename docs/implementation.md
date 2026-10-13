@@ -23,6 +23,16 @@ Rust / Tauri v2、React / TypeScript / Vite / Tailwind / shadcn/ui、CodeMirror 
 | TypeScript の五層分離・Shell 責務・メソッド文書 (#19) | OpenCode（Codex がレビュー・統合） | 編集・チャット・UI |
 | GUI 入力後の改行・ライブ表示のカーソル (#21) | Codex（独立レビュー付き） | 編集・Neovim |
 | AI 接続先・モデル・推論強度と設定ダイアログ (#22) | Codex / OpenCode | AI・チャット |
+| 最新安定版の依存・ビルド容量と CI (#50 / #51) | Codex / OpenCode | 描画・配布 |
+| 通知トースト・文書操作ダイアログ (#52) | Codex | 保存・復元 |
+| ファイル別の検索結果・検索条件・置換 (#53) | OpenCode（Codex がレビュー・統合） | ワークスペース・文書 IPC |
+| Windows ACP 実行ファイル探索・接続 (#54) | OpenCode（Codex がレビュー・統合） | AI 通信 |
+| GUI による Vim 設定・設定コード編集 (#55) | OpenCode（Codex がレビュー・統合） | 設定ファイル・Neovim |
+| 右側チャット・モデル選択・会話履歴 (#56) | Codex | AI・UI |
+| 上部メニュー・フォルダー操作・複数ルート設計 (#57) | Codex | ワークスペース・文書操作 |
+| 書式操作・選択ツールバーの Vim 設定 (#58) | Codex | GUI 編集・Vim 設定 |
+| Agent ごとの実測使用量ポップアップ (#59) | Codex / OpenCode | ACP 通信・チャット |
+| 言語切替・英語・日本語・地域表現 (#60) | Codex | 設定・UI |
 
 Orca で Issue ごとの子ワークスペースとブランチを管理し、依存順に統合する。OpenCode は **MuseSpark1.3 Contributor / Xhigh** の実効設定を確認してから起動する。指定モデルが利用できなければ OpenCode の担当は停止して報告し、別モデルへ自動変更しない。Claude Code を起動・委任・接続検証しない。Anthropic Messages API は独立した接続先として利用者の認証設定後に有効化する。
 
@@ -46,6 +56,8 @@ Rust が Neovim RPC、保存、AI プロセス、HTTP を所有する。文書 I
 - Agent / インラインの入力欄で接続先・モデル・推論強度を選び、ACP の公開候補と送信前の設定応答を検証する。Windows の接続でコンソール窓を表示しない。
 - AI 送信対象の表示、質問 / 生成 / 選択 rewrite / workspace 修正、隔離コピーと diff 承認、revision 競合・却下・取消。
 - Agent チャットは複数ターン、会話の切替、新規、再試行、取消、非表示中の保持に対応する。履歴は完了した会話だけを送り、接続先の変更で分離する。インラインチャットは選択または段落を対象に Ctrl+Shift+I / Cmd+Shift+I で開き、Vim の Ctrl+I と共存する。回答は共通 Markdown 描画を使う。
+- Agent の使用量は通信で確認できたコンテキスト、トークン、費用、利用枠を区別して表示し、課金やクレジットを推計しない。取得できない値は取得不可として表示する。
+- en-US / ja-JP と任意選択の ja-JP-x-kansai / ja-JP-x-tokushima に対応する。阿波弁は徳島市・鳴門周辺を基本に資料で用法を確認する。言語切替は文書・選択・未保存状態・実行中の AI を保持する。表現と検証の方針は [言語と地域の表現](localization.md) に従う。
 - Rust / TypeScript / Vitest / Playwright CI。AI モック、認証済みのみ実接続。Windows x64、macOS arm64 / x64、Linux x64 package と操作説明。
 - 各 OS 実 WebView / IME の確認結果を区別する。未実施を成功と記載しない。署名 / 公証は資格情報がある場合のみ。
 
