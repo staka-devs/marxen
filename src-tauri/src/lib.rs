@@ -138,6 +138,7 @@ pub fn run() {
             presentation::document::insert_workspace_image,
             presentation::document::import_external_image,
             presentation::document::create_markdown,
+            presentation::document::create_folder,
             presentation::document::rename_markdown,
             presentation::document::reload_document,
             presentation::document::close_document,

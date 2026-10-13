@@ -119,6 +119,73 @@ fn listing_hides_unsupported_and_disguised_binaries_but_keeps_folders() {
 }
 
 #[test]
+/// Create navigable Unicode folders under existing parents without allocating document buffers.
+fn creates_contained_folders_without_opening_documents() {
+    let (root, _recovery, w) = setup();
+    let folder = w.create_folder("メモ").unwrap();
+    assert_eq!(folder.path, "メモ");
+    assert_eq!(folder.name, "メモ");
+    assert!(folder.directory);
+    assert!(!folder.markdown);
+    assert_eq!(folder.kind, None);
+    assert_eq!(w.list("").unwrap(), vec![folder]);
+    let nested = w.create_folder("メモ/今日").unwrap();
+    assert_eq!(nested.path, "メモ/今日");
+    assert_eq!(w.list("メモ").unwrap(), vec![nested]);
+    assert!(root.path().join("メモ/今日").is_dir());
+    assert!(w.documents().unwrap().is_empty());
+    assert!(w.recovery_entries().unwrap().is_empty());
+}
+
+#[test]
+/// Reject both existing folders and files while preserving their contents.
+fn folder_creation_never_overwrites_existing_entries() {
+    let (root, _recovery, w) = setup();
+    w.create_folder("existing").unwrap();
+    fs::write(root.path().join("existing/keep.txt"), "keep").unwrap();
+    fs::write(root.path().join("existing.md"), "document").unwrap();
+    for path in ["existing", "existing.md"] {
+        assert!(matches!(
+            w.create_folder(path),
+            Err(WorkspaceError::AlreadyExists)
+        ));
+    }
+    assert_eq!(
+        fs::read_to_string(root.path().join("existing/keep.txt")).unwrap(),
+        "keep"
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("existing.md")).unwrap(),
+        "document"
+    );
+    assert!(w.documents().unwrap().is_empty());
+}
+
+#[test]
+/// Refuse traversal, device names, empty roots and implicit parent hierarchy creation.
+fn folder_creation_rejects_unsafe_paths_and_missing_parents() {
+    let (root, _recovery, w) = setup();
+    for path in [
+        "",
+        "..",
+        "../outside",
+        "/outside",
+        "CON",
+        "note:stream",
+        "bad\\folder",
+        "trailing.",
+    ] {
+        assert!(
+            w.create_folder(path).is_err(),
+            "accepted unsafe path: {path}"
+        );
+    }
+    assert!(w.create_folder("missing/child").is_err());
+    assert!(!root.path().join("missing").exists());
+    assert!(w.list("").unwrap().is_empty());
+}
+
+#[test]
 /// Insert an encoded relative image link only at a valid UTF-16 range and current revision.
 fn workspace_drag_inserts_relative_encoded_reference_and_checks_utf16_revision() {
     let (root, _recovery, mut w) = setup();
