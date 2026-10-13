@@ -239,6 +239,30 @@ impl Workspace {
         self.open_markdown(path)
     }
 
+    /// Create one contained directory under an existing parent without opening a buffer.
+    /// Existing entries and the workspace root are never replaced or accepted as new folders.
+    pub fn create_folder(&self, path: &str) -> Result<WorkspaceEntry, WorkspaceError> {
+        let target = self.storage.resolve(&self.root, path)?;
+        if target == self.root {
+            return Err(WorkspaceError::InvalidPath);
+        }
+        if self.storage.exists(&target) {
+            return Err(WorkspaceError::AlreadyExists);
+        }
+        self.storage.create_dir(&target)?;
+        Ok(WorkspaceEntry {
+            path: storage::relative(&self.root, &target)?,
+            name: target
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or(WorkspaceError::InvalidPath)?
+                .to_owned(),
+            directory: true,
+            markdown: false,
+            kind: None,
+        })
+    }
+
     /// Rename a Markdown document only at the acknowledged revision and a safe destination.
     pub fn rename(
         &mut self,

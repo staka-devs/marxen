@@ -167,6 +167,14 @@ mod desktop {
         with_workspace(&state, |w| w.create(&path, &text))
     }
     #[tauri::command(async)]
+    /// Create a new folder inside the active workspace without opening a document.
+    pub fn create_folder(
+        state: tauri::State<'_, ActorState>,
+        path: String,
+    ) -> Result<WorkspaceEntry, WorkspaceError> {
+        with_workspace(&state, |w| w.create_folder(&path))
+    }
+    #[tauri::command(async)]
     /// Rename a document only at the supplied revision and a safe workspace destination.
     pub fn rename_markdown(
         state: tauri::State<'_, ActorState>,
