@@ -10,6 +10,9 @@ import { trapDialogTab } from "./workspace/dialogFocus";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./ui/button";
 import { Settings } from "lucide-react";
+import { ChoiceMenu } from "./ui/choice-menu";
+import { ProviderIcon } from "./ai/provider-icon";
+import { aiProviderId } from "../domain/ai-view-preferences";
 import {
   DEFAULT_ENDPOINTS,
   PRESET_LABELS,
@@ -140,6 +143,12 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
   const dialogRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<Element | null>(null);
   const publishedProvider = useRef(provider);
+  const testAttempt = useRef(0);
+
+  useEffect(() => {
+    testAttempt.current += 1;
+    setTestResult(null); setTestFailure(null); setTestBusy(false);
+  }, [kind, preset, command, argsText, endpoint, model, anthropicEnabled, acpSelections]);
 
   useEffect(() => {
     if (JSON.stringify(provider) === JSON.stringify(publishedProvider.current)) return;
@@ -174,6 +183,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
     const onKey = (event: KeyboardEvent) => {
       trapDialogTab(event, dialogRef.current);
       if (event.key === "Escape") {
+        if (document.querySelector('[role="listbox"]')) return;
         event.stopPropagation();
         setOpen(false);
       }
@@ -284,17 +294,20 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
    * Without a gateway reports failure instead of throwing, so settings stay open.
    */
   async function handleTest(live: boolean) {
+    const attempt = ++testAttempt.current;
     setTestBusy(true);
     setTestResult(null);
     setTestFailure(null);
     try {
       if (!gateway) throw localizedException(t, "AI 機能はデスクトップアプリで利用します。");
-      setTestResult(await gateway.testConnection(provider, live));
+      const result = await gateway.testConnection(provider, live);
+      if (testAttempt.current === attempt) setTestResult(result);
     } catch (cause) {
+      if (testAttempt.current !== attempt) return;
       setTestFailure(localizedFailure(cause, describeInvokeError));
       setTestResult({ ok: false, detail: describeInvokeError(cause, t) });
     } finally {
-      setTestBusy(false);
+      if (testAttempt.current === attempt) setTestBusy(false);
     }
   }
 
@@ -320,6 +333,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
                 else if (candidate === "openai_compatible") setEndpoint(DEFAULT_ENDPOINTS.openai_compatible);
               }}
             >
+              <ProviderIcon provider={candidate === "acp" ? preset : candidate} size={14} />
               {candidate === "acp" ? "ACP" : candidate === "openai_compatible" ? t("OpenAI 互換") : "Anthropic"}
             </Button>
           ))}
@@ -327,16 +341,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
         {kind === "acp" ? (
           <div className="space-y-2">
             <label className="block text-xs">
-              {t("プリセット")}<select
-                aria-label={t("ACP プリセット")}
-                className="mt-1 block w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
-                value={preset}
-                onChange={(event) => { setPreset(event.target.value as AcpPreset); setAcpSelections(undefined); }}
-              >
-                {(Object.keys(PRESET_LABELS) as AcpPreset[]).map((candidate) => (
-                  <option key={candidate} value={candidate}>{t(PRESET_LABELS[candidate] as LabelKey)}</option>
-                ))}
-              </select>
+              {t("プリセット")}<ChoiceMenu label={t("ACP プリセット")} value={preset} onChange={(value) => { if (value !== preset) { setPreset(value as AcpPreset); setAcpSelections(undefined); } }} searchLabel={t("接続先を検索")} emptyLabel={t("表示する候補がありません。表示設定で変更できます。")} choices={(Object.keys(PRESET_LABELS) as AcpPreset[]).map((candidate) => ({ value: candidate, label: t(PRESET_LABELS[candidate] as LabelKey), icon: <ProviderIcon provider={candidate} /> }))} />
             </label>
             {preset === "custom" ? (
               <>
@@ -447,7 +452,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
         title={t("接続設定 · {{value0}}", { value0: (summary) })}
         className={compact ? "rounded-sm p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" : "ai-provider-trigger flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs"}
       >
-        {compact ? <Settings size={15} aria-hidden="true" /> : <><span className="shrink-0 font-medium">{t("接続設定")}</span>
+        {compact ? <Settings size={15} aria-hidden="true" /> : <><ProviderIcon provider={aiProviderId(provider)} /><span className="shrink-0 font-medium">{t("接続設定")}</span>
         <span className="min-w-0 flex-1 truncate text-[11px] font-normal text-muted-foreground">• {summary}</span></>}
       </button>
       {open && createPortal(

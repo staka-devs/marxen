@@ -6,6 +6,7 @@ import { useAiModels } from "./shell/hooks/useAiModels";
 import { defaultProviderConfig } from "../domain/ai-config";
 import type { AiProviderConfig, AcpConfigOption } from "../contracts/ai-contracts";
 import type { AiGateway } from "../application/ports";
+import { defaultAiViewPreferences } from "../domain/ai-view-preferences";
 afterEach(cleanup);
 const options: AcpConfigOption[] = [
   { id: "model", name: "Model", category: "model", currentValue: "fixture-a", options: [{ value: "fixture-a", name: "Fixture A" }, { value: "fixture-b", name: "Fixture B" }] },
@@ -29,17 +30,57 @@ describe("chat model selection", () => {
     const testConnection = vi.fn().mockResolvedValue({ ok: true, detail: "fixture", configOptions: options });
     render(<Harness gateway={{ testConnection } as unknown as AiGateway} />);
     expect(testConnection).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "モデル候補を取得" }));
+    fireEvent.click(screen.getByRole("button", { name: "接続して候補を確認" }));
     await screen.findByRole("combobox", { name: "チャットのモデル" });
     expect(testConnection).toHaveBeenCalledWith(defaultProviderConfig("acp"), true);
     choose("チャットの推論強度", "Xhigh");
     choose("チャットのモデル", "Fixture B");
+    expect(testConnection).toHaveBeenCalledTimes(1);
     expect(currentProvider().acp?.selections).toEqual([{ id: "model", value: "fixture-b" }]);
     choose("チャットの推論強度", "Xhigh");
     expect(currentProvider().acp?.selections).toEqual([{ id: "model", value: "fixture-b" }, { id: "reasoning", value: "xhigh" }]);
     choose("チャットの接続先", "GitHub Copilot");
     expect(currentProvider().acp?.preset).toBe("copilot");
     expect(screen.queryByRole("combobox", { name: "チャットのモデル" })).toBeNull();
+  });
+  it("keeps hidden current values readable without changing connection or model", () => {
+    const provider = defaultProviderConfig("acp");
+    provider.acp!.selections = [{ id: "model", value: "fixture-a" }];
+    const onProvider = vi.fn();
+    const onRefresh = vi.fn();
+    const onManageVisibility = vi.fn();
+    const preferences = { ...defaultAiViewPreferences(), hiddenProviders: ["codex" as const], hiddenModels: [{ provider: "codex" as const, optionId: "model", value: "fixture-a" }] };
+    render(<AiModelControls provider={provider} onProvider={onProvider} options={options} loading={false} discovered error={null} onRefresh={onRefresh} preferences={preferences} onManageVisibility={onManageVisibility} />);
+    expect(screen.getByRole("combobox", { name: "チャットの接続先" })).toHaveTextContent("Codex");
+    expect(screen.getByRole("combobox", { name: "チャットのモデル" })).toHaveTextContent("Fixture A");
+    fireEvent.click(screen.getByRole("combobox", { name: "チャットのモデル" }));
+    expect(screen.queryByRole("option", { name: /Fixture A/ })).toBeNull();
+    expect(screen.getByRole("option", { name: /Fixture B/ })).toBeVisible();
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "モデルを検索" }), { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "AI の表示設定" }));
+    expect(onManageVisibility).toHaveBeenCalledOnce();
+    expect(onProvider).not.toHaveBeenCalled(); expect(onRefresh).not.toHaveBeenCalled();
+  });
+  it("hides selector controls independently and keeps explicit connect and management available", () => {
+    const props = { provider: defaultProviderConfig("acp"), onProvider: vi.fn(), options, loading: false, discovered: true, error: null, onRefresh: vi.fn(), onManageVisibility: vi.fn() };
+    const preferences = { ...defaultAiViewPreferences(), showProviderSelector: false, showModelSelector: false };
+    const { rerender } = render(<AiModelControls {...props} preferences={preferences} />);
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.getByRole("button", { name: "接続して候補を確認" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "AI の表示設定" })).toBeEnabled();
+    rerender(<AiModelControls {...props} provider={defaultProviderConfig("openai_compatible")} preferences={preferences} />);
+    expect(screen.queryByRole("textbox", { name: "チャットのモデル" })).toBeNull();
+    expect(props.onProvider).not.toHaveBeenCalled();
+  });
+  it("does not invent choices or replace a configured value when discovery is empty", () => {
+    const provider = defaultProviderConfig("acp");
+    provider.acp!.selections = [{ id: "opaque.option", value: "retained-value" }];
+    const onProvider = vi.fn();
+    render(<AiModelControls provider={provider} onProvider={onProvider} options={[]} loading={false} discovered error={null} onRefresh={vi.fn()} />);
+    expect(screen.queryByRole("combobox", { name: "チャットのモデル" })).toBeNull();
+    expect(screen.getByText("この接続先はモデル候補を公開していません。CLI の設定を使用します。")).toBeVisible();
+    expect(onProvider).not.toHaveBeenCalled();
+    expect(provider.acp!.selections).toEqual([{ id: "opaque.option", value: "retained-value" }]);
   });
   it("preserves a direct API endpoint when editing the model", () => {
     const onProvider = vi.fn();
