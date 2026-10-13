@@ -52,6 +52,8 @@ export interface InlineChatProps {
   anchor?: () => { left: number; top: number; bottom: number } | null;
   /** Streaming transport injected by the composition root. */
   startPrompt?: AiGateway["startPrompt"];
+  /** Permission gateway for answering pending tool choices by exact IDs. */
+  aiGateway?: AiGateway;
   /**
    * Optional model controls injected by the composition root.
    *
@@ -80,11 +82,12 @@ export default function InlineChat({
   onClose,
   anchor,
   startPrompt: startPromptProp,
+  aiGateway,
   modelControls,
 }: InlineChatProps) {
   const { t } = useI18n();
   /** Injected streaming transport; throws visibly when not wired. */
-  const startPromptFn: AiGateway["startPrompt"] = startPromptProp ?? (async () => { throw new Error("AI transport is not wired."); });
+  const startPromptFn: AiGateway["startPrompt"] = startPromptProp ?? aiGateway?.startPrompt ?? (async () => { throw new Error("AI transport is not wired."); });
   const [prompt, setPrompt] = useState("");
   const [running, setRunning] = useState(false);
   const [output, setOutput] = useState("");
@@ -210,10 +213,12 @@ export default function InlineChat({
           if (event.type === "permission") {
             setPermissions((prev) => prev.some((item) => item.requestId === event.payload.requestId) ? prev : [...prev, {
               requestId: event.payload.requestId,
+              runId: event.payload.runId,
               toolCallId: event.payload.toolCallId,
               title: event.payload.title,
               options: event.payload.options.map((option) => ({ ...option })),
-              resolution: "cancelled",
+              state: "cancelled",
+              interactive: false,
             }]);
             return;
           }
@@ -259,10 +264,12 @@ export default function InlineChat({
           case "permission":
             setPermissions((prev) => prev.some((item) => item.requestId === event.payload.requestId) ? prev : [...prev, {
               requestId: event.payload.requestId,
+              runId: event.payload.runId,
               toolCallId: event.payload.toolCallId,
               title: event.payload.title,
               options: event.payload.options.map((option) => ({ ...option })),
-              resolution: "denied",
+              state: "pending",
+              interactive: true,
             }]);
             break;
           case "done":
@@ -303,6 +310,27 @@ export default function InlineChat({
 
   /** Cancel the owned inline run without touching the document. */ async function handleCancel() {
     await run.cancelOwned();
+  }
+
+  /**
+   * Answer one pending permission request with the exact chosen option ID.
+   *
+   * Replies through the injected gateway so the waiting driver delivers the
+   * choice; stale IDs surface as errors and leave the card pending.
+   */
+  async function handlePermissionChoice(runId: string, requestId: string, optionId: string) {
+    try {
+      const reply = aiGateway?.replyPermission;
+      if (!reply) throw new Error("AI transport is not wired.");
+      await reply(runId, requestId, optionId);
+      setPermissions((prev) => prev.map((item) =>
+        item.requestId !== requestId || item.state !== "pending"
+          ? item
+          : { ...item, state: "resolved" as const, resolvedOptionId: optionId, interactive: false },
+      ));
+    } catch (cause) {
+      setError(normalizeAiError(cause, t));
+    }
   }
 
   /** Close with Escape after requesting cancellation. */ function handleKeyDown(event: React.KeyboardEvent) {
@@ -383,7 +411,11 @@ export default function InlineChat({
           <ToolCard key={tool.id} tool={tool} />
         ))}
         {permissions.map((permission) => (
-          <PermissionCard key={permission.requestId} permission={permission} />
+          <PermissionCard
+            key={permission.requestId}
+            permission={permission}
+            onChoose={(optionId) => void handlePermissionChoice(permission.runId, permission.requestId, optionId)}
+          />
         ))}
         {output && !proposal && <p className="max-h-40 overflow-y-auto whitespace-pre-wrap text-[13px] leading-6">{output}</p>}
         {cancelled && <p className="text-xs text-muted-foreground">{t("取り消しました。")}</p>}

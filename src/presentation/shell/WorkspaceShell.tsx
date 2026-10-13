@@ -276,7 +276,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     loadEntries: workspace.loadEntries,
   });
   /** AI review and inline flow with shared staging exclusion. */
-  const staging = useAiStaging({ desktop, notify: setNotice, session, isolationGateway });
+  const staging = useAiStaging({ desktop, notify: setNotice, session, isolationGateway, workspaceGateway });
   const modelControls = <AiModelControls provider={aiProvider} onProvider={setAiProvider} {...aiModels} preferences={aiView.preferences} onManageVisibility={() => setAiVisibilityOpen(true)} onRefresh={() => void aiModels.refresh()} disabled={staging.agentBusy || staging.inlineBusy} />;
   // Read-through aliases for narrowing-heavy JSX; ownership stays in hooks.
   /** Active document for pane rendering. */
@@ -1063,6 +1063,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               onReview={() => { setShowAi(true); void staging.fetchReviewDiff(); }}
               onClose={staging.closeInlineChat}
               startPrompt={aiGateway?.startPrompt}
+              aiGateway={aiGateway}
             />
           </div>
         )}
@@ -1126,6 +1127,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               documentLabels={contextLabels}
               copyId={staging.staging?.copyId ?? null}
               diffs={staging.diffs}
+              newFiles={staging.newFiles}
+              applied={staging.applied}
               outcomes={staging.outcomes}
               busy={staging.reviewBusy || staging.agentBusy || staging.inlineBusy}
               message={staging.reviewMessage}

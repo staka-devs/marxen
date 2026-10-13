@@ -486,10 +486,13 @@ fn run_agentic_demo(
     );
     agent.flush();
 
-    // 6. Permission choice: denied skips the privileged write.
+    // 6. Permission choice: the test's reply decides the privileged write.
+    // With `--agentic-allow` an allow answer writes the privileged file;
+    // otherwise only a deny answer continues and the write is skipped.
+    // Either way the choice has a real filesystem effect.
     agent.send(&permission_request(session_id));
     agent.flush();
-    let denied = match read_message(reader) {
+    let answer = match read_message(reader) {
         Some(answer) => {
             if let Some(dir) = flag_dir() {
                 let _ = std::fs::write(
@@ -497,16 +500,38 @@ fn run_agentic_demo(
                     serde_json::to_vec(&answer).unwrap_or_default(),
                 );
             }
-            permission_denied(&answer)
+            answer
         }
         None => return false,
     };
-    if !denied {
-        agent.respond_error(id, "permission outcome was not denied");
-        agent.flush();
-        return true;
+    if has_flag("--agentic-allow") {
+        if !permission_allowed(&answer) {
+            agent.respond_error(id, "permission outcome was not allowed");
+            agent.flush();
+            return true;
+        }
+        let cwd = std::env::current_dir().unwrap_or_default();
+        match guarded_staging_target(&cwd, "agentic-privileged.md") {
+            Ok(target) => {
+                if std::fs::write(&target, "# Privileged\n\nWritten after allow.\n").is_err() {
+                    agent.respond_error(id, "staging write failed");
+                    agent.flush();
+                    return true;
+                }
+            }
+            Err(detail) => {
+                agent.respond_error(id, &format!("staging rejected: {detail}"));
+                agent.flush();
+                return true;
+            }
+        }
+    } else {
+        if !permission_denied(&answer) {
+            agent.respond_error(id, "permission outcome was not denied");
+            agent.flush();
+            return true;
+        }
     }
-    // Denied: privileged extra write is skipped (choice has a real effect).
 
     // 7. Final plan, text, and terminal.
     agentic_plan(
@@ -536,6 +561,18 @@ fn permission_denied(answer: &serde_json::Value) -> bool {
             .pointer("/result/outcome/optionId")
             .and_then(|id| id.as_str())
             == Some("mock_reject")
+}
+
+/// Recognize only a selected `mock_allow` permission outcome for the allow-path demo.
+fn permission_allowed(answer: &serde_json::Value) -> bool {
+    answer
+        .pointer("/result/outcome/outcome")
+        .and_then(|outcome| outcome.as_str())
+        == Some("selected")
+        && answer
+            .pointer("/result/outcome/optionId")
+            .and_then(|id| id.as_str())
+            == Some("mock_allow")
 }
 
 /// Publish independent fixture model and reasoning controls; production parsers are never reused.

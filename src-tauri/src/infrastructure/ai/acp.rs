@@ -116,12 +116,127 @@ fn agent_request_error(id: &Value, code: i64, message: &str) -> Value {
     })
 }
 
+/// Answer one `session/request_permission` with the chat user's explicit choice.
+///
+/// Registers the pending request, surfaces it as a chat event, then waits
+/// with bounded polling for `ai_permission_reply`, local cancellation, or the
+/// run deadline. Delivers the chosen option ID exactly once, the spec
+/// `cancelled` outcome after cancellation, or a bounded denial with actual
+/// reject IDs on deadline expiry. Read-only `ask` turns never wait: they
+/// surface and deny immediately. Always drops the pending slot afterwards.
+#[allow(clippy::too_many_arguments)]
+fn answer_permission_interactive(
+    conn: &mut AgentConn,
+    run_id: &AiRunId,
+    registry: &RunRegistry,
+    cancel: &AtomicBool,
+    cancel_sent: bool,
+    deadline: Duration,
+    session_id: &str,
+    req_id: &Value,
+    req_params: &Value,
+    is_ask: bool,
+    emit: &mut (dyn FnMut(AiStreamEvent) + Send),
+) -> Result<(), AiError> {
+    let cancelled = cancel_sent || cancel.load(Ordering::SeqCst);
+    let parsed = match parse_permission_request(req_id, req_params) {
+        None => {
+            let reply = agent_request_error(req_id, -32602, "invalid permission request");
+            return conn.write(&reply);
+        }
+        Some(parsed) if parsed.session_id != session_id => {
+            let reply = agent_request_error(req_id, -32602, "unknown session for permission");
+            return conn.write(&reply);
+        }
+        Some(parsed) => parsed,
+    };
+    let request_id = stringify_request_id(req_id).unwrap_or_else(|| parsed.request_id.clone());
+    let options: Vec<PermissionOption> = parsed
+        .options
+        .iter()
+        .map(|option| PermissionOption {
+            option_id: option.option_id.clone(),
+            name: option.name.clone(),
+            kind: option.kind,
+        })
+        .collect();
+    // Read-only turns surface the request but never wait for a choice.
+    if is_ask || cancelled {
+        emit(AiStreamEvent::Permission(StreamPermission {
+            run_id: run_id.clone(),
+            request_id: request_id.clone(),
+            session_id: AcpSessionId(parsed.session_id.clone()),
+            tool_call_id: parsed.tool_call_id.clone(),
+            title: parsed.title.clone(),
+            options: options.clone(),
+        }));
+        let mode = if cancelled {
+            PermissionAnswer::Cancelled
+        } else {
+            PermissionAnswer::Deny
+        };
+        return conn.answer_agent_request(
+            req_id,
+            "session/request_permission",
+            req_params,
+            mode,
+        );
+    }
+    if registry
+        .register_permission(run_id, &request_id, &parsed.session_id, options.clone())
+        .is_err()
+    {
+        let reply = agent_request_error(req_id, -32602, "unknown session for permission");
+        return conn.write(&reply);
+    }
+    emit(AiStreamEvent::Permission(StreamPermission {
+        run_id: run_id.clone(),
+        request_id: request_id.clone(),
+        session_id: AcpSessionId(parsed.session_id.clone()),
+        tool_call_id: parsed.tool_call_id.clone(),
+        title: parsed.title.clone(),
+        options,
+    }));
+    let wait = std::cmp::min(deadline, Duration::from_secs(120));
+    let start = Instant::now();
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            registry.drop_permission(run_id, &request_id);
+            let reply = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": answer_permission_by_id("", true),
+            });
+            return conn.write(&reply);
+        }
+        if let Some(option_id) = registry.take_permission_reply(run_id, &request_id) {
+            registry.drop_permission(run_id, &request_id);
+            let reply = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": answer_permission_by_id(&option_id, false),
+            });
+            return conn.write(&reply);
+        }
+        if start.elapsed() >= wait {
+            registry.drop_permission(run_id, &request_id);
+            return conn.answer_agent_request(
+                req_id,
+                "session/request_permission",
+                req_params,
+                PermissionAnswer::Deny,
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// Serve `fs/read_text_file` from the authorized staging directory.
 ///
 /// Validates the claimed session, requires an absolute contained path, and
 /// rejects symlinks escaping the root. Wrong sessions and outside paths yield
 /// a JSON-RPC error; successes return `{ content }`.
-fn serve_fs_read(staging_dir: &Path, expected_session: &str, params: &Value) -> Result<Value, Value> {
+pub(crate) fn serve_fs_read(staging_dir: &Path, expected_session: &str, params: &Value) -> Result<Value, Value> {
     let session = params.get("sessionId").and_then(|id| id.as_str()).unwrap_or("");
     if session != expected_session {
         return Err(agent_request_error(
@@ -160,7 +275,7 @@ fn serve_fs_read(staging_dir: &Path, expected_session: &str, params: &Value) -> 
 /// Markdown-only enforcement happens at review time; the transport contains
 /// the write but never applies it to live buffers. Wrong sessions and outside
 /// paths yield a JSON-RPC error.
-fn serve_fs_write(
+pub(crate) fn serve_fs_write(
     staging_dir: &Path,
     expected_session: &str,
     params: &Value,
@@ -1209,47 +1324,19 @@ fn run_acp_conversation(
                     };
                     conn.write(&reply)?;
                 } else if req_method == "session/request_permission" {
-                    let cancelled = cancel_sent || cancel.load(Ordering::SeqCst);
-                    match parse_permission_request(&req_id, &req_params) {
-                        None => {
-                            let reply = agent_request_error(&req_id, -32602, "invalid permission request");
-                            conn.write(&reply)?;
-                        }
-                        Some(parsed) if parsed.session_id != session_id => {
-                            let reply = agent_request_error(&req_id, -32602, "unknown session for permission");
-                            conn.write(&reply)?;
-                        }
-                        Some(parsed) => {
-                            let request_id = stringify_request_id(&req_id)
-                                .unwrap_or_else(|| parsed.request_id.clone());
-                            emit(AiStreamEvent::Permission(StreamPermission {
-                                run_id: run_id.clone(),
-                                request_id,
-                                session_id: AcpSessionId(parsed.session_id.clone()),
-                                tool_call_id: parsed.tool_call_id.clone(),
-                                title: parsed.title.clone(),
-                                options: parsed
-                                    .options
-                                    .iter()
-                                    .map(|option| PermissionOption {
-                                        option_id: option.option_id.clone(),
-                                        name: option.name.clone(),
-                                        kind: option.kind,
-                                    })
-                                    .collect(),
-                            }));
-                            // Surfaced denial by actual IDs; interactive
-                            // allow/deny choice arrives via a future
-                            // `ai_permission_reply` integration (see ADR).
-                            // Cancellation settles once with the spec outcome.
-                            let mode = if cancelled {
-                                PermissionAnswer::Cancelled
-                            } else {
-                                PermissionAnswer::Deny
-                            };
-                            conn.answer_agent_request(&req_id, &req_method, &req_params, mode)?;
-                        }
-                    }
+                    answer_permission_interactive(
+                        conn,
+                        run_id,
+                        registry,
+                        cancel,
+                        cancel_sent,
+                        params.timeout,
+                        session_id,
+                        &req_id,
+                        &req_params,
+                        request.mode == PromptMode::Ask,
+                        emit,
+                    )?;
                 } else {
                     // Terminals, elicitation, and unknown methods stay
                     // unimplemented: no external window is ever created.

@@ -769,6 +769,133 @@ mod regression {
         let _ = Path::new("/tmp");
     }
 
+    /// Bind permission replies to exact run/request IDs and offered options.
+    ///
+    /// Unknown runs, stale requests, and unoffered options fail without
+    /// recording; a validated choice is delivered exactly once and run
+    /// cleanup drops every remaining slot.
+    #[test]
+    fn agentic_permission_replies_require_exact_ids_and_options() {
+        let registry = RunRegistry::new();
+        let (run_id, _) = registry.register();
+        let options = vec![
+            PermissionOption {
+                option_id: "mock_allow".into(),
+                name: "allow".into(),
+                kind: PermissionOptionKind::AllowOnce,
+            },
+            PermissionOption {
+                option_id: "mock_reject".into(),
+                name: "deny".into(),
+                kind: PermissionOptionKind::RejectOnce,
+            },
+        ];
+        registry
+            .register_permission(&run_id, "900", "sess_1", options)
+            .unwrap();
+        // Foreign request IDs and invented options never record a choice.
+        assert!(matches!(
+            registry.reply_permission(&run_id, "901", "mock_reject"),
+            Err(AiError::UnknownSession)
+        ));
+        assert!(matches!(
+            registry.reply_permission(&run_id, "900", "mock_other"),
+            Err(AiError::InvalidConfig { .. })
+        ));
+        let unknown_run = AiRunId("run_9999".into());
+        assert!(matches!(
+            registry.reply_permission(&unknown_run, "900", "mock_reject"),
+            Err(AiError::UnknownSession)
+        ));
+        registry
+            .reply_permission(&run_id, "900", "mock_reject")
+            .unwrap();
+        assert_eq!(
+            registry.take_permission_reply(&run_id, "900"),
+            Some("mock_reject".to_owned())
+        );
+        // Each choice delivers a single time.
+        assert_eq!(registry.take_permission_reply(&run_id, "900"), None);
+        // Settlement cleanup drops remaining slots for the run.
+        registry
+            .register_permission(
+                &run_id,
+                "901",
+                "sess_1",
+                vec![PermissionOption {
+                    option_id: "mock_reject".into(),
+                    name: "deny".into(),
+                    kind: PermissionOptionKind::RejectOnce,
+                }],
+            )
+            .unwrap();
+        registry.remove(&run_id);
+        assert!(matches!(
+            registry.reply_permission(&run_id, "901", "mock_reject"),
+            Err(AiError::UnknownSession)
+        ));
+    }
+
+    /// Reject unauthorized staged file access without touching the filesystem.
+    ///
+    /// Wrong sessions, outside paths, and `ask`-mode writes fail; a contained
+    /// write/read roundtrip inside the staging directory succeeds.
+    #[test]
+    fn agentic_staged_file_access_rejects_wrong_session_and_path() {
+        let root = tempfile::tempdir().unwrap();
+        let staging = root.path().join("copy_1");
+        std::fs::create_dir_all(&staging).unwrap();
+        let inside = staging.join("a.md");
+        let inside_text = inside.to_string_lossy().into_owned();
+        let outside = root.path().join("outside.md");
+        let outside_text = outside.to_string_lossy().into_owned();
+        std::fs::write(&outside, "outside").unwrap();
+        // Wrong sessions never read, wherever the path points.
+        assert!(
+            serve_fs_read(
+                &staging,
+                "sess_1",
+                &serde_json::json!({ "sessionId": "sess_other", "path": inside_text }),
+            )
+            .is_err()
+        );
+        // Outside paths never read, even with the right session.
+        assert!(
+            serve_fs_read(
+                &staging,
+                "sess_1",
+                &serde_json::json!({ "sessionId": "sess_1", "path": outside_text }),
+            )
+            .is_err()
+        );
+        // `ask` turns never write, even inside their own staging copy.
+        assert!(
+            serve_fs_write(
+                &staging,
+                "sess_1",
+                &serde_json::json!({ "sessionId": "sess_1", "path": inside_text, "content": "x" }),
+                PromptMode::Ask,
+            )
+            .is_err()
+        );
+        // A contained workspace write/read roundtrip succeeds verbatim.
+        serve_fs_write(
+            &staging,
+            "sess_1",
+            &serde_json::json!({ "sessionId": "sess_1", "path": inside_text, "content": "hello staging" }),
+            PromptMode::Workspace,
+        )
+        .unwrap();
+        let body = serve_fs_read(
+            &staging,
+            "sess_1",
+            &serde_json::json!({ "sessionId": "sess_1", "path": inside_text }),
+        )
+        .unwrap();
+        assert_eq!(body["content"], "hello staging");
+        assert_eq!(std::fs::read_to_string(&inside).unwrap(), "hello staging");
+    }
+
     /// Refuse prompts before a session opens, concurrent prompts, and foreign
     /// session IDs; allow the recorded session again after prompt completion.
     #[test]

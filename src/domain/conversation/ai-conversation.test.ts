@@ -4,6 +4,7 @@ import {
   appendStreamingText,
   applyToolUpdate,
   cancelAssistant,
+  cancelChatPermissions,
   cancelChatTools,
   createConversation,
   createStreamingAssistant,
@@ -12,6 +13,7 @@ import {
   finalizeAssistant,
   isBusy,
   lastUserPrompt,
+  resolveChatPermission,
   retryHistory,
   setChatPlan,
   toHistoryPayload,
@@ -113,15 +115,42 @@ describe("ai conversation", () => {
     expect(messages[0].plan).toHaveLength(1);
     messages = addChatPermission(messages, assistant.id, {
       requestId: "900",
+      runId: "run_1",
       toolCallId: "call_1",
       title: "mock tool",
       options: [
         { optionId: "mock_allow", name: "許可", kind: "allow_once" },
         { optionId: "mock_reject", name: "拒否", kind: "reject_once" },
       ],
-    }, false);
-    expect(messages[0].permissions?.[0]).toMatchObject({ requestId: "900", resolution: "denied" });
+    }, "pending");
+    expect(messages[0].permissions?.[0]).toMatchObject({ requestId: "900", state: "pending", interactive: true });
     expect(messages[0].permissions?.[0].options.map((option) => option.optionId)).toEqual(["mock_allow", "mock_reject"]);
+    messages = resolveChatPermission(messages, assistant.id, "900", "mock_reject");
+    expect(messages[0].permissions?.[0]).toMatchObject({ state: "resolved", resolvedOptionId: "mock_reject", interactive: false });
+    // Unknown request IDs never mark another choice.
+    messages = resolveChatPermission(messages, assistant.id, "901", "mock_allow");
+    expect(messages[0].permissions).toHaveLength(1);
+    // Ask turns surface denied without actionable buttons.
+    let ask = addChatPermission([assistant], assistant.id, {
+      requestId: "901",
+      runId: "run_1",
+      title: "mock tool",
+      options: [{ optionId: "mock_reject", name: "拒否", kind: "reject_once" }],
+    }, "denied");
+    expect(ask[0].permissions?.[0]).toMatchObject({ state: "denied", interactive: false });
+    ask = cancelChatPermissions(ask, assistant.id);
+    expect(ask[0].permissions?.[0]).toMatchObject({ state: "denied" });
+    // Pending choices settle as cancelled exactly once per turn.
+    const waiting = cancelChatPermissions(messages, assistant.id);
+    expect(waiting[0].permissions?.[0]).toMatchObject({ state: "resolved" });
+    let pending = addChatPermission([assistant], assistant.id, {
+      requestId: "902",
+      runId: "run_1",
+      title: "mock tool",
+      options: [{ optionId: "mock_reject", name: "拒否", kind: "reject_once" }],
+    }, "pending");
+    pending = cancelChatPermissions(pending, assistant.id);
+    expect(pending[0].permissions?.[0]).toMatchObject({ state: "cancelled", interactive: false });
   });
 
   it("settles unfinished tools once on cancellation", () => {

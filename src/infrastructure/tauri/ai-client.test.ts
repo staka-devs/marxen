@@ -11,7 +11,7 @@ import {
   summarizeContext,
   AI_STREAM_EVENT,
 } from "../../domain/ai-config";
-import { startPrompt, testConnection } from "./ai-client";
+import { replyPermission, startPrompt, testConnection } from "./ai-client";
 import type {
   AiError,
   AiPromptRequest,
@@ -104,8 +104,21 @@ describe("ai transport", () => {
     await expect(testConnection(defaultProviderConfig("acp"), false)).rejects.toThrow(
       "デスクトップアプリ",
     );
+    await expect(replyPermission("run_1", "900", "mock_reject")).rejects.toThrow(
+      "デスクトップアプリ",
+    );
     expect(invoke).not.toHaveBeenCalled();
     expect(listen).not.toHaveBeenCalled();
+  });
+
+  it("answers pending permissions with exact run/request/option ids", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    await replyPermission("run_7", "900", "mock_allow");
+    expect(invoke).toHaveBeenCalledWith("ai_permission_reply", {
+      runId: "run_7",
+      requestId: "900",
+      optionId: "mock_allow",
+    });
   });
 
   it("routes stream events by run id and cancels through IPC", async () => {

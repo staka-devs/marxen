@@ -219,6 +219,8 @@ export interface AiGateway {
   startPrompt(request: AiPromptRequest, onEvent: (event: AiStreamEvent) => void): Promise<AiPromptSession>;
   /** Best-effort cancel without surfacing cancel errors. */
   cancelPromptSafe(stop: () => Promise<void>): Promise<void>;
+  /** Answer a pending permission request with the exact chosen option ID. */
+  replyPermission(runId: AiRunId, requestId: string, optionId: string): Promise<void>;
   /** Read credential presence for a provider. */
   getCredentialState(kind: AiProviderKind): Promise<CredentialRef>;
   /** Store a secret in the OS store. */

@@ -108,9 +108,30 @@ pub struct RunEntry {
     pub child: Mutex<Option<Box<dyn ManagedProcess>>>,
 }
 
+/// One agent permission request awaiting the chat user's explicit choice.
+///
+/// Registered when `session/request_permission` arrives during a prompt turn
+/// and removed once answered, cancelled, or timed out. Replies reference this
+/// record by exact run/request IDs, so stale or foreign IDs can never approve
+/// another run's tool call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPermission {
+    /// Session the agent claimed when requesting; bound to the owning run.
+    pub session_id: String,
+    /// User-choosable options in wire order.
+    pub options: Vec<PermissionOption>,
+}
+
+/// Key one pending permission reply slot by exact run and request IDs.
+fn permission_key(run_id: &AiRunId, request_id: &str) -> String {
+    format!("{}:{request_id}", run_id.0)
+}
+
 pub struct RunRegistry {
     next: AtomicU64,
     entries: Mutex<HashMap<String, RunEntry>>,
+    pending_permissions: Mutex<HashMap<String, PendingPermission>>,
+    permission_replies: Mutex<HashMap<String, String>>,
 }
 
 impl RunRegistry {
@@ -119,6 +140,8 @@ impl RunRegistry {
         Self {
             next: AtomicU64::new(1),
             entries: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            permission_replies: Mutex::new(HashMap::new()),
         }
     }
 
@@ -212,6 +235,160 @@ impl RunRegistry {
             .lock()
             .expect("run registry lock")
             .remove(&id.0);
+        self.remove_permissions_for_run(id);
+    }
+
+    /// Register one agent permission request awaiting an explicit user choice.
+    ///
+    /// Replaces any prior slot for the same run/request pair so retried agent
+    /// requests never deadlock on a stale record. Unknown runs are rejected
+    /// without recording, keeping foreign IDs out of every other run.
+    pub fn register_permission(
+        &self,
+        run_id: &AiRunId,
+        request_id: &str,
+        session_id: &str,
+        options: Vec<PermissionOption>,
+    ) -> Result<(), AiError> {
+        if !self
+            .entries
+            .lock()
+            .expect("run registry lock")
+            .contains_key(&run_id.0)
+        {
+            return Err(AiError::UnknownSession);
+        }
+        if request_id.is_empty() || request_id.len() > 128 {
+            return Err(AiError::InvalidConfig {
+                detail: "権限要求の ID が正しくありません".into(),
+            });
+        }
+        if session_id.is_empty() || session_id.len() > 256 {
+            return Err(AiError::InvalidConfig {
+                detail: "権限要求のセッションが正しくありません".into(),
+            });
+        }
+        if options.is_empty() || options.len() > 8 {
+            return Err(AiError::InvalidConfig {
+                detail: "権限の選択肢が正しくありません".into(),
+            });
+        }
+        let key = permission_key(run_id, request_id);
+        self.pending_permissions
+            .lock()
+            .expect("permission lock")
+            .insert(
+                key.clone(),
+                PendingPermission {
+                    session_id: session_id.to_owned(),
+                    options,
+                },
+            );
+        self.permission_replies
+            .lock()
+            .expect("permission lock")
+            .remove(&key);
+        Ok(())
+    }
+
+    /// Record the chat user's explicit choice for a pending permission request.
+    ///
+    /// Validates the run is still registered, the request is still pending for
+    /// that exact run, and the option is one the agent actually offered.
+    /// Stale, foreign, or invented IDs fail without touching the agent.
+    pub fn reply_permission(
+        &self,
+        run_id: &AiRunId,
+        request_id: &str,
+        option_id: &str,
+    ) -> Result<(), AiError> {
+        validate_run_id(run_id)?;
+        if request_id.is_empty() || request_id.len() > 128 {
+            return Err(AiError::InvalidConfig {
+                detail: "権限要求の ID が正しくありません".into(),
+            });
+        }
+        if option_id.is_empty() || option_id.len() > 128 {
+            return Err(AiError::InvalidConfig {
+                detail: "権限の選択肢が正しくありません".into(),
+            });
+        }
+        if !self
+            .entries
+            .lock()
+            .expect("run registry lock")
+            .contains_key(&run_id.0)
+        {
+            return Err(AiError::UnknownSession);
+        }
+        let key = permission_key(run_id, request_id);
+        let pending = self
+            .pending_permissions
+            .lock()
+            .expect("permission lock")
+            .get(&key)
+            .cloned();
+        let Some(pending) = pending else {
+            return Err(AiError::UnknownSession);
+        };
+        if !pending
+            .options
+            .iter()
+            .any(|option| option.option_id == option_id)
+        {
+            return Err(AiError::InvalidConfig {
+                detail: "存在しない権限の選択肢です".into(),
+            });
+        }
+        self.permission_replies
+            .lock()
+            .expect("permission lock")
+            .insert(key, option_id.to_owned());
+        Ok(())
+    }
+
+    /// Take a recorded permission choice exactly once for driver delivery.
+    ///
+    /// Returns `None` while the chat user has not answered. Consuming the
+    /// reply guarantees the agent receives each choice a single time.
+    pub fn take_permission_reply(
+        &self,
+        run_id: &AiRunId,
+        request_id: &str,
+    ) -> Option<String> {
+        self.permission_replies
+            .lock()
+            .expect("permission lock")
+            .remove(&permission_key(run_id, request_id))
+    }
+
+    /// Drop one pending permission slot without answering the agent.
+    ///
+    /// Used after the driver answers via timeout or cancellation so late
+    /// replies cannot leak into a later request reusing the same ID.
+    pub fn drop_permission(&self, run_id: &AiRunId, request_id: &str) {
+        let key = permission_key(run_id, request_id);
+        self.pending_permissions
+            .lock()
+            .expect("permission lock")
+            .remove(&key);
+        self.permission_replies
+            .lock()
+            .expect("permission lock")
+            .remove(&key);
+    }
+
+    /// Discard every permission slot owned by a settled run.
+    pub fn remove_permissions_for_run(&self, run_id: &AiRunId) {
+        let prefix = format!("{}:", run_id.0);
+        self.pending_permissions
+            .lock()
+            .expect("permission lock")
+            .retain(|key, _| !key.starts_with(&prefix));
+        self.permission_replies
+            .lock()
+            .expect("permission lock")
+            .retain(|key, _| !key.starts_with(&prefix));
     }
 }
 

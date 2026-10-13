@@ -686,7 +686,10 @@ export const japaneseMessages = {
   "保存しました（{{value0}}件）。": "保存しました（{{value0}}件）。",
   "保存に失敗しました（{{value0}}件）。": "保存に失敗しました（{{value0}}件）。",
   "直接APIは文章のみです。ファイル変更はACPで行います。": "直接APIは文章のみです。ファイル変更はACPで行います。",
-  "質問は読み取りのみです。": "質問は読み取りのみです。"
+  "質問は読み取りのみです。": "質問は読み取りのみです。",
+  "許可の選択": "許可の選択",
+  "選択しました: {{value0}}": "選択しました: {{value0}}",
+  "許可を待っています…": "許可を待っています…"
 } as const;
 
 /** Complete English catalog checked against every Japanese key. */
@@ -1377,7 +1380,10 @@ export const englishMessages = {
   "保存しました（{{value0}}件）。": "Saved ({{value0}}).",
   "保存に失敗しました（{{value0}}件）。": "Failed to save ({{value0}}).",
   "直接APIは文章のみです。ファイル変更はACPで行います。": "Direct APIs return text only. Use ACP for file changes.",
-  "質問は読み取りのみです。": "Questions are read-only."
+  "質問は読み取りのみです。": "Questions are read-only.",
+  "許可の選択": "Permission choice",
+  "選択しました: {{value0}}": "Selected: {{value0}}.",
+  "許可を待っています…": "Waiting for permission…"
 } satisfies Record<keyof typeof japaneseMessages, string>;
 
 /** Regional overlays reviewed per message; all other keys use standard Japanese. */

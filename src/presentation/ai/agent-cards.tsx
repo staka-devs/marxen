@@ -83,26 +83,61 @@ export function PlanCard({ entries }: { entries: PlanEntry[] }) {
   );
 }
 
+/** Props for the interactive permission choice card. */
+export interface PermissionCardProps {
+  /** Surfaced request with actual options and settlement state. */
+  permission: ChatPermission;
+  /** Answer the pending request with the exact chosen option ID. */
+  onChoose?: (optionId: string) => void;
+}
+
 /**
- * Surfaced permission request with actual option IDs and its resolution.
+ * Surfaced permission request with exact-ID choice buttons.
  *
- * Options display by name; the resolution (denied/cancelled) reflects the
- * actual reply sent with real IDs, never an unconditional approval.
+ * Pending interactive requests render one button per offered option; choosing
+ * replies through `onChoose` with the actual option ID and resolves the card.
+ * Resolved cards name the chosen option, denied Ask turns show disabled
+ * options without actionable buttons, and cancelled turns settle quietly.
+ * Request IDs never appear in product text; they stay in test IDs only.
  */
-export function PermissionCard({ permission }: { permission: ChatPermission }) {
+export function PermissionCard({ permission, onChoose }: PermissionCardProps) {
   const { t } = useI18n();
+  const chosen = permission.options.find((option) => option.optionId === permission.resolvedOptionId);
   return (
     <div data-testid={`permission-card-${permission.requestId}`} className="ai-permission-card mt-1 rounded border border-amber-500/40 px-2 py-1.5 text-xs">
       <p className="font-medium">{permission.title}</p>
-      <ul className="mt-1 flex flex-wrap gap-1">
-        {permission.options.map((option) => (
-          <li key={option.optionId} className="rounded border border-border px-1.5 py-0.5 text-muted-foreground">
-            {option.name}
-          </li>
-        ))}
-      </ul>
+      {permission.state === "pending" && permission.interactive ? (
+        <div className="mt-1 flex flex-wrap gap-1" role="group" aria-label={t("許可の選択")}>
+          {permission.options.map((option) => (
+            <button
+              key={option.optionId}
+              type="button"
+              aria-label={option.name}
+              title={option.name}
+              className="ai-permission-option rounded border border-border px-1.5 py-0.5 hover:bg-muted"
+              onClick={() => onChoose?.(option.optionId)}
+            >
+              {option.name}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <ul className="mt-1 flex flex-wrap gap-1">
+          {permission.options.map((option) => (
+            <li key={option.optionId} className="rounded border border-border px-1.5 py-0.5 text-muted-foreground">
+              {option.name}
+            </li>
+          ))}
+        </ul>
+      )}
       <p className="mt-1 text-muted-foreground">
-        {permission.resolution === "cancelled" ? t("取り消しました。") : t("拒否しました。")}
+        {permission.state === "cancelled"
+          ? t("取り消しました。")
+          : permission.state === "resolved"
+            ? t("選択しました: {{value0}}", { value0: (chosen?.name ?? permission.resolvedOptionId ?? "") })
+            : permission.state === "denied"
+              ? t("拒否しました。")
+              : t("許可を待っています…")}
       </p>
     </div>
   );

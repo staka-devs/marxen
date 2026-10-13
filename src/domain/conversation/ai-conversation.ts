@@ -34,11 +34,16 @@ export interface ChatTool {
 /** Surfaced permission request with actual user-choosable options. */
 export interface ChatPermission {
   requestId: string;
+  runId: string;
   toolCallId?: string;
   title: string;
   options: PermissionOption[];
-  /** Auto-denied by actual IDs; cancelled when the owning run was cancelled. */
-  resolution: "denied" | "cancelled";
+  /** Pending until the user chooses or the run settles; never auto-resolved. */
+  state: "pending" | "resolved" | "denied" | "cancelled";
+  /** The exact option the user chose; present only when resolved. */
+  resolvedOptionId?: string;
+  /** Buttons act on the live run; false in read-only Ask turns. */
+  interactive: boolean;
 }
 
 export interface ChatMessage {
@@ -180,15 +185,17 @@ export function setChatPlan(messages: ChatMessage[], assistantId: string, entrie
 /**
  * Surface one permission request with its actual options for chat display.
  *
- * The Rust transport answers by actual option IDs (deny by default,
- * cancelled after cancel); the chat records that resolution so approval is
- * never presented as unconditional.
+ * Normal turns arrive pending with actionable buttons; the choice travels to
+ * Rust by exact run/request/option IDs. Read-only Ask turns arrive denied
+ * with disabled buttons because the driver refuses without waiting.
+ * Cancelled arrivals settle as cancelled. Nothing auto-resolves a pending
+ * interactive request.
  */
 export function addChatPermission(
   messages: ChatMessage[],
   assistantId: string,
-  permission: { requestId: string; toolCallId?: string; title: string; options: PermissionOption[] },
-  cancelled: boolean,
+  permission: { requestId: string; runId: string; toolCallId?: string; title: string; options: PermissionOption[] },
+  mode: "pending" | "denied" | "cancelled",
 ): ChatMessage[] {
   return messages.map((message) => {
     if (message.id !== assistantId || message.role !== "assistant") return message;
@@ -196,11 +203,52 @@ export function addChatPermission(
     if (permissions.some((item) => item.requestId === permission.requestId)) return message;
     permissions.push({
       requestId: permission.requestId,
+      runId: permission.runId,
       toolCallId: permission.toolCallId,
       title: permission.title,
       options: permission.options.map((option) => ({ ...option })),
-      resolution: cancelled ? "cancelled" : "denied",
+      state: mode,
+      interactive: mode === "pending",
     });
+    return { ...message, permissions };
+  });
+}
+
+/**
+ * Resolve one pending permission with the exact option the user chose.
+ *
+ * Unknown request IDs leave the transcript untouched so stale replies never
+ * mark another request.
+ */
+export function resolveChatPermission(
+  messages: ChatMessage[],
+  assistantId: string,
+  requestId: string,
+  optionId: string,
+): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.id !== assistantId || message.role !== "assistant") return message;
+    const permissions = (message.permissions ?? []).map((item) =>
+      item.requestId !== requestId || item.state !== "pending"
+        ? item
+        : { ...item, state: "resolved" as const, resolvedOptionId: optionId, interactive: false },
+    );
+    return { ...message, permissions };
+  });
+}
+
+/**
+ * Settle every pending permission as cancelled for a cancelled assistant turn.
+ *
+ * Mirrors the tool rule: cancellation ends every unsettled choice exactly
+ * once per turn.
+ */
+export function cancelChatPermissions(messages: ChatMessage[], assistantId: string): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.id !== assistantId || message.role !== "assistant") return message;
+    const permissions = (message.permissions ?? []).map((item) =>
+      item.state === "pending" ? { ...item, state: "cancelled" as const, interactive: false } : item,
+    );
     return { ...message, permissions };
   });
 }
@@ -315,12 +363,15 @@ export function failAssistant(messages: ChatMessage[], assistantId: string, erro
  * Mark a streaming assistant as cancelled without persisting the turn.
  *
  * Cancelled exchanges drop from history so the next request stays clean.
- * Unfinished tools settle as cancelled exactly once per turn.
+ * Unfinished tools and pending permissions settle as cancelled exactly once.
  */
 export function cancelAssistant(messages: ChatMessage[], assistantId: string): ChatMessage[] {
-  return cancelChatTools(
-    messages.map((message) =>
-      message.id === assistantId ? { ...message, state: "cancelled" as const } : message,
+  return cancelChatPermissions(
+    cancelChatTools(
+      messages.map((message) =>
+        message.id === assistantId ? { ...message, state: "cancelled" as const } : message,
+      ),
+      assistantId,
     ),
     assistantId,
   );

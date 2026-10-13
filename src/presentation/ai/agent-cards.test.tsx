@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ChangedFileList, PermissionCard, PlanCard, ToolCard } from "./agent-cards";
 
 describe("agent cards", () => {
@@ -26,19 +26,47 @@ describe("agent cards", () => {
       <PermissionCard
         permission={{
           requestId: "900",
+          runId: "run_1",
           toolCallId: "call_1",
           title: "mock tool",
           options: [
             { optionId: "mock_allow", name: "許可", kind: "allow_once" },
             { optionId: "mock_reject", name: "拒否", kind: "reject_once" },
           ],
-          resolution: "denied",
+          state: "pending",
+          interactive: true,
         }}
       />,
     );
     expect(screen.getByTestId("permission-card-900")).toBeVisible();
     expect(screen.getByText("mock tool")).toBeVisible();
+    expect(screen.getByRole("button", { name: "許可" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "拒否" })).toBeVisible();
     expect(screen.queryByText("900")).not.toBeInTheDocument();
+  });
+
+  it("resolves permission cards with the chosen option and no raw ids", () => {
+    const onChoose = vi.fn();
+    render(
+      <PermissionCard
+        permission={{
+          requestId: "901",
+          runId: "run_1",
+          title: "mock tool",
+          options: [
+            { optionId: "mock_allow", name: "許可", kind: "allow_once" },
+            { optionId: "mock_reject", name: "拒否", kind: "reject_once" },
+          ],
+          state: "resolved",
+          resolvedOptionId: "mock_allow",
+          interactive: false,
+        }}
+        onChoose={onChoose}
+      />,
+    );
+    expect(screen.getByTestId("permission-card-901")).toBeVisible();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByText("901")).not.toBeInTheDocument();
   });
 
   it("shows changed-file cards for diffs and new files", () => {

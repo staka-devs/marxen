@@ -37,6 +37,7 @@ import {
   finalizeAssistant,
   isBusy,
   lastUserPrompt,
+  resolveChatPermission,
   retryHistory,
   setChatPlan,
   toHistoryPayload,
@@ -315,10 +316,11 @@ export default function AiPanel({
           ...previous,
           messages: addChatPermission(previous.messages, assistant, {
             requestId: event.payload.requestId,
+            runId: event.payload.runId,
             toolCallId: event.payload.toolCallId,
             title: event.payload.title,
             options: event.payload.options,
-          }, true),
+          }, "cancelled"),
         }));
         return;
       }
@@ -362,10 +364,11 @@ export default function AiPanel({
           ...prev,
           messages: addChatPermission(prev.messages, assistant, {
             requestId: event.payload.requestId,
+            runId: event.payload.runId,
             toolCallId: event.payload.toolCallId,
             title: event.payload.title,
             options: event.payload.options,
-          }, false),
+          }, capturedMode === "ask" ? "denied" : "pending"),
         }));
         break;
       case "done":
@@ -502,8 +505,30 @@ export default function AiPanel({
     // as cancelled via the token/flag checks above.
   }
 
-  /** Retry the last prompt after dropping the failed exchange. */ async function handleRetry() {
-    if (running || disabled || differentProvider || !conversation) return;
+  /**
+   * Answer one pending permission request with the exact chosen option ID.
+   *
+   * Replies through the injected gateway so the waiting driver delivers the
+   * choice to the agent; stale or foreign IDs surface as stream errors and
+   * leave the card pending.
+   */
+  async function handlePermissionChoice(messageId: string, runId: string, requestId: string, optionId: string) {
+    try {
+      const reply = aiGateway?.replyPermission;
+      if (!reply) throw new Error("AI transport is not wired.");
+      await reply(runId, requestId, optionId);
+      const target = conversationId;
+      if (!target) return;
+      applyToConversation(target, (prev) => ({
+        ...prev,
+        messages: resolveChatPermission(prev.messages, messageId, requestId, optionId),
+      }));
+    } catch (cause) {
+      setStreamError(normalizeAiError(cause, t));
+    }
+  }
+
+  /** Retry the last prompt after dropping the failed exchange. */ async function handleRetry() {    if (running || disabled || differentProvider || !conversation) return;
     const last = lastUserPrompt(conversation.messages);
     if (!last) return;
     applyToConversation(conversation.id, (prev) => ({
@@ -625,7 +650,11 @@ export default function AiPanel({
                   <ToolCard key={tool.id} tool={tool} />
                 ))}
                 {(message.permissions ?? []).map((permission) => (
-                  <PermissionCard key={permission.requestId} permission={permission} />
+                  <PermissionCard
+                    key={permission.requestId}
+                    permission={permission}
+                    onChoose={(optionId) => void handlePermissionChoice(message.id, permission.runId, permission.requestId, optionId)}
+                  />
                 ))}
                 {message.text && (message.state === "done"
                   ? <div className="marxen-chat-body mt-1"><MarkdownPreview text={message.text} label={t("AI の回答")} testId={`chat-response-${message.id}`} /></div>

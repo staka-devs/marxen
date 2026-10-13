@@ -25,12 +25,31 @@ const staging: StagingTarget = { copyId: "copy_01" };
 const labels = { doc_01: "a.md" };
 
 /**
- * Render the agent panel for tool assertions.
+ * Render the agent panel for tool assertions with an injectable permission gateway.
  */
-function renderPanel() {
-  return render(
-    <AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} contextLabels={labels} />,
+function renderPanel(gateway?: Partial<AiGateway>) {
+  const mockGateway = {
+    startPrompt: mockStartPrompt,
+    /** Best-effort cancel mock settling immediately. */
+    cancelPromptSafe: async () => undefined,
+    /** Permission reply mock recording exact run/request/option IDs. */
+    replyPermission: vi.fn(async () => undefined),
+    getCredentialState: vi.fn(),
+    setCredential: vi.fn(),
+    deleteCredential: vi.fn(),
+    testConnection: vi.fn(),
+    ...gateway,
+  } as unknown as AiGateway;
+  render(
+    <AiPanel
+      startPrompt={mockStartPrompt}
+      contexts={contexts}
+      staging={staging}
+      contextLabels={labels}
+      aiGateway={mockGateway}
+    />,
   );
+  return mockGateway;
 }
 
 describe("agentic chat", () => {
@@ -41,6 +60,8 @@ describe("agentic chat", () => {
       return { runId: "run_agentic", stop: vi.fn() };
     });
     renderPanel();
+    fireEvent.click(screen.getByRole("combobox", { name: "モード" }));
+    fireEvent.click(screen.getByRole("option", { name: /文書編集/ }));
     fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "直して" } });
     fireEvent.click(screen.getByRole("button", { name: "送信" }));
     await vi.waitFor(() => expect(handler).not.toBeNull());
@@ -80,8 +101,44 @@ describe("agentic chat", () => {
       },
     });
     expect(await screen.findByTestId("permission-card-900")).toBeVisible();
+    expect(screen.getByRole("button", { name: "許可" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "拒否" })).toBeVisible();
     expect(screen.queryByText("copy_01")).not.toBeInTheDocument();
     expect(screen.queryByText("doc_01")).not.toBeInTheDocument();
+  });
+
+  it("replies permission choices with exact run/request/option ids", async () => {
+    let handler: ((event: AiStreamEvent) => void) | null = null;
+    mockStartPrompt.mockImplementation(async (_request, onEvent) => {
+      handler = onEvent;
+      return { runId: "run_choice", stop: vi.fn() };
+    });
+    const gateway = renderPanel();
+    fireEvent.click(screen.getByRole("combobox", { name: "モード" }));
+    fireEvent.click(screen.getByRole("option", { name: /文書編集/ }));
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "直して" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(handler).not.toBeNull());
+    handler!({ type: "started", payload: { runId: "run_choice" } });
+    handler!({
+      type: "permission",
+      payload: {
+        runId: "run_choice",
+        requestId: "900",
+        sessionId: "sess_1",
+        toolCallId: "call_1",
+        title: "mock tool",
+        options: [
+          { optionId: "mock_allow", name: "許可", kind: "allow_once" },
+          { optionId: "mock_reject", name: "拒否", kind: "reject_once" },
+        ],
+      },
+    });
+    expect(await screen.findByTestId("permission-card-900")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "許可" }));
+    await vi.waitFor(() => expect(gateway.replyPermission).toHaveBeenCalledWith("run_choice", "900", "mock_allow"));
+    expect(await screen.findByText(/選択しました/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "許可" })).not.toBeInTheDocument();
   });
 
   it("marks unfinished tools cancelled once on cancellation", async () => {

@@ -165,6 +165,7 @@ pub fn run() {
             presentation::ai::ai_test_connection,
             presentation::ai::ai_prompt_stream,
             presentation::ai::ai_prompt_cancel,
+            presentation::ai::ai_permission_reply,
             presentation::ai::ai_usage_snapshot,
             presentation::ai::ai_codex_account_usage,
             presentation::isolation::isolation_create,
