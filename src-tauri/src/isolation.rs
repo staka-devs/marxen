@@ -826,6 +826,21 @@ impl IsolationManager {
         Ok(dir)
     }
 
+    /// Resolve and authorize the captured scope before pinning a live run.
+    /// Callers serialize workspace access before manager access. Failed
+    /// resolution or authorization never acquires a pin; successful runs
+    /// retain it until transport settlement, including cancellation.
+    pub fn prepare_prompt_run(
+        &mut self,
+        workspace: &Workspace,
+        request: &crate::ai_contracts::AiPromptRequest,
+    ) -> Result<PathBuf, WorkspaceError> {
+        let dir = self.resolve(&request.staging.copy_id)?;
+        self.authorize_prompt(workspace, request)?;
+        self.pin_for_run(&request.staging.copy_id)?;
+        Ok(dir)
+    }
+
     /// Authorize an outgoing prompt against the captured Rust snapshots before
     /// any network or process side effect (both HTTP and ACP). The current
     /// request must equal the registered copy exactly: the same documents at
@@ -1510,118 +1525,8 @@ fn render_scoped_sections(document_id: &DocumentId, sections: &[(Utf16Range, Str
     )
 }
 
-/// Tauri-shared isolation state (desktop). Single manager keyed by copy id.
 #[cfg(feature = "desktop")]
-pub struct IsolationState {
-    pub manager: std::sync::Mutex<IsolationManager>,
-}
-
-#[cfg(feature = "desktop")]
-impl Default for IsolationState {
-    fn default() -> Self {
-        let manager = IsolationManager::open_default().expect("staging dir");
-        Self {
-            manager: std::sync::Mutex::new(manager),
-        }
-    }
-}
-
-#[cfg(feature = "desktop")]
-mod desktop {
-    use super::*;
-    use crate::ai_contracts::{IsolatedCopyId, PromptContext, PromptMode, ProposalText};
-    use crate::contracts::WorkspaceError;
-    use crate::ipc::ActorState;
-
-    fn with_both<T>(
-        workspace: &ActorState,
-        isolation: &IsolationState,
-        call: impl FnOnce(&Workspace, &mut IsolationManager) -> Result<T, WorkspaceError>,
-    ) -> Result<T, WorkspaceError> {
-        let mut wguard = workspace.workspace.lock().map_err(|_| WorkspaceError::Io {
-            detail: "workspace lock poisoned".into(),
-        })?;
-        let workspace = wguard.as_mut().ok_or(WorkspaceError::NoWorkspace)?;
-        let mut mguard = isolation.manager.lock().map_err(|_| WorkspaceError::Io {
-            detail: "isolation lock poisoned".into(),
-        })?;
-        call(workspace, &mut mguard)
-    }
-
-    #[tauri::command(async)]
-    pub fn isolation_create(
-        workspace_state: tauri::State<'_, ActorState>,
-        isolation: tauri::State<'_, IsolationState>,
-        contexts: Vec<PromptContext>,
-    ) -> Result<IsolatedCopyInfo, WorkspaceError> {
-        with_both(&workspace_state, &isolation, |w, m| {
-            m.create_copy(w, &contexts)
-        })
-    }
-
-    #[tauri::command(async)]
-    pub fn isolation_diff(
-        workspace_state: tauri::State<'_, ActorState>,
-        isolation: tauri::State<'_, IsolationState>,
-        copy_id: String,
-    ) -> Result<Vec<IsolationDiff>, WorkspaceError> {
-        let id = IsolatedCopyId(copy_id);
-        with_both(&workspace_state, &isolation, |w, m| m.diff(w, &id))
-    }
-
-    #[tauri::command(async)]
-    pub fn isolation_stage_proposal(
-        workspace_state: tauri::State<'_, ActorState>,
-        isolation: tauri::State<'_, IsolationState>,
-        copy_id: String,
-        proposal: ProposalText,
-        mode: PromptMode,
-    ) -> Result<StagedProposal, WorkspaceError> {
-        let id = IsolatedCopyId(copy_id);
-        with_both(&workspace_state, &isolation, |w, m| {
-            m.stage_proposal(w, &id, &proposal, mode)
-        })
-    }
-
-    #[tauri::command(async)]
-    pub fn isolation_approve(
-        workspace_state: tauri::State<'_, ActorState>,
-        isolation: tauri::State<'_, IsolationState>,
-        copy_id: String,
-    ) -> Result<ApproveResult, WorkspaceError> {
-        let id = IsolatedCopyId(copy_id);
-        with_both(&workspace_state, &isolation, |w, m| m.approve(w, &id))
-    }
-
-    #[tauri::command(async)]
-    pub fn isolation_reject(
-        workspace_state: tauri::State<'_, ActorState>,
-        isolation: tauri::State<'_, IsolationState>,
-        copy_id: String,
-    ) -> Result<(), WorkspaceError> {
-        let id = IsolatedCopyId(copy_id);
-        with_both(&workspace_state, &isolation, |w, m| {
-            let _ = w;
-            m.reject(&id)
-        })
-    }
-
-    #[tauri::command(async)]
-    pub fn isolation_cancel(
-        workspace_state: tauri::State<'_, ActorState>,
-        isolation: tauri::State<'_, IsolationState>,
-        copy_id: String,
-    ) -> Result<(), WorkspaceError> {
-        let id = IsolatedCopyId(copy_id);
-        with_both(&workspace_state, &isolation, |w, m| {
-            let _ = w;
-            m.cancel(&id)
-        })
-    }
-}
-
-#[cfg(feature = "desktop")]
-pub use desktop::*;
+pub use crate::ipc::isolation::*;
 
 #[cfg(test)]
 mod tests {
