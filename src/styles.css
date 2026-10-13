@@ -126,6 +126,11 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .marxen-md kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 0.3rem; padding: 0 0.35em; font-size: 0.85em; background: var(--muted); }
 
 /* Inline live widgets inside the CodeMirror editor (ADR-0061). */
+.marxen-chat-body { --editor-font-size: 13px; --editor-line-height: 1.65; }
+.marxen-chat-body .marxen-md { height: auto; padding: 0; overflow: visible; background: transparent; }
+.marxen-chat-body .marxen-md h1 { font-size: 1.3em; }
+.marxen-chat-body .marxen-md h2 { font-size: 1.15em; }
+.marxen-chat-body .marxen-md h3 { font-size: 1.05em; }
 .marxen-live-widget { padding: 2px 0; white-space: normal; }
 .marxen-live-widget .marxen-live-body { font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; }
 .marxen-live-widget .marxen-live-loading { color: var(--muted-foreground); font-size: 0.8em; padding: 0.25em 0; }

@@ -1,5 +1,5 @@
 // Generated from src-tauri/src/ai_contracts.rs. Run npm run ai-contracts:generate.
-// Do not edit by hand. AI IPC schema version 1.
+// Do not edit by hand. AI IPC schema version 2.
 import type { DocumentId, Revision, Utf16Range } from "./contracts";
 export type AiProviderKind = "acp" | "openai_compatible" | "anthropic";
 export type AcpPreset = "codex" | "opencode" | "custom";
@@ -18,11 +18,18 @@ export type IsolatedCopyId = string;
 export type AcpSessionId = string;
 export type AiRunId = string;
 export type StagingTarget = { copyId: IsolatedCopyId, };
+export type ChatRole = "user" | "assistant";
+export type ChatHistoryMessage = { role: ChatRole, text: string, };
 export type AiPromptRequest = { provider: AiProviderConfig, mode: PromptMode, prompt: string, contexts: Array<PromptContext>, staging: StagingTarget, 
 /**
  * Resume an existing ACP session. Required to be absent for HTTP backends.
  */
-sessionId: AcpSessionId | null, };
+sessionId: AcpSessionId | null, 
+/**
+ * Explicit multi-turn history (oldest first). Only completed turns;
+ * bounded and validated by Rust before any side effect.
+ */
+history: Array<ChatHistoryMessage>, };
 export type ContextRef = { documentId: DocumentId, revision: Revision, };
 export type ProposalText = { text: string, baseContexts: Array<ContextRef>, };
 export type ContextSummary = { documentId: DocumentId, revision: Revision, ranges: Array<Utf16Range>, chars: number, };

@@ -182,8 +182,7 @@ async function openDocAndAi() {
 }
 
 async function registerAndSend() {
-  fireEvent.click(screen.getByRole("button", { name: "送信範囲を登録する" }));
-  await screen.findByText(/作業コピー copy_1/);
+  // Preparation is automatic on send: no manual registration step.
   const sidebar = screen.getByTestId("ai-sidebar");
   fireEvent.click(within(sidebar).getByLabelText("選択書き換え"));
   fireEvent.change(within(sidebar).getByLabelText("プロンプト"), { target: { value: "書いて" } });
@@ -195,7 +194,7 @@ async function registerAndSend() {
 it("registers exact scope, stages the proposal, diffs, and applies with per-doc outcomes", async () => {
   mockStream();
   await openDocAndAi();
-  expect(screen.getByText(/doc_a rev 0/)).toBeVisible();
+  expect(within(screen.getByTestId("ai-sidebar")).getByText("a.md")).toBeVisible();
   await registerAndSend();
   expect(mockedInvoke).toHaveBeenCalledWith(
     "isolation_create",
@@ -217,7 +216,7 @@ it("registers exact scope, stages the proposal, diffs, and applies with per-doc 
   fireEvent.click(screen.getByRole("button", { name: "承認して適用" }));
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
   await waitFor(() => expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 1"));
-  expect(await screen.findByLabelText("承認結果")).toHaveTextContent(/doc_a.*適用/);
+  expect(await screen.findByLabelText("承認結果")).toHaveTextContent(/a\.md.*適用/);
   expect(screen.queryByTestId("ai-proposal")).not.toBeInTheDocument();
   expect(backend.docs.get("メモ/a.md")!.text).toContain("[適用]");
 });
@@ -225,15 +224,14 @@ it("registers exact scope, stages the proposal, diffs, and applies with per-doc 
 it("displays ask proposals without staging", async () => {
   mockStream();
   await openDocAndAi();
-  fireEvent.click(screen.getByRole("button", { name: "送信範囲を登録する" }));
-  await screen.findByText(/作業コピー copy_1/);
   const sidebar = screen.getByTestId("ai-sidebar");
   // Default mode stays ask: proposal displays, stage is refused.
   fireEvent.change(within(sidebar).getByLabelText("プロンプト"), { target: { value: "教えて" } });
   fireEvent.click(within(sidebar).getByRole("button", { name: "送信" }));
   await waitFor(() => expect(handler).not.toBeNull());
   emitDone();
-  expect(await screen.findByTestId("ai-proposal")).toHaveTextContent("提案文");
+  await waitFor(() => expect(within(sidebar).getByLabelText("AI の回答")).toHaveTextContent("提案文"));
+  expect(screen.queryByTestId("ai-proposal")).not.toBeInTheDocument();
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "isolation_stage_proposal")).toHaveLength(0);
   expect(await screen.findByText(/表示のみ/)).toBeVisible();
 });
@@ -258,8 +256,8 @@ it("treats an unchanged scope as success alongside an applied document", async (
   fireEvent.click(screen.getByRole("button", { name: "承認して適用" }));
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
   const results = await screen.findByLabelText("承認結果");
-  expect(results).toHaveTextContent(/doc_a.*適用/);
-  expect(results).toHaveTextContent(/doc_b.*変更なし/);
+  expect(results).toHaveTextContent(/a\.md.*適用/);
+  expect(results).toHaveTextContent(/文書.*変更なし/);
   // Unchanged is success: no failure text, no false all-or-nothing label.
   expect(screen.queryByText(/未適用/)).not.toBeInTheDocument();
   expect(screen.queryByText(/all-or-nothing/i)).not.toBeInTheDocument();
@@ -281,7 +279,7 @@ it("reports a rollback failure per document without all-or-nothing claims", asyn
   fireEvent.click(screen.getByRole("button", { name: "承認して適用" }));
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
   const results = await screen.findByLabelText("承認結果");
-  expect(results).toHaveTextContent(/doc_a.*未適用/);
+  expect(results).toHaveTextContent(/a\.md.*未適用/);
   expect(results).toHaveTextContent(/ロールバック済み/);
   expect(results).toHaveTextContent(/ロールバック失敗/);
   expect(await screen.findByText(/1 文書が未適用/)).toBeVisible();

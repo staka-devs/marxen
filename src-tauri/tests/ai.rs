@@ -41,6 +41,7 @@ fn openai_request(base: &str) -> AiPromptRequest {
             copy_id: IsolatedCopyId("copy_07".into()),
         },
         session_id: None,
+        history: vec![],
     }
 }
 
@@ -309,12 +310,6 @@ async fn http_errors_map_to_auth_and_connection_failures() {
     server.done.take().expect("join").join().expect("server");
 }
 
-/// Cancelling an in-flight HTTP prompt stops the stream without a `Done` event.
-///
-/// The first stage carries the mock SSE stream through its first real content
-/// chunk; the wait below is deadline-bounded so a missing chunk fails fast
-/// instead of hanging, and the driver await is bounded so cancel must settle
-/// promptly after the flag is set.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn http_cancel_midstream_stops_without_done() {
     let body = include_str!("../../tests/fixtures/ai_sse_openai.txt").replace("\r\n", "\n");
@@ -386,6 +381,69 @@ async fn http_cancel_midstream_stops_without_done() {
     server.done.take().expect("join").join().expect("server");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn http_cancel_while_silent_server_holds_stream() {
+    // The server accepts and reads the request, then stays silent: without
+    // stall-aware reads the run would hang until the client timeout.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let base = format!(
+        "http://127.0.0.1:{}",
+        listener.local_addr().expect("port").port()
+    );
+    let (seen_tx, seen_rx) = std::sync::mpsc::channel::<()>();
+    // Detached on purpose: the sleeper must not gate the test's join. The
+    // cancellation proof is the driver's prompt settlement, not thread exit.
+    std::thread::spawn(move || {
+        let Some(mut stream) = accept_bounded(&listener) else {
+            return;
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("timeout");
+        read_http_head(&mut stream);
+        let _ = seen_tx.send(());
+        // Silence past any test patience: cancellation must win first.
+        std::thread::sleep(Duration::from_secs(30));
+    });
+    let request = openai_request(&base);
+    let run_id = AiRunId("run_silent_cancel".into());
+    let cancel = Arc::new(AtomicBool::new(false));
+    let events: Arc<Mutex<Vec<AiStreamEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let client = http_client(Duration::from_secs(60)).unwrap();
+    let target = http_target(&request.provider).unwrap();
+    let driver_events = events.clone();
+    let driver_cancel = cancel.clone();
+    let driver = tokio::spawn(async move {
+        let mut emit = |event: AiStreamEvent| {
+            driver_events.lock().expect("events lock").push(event);
+        };
+        run_http_prompt(
+            &client,
+            &target,
+            "mock-secret",
+            &request,
+            &run_id,
+            &driver_cancel,
+            &mut emit,
+        )
+        .await
+    });
+    // The request reached the silent server; now cancel and prove the driver
+    // settles promptly instead of waiting out the 60s client timeout.
+    seen_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("request seen");
+    cancel.store(true, Ordering::SeqCst);
+    tokio::time::timeout(Duration::from_secs(10), driver)
+        .await
+        .expect("cancel wins over the silent server")
+        .expect("driver")
+        .unwrap();
+    let events = events.lock().expect("events lock").clone();
+    let (_, done, cancelled) = events_of(&events);
+    assert!(cancelled && !done, "{events:?}");
+}
+
 fn sse_reply_chunked(first: &str) -> Vec<u8> {
     format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{}",
@@ -452,6 +510,7 @@ fn acp_request(argv: AcpArgv) -> AiPromptRequest {
             copy_id: IsolatedCopyId("copy_07".into()),
         },
         session_id: None,
+        history: vec![],
     }
 }
 
@@ -983,4 +1042,130 @@ fn real_opencode_handshake_when_binary_configured() {
         "real agent handshake: name={:?} session={} notifications={}",
         info.agent_name, info.session_id, info.notifications
     );
+}
+
+/// Read one HTTP request head plus its JSON body on loopback. Bodies carry the
+/// explicit multi-turn history; the mock never touches real credentials.
+fn serve_capture_body(stages: Vec<(u64, Vec<u8>)>) -> (String, std::sync::mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let base = format!(
+        "http://127.0.0.1:{}",
+        listener.local_addr().expect("port").port()
+    );
+    let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let Some(mut stream) = accept_bounded(&listener) else {
+            return;
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("timeout");
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            if stream.read_exact(&mut byte).is_err() || head.len() > 65536 {
+                break;
+            }
+            head.extend_from_slice(&byte);
+        }
+        let head_text = String::from_utf8_lossy(&head).into_owned();
+        let length = head_text.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                value.trim().parse::<usize>().ok()
+            } else {
+                None
+            }
+        });
+        let mut body = vec![0u8; length.unwrap_or(0).min(1_048_576)];
+        if !body.is_empty() {
+            let _ = stream.read_exact(&mut body);
+        }
+        let _ = seen_tx.send(String::from_utf8_lossy(&body).into_owned());
+        for (delay_ms, bytes) in stages {
+            if delay_ms > 0 {
+                std::thread::sleep(Duration::from_millis(delay_ms));
+            }
+            if stream.write_all(&bytes).is_err() {
+                return;
+            }
+        }
+    });
+    (base, seen_rx)
+}
+
+#[tokio::test]
+async fn openai_two_turn_history_reaches_mock_server() {
+    let body = include_str!("../../tests/fixtures/ai_sse_openai.txt").replace("\r\n", "\n");
+    let reply = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    )
+    .into_bytes();
+    let (base, seen) = serve_capture_body(vec![(0, reply)]);
+    let mut request = openai_request(&base);
+    request.history = vec![
+        ChatHistoryMessage {
+            role: ChatRole::User,
+            text: "1件目の質問".into(),
+        },
+        ChatHistoryMessage {
+            role: ChatRole::Assistant,
+            text: "1件目の回答".into(),
+        },
+    ];
+    request.prompt = "2件目の質問".into();
+    let run_id = AiRunId("run_history_2turn".into());
+    let cancel = AtomicBool::new(false);
+    let mut events = Vec::new();
+    let client = http_client(Duration::from_secs(20)).unwrap();
+    let target = http_target(&request.provider).unwrap();
+    run_http_prompt(
+        &client,
+        &target,
+        "mock-secret",
+        &request,
+        &run_id,
+        &cancel,
+        &mut |event| events.push(event),
+    )
+    .await
+    .unwrap();
+    let (text, done, cancelled) = events_of(&events);
+    assert_eq!(text, "Hello, 世界！");
+    assert!(done && !cancelled);
+    let sent = seen.recv_timeout(Duration::from_secs(5)).unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&sent).expect("request json");
+    let messages = payload["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 3, "{sent}");
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"], "1件目の質問");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["content"], "1件目の回答");
+    assert!(messages[2]["content"]
+        .as_str()
+        .expect("content")
+        .contains("2件目の質問"));
+    assert!(
+        !sent.contains("mock-secret"),
+        "secrets stay in headers, never in bodies"
+    );
+}
+
+#[test]
+fn oversized_history_is_rejected_before_any_side_effect() {
+    let mut request = openai_request("http://127.0.0.1:9");
+    request.history = vec![ChatHistoryMessage {
+        role: ChatRole::User,
+        text: "   ".into(),
+    }];
+    assert!(validate_prompt_request(&request).is_err());
+    request.history = (0..MAX_HISTORY_MESSAGES + 1)
+        .map(|i| ChatHistoryMessage {
+            role: ChatRole::User,
+            text: format!("q{i}"),
+        })
+        .collect();
+    assert!(validate_prompt_request(&request).is_err());
 }

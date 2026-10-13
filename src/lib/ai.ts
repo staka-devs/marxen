@@ -15,7 +15,7 @@ import type {
 } from "../shared/ai-contracts";
 
 export const AI_STREAM_EVENT = "ai-stream";
-export const AI_CONTRACT_VERSION = 1;
+export const AI_CONTRACT_VERSION = 2;
 
 export const KIND_LABELS: Record<AiProviderKind, string> = {
   acp: "ACP エージェント",
@@ -33,7 +33,7 @@ export const MODE_LABELS: Record<PromptMode, string> = {
   ask: "質問",
   generate: "生成",
   rewrite: "選択書き換え",
-  workspace: "workspace 修正",
+  workspace: "ワークスペース編集",
 };
 
 export const DEFAULT_ENDPOINTS: Record<AiProviderKind, string> = {
@@ -75,6 +75,50 @@ export function defaultProviderConfig(kind: AiProviderKind): AiProviderConfig {
   };
 }
 
+export function buildProviderConfig(state: {
+  kind: AiProviderKind;
+  preset: AcpPreset;
+  command: string;
+  argsText: string;
+  endpoint: string;
+  model: string;
+  anthropicEnabled: boolean;
+}): AiProviderConfig {
+  if (state.kind === "acp") {
+    if (state.preset === "custom") {
+      const args = state.argsText
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+      return {
+        kind: "acp",
+        acp: { preset: "custom", argv: { command: state.command.trim(), args } },
+        openai: null,
+        anthropic: null,
+      };
+    }
+    return { kind: "acp", acp: { preset: state.preset, argv: null }, openai: null, anthropic: null };
+  }
+  if (state.kind === "openai_compatible") {
+    return {
+      kind: "openai_compatible",
+      acp: null,
+      openai: { endpoint: state.endpoint.trim(), model: state.model.trim() },
+      anthropic: null,
+    };
+  }
+  return {
+    kind: "anthropic",
+    acp: null,
+    openai: null,
+    anthropic: {
+      enabled: state.anthropicEnabled,
+      endpoint: state.endpoint.trim(),
+      model: state.model.trim(),
+    },
+  };
+}
+
 export function formatRanges(context: PromptContext): string {
   return context.ranges.map((range) => `[${range.start}, ${range.end})`).join(", ");
 }
@@ -108,9 +152,9 @@ export function describeAiError(error: AiError): string {
     case "session_busy":
       return "実行中のため、新しい送信はできません。";
     case "unknown_session":
-      return "セッションの再開には未対応です。session_id を外して送信してください。";
+      return "この接続は再開できません。新しい会話を開始してください。";
     case "staging_unresolved":
-      return `作業コピー ${error.copy_id} を解決できません。隔離コピー連携 (#8) の後に利用できます。`;
+      return "作業コピーを準備できません。文書を開いて対象範囲を指定してください。";
     case "live_target_rejected":
       return `Markdownファイルは直接指定できません: ${error.detail}`;
     case "unsupported_protocol":
@@ -119,6 +163,10 @@ export function describeAiError(error: AiError): string {
       return `${error.command} は起動しません。Codex / OpenCode / カスタムを使います。`;
     case "credential_store_failed":
       return `資格情報ストアの操作に失敗しました: ${error.detail}`;
+    default: {
+      const failure = error as { detail?: unknown };
+      return typeof failure.detail === "string" ? failure.detail : "処理に失敗しました。";
+    }
   }
 }
 
@@ -171,19 +219,35 @@ export async function startPrompt(
   let unlisten: UnlistenFn | null = null;
   let runId: AiRunId | null = null;
   let stopped = false;
+  let completed = false;
+  const pending: AiStreamEvent[] = [];
+  const deliver = (payload: AiStreamEvent) => {
+    const eventRunId = payload.payload.runId;
+    if (eventRunId !== runId || completed) return;
+    const terminal = payload.type === "done" || payload.type === "error" || payload.type === "cancelled";
+    if (terminal) completed = true;
+    try { onEvent(payload); }
+    finally {
+      if (terminal) { unlisten?.(); unlisten = null; }
+    }
+  };
   unlisten = await listen<AiStreamEvent>(AI_STREAM_EVENT, (event) => {
     const payload = event.payload;
-    const eventRunId =
-      payload.type === "error" ? (payload.payload.runId ?? runId) : payload.payload.runId;
-    if (runId !== null && eventRunId !== runId) {
+    if (runId === null) {
+      // IPC can emit before returning its run id. Fence other runs first;
+      // keep this temporary queue bounded while the command is pending.
+      if (pending.length === 256) pending.shift();
+      pending.push(payload);
       return;
     }
-    onEvent(payload);
+    deliver(payload);
   });
   try {
     runId = await invoke<AiRunId>("ai_prompt_stream", { request });
+    for (const event of pending) deliver(event);
+    pending.length = 0;
   } catch (cause) {
-    unlisten();
+    unlisten?.();
     throw cause;
   }
   const owned = runId;
@@ -195,7 +259,7 @@ export async function startPrompt(
       }
       stopped = true;
       try {
-        await invoke("ai_prompt_cancel", { runId: owned });
+        if (!completed) await invoke("ai_prompt_cancel", { runId: owned });
       } finally {
         unlisten?.();
       }
