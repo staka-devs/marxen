@@ -728,10 +728,8 @@ fn run_agentic_demo(
     let flags = fresh_dir(&format!("marxen-ai-test-flags-{name}"));
     let mut args: Vec<String> = extra.iter().map(|arg| (*arg).to_owned()).collect();
     args.push("--agentic-demo".into());
-    let argv = mock_agent_argv_with_flag_dir(
-        &args.iter().map(String::as_str).collect::<Vec<_>>(),
-        &flags,
-    );
+    let argv =
+        mock_agent_argv_with_flag_dir(&args.iter().map(String::as_str).collect::<Vec<_>>(), &flags);
     let request = acp_request(argv.clone());
     let (_, staging_dir) = seed_agentic_staging(name, "# Seed\n");
     let params = acp_params(argv, &staging_dir, timeout);
@@ -762,14 +760,16 @@ fn run_agentic_demo(
 fn event_index(events: &[AiStreamEvent], what: &str) -> usize {
     events
         .iter()
-        .position(|event| match (what, event) {
-            ("plan", AiStreamEvent::Plan(_)) => true,
-            ("tool_call", AiStreamEvent::ToolCall(_)) => true,
-            ("tool_call_update", AiStreamEvent::ToolCallUpdate(_)) => true,
-            ("permission", AiStreamEvent::Permission(_)) => true,
-            ("done", AiStreamEvent::Done(_)) => true,
-            ("cancelled", AiStreamEvent::Cancelled(_)) => true,
-            _ => false,
+        .position(|event| {
+            matches!(
+                (what, event),
+                ("plan", AiStreamEvent::Plan(_))
+                    | ("tool_call", AiStreamEvent::ToolCall(_))
+                    | ("tool_call_update", AiStreamEvent::ToolCallUpdate(_))
+                    | ("permission", AiStreamEvent::Permission(_))
+                    | ("done", AiStreamEvent::Done(_))
+                    | ("cancelled", AiStreamEvent::Cancelled(_))
+            )
         })
         .unwrap_or_else(|| panic!("missing {what} in {events:?}"))
 }
@@ -809,7 +809,10 @@ fn agentic_demo_multistep_deny_records_order_and_contents() {
         .collect();
     assert!(calls.contains(&"call_read_1"), "read step, got {calls:?}");
     assert!(calls.contains(&"call_edit_1"), "edit step, got {calls:?}");
-    assert!(calls.contains(&"call_create_1"), "create step, got {calls:?}");
+    assert!(
+        calls.contains(&"call_create_1"),
+        "create step, got {calls:?}"
+    );
     for event in &events {
         let event_run = match event {
             AiStreamEvent::Started(started) => &started.run_id,
@@ -823,7 +826,7 @@ fn agentic_demo_multistep_deny_records_order_and_contents() {
             AiStreamEvent::Error(error) => error.run_id.as_ref().expect("error run"),
             AiStreamEvent::Cancelled(cancelled) => &cancelled.run_id,
         };
-        assert_eq!(event_run.0.starts_with("run_"), true);
+        assert!(event_run.0.starts_with("run_"));
     }
     // Every event belongs to the single owning run: no foreign session leaks.
     let mut owners: Vec<&str> = events
@@ -849,13 +852,19 @@ fn agentic_demo_multistep_deny_records_order_and_contents() {
     let edited = std::fs::read_to_string(staging_dir.join("seed.md")).expect("edited seed");
     assert!(edited.contains("Agentic edit."), "{edited}");
     let created = std::fs::read_to_string(staging_dir.join("agentic-note.md")).expect("new note");
-    assert!(created.contains("Created by the reproducible mock agent."), "{created}");
+    assert!(
+        created.contains("Created by the reproducible mock agent."),
+        "{created}"
+    );
     assert!(!staging_dir.join("agentic-privileged.md").exists());
-    let answer: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(flags.join("permission.json")).expect("permission log"))
-            .expect("permission json");
+    let answer: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(flags.join("permission.json")).expect("permission log"),
+    )
+    .expect("permission json");
     assert_eq!(
-        answer.pointer("/result/outcome/optionId").and_then(|id| id.as_str()),
+        answer
+            .pointer("/result/outcome/optionId")
+            .and_then(|id| id.as_str()),
         Some("mock_reject")
     );
 }
@@ -874,14 +883,17 @@ fn agentic_demo_allow_enables_privileged_write() {
         Duration::from_secs(30),
     );
     assert!(event_index(&events, "permission") < event_index(&events, "done"));
-    let privileged =
-        std::fs::read_to_string(staging_dir.join("agentic-privileged.md")).expect("privileged file");
+    let privileged = std::fs::read_to_string(staging_dir.join("agentic-privileged.md"))
+        .expect("privileged file");
     assert!(privileged.contains("Written after allow."), "{privileged}");
-    let answer: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(flags.join("permission.json")).expect("permission log"))
-            .expect("permission json");
+    let answer: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(flags.join("permission.json")).expect("permission log"),
+    )
+    .expect("permission json");
     assert_eq!(
-        answer.pointer("/result/outcome/optionId").and_then(|id| id.as_str()),
+        answer
+            .pointer("/result/outcome/optionId")
+            .and_then(|id| id.as_str()),
         Some("mock_allow")
     );
 }
@@ -912,7 +924,10 @@ fn agentic_demo_cancel_during_permission_wait_settles_once() {
     run_acp_prompt(&params, &request, &run_id, &registry, &cancel, &mut emit).unwrap();
     assert!(cancelled_on_plan, "the demo must reach its first plan");
     let (_, done, cancelled) = events_of(&events);
-    assert!(cancelled && !done, "cancellation settles once, got {events:?}");
+    assert!(
+        cancelled && !done,
+        "cancellation settles once, got {events:?}"
+    );
 }
 
 #[test]

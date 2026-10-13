@@ -302,8 +302,14 @@ pub struct ToolCallLocation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolCallContent {
-    Content { text: String },
-    Diff { path: String, old_text: Option<String>, new_text: String },
+    Content {
+        text: String,
+    },
+    Diff {
+        path: String,
+        old_text: Option<String>,
+        new_text: String,
+    },
 }
 
 /// One tool call announced by the agent via `session/update`.

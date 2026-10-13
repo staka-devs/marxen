@@ -341,7 +341,14 @@ fn run_agentic_demo(
     agent.flush();
 
     // 2. Read tool via direct filesystem.
-    agentic_tool_call(agent, session_id, "call_read_1", "Reading staged document", "read", "pending");
+    agentic_tool_call(
+        agent,
+        session_id,
+        "call_read_1",
+        "Reading staged document",
+        "read",
+        "pending",
+    );
     agent.flush();
     let Some((first_path, first_text)) = agentic_first_staged_file() else {
         agent.respond_error(id, "agentic demo found no staged file");
@@ -409,7 +416,14 @@ fn run_agentic_demo(
     }
 
     // 4. Edit tool via client fs/write_text_file with a real diff.
-    agentic_tool_call(agent, session_id, "call_edit_1", "Editing staged document", "edit", "pending");
+    agentic_tool_call(
+        agent,
+        session_id,
+        "call_edit_1",
+        "Editing staged document",
+        "edit",
+        "pending",
+    );
     agent.flush();
     agentic_tool_update(agent, session_id, "call_edit_1", "in_progress", None);
     agent.flush();
@@ -455,7 +469,14 @@ fn run_agentic_demo(
     agent.flush();
 
     // 5. Create tool via direct filesystem with a real new Markdown file.
-    agentic_tool_call(agent, session_id, "call_create_1", "Creating agentic note", "edit", "pending");
+    agentic_tool_call(
+        agent,
+        session_id,
+        "call_create_1",
+        "Creating agentic note",
+        "edit",
+        "pending",
+    );
     agent.flush();
     agentic_tool_update(agent, session_id, "call_create_1", "in_progress", None);
     agent.flush();

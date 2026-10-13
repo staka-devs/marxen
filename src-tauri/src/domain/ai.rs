@@ -1015,7 +1015,10 @@ fn parse_tool_content_item(item: &Value) -> Option<ToolCallContent> {
                 .get("oldText")
                 .and_then(|text| text.as_str())
                 .map(str::to_owned);
-            let new_text = item.get("newText").and_then(|text| text.as_str())?.to_owned();
+            let new_text = item
+                .get("newText")
+                .and_then(|text| text.as_str())?
+                .to_owned();
             if new_text.chars().count() > MAX_EXCERPT_BYTES {
                 return None;
             }
@@ -1293,7 +1296,10 @@ pub fn stringify_request_id(id: &Value) -> Option<String> {
 /// protocol error instead of recording a dishonest choice.
 pub fn parse_permission_request(id: &Value, params: &Value) -> Option<ParsedPermission> {
     let request_id = stringify_request_id(id)?;
-    let session_id = params.get("sessionId").and_then(|id| id.as_str())?.to_owned();
+    let session_id = params
+        .get("sessionId")
+        .and_then(|id| id.as_str())?
+        .to_owned();
     if session_id.is_empty() || session_id.len() > 256 {
         return None;
     }

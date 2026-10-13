@@ -209,12 +209,7 @@ fn answer_permission_interactive(
         } else {
             PermissionAnswer::Deny
         };
-        return conn.answer_agent_request(
-            req_id,
-            "session/request_permission",
-            req_params,
-            mode,
-        );
+        return conn.answer_agent_request(req_id, "session/request_permission", req_params, mode);
     }
     if registry
         .register_permission(run_id, &request_id, &parsed.session_id, options.clone())
@@ -268,8 +263,15 @@ fn answer_permission_interactive(
 /// Validates the claimed session, requires an absolute contained path, and
 /// rejects symlinks escaping the root. Wrong sessions and outside paths yield
 /// a JSON-RPC error; successes return `{ content }`.
-pub(crate) fn serve_fs_read(staging_dir: &Path, expected_session: &str, params: &Value) -> Result<Value, Value> {
-    let session = params.get("sessionId").and_then(|id| id.as_str()).unwrap_or("");
+pub(crate) fn serve_fs_read(
+    staging_dir: &Path,
+    expected_session: &str,
+    params: &Value,
+) -> Result<Value, Value> {
+    let session = params
+        .get("sessionId")
+        .and_then(|id| id.as_str())
+        .unwrap_or("");
     if session != expected_session {
         return Err(agent_request_error(
             &Value::Null,
@@ -277,7 +279,10 @@ pub(crate) fn serve_fs_read(staging_dir: &Path, expected_session: &str, params: 
             "unknown session for fs/read_text_file",
         ));
     }
-    let path = params.get("path").and_then(|path| path.as_str()).unwrap_or("");
+    let path = params
+        .get("path")
+        .and_then(|path| path.as_str())
+        .unwrap_or("");
     if !staging_path_allowed(staging_dir, path) {
         return Err(agent_request_error(
             &Value::Null,
@@ -285,9 +290,8 @@ pub(crate) fn serve_fs_read(staging_dir: &Path, expected_session: &str, params: 
             "path is outside the authorized staging copy",
         ));
     }
-    let bytes = std::fs::read(Path::new(path)).map_err(|_| {
-        agent_request_error(&Value::Null, -32602, "staging file cannot be read")
-    })?;
+    let bytes = std::fs::read(Path::new(path))
+        .map_err(|_| agent_request_error(&Value::Null, -32602, "staging file cannot be read"))?;
     let content = String::from_utf8(bytes)
         .map_err(|_| agent_request_error(&Value::Null, -32602, "staging file is not UTF-8"))?;
     if content.len() > MAX_EXCERPT_BYTES {
@@ -321,7 +325,10 @@ pub(crate) fn serve_fs_write(
             "ask mode is read-only",
         ));
     }
-    let session = params.get("sessionId").and_then(|id| id.as_str()).unwrap_or("");
+    let session = params
+        .get("sessionId")
+        .and_then(|id| id.as_str())
+        .unwrap_or("");
     if session != expected_session {
         return Err(agent_request_error(
             &Value::Null,
@@ -329,7 +336,10 @@ pub(crate) fn serve_fs_write(
             "unknown session for fs/write_text_file",
         ));
     }
-    let path = params.get("path").and_then(|path| path.as_str()).unwrap_or("");
+    let path = params
+        .get("path")
+        .and_then(|path| path.as_str())
+        .unwrap_or("");
     if !staging_path_allowed(staging_dir, path) {
         return Err(agent_request_error(
             &Value::Null,
@@ -337,9 +347,12 @@ pub(crate) fn serve_fs_write(
             "path is outside the authorized staging copy",
         ));
     }
-    let content = params.get("content").and_then(|content| content.as_str()).ok_or_else(|| {
-        agent_request_error(&Value::Null, -32602, "fs/write_text_file requires content")
-    })?;
+    let content = params
+        .get("content")
+        .and_then(|content| content.as_str())
+        .ok_or_else(|| {
+            agent_request_error(&Value::Null, -32602, "fs/write_text_file requires content")
+        })?;
     if content.len() > MAX_EXCERPT_BYTES {
         return Err(agent_request_error(
             &Value::Null,
@@ -353,9 +366,8 @@ pub(crate) fn serve_fs_write(
             agent_request_error(&Value::Null, -32602, "staging parent cannot be created")
         })?;
     }
-    std::fs::write(target, content.as_bytes()).map_err(|_| {
-        agent_request_error(&Value::Null, -32602, "staging file cannot be written")
-    })?;
+    std::fs::write(target, content.as_bytes())
+        .map_err(|_| agent_request_error(&Value::Null, -32602, "staging file cannot be written"))?;
     Ok(serde_json::json!({}))
 }
 
@@ -1147,7 +1159,16 @@ pub fn run_acp_prompt(
         watchdog_registry.timeout_cancel(&watchdog_id);
     });
 
-    let outcome = run_acp_conversation(params, request, run_id, registry, cancel, run_started, emit, &mut conn);
+    let outcome = run_acp_conversation(
+        params,
+        request,
+        run_id,
+        registry,
+        cancel,
+        run_started,
+        emit,
+        &mut conn,
+    );
     let outcome = outcome.map_err(|error| with_stderr(error, &stderr_captured));
     // Reap exactly once on every path. Graceful turns (Done or a cooperating
     // cancel) shut the agent down by closing stdin; kill paths already reaped
@@ -1348,7 +1369,12 @@ fn run_acp_conversation(
                     };
                     conn.write(&reply)?;
                 } else if req_method == "fs/write_text_file" {
-                    let reply = match serve_fs_write(&params.staging_dir, session_id, &req_params, request.mode) {
+                    let reply = match serve_fs_write(
+                        &params.staging_dir,
+                        session_id,
+                        &req_params,
+                        request.mode,
+                    ) {
                         Ok(result) => serde_json::json!({
                             "jsonrpc": "2.0", "id": req_id, "result": result
                         }),
