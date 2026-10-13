@@ -8,24 +8,33 @@ import { expect, test } from "@playwright/test";
 test("live/source/read/split retain the document without editing it", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("revision")).toHaveText("リビジョン 0");
-  // The Issue #6 preview renders asynchronously; wait for content first.
-  await expect(page.getByTestId("preview")).toContainText("日本語で書く");
-  const before = await page.getByTestId("preview").textContent();
+  // Live mode renders inline widgets inside the single editor: no separate
+  // preview pane exists there.
+  await expect(page.locator('[data-testid="editor-primary"] .marxen-live-widget').first()).toBeVisible();
+  expect(await page.locator('[data-testid="preview"]').count()).toBe(0);
 
   await page.getByRole("button", { name: "閲覧", exact: true }).click();
-  await expect(page.getByTestId("preview")).toBeVisible();
+  const preview = page.getByTestId("preview");
+  await expect(preview).toContainText("日本語で書く");
+  const before = await preview.textContent();
 
   await page.getByRole("button", { name: "原文", exact: true }).click();
   await expect(page.locator('[data-testid="editor-primary"] .cm-content')).toBeVisible();
+  expect(await page.locator('[data-testid="preview"]').count()).toBe(0);
 
   await page.getByRole("button", { name: "分割", exact: true }).click();
   await expect(page.locator('[data-testid="editor-secondary"] .cm-content')).toBeVisible();
 
   await page.getByRole("button", { name: "ライブ", exact: true }).click();
+  await expect(page.locator('[data-testid="editor-primary"] .marxen-live-widget').first()).toBeVisible();
+  expect(await page.locator('[data-testid="preview"]').count()).toBe(0);
+
+  await page.getByRole("button", { name: "閲覧", exact: true }).click();
   await expect(page.getByTestId("preview")).toContainText("日本語で書く");
   expect(await page.getByTestId("preview").textContent()).toBe(before);
   await expect(page.getByTestId("revision")).toHaveText("リビジョン 0");
 
+  await page.getByRole("button", { name: "ライブ", exact: true }).click();
   await page.screenshot({ path: "docs/reports/issue-5-ui/live.png" });
   await page.getByRole("button", { name: "閲覧", exact: true }).click();
   await page.screenshot({ path: "docs/reports/issue-5-ui/read.png" });
@@ -42,6 +51,7 @@ test("invalid fixtures render safely without executing", async ({ page }) => {
   });
 
   await page.getByRole("button", { name: "検証/安全でないHTML.md" }).click();
+  await page.getByRole("button", { name: "閲覧", exact: true }).click();
   const preview = page.getByTestId("preview");
   await expect(preview).toContainText("この本文は表示できる。");
   expect(await preview.locator("script").count()).toBe(0);

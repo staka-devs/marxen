@@ -1,14 +1,23 @@
-// Sanitization policy for Issue #6 (rehype-sanitize schema).
+// Sanitization policy for Issue #6 (rehype-sanitize schema, ADR-0060).
 //
 // Base: the GitHub-flavored default (relative links/images pass,
-// `javascript:` / event handlers / script / iframe are stripped).
-// Extensions keep the Issue #6 feature set alive through sanitization:
+// `javascript:` / `vbscript:` / event handlers / script / iframe are
+// stripped). `data:` is rejected for `href` (navigation executes) but
+// allowed for image `src` (static image context never executes scripts,
+// and pasted screenshots need it). Extensions keep the feature set alive:
 // five GitHub alert kinds (div/p classes + octicon svg), ruby-free CJK
 // content, and footnote link integrity. MathJax/Shiki/special-block HTML is
 // generated AFTER sanitization from escaped source, so `mjx-*` and `style`
 // never need to pass through here.
+//
+// DOM clobbering: every `id` / `name` gets the `marxen-` prefix so user
+// HTML can never shadow `window` / `document` properties (`location`,
+// `cookie`, ...). Same-document `#fragment` links are rewritten to the
+// prefixed targets by `rehypeMatchFragmentLinks` in pipeline.ts.
 
 import { defaultSchema } from "hast-util-sanitize";
+
+export const CLOBBER_PREFIX = "marxen-";
 
 export interface SanitizeSchema {
   tagNames?: string[];
@@ -47,13 +56,18 @@ export function marxenSanitizeSchema(): SanitizeSchema {
   ];
   attributes.path = ["d"];
   attributes.span = [...((attributes.span as unknown[]) ?? []), ["className", "sr-only"]];
+  const protocols: Record<string, string[]> = { ...(base.protocols ?? {}) };
+  // `data:` images stay (static context, pasted screenshots); `data:` links
+  // stay rejected so `data:text/html` can never become navigation + script.
+  protocols.src = [...(protocols.src ?? []), "data"];
   return {
     ...base,
     tagNames: [...(base.tagNames ?? []), "svg", "path"],
     attributes: attributes as SanitizeSchema["attributes"],
-    // remark-rehype already prefixes footnote ids with `user-content-`;
-    // the default clobber pass would prefix them twice and break
-    // footnote forward/back links (`#user-content-fn-a` -> nowhere).
-    clobberPrefix: "",
+    protocols,
+    // Every id/name is prefixed so user HTML cannot clobber window/document
+    // members. Fragment hrefs are repointed to the prefixed ids by
+    // `rehypeMatchFragmentLinks`, keeping footnotes and author anchors live.
+    clobberPrefix: CLOBBER_PREFIX,
   };
 }

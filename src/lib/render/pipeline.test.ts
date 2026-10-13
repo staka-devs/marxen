@@ -32,9 +32,12 @@ describe("render pipeline", () => {
     const { html } = await renderMarkdownDocument("参照[^note]。\n\n[^note]: 脚注の本文。\n");
     expect(html).toContain("footnotes");
     expect(html).toContain("脚注の本文");
-    expect(html).toContain('href="#user-content-fn-note"');
-    expect(html).toContain('id="user-content-fn-note"');
-    expect(html).not.toContain("user-content-user-content-");
+    // Clobber-prefixed ids stay in lockstep with their fragment links.
+    expect(html).toContain('href="#marxen-user-content-fn-note"');
+    expect(html).toContain('id="marxen-user-content-fn-note"');
+    expect(html).toContain('href="#marxen-user-content-fnref-note"');
+    expect(html).toContain('id="marxen-user-content-fnref-note"');
+    expect(html).not.toContain('href="#user-content-fn-note"');
   });
 
   it("highlights code locally with Shiki and keeps unknown languages as text", async () => {
@@ -150,6 +153,37 @@ describe("render pipeline", () => {
     const result = await renderMarkdownDocument("<scr<script>ipt>\n\n```\nunterminated");
     expect(typeof result.html).toBe("string");
     expect(result.html).not.toContain("<script>");
+  });
+
+  it("prefixes user ids/names so they cannot clobber window properties", async () => {
+    const { html } = await renderMarkdownDocument(
+      '<h2 id="cookie">見出し</h2>\n\n<a name="location">錨</a>\n\n<a href="#cookie">cookie へ</a>\n\n<img id="name" src="x.png">\n',
+    );
+    expect(html).toContain('id="marxen-cookie"');
+    expect(html).toContain('href="#marxen-cookie"');
+    expect(html).toContain('name="marxen-location"');
+    expect(html).not.toContain('id="cookie"');
+    expect(html).not.toContain('id="location"');
+    expect(html).not.toContain('id="name"');
+    expect(html).not.toContain('name="location"');
+    expect(html).not.toContain('href="#cookie"');
+  });
+
+  it("rejects data/vbscript/javascript execution but keeps useful HTML", async () => {
+    const { html } = await renderMarkdownDocument(
+      '[data](data:text/html,<script>alert(1)</script>)\n\n[vb](vbscript:msgbox(1))\n\n[js](javascript:alert(1))\n\n<img src="data:image/png;base64,iVBORw0KGgo=" alt="貼付画像">\n\n<details><summary>詳細</summary><p>本文。</p></details>\n',
+    );
+    expect(html).not.toContain("data:text/html");
+    expect(html).not.toContain("vbscript:");
+    expect(html).not.toContain("javascript:");
+    expect(html).toContain('src="data:image/png;base64,iVBORw0KGgo="');
+    expect(html).toContain("<details");
+    expect(html).toContain("本文。");
+  });
+
+  it("scrubs executable links from MathJax output", async () => {
+    const { html } = await renderMarkdownDocument("数式 $\\href{javascript:alert(1)}{押す}$ を含む。\n");
+    expect(html).not.toContain("javascript:");
   });
 });
 
