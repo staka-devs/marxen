@@ -1,0 +1,15 @@
+import type { CodexAccountUsage, ReportedUsage } from "../../contracts/ai-contracts";
+
+/** Read reported usage without starting an agent or sending a prompt. */
+export interface AiUsageGateway {
+  /** Read bounded observations already received by the native AI service. */
+  snapshot(): Promise<ReportedUsage[]>;
+  /** Subscribe to usage observations, returning an explicit listener cleanup. */
+  subscribe(onUsage: (usage: ReportedUsage) => void): Promise<() => void>;
+}
+
+/** Read installed Codex account limits independently of prompt observations. */
+export interface CodexAccountUsageGateway {
+  /** Request official account metadata without creating a conversation or inference. */
+  read(): Promise<CodexAccountUsage>;
+}
