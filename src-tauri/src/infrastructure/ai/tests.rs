@@ -763,9 +763,12 @@ mod regression {
     #[test]
     fn agentic_staging_paths_reject_outside_access() {
         use std::path::Path;
-        let staging = std::env::temp_dir().join("marxen-staging-test");
+        let scratch = tempfile::tempdir().expect("scratch dir");
+        let staging = scratch.path().join("staging");
+        std::fs::create_dir_all(&staging).expect("staging dir");
         let inside = staging.join("a.md").to_string_lossy().replace('\\', "/");
-        let outside = std::env::temp_dir()
+        let outside = scratch
+            .path()
             .join("other-a.md")
             .to_string_lossy()
             .replace('\\', "/");
@@ -1234,6 +1237,110 @@ mod regression {
                 std::fs::read_to_string(staging.join("sub").join("note.md")).unwrap(),
                 "inside"
             );
+        }
+    }
+
+    /// Authorize absent destinations through valid canonical aliases.
+    ///
+    /// A previously absent destination reached through a canonical alias of
+    /// the owned root (platform alias or Unix root symlink) resolves inside
+    /// staging and must succeed, while dangling links and missing staging
+    /// roots fail closed with nothing created. The scratch directory is
+    /// uniquely owned. Symlink branches only execute on Unix; public
+    /// macOS/Linux CI verifies them and Windows reports them as unexecuted.
+    #[test]
+    fn agentic_staging_allows_absent_destinations_through_valid_aliases() {
+        let scratch = tempfile::tempdir().expect("scratch dir");
+        let staging = scratch.path().join("staging");
+        std::fs::create_dir_all(&staging).expect("staging dir");
+        // Platform-alias branch when the canonical root differs lexically
+        // (macOS /private/var, Windows UNC): the absent destination succeeds.
+        let canonical_root = staging.canonicalize().expect("canonical staging");
+        let canonical_dest = canonical_root
+            .join("fresh.md")
+            .to_string_lossy()
+            .into_owned();
+        let lexical_dest = staging.join("fresh.md").to_string_lossy().into_owned();
+        if canonical_dest != lexical_dest {
+            assert!(staging_path_allowed(&staging, &canonical_dest));
+            serve_fs_write(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": canonical_dest, "content": "fresh alias"}),
+                PromptMode::Workspace,
+            )
+            .expect("alias absent-file write");
+            assert_eq!(
+                std::fs::read_to_string(staging.join("fresh.md")).unwrap(),
+                "fresh alias"
+            );
+        }
+        // A missing staging root fails closed for gate, read, and write alike.
+        let ghost = scratch.path().join("ghost");
+        let ghost_dest = ghost.join("a.md").to_string_lossy().into_owned();
+        assert!(!staging_path_allowed(&ghost, &ghost_dest));
+        assert!(serve_fs_read(
+            &ghost,
+            "sess_1",
+            &serde_json::json!({"sessionId": "sess_1", "path": ghost_dest}),
+        )
+        .is_err());
+        assert!(serve_fs_write(
+            &ghost,
+            "sess_1",
+            &serde_json::json!({"sessionId": "sess_1", "path": ghost_dest, "content": "x"}),
+            PromptMode::Workspace,
+        )
+        .is_err());
+        assert!(!ghost.exists());
+        // Symlink branches need link privilege: Unix-only execution.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            // A root symlink is a valid alias: the absent destination succeeds.
+            let root_link = scratch.path().join("root-link");
+            symlink(&staging, &root_link).expect("root symlink");
+            let via_link = root_link.join("via-link.md").to_string_lossy().into_owned();
+            assert!(staging_path_allowed(&staging, &via_link));
+            serve_fs_write(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": via_link, "content": "via link"}),
+                PromptMode::Workspace,
+            )
+            .expect("root-link absent-file write");
+            assert_eq!(
+                std::fs::read_to_string(staging.join("via-link.md")).unwrap(),
+                "via link"
+            );
+            // A dangling link is an entry that cannot resolve: gate, read,
+            // and write all fail and the link itself is left untouched.
+            let missing_target = scratch.path().join("no-such-target");
+            let dangling = staging.join("dangling.md");
+            symlink(&missing_target, &dangling).expect("dangling symlink");
+            let dangling_text = dangling.to_string_lossy().into_owned();
+            assert!(!staging_path_allowed(&staging, &dangling_text));
+            assert!(serve_fs_read(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": dangling_text}),
+            )
+            .is_err());
+            let refusal = serve_fs_write(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": dangling_text, "content": "x"}),
+                PromptMode::Workspace,
+            )
+            .expect_err("dangling write refuses");
+            assert_eq!(
+                refusal
+                    .pointer("/error/message")
+                    .and_then(|message| message.as_str()),
+                Some("path is outside the authorized staging copy")
+            );
+            assert!(!missing_target.exists());
+            assert!(std::fs::symlink_metadata(&dangling).is_ok());
         }
     }
 
