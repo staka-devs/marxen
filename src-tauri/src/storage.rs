@@ -3,7 +3,7 @@ use crate::contracts::{DocumentSnapshot, WorkspaceError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,4 +261,122 @@ fn replace_windows(temporary: tempfile::NamedTempFile, path: &Path) -> Result<()
         .sync_all()?;
     backup_dir.close()?;
     Ok(())
+}
+
+pub const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+
+/// Bound allocation and read even when a dropped file grows concurrently.
+pub fn read_image_bytes(path: &Path) -> Result<Vec<u8>, WorkspaceError> {
+    let meta = fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() || !meta.is_file() || meta.len() > MAX_IMAGE_BYTES as u64 {
+        return Err(WorkspaceError::InvalidImage);
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(path)?
+        .take(MAX_IMAGE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(WorkspaceError::InvalidImage);
+    }
+    Ok(bytes)
+}
+
+pub fn image_family(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp"
+    )
+}
+
+pub fn text_family(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    markdown(path)
+        || matches!(
+            name.as_str(),
+            "readme"
+                | "license"
+                | "copying"
+                | "makefile"
+                | "dockerfile"
+                | "vimrc"
+                | "_vimrc"
+                | ".vimrc"
+                | ".gitignore"
+                | ".gitattributes"
+                | ".editorconfig"
+                | ".env"
+        )
+        || matches!(
+            path.extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .as_str(),
+            "txt"
+                | "text"
+                | "log"
+                | "csv"
+                | "tsv"
+                | "json"
+                | "jsonc"
+                | "yaml"
+                | "yml"
+                | "toml"
+                | "ini"
+                | "conf"
+                | "config"
+                | "xml"
+                | "html"
+                | "htm"
+                | "css"
+                | "scss"
+                | "less"
+                | "js"
+                | "jsx"
+                | "ts"
+                | "tsx"
+                | "mjs"
+                | "cjs"
+                | "rs"
+                | "py"
+                | "rb"
+                | "go"
+                | "java"
+                | "c"
+                | "h"
+                | "cpp"
+                | "hpp"
+                | "cs"
+                | "swift"
+                | "kt"
+                | "sh"
+                | "bash"
+                | "zsh"
+                | "ps1"
+                | "sql"
+                | "lua"
+                | "vim"
+                | "tex"
+                | "rst"
+                | "env"
+        )
+}
+
+pub fn utf8_text(bytes: Vec<u8>) -> Result<String, WorkspaceError> {
+    let text = String::from_utf8(bytes).map_err(|_| WorkspaceError::InvalidUtf8)?;
+    if text
+        .chars()
+        .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+    {
+        return Err(WorkspaceError::InvalidUtf8);
+    }
+    Ok(text)
 }

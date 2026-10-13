@@ -109,11 +109,34 @@ impl Workspace {
             if storage::resolve(&self.root, &relative).is_err() {
                 continue;
             }
+            let kind = if meta.is_dir() {
+                None
+            } else if meta.is_file() && storage::image_family(&entry.path()) {
+                if self.load_workspace_image(&relative).is_err() {
+                    continue;
+                }
+                Some(WorkspaceFileKind::Image)
+            } else if meta.is_file() && storage::text_family(&entry.path()) {
+                if storage::read_disk(&entry.path())?
+                    .and_then(|b| storage::utf8_text(b).ok())
+                    .is_none()
+                {
+                    continue;
+                }
+                Some(if storage::markdown(&entry.path()) {
+                    WorkspaceFileKind::Markdown
+                } else {
+                    WorkspaceFileKind::Text
+                })
+            } else {
+                continue;
+            };
             entries.push(WorkspaceEntry {
                 path: relative,
                 name,
                 directory: meta.is_dir(),
                 markdown: meta.is_file() && storage::markdown(&entry.path()),
+                kind,
             });
         }
         entries.sort_by(|a, b| b.directory.cmp(&a.directory).then(a.name.cmp(&b.name)));
@@ -125,6 +148,14 @@ impl Workspace {
         if !storage::markdown(&target) {
             return Err(WorkspaceError::NotMarkdown);
         }
+        self.open_text_file(path)
+    }
+
+    pub fn open_text_file(&mut self, path: &str) -> Result<OpenDocument, WorkspaceError> {
+        let target = storage::resolve(&self.root, path)?;
+        if !storage::text_family(&target) {
+            return Err(WorkspaceError::NotText);
+        }
         if let Some(actor) = self
             .actors
             .values()
@@ -134,7 +165,7 @@ impl Workspace {
         }
         let bytes = storage::read_disk(&target)?.ok_or(WorkspaceError::NotFound)?;
         let baseline = storage::fingerprint(&bytes);
-        let text = String::from_utf8(bytes).map_err(|_| WorkspaceError::InvalidUtf8)?;
+        let text = storage::utf8_text(bytes)?;
         let id = self.new_id();
         let actor = DocumentActor::open(DocumentId(id.clone()), text, Some(target))?;
         // Catch external mutation between disk read and actor creation.
@@ -235,7 +266,10 @@ impl Workspace {
             for entry in self.list(&folder)? {
                 if entry.directory {
                     pending.push(entry.path);
-                } else if entry.markdown {
+                } else if matches!(
+                    entry.kind,
+                    Some(WorkspaceFileKind::Markdown | WorkspaceFileKind::Text)
+                ) {
                     files.push(entry.path);
                 }
             }
@@ -357,8 +391,8 @@ impl Workspace {
             }
             if let Some(path) = &record.path {
                 let path = storage::resolve(&self.root, path)?;
-                if !storage::markdown(&path) {
-                    return Err(WorkspaceError::NotMarkdown);
+                if !storage::text_family(&path) {
+                    return Err(WorkspaceError::NotText);
                 }
             }
             records.push(record);
@@ -458,15 +492,71 @@ impl Workspace {
             }
         }
         let target = storage::resolve(&self.root, &parts.join("/"))?;
-        let bytes = storage::read_disk(&target)?.ok_or(WorkspaceError::NotFound)?;
+        let bytes = storage::read_image_bytes(&target)?;
         let mime = image_mime(&target, &bytes)?;
-        if bytes.len() > 20 * 1024 * 1024 {
-            return Err(WorkspaceError::InvalidImage);
-        }
         Ok(ImageData {
             mime: mime.into(),
             bytes,
         })
+    }
+
+    pub fn load_workspace_image(&self, path: &str) -> Result<ImageData, WorkspaceError> {
+        let target = storage::resolve(&self.root, path)?;
+        let bytes = storage::read_image_bytes(&target)?;
+        Ok(ImageData {
+            mime: image_mime(&target, &bytes)?.into(),
+            bytes,
+        })
+    }
+
+    pub fn insert_workspace_image(
+        &self,
+        request: SaveRequest,
+        path: &str,
+        range: Utf16Range,
+    ) -> Result<DocumentSnapshot, WorkspaceError> {
+        self.load_workspace_image(path)?;
+        let actor = self.actor(&request.document_id.0)?;
+        let document = actor.path().ok_or(WorkspaceError::InvalidPath)?;
+        if !storage::markdown(&document) {
+            return Err(WorkspaceError::NotMarkdown);
+        }
+        let parent = storage::relative(
+            &self.root,
+            document.parent().ok_or(WorkspaceError::InvalidPath)?,
+        )?;
+        let from: Vec<_> = parent.split('/').filter(|s| !s.is_empty()).collect();
+        let to: Vec<_> = path.split('/').collect();
+        let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+        let mut parts = vec!["..".to_owned(); from.len() - common];
+        parts.extend(to[common..].iter().map(|p| encode_image_name(p)));
+        Ok(actor.apply_edits(EditRequest {
+            document_id: request.document_id,
+            base_revision: request.base_revision,
+            source: EditSource::Gui,
+            edits: vec![TextEdit {
+                range,
+                text: format!("![]({})", parts.join("/")),
+            }],
+        })?)
+    }
+
+    pub fn import_external_image(
+        &self,
+        request: SaveRequest,
+        path: &Path,
+        range: Utf16Range,
+    ) -> Result<PasteResult, WorkspaceError> {
+        if !path.is_absolute() {
+            return Err(WorkspaceError::InvalidPath);
+        }
+        let bytes = storage::read_image_bytes(path)?;
+        image_mime(path, &bytes)?;
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or(WorkspaceError::InvalidPath)?;
+        self.paste_image(request, name, &bytes, range)
     }
 
     pub fn paste_image(
@@ -476,12 +566,29 @@ impl Workspace {
         bytes: &[u8],
         range: Utf16Range,
     ) -> Result<PasteResult, WorkspaceError> {
-        if name.contains(['/', '\\']) || bytes.len() > 20 * 1024 * 1024 {
+        if name.contains(['/', '\\']) || bytes.len() > storage::MAX_IMAGE_BYTES {
             return Err(WorkspaceError::InvalidImage);
         }
         let actor = self.actor(&request.document_id.0)?;
         let snapshot = actor.sync_from_nvim()?;
         let document = actor.path().ok_or(WorkspaceError::InvalidPath)?;
+        if !storage::markdown(&document) {
+            return Err(WorkspaceError::NotMarkdown);
+        }
+        image_mime(Path::new(name), bytes)?;
+        crate::validation::validate_edit(
+            &snapshot,
+            &EditRequest {
+                document_id: request.document_id.clone(),
+                base_revision: request.base_revision,
+                source: EditSource::Gui,
+                edits: vec![TextEdit {
+                    range: range.clone(),
+                    text: String::new(),
+                }],
+            },
+        )
+        .map_err(|error| WorkspaceError::Contract { error })?;
         let parent = document.parent().ok_or(WorkspaceError::InvalidPath)?;
         let folder = parent.join("images");
         let relative_folder = storage::relative(&self.root, &folder)?;
@@ -492,16 +599,7 @@ impl Workspace {
         let path = format!("{relative_folder}/{name}");
         let target = storage::resolve(&self.root, &path)?;
         image_mime(&target, bytes)?;
-        let encoded = name
-            .bytes()
-            .map(|b| {
-                if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.') {
-                    (b as char).to_string()
-                } else {
-                    format!("%{b:02X}")
-                }
-            })
-            .collect::<String>();
+        let encoded = encode_image_name(name);
         let edits = EditRequest {
             document_id: request.document_id,
             base_revision: request.base_revision,
@@ -523,6 +621,18 @@ impl Workspace {
             Err(error) => Err(error.into()),
         }
     }
+}
+
+fn encode_image_name(name: &str) -> String {
+    name.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.') {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
 }
 
 fn image_mime(path: &Path, bytes: &[u8]) -> Result<&'static str, WorkspaceError> {

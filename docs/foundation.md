@@ -24,6 +24,19 @@ Rust / Tauri v2、React / TypeScript / Vite / Tailwind v4、Radix、shadcn/ui �
 | RuntimeStatus | contractVersion / 実エンジンの connection / detail |
 | ContractError | code による判別 union。stale_revision は expected / received を含む |
 
+ワークスペースのエントリーは `WorkspaceEntry.directory` でフォルダーを識別し、ファイルは `kind` の `markdown` / `text` / `image` で区別する。Markdown と UTF-8 テキストだけが Neovim の文書 buffer を持ち、画像は byte 資源として扱う。テキストに見せかけたバイナリは `not_text` で拒否する。
+
+| コマンド | 意味 |
+| --- | --- |
+| `open_text_file` | Rust の workspace 内にある UTF-8 テキストを Neovim で開く |
+| `load_workspace_image` | 対応画像を workspace 内から読む。画像タブは document ID を作らない |
+| `insert_workspace_image` | 既存画像の相対リンクを指定文書の revision 付き範囲へ挿入する |
+| `import_external_image` | 外部 PNG / JPEG / GIF / WebP を workspace へコピーし、revision 付き範囲へ挿入する |
+
+画像は拡張子と実データを検証し、1 枚 20 MiB、ドロップ 1 回 16 枚を上限とする。workspace の包含、symlink、revision を確認し、既存の同名ファイルを上書きしない。GUI は相対リンクを URL エンコードして扱う。
+
+AI 契約は独立した schema version 2 を持ち、履歴は最大 32 メッセージ・20,000 文字に制限する。文書・AI・隔離の 3 種類をそれぞれ生成して CI で照合する。
+
 数値は JSON に安全な u32 に限定し、負数・小数・オーバーフローは Rust の deserialize で拒否する。最大 revision は revision_exhausted エラーとする。
 
 ## 位置と範囲編集

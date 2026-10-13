@@ -81,6 +81,48 @@ mod desktop {
         with_workspace(&state, |w| w.open_markdown(&path))
     }
     #[tauri::command(async)]
+    pub fn open_text_file(
+        state: tauri::State<'_, ActorState>,
+        path: String,
+    ) -> Result<OpenDocument, WorkspaceError> {
+        with_workspace(&state, |w| w.open_text_file(&path))
+    }
+    #[tauri::command(async)]
+    pub fn load_workspace_image(
+        state: tauri::State<'_, ActorState>,
+        path: String,
+    ) -> Result<ImageData, WorkspaceError> {
+        with_workspace(&state, |w| w.load_workspace_image(&path))
+    }
+    #[tauri::command(async)]
+    pub fn insert_workspace_image(
+        state: tauri::State<'_, ActorState>,
+        document_id: String,
+        base_revision: u32,
+        path: String,
+        range: Utf16Range,
+    ) -> Result<DocumentSnapshot, WorkspaceError> {
+        with_workspace(&state, |w| {
+            w.insert_workspace_image(request(document_id, base_revision), &path, range)
+        })
+    }
+    #[tauri::command(async)]
+    pub fn import_external_image(
+        state: tauri::State<'_, ActorState>,
+        document_id: String,
+        base_revision: u32,
+        path: String,
+        range: Utf16Range,
+    ) -> Result<PasteResult, WorkspaceError> {
+        with_workspace(&state, |w| {
+            w.import_external_image(
+                request(document_id, base_revision),
+                std::path::Path::new(&path),
+                range,
+            )
+        })
+    }
+    #[tauri::command(async)]
     pub fn create_markdown(
         state: tauri::State<'_, ActorState>,
         path: String,
