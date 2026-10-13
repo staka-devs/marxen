@@ -7,6 +7,7 @@ import { expect, test, type Page } from "@playwright/test";
 // inline widgets inside .cm-content (no separate preview); read uses the
 // shared read preview.
 
+/** Switch the shell display mode for E2E navigation assertions. */
 async function setViewMode(page: Page, mode: string) {
   await page.getByLabel("表示モード").selectOption(mode);
 }

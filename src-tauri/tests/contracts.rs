@@ -1,5 +1,6 @@
-use marxen_lib::{contracts::*, validation::*};
+use marxen_lib::{contracts::*, domain::validation::*};
 
+/// Build the fixed Unicode snapshot used to compare JSON wire data and range validation.
 fn snapshot() -> DocumentSnapshot {
     DocumentSnapshot {
         document_id: DocumentId("doc_01".into()),
@@ -9,11 +10,13 @@ fn snapshot() -> DocumentSnapshot {
     }
 }
 
+/// Deserialize the shared edit fixture so Rust and TypeScript exercise the same boundary payload.
 fn request() -> EditRequest {
     serde_json::from_str(include_str!("../../tests/fixtures/edit.json")).unwrap()
 }
 
 #[test]
+/// Resolve the shared emoji edit range against the fixture while leaving its input snapshot untouched.
 fn shared_wire_fixture_resolves_emoji_without_mutating_snapshot() {
     let doc = snapshot();
     let ranges = validate_edit(&doc, &request()).unwrap();
@@ -28,6 +31,7 @@ fn shared_wire_fixture_resolves_emoji_without_mutating_snapshot() {
 }
 
 #[test]
+/// Require UTF-8 and UTF-16 conversions to agree at every valid scalar boundary.
 fn roundtrips_every_unicode_scalar_boundary() {
     for text in ["", "ascii", "日本語😀\r\n", "e\u{301}👩‍💻\n終"] {
         for byte in (0..=text.len()).filter(|&byte| text.is_char_boundary(byte)) {
@@ -38,6 +42,7 @@ fn roundtrips_every_unicode_scalar_boundary() {
 }
 
 #[test]
+/// Reject positions inside a surrogate pair, inside UTF-8 bytes or beyond the document.
 fn rejects_surrogate_split_byte_split_and_out_of_bounds() {
     assert_eq!(
         utf16_to_utf8("😀", Utf16Offset(1)),
@@ -58,6 +63,7 @@ fn rejects_surrogate_split_byte_split_and_out_of_bounds() {
 }
 
 #[test]
+/// Refuse edits whose document identity or exact base revision does not match the snapshot.
 fn rejects_stale_or_future_revision_and_wrong_document() {
     let mut req = request();
     for revision in [6, 8] {
@@ -79,6 +85,7 @@ fn rejects_stale_or_future_revision_and_wrong_document() {
 }
 
 #[test]
+/// Reject malformed or unsupported document identifiers at the boundary.
 fn rejects_invalid_document_ids() {
     for id in ["", " ", "../file", "doc/1", "文書", &"x".repeat(129)] {
         assert_eq!(
@@ -90,6 +97,7 @@ fn rejects_invalid_document_ids() {
 }
 
 #[test]
+/// Require ordered, nonoverlapping ranges and reject duplicate insertions at one offset.
 fn rejects_reversed_overlapping_unsorted_or_duplicate_insertions() {
     let mut req = request();
     req.edits[0].range = Utf16Range {
@@ -119,6 +127,7 @@ fn rejects_reversed_overlapping_unsorted_or_duplicate_insertions() {
 }
 
 #[test]
+/// Accept adjacent ranges and end-of-document insertion while refusing an empty edit batch.
 fn accepts_adjacent_edits_and_end_insertion_rejects_empty_batch() {
     let mut req = request();
     req.edits = [(0, 1), (1, 3), (10, 10)]
@@ -143,6 +152,7 @@ fn accepts_adjacent_edits_and_end_insertion_rejects_empty_batch() {
 }
 
 #[test]
+/// Use the same identity and revision rules for save, cursor and mode requests.
 fn validates_save_cursor_and_mode_against_exact_snapshot() {
     let doc = snapshot();
     assert!(validate_save(
@@ -177,6 +187,7 @@ fn validates_save_cursor_and_mode_against_exact_snapshot() {
 }
 
 #[test]
+/// Require revision exhaustion to return an error instead of wrapping to an older revision.
 fn revision_never_wraps() {
     assert_eq!(
         next_revision(Revision(u32::MAX)),
@@ -186,6 +197,7 @@ fn revision_never_wraps() {
 }
 
 #[test]
+/// Refuse malformed JSON boundary values before they reach document operations.
 fn malformed_wire_values_fail_deserialization() {
     let fixture = include_str!("../../tests/fixtures/edit.json");
     for invalid in [
@@ -200,6 +212,7 @@ fn malformed_wire_values_fail_deserialization() {
 }
 
 #[test]
+/// Check serialized event and runtime-state fields against their declared IPC contract.
 fn event_shape_and_runtime_state_are_truthful() {
     let event = DocumentEvent::Snapshot(snapshot());
     let value = serde_json::to_value(&event).unwrap();
@@ -210,7 +223,7 @@ fn event_shape_and_runtime_state_are_truthful() {
         event
     );
     assert_eq!(
-        marxen_lib::runtime_status().connection,
+        marxen_lib::presentation::runtime::disconnected_status().connection,
         ConnectionState::Disconnected
     );
 }

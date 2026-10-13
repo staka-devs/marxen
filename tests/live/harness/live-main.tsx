@@ -2,9 +2,9 @@
 // entry references it, so `vite build` and Tauri packages exclude it).
 import { useCallback, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { CodeMirrorEditor, type EditorSelection, type ExternalCursor } from "../../../src/components/editor/CodeMirrorEditor";
-import type { TextEdit } from "../../../src/shared/contracts";
-import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../../src/lib/editor-preferences";
+import { CodeMirrorEditor, type EditorSelection, type ExternalCursor } from "../../../src/presentation/editor/CodeMirrorEditor";
+import type { TextEdit } from "../../../src/contracts/contracts";
+import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../../src/domain/editor-preferences";
 import "../../../src/styles.css";
 
 export const SAMPLE = [
@@ -38,6 +38,11 @@ export const SAMPLE = [
   "",
 ].join("\n");
 
+/**
+ * Apply wire range edits tail-first for the harness round-trip simulation.
+ *
+ * Sorts descending so earlier offsets stay valid while applying.
+ */
 function applyEditsToText(before: string, edits: TextEdit[]): string {
   const ordered = [...edits].sort((a, b) => b.range.start - a.range.start);
   let out = before;
@@ -48,16 +53,23 @@ function applyEditsToText(before: string, edits: TextEdit[]): string {
 }
 
 interface HarnessApi {
+  /** Replace the editor text. */
   setValue: (text: string) => void;
+  /** Read the current editor text. */
   getValue: () => string;
+  /** Read captured GUI edit batches. */
   getEdits: () => TextEdit[][];
+  /** Clear captured edit batches. */
   clearEdits: () => void;
+  /** Read the last reported selection. */
   getSelection: () => EditorSelection | null;
   /** Shell cursor echo with its own sequence (ExternalCursor seq seam). */
   echoCursor: (anchor: number, head: number) => void;
   /** Relative sources the fake image resolver was asked for. */
   imageCalls: () => string[];
+  /** Merge partial preferences into the harness state. */
   setPreferences: (preferences: Partial<EditorPreferences>) => void;
+  /** Switch the harness Vim mode. */
   setVimMode: (mode: string) => void;
 }
 
@@ -67,6 +79,12 @@ declare global {
   }
 }
 
+/**
+ * Dev-only harness shell for live-widget browser tests.
+ *
+ * Hosts one live-preview editor with fake image loading and exposes control
+ * hooks on `window.__harness` for Playwright assertions.
+ */
 function Harness() {
   const [value, setValue] = useState(SAMPLE);
   const [edits, setEdits] = useState<TextEdit[][]>([]);
@@ -84,6 +102,11 @@ function Harness() {
   const imageCallsRef = useRef<string[]>([]);
   // Stand-in for the UI-owned Rust loader: resolves after a delay so stale
   // passes can be observed, and records every requested relative source.
+  /**
+   * Fake image resolver recording sources and resolving after a delay.
+   *
+   * Returns null for `missing` sources so stale-pass behavior stays observable.
+   */
   const resolveImage = useCallback((src: string) => {
     imageCallsRef.current.push(src);
     return new Promise<string | null>((done) => {
@@ -92,16 +115,24 @@ function Harness() {
   }, []);
 
   window.__harness = {
+    /** Replace the editor text. */
     setValue: (text: string) => setValue(text),
+    /** Read the current editor text. */
     getValue: () => valueRef.current,
+    /** Read captured GUI edit batches. */
     getEdits: () => editsRef.current,
+    /** Clear captured edit batches. */
     clearEdits: () => setEdits([]),
+    /** Read the last reported selection. */
     getSelection: () => selectionRef.current,
+    /** Echo a cursor with a harness-owned sequence. */
     echoCursor: (anchor: number, head: number) => {
       seqRef.current += 1;
       setCursor({ anchor, head, seq: seqRef.current });
     },
+    /** List relative sources the fake resolver was asked for. */
     imageCalls: () => [...imageCallsRef.current],
+    /** Merge partial preferences into the harness state. */
     setPreferences: (next) => setPreferences((previous) => ({ ...previous, ...next })),
     setVimMode,
   };

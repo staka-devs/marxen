@@ -1,0 +1,1142 @@
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { Bot, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronDown, X } from "lucide-react";
+import { CodeMirrorEditor } from "../editor/CodeMirrorEditor";
+import { MarkdownPreview } from "../preview/MarkdownPreview";
+import AiPanel from "../ai-panel";
+import InlineChat from "../ai-inline-chat";
+import ReviewPanel from "../review-panel";
+import type { AiProviderConfig } from "../../contracts/ai-contracts";
+import { buildProviderConfig } from "../../domain/ai-config";
+import { FileTree, buildTree } from "../workspace/FileTree";
+import { ImageViewer } from "../workspace/ImageViewer";
+import { ImageDropZone } from "../workspace/ImageDropZone";
+import { Tabs, type TabItem } from "../workspace/Tabs";
+import { QuickOpen } from "../workspace/QuickOpen";
+import { SearchPanel } from "../workspace/SearchPanel";
+import { Outline } from "../workspace/Outline";
+import { CommandPalette, type PaletteCommand } from "../workspace/CommandPalette";
+import { SettingsPanel } from "../workspace/SettingsPanel";
+import { RawGridView } from "../workspace/RawGridView";
+import { GuiToolbar } from "../workspace/GuiToolbar";
+import {
+  formatRange,
+  insertImage,
+  insertLink,
+  insertTable,
+  tableAddColumn,
+  tableAddRow,
+  toggleCheckbox,
+  type FormatKind,
+} from "../../domain/markdown-gui";
+import type { ThemeId } from "../../domain/workspace-content";
+import {
+  READONLY_MESSAGE,
+  workspaceErrorText,
+} from "../../domain/document-errors";
+import { COPY_LABELS } from "../../domain/clipboard-text";
+import { offsetToLineCol } from "../../domain/coordinates/utf16";
+import { normalizeEditorPreferences, type EditorPreferences } from "../../domain/editor-preferences";
+import { entryKind } from "../../domain/workspace-files";
+import { docFromOpen, fileLabel } from "../../application/document/document-helpers";
+import type {
+  AiGateway,
+  AiProfileStore,
+  ClipboardGateway,
+  DialogGateway,
+  DocumentGateway,
+  DropGateway,
+  EditorPreferencesStore,
+  ImageLoader,
+  IsolationGateway,
+  RuntimeGateway,
+  WorkspaceEventSource,
+  WorkspaceGateway,
+} from "../../application/ports";
+import type { ViewMode, NavBasis, SideView } from "./shellView";
+import { useDocumentSession } from "./hooks/useDocumentSession";
+import { useVimEditing } from "./hooks/useVimEditing";
+import { useWorkspace } from "./hooks/useWorkspace";
+import { useImageAttachments } from "./hooks/useImageAttachments";
+import { useAiStaging } from "./hooks/useAiStaging";
+
+export type { ViewMode, NavBasis, SideView } from "./shellView";
+
+/**
+ * Injected shell dependencies from the composition root.
+ *
+ * All native transports arrive via these narrow ports so the shell never
+ * imports infrastructure directly; tests inject fakes for the same surface.
+ */
+export interface WorkspaceShellProps {
+  /** Serial revision-aware document gateway (registry or read-only). */
+  documentGateway?: DocumentGateway;
+  /** Workspace file and recovery gateway over native IPC. */
+  workspaceGateway?: WorkspaceGateway;
+  /** Pushed workspace event subscription with polling fallback. */
+  eventSource?: WorkspaceEventSource;
+  /** AI streaming, credentials, and connection tests. */
+  aiGateway?: AiGateway;
+  /** Isolation staging lifecycle pinned by Rust. */
+  isolationGateway?: IsolationGateway;
+  /** Runtime connectivity status. */
+  runtimeGateway?: RuntimeGateway;
+  /** Native folder and config pickers. */
+  dialogGateway?: DialogGateway;
+  /** Native file-drop subscription. */
+  dropGateway?: DropGateway;
+  /** Native clipboard writes through Rust. */
+  clipboardGateway?: ClipboardGateway;
+  /** Non-secret AI profile persistence. */
+  aiProfileStore?: AiProfileStore;
+  /** View-only editor preferences persistence. */
+  editorPreferencesStore?: EditorPreferencesStore;
+  /** Document-scoped image byte loader. */
+  imageLoader?: ImageLoader;
+  /** True on desktop; browser demo stays read-only. */
+  desktop?: boolean;
+}
+
+const MODE_JA: Record<string, string> = {
+  normal: "ノーマル",
+  insert: "挿入",
+  replace: "置換",
+  visual: "選択",
+  visual_line: "行選択",
+  visual_block: "矩形選択",
+  command_line: "コマンド",
+  terminal: "ターミナル",
+};
+
+const MODE_LABEL: Record<ViewMode, string> = {
+  live: "ライブプレビュー",
+  source: "Markdown",
+  read: "プレビュー",
+  split: "分割表示",
+};
+
+/**
+ * Workspace shell composing editors, sidebars, AI, and review via injected ports.
+ *
+ * Owns UI layout and React state; revision, staging, and transport operations
+ * delegate to application services and injected gateways. Real Neovim stays
+ * authoritative with stale resync, generation fencing, and scoped approval.
+ */
+export function WorkspaceShell(props: WorkspaceShellProps = {}) {
+  const {
+    documentGateway,
+    workspaceGateway,
+    eventSource,
+    aiGateway,
+    isolationGateway,
+    runtimeGateway,
+    dialogGateway,
+    dropGateway,
+    clipboardGateway,
+    aiProfileStore,
+    editorPreferencesStore,
+    imageLoader,
+    desktop: desktopProp,
+  } = props;
+  const desktop = desktopProp ?? false;
+  const [viewMode, setViewMode] = useState<ViewMode>("live");
+  const [splitRatio, setSplitRatio] = useState(50);
+  const [navBasis, setNavBasis] = useState<NavBasis>("source");
+  const [showRaw, setShowRaw] = useState(false);
+  const [sideView, setSideView] = useState<SideView | null>("explorer");
+  const [showAi, setShowAi] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [manualFolder, setManualFolder] = useState(false);
+  const [aiProvider, setAiProvider] = useState<AiProviderConfig>(() => {
+    try {
+      const saved = aiProfileStore?.load();
+      if (!saved) return buildProviderConfig({ kind: "acp", preset: "codex", command: "", argsText: "", endpoint: "https://api.openai.com/v1", model: "", anthropicEnabled: false });
+      return buildProviderConfig(saved);
+    } catch {
+      return buildProviderConfig({ kind: "acp", preset: "codex", command: "", argsText: "", endpoint: "https://api.openai.com/v1", model: "", anthropicEnabled: false });
+    }
+  });
+  const [aiSettingsToken, setAiSettingsToken] = useState(0);
+  const [preferences, setPreferences] = useState(() => {
+    try {
+      return editorPreferencesStore?.load() ?? { theme: "dark", fontSize: 15, lineHeight: 1.7, wordWrap: true, lineNumbers: true, highlightActiveLine: true } as EditorPreferences;
+    } catch {
+      return { theme: "dark", fontSize: 15, lineHeight: 1.7, wordWrap: true, lineNumbers: true, highlightActiveLine: true } as EditorPreferences;
+    }
+  });
+  const theme = preferences.theme;
+  /**
+   * Normalize and persist editor preferences, noticing once on failure.
+   *
+   * View-only settings apply immediately; document/AI state stays native-owned.
+   */
+  const updatePreferences = useCallback((next: EditorPreferences) => {
+    const normalized = normalizeEditorPreferences(next);
+    setPreferences(normalized);
+    try {
+      const ok = editorPreferencesStore?.save(normalized);
+      if (ok === false) setNotice("設定を保存できませんでした。この起動中は変更を保持します。");
+    } catch {
+      setNotice("設定を保存できませんでした。この起動中は変更を保持します。");
+    }
+  }, [editorPreferencesStore]);
+  /**
+   * Apply a theme by persisting preferences with the new theme.
+   *
+   * Thin wrapper preserving the current font/wrap settings.
+   */
+  const setTheme = (next: ThemeId) => updatePreferences({ ...preferences, theme: next });
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [palette, setPalette] = useState(false);
+  const [settings, setSettings] = useState(false);
+  const [folderInput, setFolderInput] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  /** Revision-aware document session: docs, tabs, selections, and mutations. */
+  const session = useDocumentSession({ desktop, documentGateway, workspaceGateway, clipboardGateway, notify: setNotice });
+  /** Vim key routing with optimistic ranges and mapping-first execution. */
+  const vim = useVimEditing({ desktop, navBasis, notify: setNotice, session });
+  /** Workspace lifecycle: entries, search, events, runtime, grid, config. */
+  const workspace = useWorkspace({
+    desktop,
+    notify: setNotice,
+    session,
+    workspaceGateway,
+    eventSource,
+    runtimeGateway,
+    dialogGateway,
+    showRaw,
+    settingsOpen: settings,
+    routeVimKeys: vim.routeVimKeys,
+    /** Reset folder UI after a workspace opens. */
+    onWorkspaceOpened: () => setManualFolder(false),
+  });
+  /** Image attachments: resolvers, paste capture, and drop routing. */
+  const image = useImageAttachments({
+    desktop,
+    notify: setNotice,
+    session,
+    vim,
+    workspaceGateway,
+    imageLoader,
+    loadEntries: workspace.loadEntries,
+  });
+  /** AI review and inline flow with shared staging exclusion. */
+  const staging = useAiStaging({ desktop, notify: setNotice, session, isolationGateway });
+  // Read-through aliases for narrowing-heavy JSX; ownership stays in hooks.
+  /** Active document for pane rendering. */
+  const active = session.active;
+  /** Active image path for `image:` tabs, if any. */
+  const activeImage = session.activeImage;
+  /** Whether the active document renders as Markdown. */
+  const activeIsMarkdown = session.activeIsMarkdown;
+  /** Active tab ID for tabs and footer display. */
+  const activeId = session.activeId;
+  /** GUI selections keyed by document ID. */
+  const selections = session.selections;
+  /** Shell cursor echoes keyed by document ID. */
+  const cursorEcho = session.cursorEcho;
+  /** Current Vim mode label for display. */
+  const vimMode = session.vimMode;
+
+  const effectiveViewMode: ViewMode = active && !activeIsMarkdown ? "source" : viewMode;
+
+  // Snapshot merge, stale resync, cursor refresh, and selection follow-up
+  // live in useDocumentSession with generation fencing.
+
+  // Workspace entries, folder open, and file open live in useWorkspace and
+  // useDocumentSession with injected gateway ports.
+
+  // Document mutations (edits, Vim input, undo/redo, save, close) live in
+  // useDocumentSession; selection sync follows in the same owner.
+
+  // GUI selection staging and explicit jumps live in useDocumentSession.
+
+  // -- GUI range actions -----------------------------------------------------
+
+  // GUI range actions and Vim key routing live in useVimEditing with
+  // optimistic caret and execution-time native-mode decisions.
+
+  // Printable character routing lives in useVimEditing.
+
+  // Captured paste routing lives in useVimEditing.
+
+  // Editor key dispatch lives in useVimEditing with IME coexistence.
+
+  // Paste capture and image drops live in useImageAttachments with
+  // event-first clipboard handling and chained multi-file revisions.
+
+  // Revision-aware search and replace live in useWorkspace with debounced
+  // registry search, local demo search, and chained replace revisions.
+
+  // Workspace events, runtime status, and raw grid screens live in
+  // useWorkspace with subscription cleanup and incremental redraws.
+
+  // Local-image resolvers live in useImageAttachments bound to the active
+  // document; Neovim config application lives in useWorkspace.
+
+  const commands: PaletteCommand[] = useMemo(
+    () => [
+      { id: "view-live", label: "表示: ライブにする" },
+      { id: "view-source", label: "表示: Markdownにする" },
+      { id: "view-read", label: "表示: 閲覧にする" },
+      { id: "view-split", label: "表示: 分割にする" },
+      { id: "nav-display", label: "移動: 表示基準にする" },
+      { id: "nav-source", label: "移動: Vim の移動にする" },
+      { id: "file-new", label: "ファイル: 新規作成する" },
+      { id: "file-rename", label: "ファイル: 名前を変更する" },
+      { id: "file-save", label: "ファイル: 保存する" },
+      { id: "file-reload", label: "ファイル: 再読込する" },
+      { id: "file-close", label: "ファイル: 閉じる" },
+      { id: "edit-undo", label: "編集: 元に戻す" },
+      { id: "edit-redo", label: "編集: やり直す" },
+      { id: "palette-quickopen", label: "移動: ファイルをすばやく開く" },
+      { id: "palette-raw", label: "表示: Neovim 画面を切り替える" },
+      { id: "palette-raw-refresh", label: "表示: Neovim 画面を更新する" },
+      { id: "palette-recovery", label: "復旧: 復旧一覧を更新する" },
+      { id: "palette-ai", label: "AI: AI 支援を開く" },
+      { id: "inline-chat", label: "インライン: チャットを開く" },
+      { id: "palette-settings", label: "設定: 設定を開く" },
+    ],
+    [],
+  );
+
+  /** Run a palette command by ID for views, files, and AI. */ const runCommand = useCallback(
+    (id: string) => {      if (id === "view-live") setViewMode("live");
+      else if (id === "view-source") setViewMode("source");
+      else if (id === "view-read") setViewMode("read");
+      else if (id === "view-split") setViewMode("split");
+      else if (id === "nav-display") setNavBasis("display");
+      else if (id === "nav-source") setNavBasis("source");
+      else if (id === "file-save") void session.handleSave();
+      else if (id === "file-reload") void session.handleReload();
+      else if (id === "file-close" && session.activeRef.current) void session.closeTab(session.activeRef.current);
+      else if (id === "file-new") {
+        workspace.setNewFilePath("");
+        workspace.setNewFileOpen(true);
+      } else if (id === "file-rename" && session.activeRef.current) {
+        const current = session.docsRef.current[session.activeRef.current];
+        workspace.setRenamePath(current?.path ?? "");
+        workspace.setRenameDoc(session.activeRef.current);
+      } else if (id === "edit-undo") void session.handleUndo();
+      else if (id === "edit-redo") void session.handleRedo();
+      else if (id === "palette-quickopen") setQuickOpen(true);
+      else if (id === "palette-raw") setShowRaw((value) => !value);
+      else if (id === "palette-raw-refresh") workspace.handleRawGridRefresh();
+      else if (id === "palette-recovery") void workspace.refreshRecovery();
+      else if (id === "palette-ai") {
+        if (!desktop) setNotice(READONLY_MESSAGE);
+        else setShowAi(true);
+      } else if (id === "inline-chat") {
+        if (!desktop) setNotice(READONLY_MESSAGE);
+        else staging.openInlineChat();
+      } else if (id === "palette-settings") setSettings(true);
+    },
+    [desktop, session.handleSave, session.handleReload, session.handleUndo, session.handleRedo, session.closeTab, workspace.refreshRecovery, workspace.handleRawGridRefresh, workspace.setNewFilePath, workspace.setNewFileOpen, workspace.setRenamePath, workspace.setRenameDoc, staging.openInlineChat],
+  );
+
+  useEffect(() => {
+    /**
+     * Handle global shortcuts for quick-open, palette, and save.
+     *
+     * Ctrl/Cmd+P toggles quick-open (Shift adds palette); Ctrl/Cmd+S saves.
+     * Registered once per save handler identity.
+     */
+    const onKey = (event: KeyboardEvent) => {
+      const mod = event.ctrlKey || event.metaKey;
+      if (mod && event.key.toLowerCase() === "p" && !event.shiftKey) {
+        event.preventDefault();
+        setQuickOpen((value) => !value);
+      } else if (mod && event.key.toLowerCase() === "p" && event.shiftKey) {
+        event.preventDefault();
+        setPalette((value) => !value);
+      } else if (mod && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void session.handleSave();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [session.handleSave]);
+
+  // -- derived view data --------------------------------------------------------
+
+  /** Build sidebar tree nodes from entries or demo docs. */ const treeNodes = useMemo(() => {
+    if (desktop) {
+      return buildTree(workspace.entries);
+    }
+    return buildTree(
+      Object.keys(session.docs).map((path) => ({ path, name: path.split("/").pop() ?? path, directory: false, markdown: true })),
+    );
+  }, [desktop, workspace.entries, session.docs]);
+
+  const tabItems: TabItem[] = useMemo(
+    () =>
+      session.tabs.map((id) => {
+        const doc = session.docs[id];
+        return { id, label: fileLabel(session.imageTabs[id] ?? doc?.path ?? null, id), dirty: doc?.dirty ?? false };
+      }),
+    [session.tabs, session.docs, session.imageTabs],
+  );
+
+  /** Collect deduplicated quick-open paths from docs and entries. */ const quickPaths = useMemo(() => {
+    const fromEntries = workspace.entries.filter((entry) => !entry.directory && entryKind(entry)).map((entry) => entry.path);
+    const fromDocs = Object.values(session.docs).map((doc) => doc.path).filter((path): path is string => path !== null);
+    return Array.from(new Set([...fromDocs, ...fromEntries, ...Object.keys(session.demo)]));
+  }, [workspace.entries, session.docs, session.demo]);
+
+  /** Format the cursor as 1-based line:column or null. */ const cursorPos = useMemo(() => {
+    if (!session.active) return null;
+    const sel = session.selections[session.active.documentId] ?? { anchor: 0, head: 0 };
+    try {
+      const pos = offsetToLineCol(session.active.text, Math.min(sel.head, session.active.text.length));
+      return `${pos.line + 1}:${pos.col + 1}`;
+    } catch {
+      return null;
+    }
+  }, [session.active, session.selections]);
+
+  // Visible filename labels for AI scopes (never internal ids in product text).
+  /** Map document IDs to visible filenames without internal IDs. */ const contextLabels = useMemo(() => {
+    const labels: Record<string, string> = {};
+    for (const doc of Object.values(session.docs)) {
+      const base = doc.path?.split("/").pop() ?? doc.documentId;
+      labels[doc.documentId] = base === "" ? doc.documentId : base;
+    }
+    return labels;
+  }, [session.docs]);
+
+  const activeExternal = session.active ? session.externalByDoc[session.active.documentId] : undefined;
+  const isConflicted = session.active ? session.conflictDoc === session.active.documentId : false;
+
+  // Exact AI scope, staging refs, and proposal intake live in useAiStaging
+  // with the application staging service and generation fencing.
+
+
+  return (
+    <div data-theme={theme} data-testid="workspace-shell" style={{ "--editor-font-size": `${preferences.fontSize}px`, "--editor-line-height": preferences.lineHeight } as CSSProperties} className="flex h-dvh overflow-hidden bg-background text-foreground">
+      <nav aria-label="アクティビティ" className="marxen-activity flex w-11 shrink-0 flex-col items-center border-r border-border bg-card py-1">
+        {(
+          [
+            { id: "explorer", label: "エクスプローラー", icon: <Files size={17} aria-hidden="true" /> },
+            { id: "search", label: "検索", icon: <Search size={17} aria-hidden="true" /> },
+            { id: "outline", label: "アウトライン", icon: <ListTree size={17} aria-hidden="true" /> },
+          ] as Array<{ id: SideView; label: string; icon: ReactNode }>
+        ).map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => setSideView((current) => (current === item.id ? null : item.id))}
+            aria-pressed={sideView === item.id}
+            aria-label={item.label}
+            title={item.label}
+            className={`relative flex h-10 w-full items-center justify-center border-l-2 hover:text-foreground ${sideView === item.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}
+          >
+            {item.icon}
+          </button>
+        ))}
+        {desktop && (
+          <button
+            type="button"
+            onClick={() => setShowAi((value) => !value)}
+            aria-pressed={showAi}
+            aria-label="AI"
+            title="AI 支援"
+            className={`relative flex h-10 w-full items-center justify-center border-l-2 hover:text-foreground ${showAi ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}
+          >
+            <Bot size={17} aria-hidden="true" />
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => setSettings(true)}
+          aria-label="設定表示切替"
+          title="設定"
+          className="mt-auto flex h-10 w-full items-center justify-center text-muted-foreground hover:text-foreground"
+        >
+          <SettingsIcon size={17} aria-hidden="true" />
+        </button>
+      </nav>
+      {sideView && (
+        <aside className="hidden w-56 shrink-0 flex-col overflow-y-auto border-r border-border bg-card md:flex" aria-label="サイドバー">
+          {sideView === "explorer" && (
+            <div className="flex flex-col">
+              <div className="flex h-9 shrink-0 items-center gap-1 px-3">
+                <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground">エクスプローラー</span>
+                {desktop && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void workspace.pickFolderAndOpen()}
+                      aria-label="フォルダーを開く"
+                      title="フォルダーを開く"
+                      className="rounded-sm p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    >
+                      <FolderOpen size={15} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setManualFolder((value) => !value)}
+                      aria-expanded={manualFolder}
+                      aria-label="パスを入力する"
+                      title="パスを入力する"
+                      className="rounded-sm p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    >
+                      <Ellipsis size={15} aria-hidden="true" />
+                    </button>
+                  </>
+                )}
+              </div>
+              {desktop && manualFolder && (
+                <div className="mb-2 flex gap-1 px-3">
+                  <input
+                    value={folderInput}
+                    onChange={(event) => setFolderInput(event.target.value)}
+                    placeholder="フォルダーの絶対パス…"
+                    aria-label="開くフォルダーの絶対パス"
+                    className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs"
+                  />
+                  <button type="button" onClick={() => void workspace.openWorkspaceFolder(folderInput)} className="rounded-md border border-border px-2 py-1.5 text-xs">
+                    開く
+                  </button>
+                </div>
+              )}
+              {desktop && workspace.wsRoot && <p className="flex h-7 items-center gap-1.5 px-2 text-xs font-semibold" title={workspace.wsRoot}><ChevronDown size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" /><FolderOpen size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" /><span className="truncate">{workspace.wsRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace.wsRoot}</span></p>}
+              <FileTree desktop={desktop} nodes={treeNodes} activePath={activeImage ?? active?.path ?? null} onOpenFile={(path) => void session.openFile(path)} />
+              {desktop && !workspace.wsRoot && (
+                <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
+                  <p className="mb-2">フォルダーを開いてください。</p>
+                  <button
+                    type="button"
+                    onClick={() => void workspace.pickFolderAndOpen()}
+                    className="w-full rounded-md border border-border px-2 py-1.5"
+                  >
+                    フォルダーを開く
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          {sideView === "search" && (
+            <SearchPanel
+              query={workspace.searchQuery}
+              onQuery={workspace.setSearchQuery}
+              hits={desktop ? workspace.registryHits : workspace.localHits}
+              searching={workspace.searching}
+              canReplace={desktop}
+              replaceText={workspace.replaceText}
+              onReplaceText={workspace.setReplaceText}
+              onJump={(hit) => void workspace.jumpToHit(hit)}
+              onReplaceOne={(hit) => void workspace.replaceOne(hit)}
+              onReplaceAll={() => void workspace.replaceAllMatches()}
+            />
+          )}
+          {sideView === "outline" && (
+            <Outline
+              text={active?.text ?? ""}
+              onJump={(offset) => {
+                if (active) void session.jumpToOffset(active.documentId, offset, offset);
+              }}
+            />
+          )}
+        </aside>
+      )}
+
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        <header className="marxen-editor-header flex h-9 shrink-0 items-center gap-1 border-b border-border bg-card pr-2">
+          <div className="min-w-0 flex-1">
+            <Tabs tabs={tabItems} activeId={activeId} onSelect={session.setActiveId} onClose={(id) => void session.closeTab(id)} />
+          </div>
+          <label className="sr-only" htmlFor="view-mode-select">表示モード</label>
+          <select
+            id="view-mode-select"
+            value={effectiveViewMode}
+            disabled={!activeIsMarkdown}
+            onChange={(event) => setViewMode(event.target.value as ViewMode)}
+            aria-label="表示モード"
+            className="h-7 max-w-36 rounded bg-transparent px-1 text-xs text-muted-foreground hover:bg-muted"
+          >
+            {(Object.keys(MODE_LABEL) as ViewMode[]).map((mode) => (
+              <option key={mode} value={mode}>
+                {MODE_LABEL[mode]}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => setViewMode((mode) => mode === "split" ? "live" : "split")}
+            aria-label="プレビューを横に開く"
+            disabled={!activeIsMarkdown}
+            aria-pressed={viewMode === "split"}
+            title="プレビューを横に開く"
+            className={`rounded p-1.5 hover:bg-muted ${viewMode === "split" ? "text-primary" : "text-muted-foreground"}`}
+          >
+            <PanelsLeftRight size={16} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void session.handleSave()}
+            disabled={!desktop || !active}
+            title={desktop ? "保存" : READONLY_MESSAGE}
+            aria-label="保存"
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted disabled:opacity-50"
+          >
+            <Save size={15} aria-hidden="true" />
+          </button>
+          {desktop && (
+            <button
+              type="button"
+              onClick={() => setShowAi((value) => !value)}
+              aria-pressed={showAi}
+              aria-label="AI 支援"
+              title="AI 支援"
+              className={`rounded-md p-1.5 hover:bg-muted ${showAi ? "text-primary" : "text-muted-foreground"}`}
+            >
+              <Bot size={15} aria-hidden="true" />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setMoreOpen((value) => !value)}
+            aria-expanded={moreOpen}
+            aria-label="その他の操作"
+            title="その他の操作"
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"
+          >
+            <Ellipsis size={15} aria-hidden="true" />
+          </button>
+        </header>
+        {moreOpen && (
+          <div role="menu" aria-label="その他の操作" className="absolute inset-x-0 top-10 z-20 mx-auto max-w-lg rounded-lg border border-border bg-card p-3 shadow-lg">
+            <p className="mb-1 text-xs font-semibold text-muted-foreground">書式</p>
+            <GuiToolbar
+                onFormat={(kind: FormatKind) => vim.guiAtSelection((text, start, end) => formatRange(text, start, end, kind))}
+                onCheckbox={() => {
+                  const id = session.activeRef.current;
+                  if (!id || !session.registry) {
+                    setNotice(READONLY_MESSAGE);
+                    return;
+                  }
+                  const current = session.docsRef.current[id];
+                  if (!current) return;
+                  const sel = session.selections[id] ?? { anchor: 0, head: 0 };
+                  void session.applyEdits(id, toggleCheckbox(current.text, Math.min(sel.head, current.text.length)));
+                }}
+                onTable={() => {
+                  const id = session.activeRef.current;
+                  if (!id || !session.registry) {
+                    setNotice(READONLY_MESSAGE);
+                    return;
+                  }
+                  const current = session.docsRef.current[id];
+                  if (!current) return;
+                  const sel = session.selections[id] ?? { anchor: 0, head: 0 };
+                  void session.applyEdits(id, insertTable(Math.min(sel.head, current.text.length), 2, 2));
+                }}
+                onTableRow={() => {
+                  const id = session.activeRef.current;
+                  if (!id || !session.registry) {
+                    setNotice(READONLY_MESSAGE);
+                    return;
+                  }
+                  const current = session.docsRef.current[id];
+                  if (!current) return;
+                  const sel = session.selections[id] ?? { anchor: 0, head: 0 };
+                  try {
+                    void session.applyEdits(id, tableAddRow(current.text, Math.min(sel.head, current.text.length)));
+                  } catch (cause) {
+                    setNotice(workspaceErrorText(cause));
+                  }
+                }}
+                onTableColumn={() => {
+                  const id = session.activeRef.current;
+                  if (!id || !session.registry) {
+                    setNotice(READONLY_MESSAGE);
+                    return;
+                  }
+                  const current = session.docsRef.current[id];
+                  if (!current) return;
+                  const sel = session.selections[id] ?? { anchor: 0, head: 0 };
+                  try {
+                    void session.applyEdits(id, tableAddColumn(current.text, Math.min(sel.head, current.text.length)));
+                  } catch (cause) {
+                    setNotice(workspaceErrorText(cause));
+                  }
+                }}
+                onLink={() => vim.guiAtSelection((text, start, end) => insertLink(text, start, end, "https://example.com"))}
+                onImage={() => vim.guiAtSelection((text, start, end) => insertImage(text, start, end, "images/paste.png"))}
+                onUndo={() => void session.handleUndo()}
+                onRedo={() => void session.handleRedo()}
+                vimMode={MODE_JA[session.vimMode] ?? session.vimMode}
+                disabled={!desktop || !activeIsMarkdown}
+              />
+            <div role="group" aria-label="移動基準" className="mt-2 flex gap-1">
+              {(["display", "source"] as NavBasis[]).map((basis) => (
+                <button
+                  key={basis}
+                  type="button"
+                  onClick={() => {
+                    setNavBasis(basis);
+                    setMoreOpen(false);
+                  }}
+                  aria-pressed={navBasis === basis}
+                  title={basis === "display" ? "折り返し行の上下・行頭末は表示基準で移動します" : "上下・行頭末・単語・テキストオブジェクト・マクロは実 Neovim のVim の移動で動作します"}
+                  className={`rounded-md px-2 py-1 text-xs ${navBasis === basis ? "bg-primary text-primary-foreground" : "border border-border"}`}
+                >
+                  {basis === "display" ? "表示行" : "Vim"}
+                </button>
+              ))}
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-1">
+              {(
+                [
+                  ["raw", "Neovim 画面"],
+                  ["quick", "クイックオープン"],
+                  ["palette", "コマンドパレット"],
+                  ["inline", "インラインチャット"],
+                  ["new", "新規ファイル"],
+                  ["rename", "名前を変更"],
+                  ["reload", "再読込"],
+                  ["close", "閉じる"],
+                  ["recovery", "復旧一覧"],
+                  ["settings", "設定"],
+                ] as Array<[string, string]>
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreOpen(false);
+                    if (id === "raw") setShowRaw((value) => !value);
+                    else if (id === "quick") setQuickOpen(true);
+                    else if (id === "palette") setPalette(true);
+                    else if (id === "inline") staging.openInlineChat();
+                    else if (id === "new") {
+                      workspace.setNewFilePath("");
+                      workspace.setNewFileOpen(true);
+                    } else if (id === "rename" && session.activeRef.current) {
+                      const current = session.docsRef.current[session.activeRef.current];
+                      workspace.setRenamePath(current?.path ?? "");
+                      workspace.setRenameDoc(session.activeRef.current);
+                    } else if (id === "reload") void session.handleReload();
+                    else if (id === "close" && session.activeRef.current) void session.closeTab(session.activeRef.current);
+                    else if (id === "recovery") void workspace.refreshRecovery();
+                    else if (id === "settings") setSettings(true);
+                  }}
+                  className="rounded-md border border-border px-2 py-1.5 text-left text-xs hover:bg-muted"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="min-h-0 shrink-0 space-y-2 overflow-y-auto empty:hidden">
+          {notice && (
+            <div role="alert" className="flex min-h-7 items-center gap-2 border-b border-border bg-card px-3 text-xs">
+              <span className="min-w-0 flex-1 truncate" title={notice}>{notice}</span>
+              <button type="button" aria-label="通知を閉じる" onClick={() => setNotice(null)} className="shrink-0 rounded-sm p-1 text-muted-foreground hover:bg-muted"><X size={13} aria-hidden="true" /></button>
+            </div>
+          )}
+          {activeExternal && active && (
+            <div role="alert" data-testid="external-banner" className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3 text-xs">
+              <span>
+                {activeExternal.deleted ? "ファイルが外部で削除されました。" : "ファイルが外部で変更されました。"}
+                {active.dirty ? "未保存の変更を保持しています。" : ""}
+              </span>
+              {!active.dirty && (
+                <button type="button" onClick={() => void session.handleReload()} className="rounded-md border border-border px-3 py-1">
+                  再読込する
+                </button>
+              )}
+            </div>
+          )}
+          {isConflicted && active && (
+            <div role="alert" data-testid="conflict-banner" className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3 text-xs">
+              <span>保存競合: ディスクが変更されています。本文は保持しています。</span>
+              <button
+                type="button"
+                onClick={() => {
+                  const id = active.documentId;
+                  const current = session.docsRef.current[id];
+                  if (!current) return;
+                  void (async () => {
+                    try {
+                      await workspaceGateway!.closeDocument({ documentId: id, baseRevision: current.revision }, "discard");
+                      const open = await workspaceGateway!.openMarkdown(active.path ?? "");
+                      const doc = docFromOpen(open);
+                      session.setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
+                      session.setTabs((prev) => prev.map((tab) => (tab === id ? doc.documentId : tab)));
+                      session.setActiveId(doc.documentId);
+                      session.setConflictDoc(null);
+                      setNotice("最新のMarkdownに再読込しました（未保存の変更は破棄）。");
+                    } catch (cause) {
+                      setNotice(workspaceErrorText(cause));
+                    }
+                  })();
+                }}
+                className="rounded-md border border-border px-3 py-1"
+              >
+                再読込（未保存を破棄）
+              </button>
+              <button type="button" onClick={() => session.setConflictDoc(null)} className="rounded-md border border-border px-3 py-1">
+                保持する
+              </button>
+            </div>
+          )}
+          {workspace.recovery.length > 0 && (
+            <div role="alert" data-testid="recovery-banner" className="rounded-lg border border-border bg-card p-3 text-xs">
+              <p className="mb-2 font-medium">前回未保存の文書があります（クラッシュ復元）。</p>
+              <ul className="space-y-1">
+                {workspace.recovery.map((entry) => (
+                  <li key={entry.documentId} className="flex flex-wrap items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate">
+                      {entry.path ?? entry.documentId}
+                      {entry.conflict ? "（ディスクも変更あり）" : ""}
+                    </span>
+                    <button type="button" onClick={() => void workspace.restoreEntry(entry.documentId, false)} className="rounded border border-border px-2 py-1">
+                      復元する
+                    </button>
+                    <button type="button" onClick={() => void workspace.restoreEntry(entry.documentId, true)} className="rounded border border-border px-2 py-1">
+                      破棄する
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {session.closeDecision && (
+            <div role="dialog" aria-label="閉じる確認" data-testid="close-dialog" className="rounded-lg border border-border bg-card p-3 text-xs">
+              <p className="mb-2">未保存の変更があります。どうしますか。</p>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => void session.resolveCloseDecision("save")} className="rounded-md border border-border px-3 py-1">
+                  保存して閉じる
+                </button>
+                <button type="button" onClick={() => void session.resolveCloseDecision("discard")} className="rounded-md border border-border px-3 py-1">
+                  破棄して閉じる
+                </button>
+                <button type="button" onClick={() => void session.resolveCloseDecision("cancel")} className="rounded-md border border-border px-3 py-1">
+                  キャンセル
+                </button>
+              </div>
+            </div>
+          )}
+          {workspace.newFileOpen && (
+            <div role="dialog" aria-label="新規ファイル" className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3 text-xs">
+              <input
+                value={workspace.newFilePath}
+                onChange={(event) => workspace.setNewFilePath(event.target.value)}
+                placeholder="メモ/新規.md"
+                aria-label="新規ファイルのパス"
+                className="min-w-40 flex-1 rounded-md border border-border bg-background px-3 py-1.5"
+              />
+              <button type="button" onClick={() => void workspace.createFile()} className="rounded-md border border-border px-3 py-1">
+                作成する
+              </button>
+              <button type="button" onClick={() => workspace.setNewFileOpen(false)} className="rounded-md border border-border px-3 py-1">
+                閉じる
+              </button>
+            </div>
+          )}
+          {workspace.renameDoc && (
+            <div role="dialog" aria-label="名前の変更" className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3 text-xs">
+              <input
+                value={workspace.renamePath}
+                onChange={(event) => workspace.setRenamePath(event.target.value)}
+                placeholder="メモ/新名.md"
+                aria-label="新しいパス"
+                className="min-w-40 flex-1 rounded-md border border-border bg-background px-3 py-1.5"
+              />
+              <button type="button" onClick={() => void workspace.renameFile()} className="rounded-md border border-border px-3 py-1">
+                変更する
+              </button>
+              <button type="button" onClick={() => workspace.setRenameDoc(null)} className="rounded-md border border-border px-3 py-1">
+                閉じる
+              </button>
+            </div>
+          )}
+        </div>
+
+        <main
+          className="grid min-h-0 min-w-0 flex-1 overflow-hidden"
+          style={{ gridTemplateColumns: effectiveViewMode === "split" && activeIsMarkdown && active ? `minmax(0, ${splitRatio}fr) 5px minmax(0, ${100 - splitRatio}fr)` : "minmax(0, 1fr)" }}
+          aria-label="編集領域"
+        >
+          {/* One editor-primary at a time: live owns the inline preview
+              pane, source/split own the raw pane. Selections live in shell
+              state so scroll/cursor survive mode switches. */}
+          {activeImage ? <ImageViewer key={activeImage} path={activeImage} loadImage={(path) => workspaceGateway!.loadWorkspaceImage(path)} /> : active ? (
+            effectiveViewMode === "live" ? (
+              <ImageDropZone desktop={desktop} subscribeNativeDrop={dropGateway?.listen} enabled={desktop && activeIsMarkdown} selection={image.dropSelection} onDrop={image.handleImageDrop} onError={setNotice}>
+              <div onKeyDownCapture={vim.onEditorKeyDown} onPasteCapture={image.onPasteCapture} className="h-full min-h-0 min-w-0">
+                <CodeMirrorEditor
+                  key={`live-${active.documentId}`}
+                  value={active.text}
+                  editable={desktop}
+                  ariaLabel={`${active.path ?? active.documentId}の${activeIsMarkdown ? "Markdown" : "テキスト"}エディタ`}
+                  testId="editor-primary"
+                  initialSelection={selections[active.documentId] ?? null}
+                  externalCursor={cursorEcho[active.documentId] ?? null}
+                  livePreview
+                  preferences={preferences}
+                  vimMode={vimMode}
+                  allowTextInput={vimMode === "insert" || vimMode === "replace"}
+                  resolveImage={image.liveResolver}
+                  onGuiEdits={(edits) => void session.applyEdits(active.documentId, edits)}
+                  onSelectionChange={(selection) => session.handleSelection(active.documentId, selection)}
+                />
+              </div>
+              </ImageDropZone>
+            ) : (
+              <ImageDropZone desktop={desktop} subscribeNativeDrop={dropGateway?.listen} hidden={effectiveViewMode === "read"} enabled={desktop && activeIsMarkdown && effectiveViewMode !== "read"} selection={image.dropSelection} onDrop={image.handleImageDrop} onError={setNotice}>
+              <div
+                onKeyDownCapture={vim.onEditorKeyDown}
+                onPasteCapture={image.onPasteCapture}
+                className={effectiveViewMode === "read" ? "hidden" : "flex h-full min-h-0 min-w-0 flex-col"}
+                aria-hidden={effectiveViewMode === "read"}
+              >
+                {effectiveViewMode === "split" && <div className="flex h-7 shrink-0 items-center border-b border-border px-3 text-xs text-muted-foreground">Markdown</div>}
+                <CodeMirrorEditor
+                  key={`primary-${active.documentId}`}
+                  value={active.text}
+                  editable={desktop}
+                  ariaLabel={`${active.path ?? active.documentId}の${activeIsMarkdown ? "Markdown" : "テキスト"}エディタ`}
+                  testId="editor-primary"
+                  preferences={preferences}
+                  vimMode={vimMode}
+                  allowTextInput={vimMode === "insert" || vimMode === "replace"}
+                  initialSelection={selections[active.documentId] ?? null}
+                  externalCursor={cursorEcho[active.documentId] ?? null}
+                  onGuiEdits={(edits) => void session.applyEdits(active.documentId, edits)}
+                  onSelectionChange={(selection) => session.handleSelection(active.documentId, selection)}
+                />
+              </div>
+              </ImageDropZone>
+            )
+          ) : (
+            <div className="rounded-md border border-dashed border-border p-4 text-xs text-muted-foreground">
+              フォルダーを開き、ツリーからファイルを開いてください。
+            </div>
+          )}
+          {effectiveViewMode === "read" && activeIsMarkdown && active && (
+            <div className="min-h-0 min-w-0">
+              <MarkdownPreview key={`read-${active.documentId}`} text={active.text} resolveImage={image.readResolver} />
+            </div>
+          )}
+          {effectiveViewMode === "split" && active && (
+            <>
+              <div
+                role="separator"
+                aria-label="Markdown とプレビューの幅"
+                aria-orientation="vertical"
+                aria-valuemin={25}
+                aria-valuemax={75}
+                aria-valuenow={splitRatio}
+                tabIndex={0}
+                className="z-10 cursor-col-resize touch-none border-x border-border bg-card hover:bg-primary focus-visible:bg-primary focus-visible:outline-none"
+                onPointerDown={(event) => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); }}
+                onPointerMove={(event) => {
+                  if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+                  const bounds = event.currentTarget.parentElement!.getBoundingClientRect();
+                  setSplitRatio(Math.max(25, Math.min(75, (event.clientX - bounds.left) / bounds.width * 100)));
+                }}
+                onPointerUp={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+                onDoubleClick={() => setSplitRatio(50)}
+                onKeyDown={(event) => {
+                  if (!["ArrowLeft", "ArrowRight", "Home"].includes(event.key)) return;
+                  event.preventDefault();
+                  setSplitRatio((ratio) => event.key === "Home" ? 50 : Math.max(25, Math.min(75, ratio + (event.key === "ArrowLeft" ? -5 : 5))));
+                }}
+              />
+              <div className="flex min-h-0 min-w-0 flex-col" data-testid="split-preview-pane">
+                <div className="flex h-7 shrink-0 items-center border-b border-border px-3 text-xs text-muted-foreground">プレビュー</div>
+                <div className="min-h-0 flex-1">
+                  <MarkdownPreview key={`split-${active.documentId}`} text={active.text} resolveImage={image.readResolver} />
+                </div>
+              </div>
+            </>
+          )}
+        </main>
+
+        {showRaw && active && (
+          <div className="shrink-0 px-2 pb-2">
+            <RawGridView
+              text={active.text}
+              revision={workspace.gridRev ?? active.revision}
+              onRefresh={workspace.handleRawGridRefresh}
+              grid={workspace.nvimGrid}
+              onVimKeys={desktop ? workspace.handleRawGridKeys : undefined}
+            />
+          </div>
+        )}
+
+        <footer className="flex h-6 shrink-0 items-center gap-3 whitespace-nowrap border-t border-border bg-card px-3 text-[11px] text-muted-foreground">
+          {desktop && active && <span data-testid="vim-footer-mode" className="flex h-5 shrink-0 items-center rounded-sm bg-primary/10 px-1.5 font-medium text-primary">{MODE_JA[vimMode] ?? vimMode}</span>}
+          <span className="min-w-0 flex-1 truncate" title={activeImage ?? active?.path ?? undefined}>{activeImage ?? active?.path ?? "ファイルを開いてください"}</span>
+          {cursorPos && <span data-testid="cursor" title="カーソル位置"><span className="sr-only">カーソル </span>{cursorPos}</span>}
+          <span data-testid="dirty">{!active || active.dirty ? (active ? "未保存" : "—") : "保存済み"}</span>
+          {desktop && session.copyReady === activeId && <span data-testid="copy-ready" className="min-w-0 max-w-72 truncate" title={Object.entries(workspace.copyKeys).map(([format, key]) => `${key} ${COPY_LABELS[format as keyof typeof COPY_LABELS]}`).join(" / ")}>コピー形式を選択</span>}
+          {!desktop && <span data-testid="readonly-note">ブラウザ表示は読み取り専用です</span>}
+          <span role="status" className="shrink-0">
+            {workspace.runtime ? (workspace.runtime.connection === "disconnected" ? "Neovim 未接続" : workspace.runtime.connection === "connected" ? "Neovim 接続済み" : workspace.runtime.detail) : "接続状態を確認中…"}
+          </span>
+          <details className="relative shrink-0">
+            <summary aria-label="エディターの接続情報" title="エディターの接続情報" className="flex cursor-pointer list-none items-center rounded-sm p-0.5 hover:bg-muted"><Info size={13} aria-hidden="true" /></summary>
+            <div className="absolute bottom-7 right-0 z-20 min-w-44 rounded border border-border bg-card p-3 shadow-lg">
+              <span data-testid="revision" className="block">リビジョン {active?.revision ?? "—"}</span>
+              {desktop && session.vimKeys !== "" && <span data-testid="vim-keys" className="mt-1 block">Vim入力 {session.vimKeys}</span>}
+            </div>
+          </details>
+        </footer>
+
+        <QuickOpen
+          open={quickOpen}
+          paths={quickPaths}
+          label="クイックオープン"
+          testId="quick-open"
+          onSelect={(path) => void session.openFile(path)}
+          onClose={() => setQuickOpen(false)}
+        />
+          {staging.inlineOpen && staging.inlineSnapshot && active && staging.inlineSnapshot.documentId === active.documentId && (
+          <div data-testid="inline-chat-anchor">
+            <InlineChat
+              key={`${staging.inlineSnapshot.documentId}:${staging.inlineSnapshot.revision}:${staging.inlineSnapshot.ranges[0]?.start}:${staging.inlineSnapshot.ranges[0]?.end}`}
+              anchor={staging.inlineAnchor}
+              documentId={staging.inlineSnapshot.documentId}
+              documentLabel={contextLabels[staging.inlineSnapshot.documentId] ?? "現在の文書"}
+              target={{
+                start: staging.inlineSnapshot.ranges[0]?.start ?? 0,
+                end: staging.inlineSnapshot.ranges[0]?.end ?? 0,
+                kind: staging.inlineKind,
+                excerpt: staging.inlineSnapshot.text,
+              }}
+              context={staging.inlineSnapshot}
+              staging={staging.staging}
+              ensureStaging={(contexts) => staging.ensureStagingFor(contexts, "inline")}
+              provider={aiProvider}
+              disabled={staging.agentBusy}
+              onBusyChange={staging.setInlineChatBusy}
+              onProposal={staging.handleProposal}
+              onReview={() => { setShowAi(true); void staging.fetchReviewDiff(); }}
+              onClose={staging.closeInlineChat}
+              startPrompt={aiGateway?.startPrompt}
+            />
+          </div>
+        )}
+        <CommandPalette open={palette} commands={commands} onRun={runCommand} onClose={() => setPalette(false)} />
+        {settings && (
+          <SettingsPanel
+            theme={theme}
+            onTheme={setTheme}
+            preferences={preferences}
+            onPreferences={updatePreferences}
+            onOpenAiSettings={desktop ? () => { setSettings(false); setShowAi(true); setAiSettingsToken((token) => token + 1); } : undefined}
+            configPath={workspace.configPath}
+            configError={workspace.configError}
+            onConfigPath={workspace.setConfigPath}
+            onBrowseConfig={
+              desktop
+                ? () =>
+                    void (async () => {
+                      const picked = await dialogGateway!.pickConfigFile();
+                      if (picked) workspace.setConfigPath(picked);
+                    })()
+                : undefined
+            }
+            onApplyConfig={() => void workspace.applyConfig()}
+            applyingConfig={workspace.applyingConfig}
+            currentConfig={workspace.currentConfig}
+            copyKeys={workspace.copyKeys}
+            onClose={() => setSettings(false)}
+          />
+        )}
+      </div>
+
+      {desktop && (
+        <aside
+          data-testid="ai-sidebar"
+          aria-label="AI サイドバー"
+          aria-hidden={!showAi}
+          className={
+            showAi
+              ? "marxen-ai-sidebar flex w-80 max-w-[85vw] shrink-0 flex-col border-l border-border bg-card"
+              : "hidden"
+          }
+        >
+          <div className="flex min-h-0 flex-1 flex-col">
+          <AiPanel
+            contexts={staging.aiContexts}
+            staging={staging.staging}
+            ensureStaging={(contexts) => staging.ensureStagingFor(contexts, "agent")}
+            provider={aiProvider}
+            onProvider={setAiProvider}
+            openSettingsToken={aiSettingsToken}
+            onClose={() => setShowAi(false)}
+            contextLabels={contextLabels}
+            disabled={staging.inlineBusy}
+            onBusyChange={staging.setAgentChatBusy}
+            onRemoveContext={() => staging.setAiDismissed(true)}
+            onProposal={staging.handleProposal}
+            startPrompt={aiGateway?.startPrompt}
+            profileStore={aiProfileStore}
+            aiGateway={aiGateway}
+          />
+          </div>
+          <div className="max-h-72 min-h-0 overflow-y-auto">
+            <ReviewPanel
+              documentLabels={contextLabels}
+              copyId={staging.staging?.copyId ?? null}
+              diffs={staging.diffs}
+              outcomes={staging.outcomes}
+              busy={staging.reviewBusy || staging.agentBusy || staging.inlineBusy}
+              message={staging.reviewMessage}
+              status={staging.reviewStatus}
+              proposalText={staging.aiProposal?.proposal.text ?? null}
+              onFetchDiff={() => void staging.fetchReviewDiff()}
+              onStageProposal={staging.aiProposal && staging.aiProposal.mode !== "ask" && staging.staging && staging.reviewMessage ? () => void staging.stageStoredProposal() : null}
+              onApprove={() => void staging.approveStaging()}
+              onReject={() => void staging.rejectStaging()}
+              onCancel={() => void staging.cancelStaging()}
+            />
+          </div>
+          {staging.aiDismissed && active && (
+            <button type="button" onClick={() => staging.setAiDismissed(false)} className="mt-2 w-full rounded-md border border-border px-3 py-1.5 text-xs">
+              現在の選択を送る
+            </button>
+          )}
+          {staging.aiProposal && staging.aiProposal.mode !== "ask" && (
+            <details data-testid="ai-proposal" className="mt-3 max-h-48 min-h-0 overflow-y-auto border-t border-border pt-2 text-xs">
+              <summary className="cursor-pointer text-muted-foreground">提案の Markdown</summary>
+              <p className="font-medium">AI の提案</p>
+              <p className="mt-1 whitespace-pre-wrap">{staging.aiProposal.proposal.text}</p>
+              <p
+                className="mt-1 text-muted-foreground"
+                title={staging.aiProposal.proposal.baseContexts.map((ref) => `rev ${ref.revision}`).join(", ")}
+              >
+                対象: {staging.aiProposal.proposal.baseContexts.map((ref) => contextLabels[ref.documentId] ?? "現在の文書").join(", ")}
+              </p>
+              <p className="mt-1 text-muted-foreground">適用は上の差分レビューで行います。</p>
+              <button type="button" onClick={() => staging.setAiProposal(null)} className="mt-2 w-full rounded-md border border-border px-3 py-1.5">
+                却下する
+              </button>
+            </details>
+          )}
+        </aside>
+      )}
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+

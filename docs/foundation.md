@@ -6,7 +6,7 @@ Rust / Tauri v2、React / TypeScript / Vite / Tailwind v4、Radix、shadcn/ui �
 
 ## 共通 IPC 型
 
-正本は src-tauri/src/contracts.rs。ts-rs で src/shared/contracts.ts に生成し、contracts:check で差分を検出する。JSON field は camelCase、enum 値は snake_case。契約版は 1。
+正本は `src-tauri/src/contracts/mod.rs`。ts-rs で `src/contracts/contracts.ts` に生成し、`contracts:check` で差分を検出する。JSON field は camelCase、enum 値は snake_case。契約版は 1。
 
 | 型 | 意味 |
 | --- | --- |
@@ -43,7 +43,7 @@ AI 契約は独立した schema version 2 を持ち、履歴は最大 32 メッ�
 
 位置は表示列や grapheme 数ではなく原文の位置である。範囲は半開区間 [start, end)。a😀日本語 の絵文字は UTF-16 [1,3)、UTF-8 [1,5) に対応する。CRLF は 2 units と数え、結合文字 / ZWJ を正規化しない。
 
-validation.rs は surrogate pair の中間、UTF-8 scalar の中間、範囲外、逆転範囲を拒否する。grapheme 境界は強制しない。全編集は同じ base snapshot の昇順・非重複範囲である。隣接範囲は許容し、同じ開始位置の複数編集 / 挿入、空配列は拒否する。
+`src-tauri/src/domain/validation.rs` は surrogate pair の中間、UTF-8 scalar の中間、範囲外、逆転範囲を拒否する。grapheme 境界は強制しない。全編集は同じ base snapshot の昇順・非重複範囲である。隣接範囲は許容し、同じ開始位置の複数編集 / 挿入、空配列は拒否する。
 
 validate_edit は検証済み UTF-8 バイト範囲を返し snapshot を変更しない。文書 actor は入力を直列化して revision を再確認し、末尾から実 Neovim に適用して新 snapshot を発行する。save / cursor / mode も対象 ID と exact revision を検証する。cursor / mode は内容 revision を増やさない。stale_revision では最新 snapshot に再同期する。
 
@@ -51,7 +51,7 @@ validate_edit は検証済み UTF-8 バイト範囲を返し snapshot を変更�
 
 scripts/neovim-manifest.json は公式 0.11.5 の archive と 4 target の SHA-256 を固定する。cache も検証し、archive 全体を src-tauri/resources/neovim/ に展開する。Windows DLL、runtime、archive 内ライセンスを保持する。バイナリ / cache は Git に含めない。
 
-配布は tauri.bundle.conf.json の resources mapping で neovim/ を同梱する。文書 actor は Tauri の app.path().resource_dir() 以下の neovim/bin/nvim(.exe) と neovim/share/nvim/runtime を解決し、VIMRUNTIME を渡す。開発・実 Neovim 統合テストには bundle:neovim を実行するか、同じ対象の検証済み資源を用意する。実行ファイルだけの externalBin は DLL / runtime が欠落するため使わない。
+配布は tauri.bundle.conf.json の resources mapping で neovim/ を同梱する。composition root が Tauri の app.path().resource_dir() を渡し、Neovim adapter がその下の neovim/bin/nvim(.exe) と neovim/share/nvim/runtime を解決して VIMRUNTIME を設定する。application の文書 actor は注入された buffer port を使う。開発・実 Neovim 統合テストには bundle:neovim を実行するか、同じ対象の検証済み資源を用意する。実行ファイルだけの externalBin は DLL / runtime が欠落するため使わない。
 
 verify-neovim.mjs は native OS / CPU で実 Neovim を headless 起動し、固定版、Markdown runtime、日本語・絵文字 buffer を検証する。RPC actor、mapping、Undo、IME、WebView は検証しない。
 
