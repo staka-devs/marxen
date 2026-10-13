@@ -8,6 +8,37 @@ use crate::contracts::ai::*;
 use crate::domain::ai::*;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
+
+#[cfg(windows)]
+#[test]
+/// Resolve an official npm Codex shim directly to the native binary, retaining exact arguments.
+fn codex_npm_account_reader_preserves_argv_without_launching_a_node_parent() {
+    let root = tempfile::tempdir().unwrap();
+    let shim = root.path().join("codex.cmd");
+    std::fs::write(&shim, "test shim; never executed").unwrap();
+    let (package, target) = if cfg!(target_arch = "aarch64") {
+        ("codex-win32-arm64", "aarch64-pc-windows-msvc")
+    } else {
+        ("codex-win32-x64", "x86_64-pc-windows-msvc")
+    };
+    let executable = root
+        .path()
+        .join("node_modules/@openai")
+        .join(package)
+        .join("vendor")
+        .join(target)
+        .join("bin/codex.exe");
+    std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+    std::fs::write(&executable, "test binary; never executed").unwrap();
+    let argv = AcpArgv {
+        command: shim.to_string_lossy().into_owned(),
+        args: vec!["app-server".into(), "--listen".into(), "stdio://".into()],
+    };
+    let launch = resolve_acp_launch(&argv).unwrap();
+    assert!(launch.program.is_absolute());
+    assert_eq!(launch.program, executable);
+    assert_eq!(launch.args, argv.args);
+}
 mod regression {
     use super::*;
     use crate::contracts::{DocumentId, Revision, Utf16Offset, Utf16Range};

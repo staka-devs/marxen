@@ -191,7 +191,7 @@ fn resolve_explicit_launch(path: &Path, args: &[String]) -> Result<ResolvedAcpLa
     })
 }
 
-/// Find the Node.js executable backing a `codex-acp` npm shim.
+/// Find the Node.js executable backing an official codex-acp npm shim.
 /// Prefers a `node.exe` sibling of the npm root, then PATH lookup.
 fn find_node_program(npm_root: &Path) -> Option<PathBuf> {
     let sibling = npm_root.join("node.exe");
@@ -206,6 +206,7 @@ fn find_node_program(npm_root: &Path) -> Option<PathBuf> {
 /// Resolve a known official npm shim to its bundled target without a shell.
 /// `opencode` maps to `node_modules/@opencode/cli/bin/opencode.exe`;
 /// `codex-acp` maps to `node <npm>/node_modules/@agentclientprotocol/codex-acp/dist/index.js`.
+/// `codex` maps directly to the published native executable, avoiding a Node parent process.
 /// All other shims return `None` so callers keep searching or report missing.
 fn resolve_npm_shim_target(shim: &Path, original_args: &[String]) -> Option<ResolvedAcpLaunch> {
     let stem = shim
@@ -226,6 +227,10 @@ fn resolve_npm_shim_target(shim: &Path, original_args: &[String]) -> Option<Reso
                 args: original_args.to_vec(),
             })
         }
+        "codex" => codex_npm_program(npm_root).map(|program| ResolvedAcpLaunch {
+            program,
+            args: original_args.to_vec(),
+        }),
         "codex-acp" => {
             let script = npm_root
                 .join("node_modules")
@@ -247,6 +252,34 @@ fn resolve_npm_shim_target(shim: &Path, original_args: &[String]) -> Option<Reso
         }
         _ => None,
     }
+}
+
+/// Resolve the published Codex platform package or its bundled vendor fallback.
+/// Native launches own one process rather than a Node launcher plus a native child.
+pub(super) fn codex_npm_program(npm_root: &Path) -> Option<PathBuf> {
+    let (package, target, executable) = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => ("codex-win32-x64", "x86_64-pc-windows-msvc", "codex.exe"),
+        ("windows", "aarch64") => ("codex-win32-arm64", "aarch64-pc-windows-msvc", "codex.exe"),
+        ("macos", "x86_64") => ("codex-darwin-x64", "x86_64-apple-darwin", "codex"),
+        ("macos", "aarch64") => ("codex-darwin-arm64", "aarch64-apple-darwin", "codex"),
+        ("linux", "x86_64") => ("codex-linux-x64", "x86_64-unknown-linux-musl", "codex"),
+        ("linux", "aarch64") => ("codex-linux-arm64", "aarch64-unknown-linux-musl", "codex"),
+        _ => return None,
+    };
+    let openai = npm_root.join("node_modules").join("@openai");
+    [openai.join(package), openai.join("codex")]
+        .into_iter()
+        .find_map(|root| {
+            let candidate = root
+                .join("vendor")
+                .join(target)
+                .join("bin")
+                .join(executable);
+            candidate
+                .is_file()
+                .then(|| std::path::absolute(candidate).ok())
+                .flatten()
+        })
 }
 
 /// Resolve bare PATH commands to directly spawnable launches in directory order.

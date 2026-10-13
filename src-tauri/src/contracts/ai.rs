@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// Independent version of the AI IPC schema.
-pub const AI_CONTRACT_VERSION: u32 = 4;
+pub const AI_CONTRACT_VERSION: u32 = 5;
 
 /// OS credential store layout. Secrets are addressed, never transferred.
 pub const SECRET_SERVICE: &str = "dev.staka.marxen";
@@ -338,6 +338,59 @@ pub struct ReportedUsage {
     pub received_ms: u64,
 }
 
+/// A quota window reported by Codex, separate from a prompt's context occupancy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageWindow {
+    pub used_percent: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub window_duration_mins: Option<u32>,
+    /// Unix seconds reported for the next reset; omitted when unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub resets_at: Option<u64>,
+}
+
+/// Provider-reported remaining credit status, without inferred currency or spend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageCredits {
+    pub has_credits: bool,
+    pub unlimited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub balance: Option<String>,
+}
+
+/// One independently metered Codex bucket from the official account RPC.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodexUsageBucket {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub primary: Option<UsageWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub secondary: Option<UsageWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub credits: Option<UsageCredits>,
+}
+
+/// Read-only Codex account usage; credentials and account identity never cross IPC.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodexAccountUsage {
+    pub buckets: Vec<CodexUsageBucket>,
+    #[ts(type = "number")]
+    pub received_ms: u64,
+}
+
 /// Nonterminal usage payload. Delivery never settles a run; `Done`, `Error`,
 /// and `Cancelled` remain the only terminal events.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -436,6 +489,10 @@ pub fn typescript() -> String {
         AcpUsageScope::decl(&cfg),
         UsageCost::decl(&cfg),
         ReportedUsage::decl(&cfg),
+        UsageWindow::decl(&cfg),
+        UsageCredits::decl(&cfg),
+        CodexUsageBucket::decl(&cfg),
+        CodexAccountUsage::decl(&cfg),
         AiStreamEvent::decl(&cfg),
         AiError::decl(&cfg),
         CredentialRef::decl(&cfg),

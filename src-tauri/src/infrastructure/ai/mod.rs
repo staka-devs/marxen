@@ -1,4 +1,5 @@
 //! ACP, HTTP, credential, and native discovery adapters.
+pub mod account_usage;
 pub mod acp;
 mod config_options;
 pub mod credentials;

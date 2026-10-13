@@ -1,5 +1,6 @@
 //! Thin Tauri AI commands preserve IPC payloads while application owns each run.
 use super::{document::ActorState, isolation::IsolationState};
+use crate::application::ai::account_usage::AccountUsageService;
 use crate::application::ai::service::AiService;
 use crate::contracts::ai::*;
 use std::sync::Arc;
@@ -69,4 +70,12 @@ pub fn ai_prompt_cancel(
 /// This is read-only: it never sends a prompt or starts inference.
 pub fn ai_usage_snapshot(service: tauri::State<'_, AiService>) -> Vec<ReportedUsage> {
     service.usage_snapshot()
+}
+
+#[tauri::command(async)]
+/// Read the installed Codex account's official limits without starting inference.
+pub fn ai_codex_account_usage(
+    service: tauri::State<'_, AccountUsageService>,
+) -> Result<CodexAccountUsage, AiError> {
+    service.read_codex()
 }
