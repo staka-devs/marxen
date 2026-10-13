@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { ChevronDown, ChevronRight, FileCode2, FileText, Folder, FolderOpen, Image, FileType2 } from "lucide-react";
+import { ChevronDown, ChevronRight, FileCode2, FileText, Folder, FolderOpen, Image } from "lucide-react";
 import type { WorkspaceEntry, WorkspaceFileKind } from "../../contracts/contracts";
 import { entryKind, WORKSPACE_IMAGE_DRAG, WORKSPACE_IMAGE_POINTER_DROP } from "../../domain/workspace-files";
 
@@ -72,7 +72,7 @@ function Node({ node, activePath, onOpenFile, depth, desktop = false }: NodeProp
   const suppressClick = useRef(false);
   const selected = activePath === node.path;
   const Icon = node.directory ? (open ? FolderOpen : Folder)
-    : node.kind === "image" ? Image : node.markdown ? FileType2
+    : node.kind === "image" ? Image : node.markdown ? FileText
     : /\.(jsonc?|ya?ml|toml|[cm]?jsx?|tsx?|rs|py|css|html?|lua|vim)$/i.test(node.path) ? FileCode2 : FileText;
   return (
     <li role="treeitem" aria-level={depth + 1} aria-selected={selected} aria-expanded={node.directory ? open : undefined}>
@@ -118,10 +118,10 @@ function Node({ node, activePath, onOpenFile, depth, desktop = false }: NodeProp
         style={{ paddingLeft: 6 + depth * 16 }}
       >
         {node.directory ? (open ? <ChevronDown size={12} aria-hidden /> : <ChevronRight size={12} aria-hidden />) : <span className="w-3 shrink-0" />}
-        <Icon size={15} aria-hidden data-file-icon={node.directory ? (open ? "folder-open" : "folder") : node.kind} className="shrink-0" />
+        <Icon size={15} aria-hidden data-file-icon={node.directory ? (open ? "folder-open" : "folder") : node.kind} className={`shrink-0 ${node.directory ? "text-muted-foreground" : node.markdown ? "text-primary/80" : "text-muted-foreground"}`} />
         <span className="truncate">{node.name}</span>
       </button>
-      {node.directory && open && <ul role="group">{(node.children ?? []).map(child =>
+      {node.directory && open && <ul role="group" className="marxen-tree-children" style={{ "--tree-indent": `${20 + depth * 16}px` } as React.CSSProperties}>{(node.children ?? []).map(child =>
         <Node key={child.path} node={child} activePath={activePath} onOpenFile={onOpenFile} depth={depth + 1} desktop={desktop} />
       )}</ul>}
     </li>

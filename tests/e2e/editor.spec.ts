@@ -110,9 +110,9 @@ test("tree/tabs/quick-open/search/outline/palette/themes work in Japanese", asyn
 
   await page.getByRole("button", { name: "設定表示切替" }).click();
   await expect(page.getByTestId("settings")).toBeVisible();
-  await page.getByRole("button", { name: "ライト" }).click();
+  await page.getByLabel("カラーテーマ").selectOption("light");
   await expect(page.getByTestId("workspace-shell")).toHaveAttribute("data-theme", "light");
-  await page.getByRole("button", { name: "ダーク" }).click();
+  await page.getByLabel("カラーテーマ").selectOption("dark");
   await expect(page.getByTestId("workspace-shell")).toHaveAttribute("data-theme", "dark");
   await page.screenshot({ path: "docs/reports/issue-5-ui/settings-dark.png" });
 });

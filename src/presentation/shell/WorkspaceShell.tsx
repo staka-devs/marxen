@@ -3,6 +3,9 @@ import { Bot, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIco
 import { CodeMirrorEditor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
 import AiPanel from "../ai-panel";
+import AiProviderSettings from "../ai-provider-settings";
+import { EditorActionsPopover } from "../workspace/EditorActionsPopover";
+import { WorkspaceSidebar } from "../workspace/WorkspaceSidebar";
 import InlineChat from "../ai-inline-chat";
 import ReviewPanel from "../review-panel";
 import type { AiProviderConfig } from "../../contracts/ai-contracts";
@@ -155,7 +158,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       return buildProviderConfig({ kind: "acp", preset: "codex", command: "", argsText: "", endpoint: "https://api.openai.com/v1", model: "", anthropicEnabled: false });
     }
   });
-  const [aiSettingsToken, setAiSettingsToken] = useState(0);
+
   const [preferences, setPreferences] = useState(() => {
     try {
       return editorPreferencesStore?.load() ?? { theme: "dark", fontSize: 15, lineHeight: 1.7, wordWrap: true, lineNumbers: true, highlightActiveLine: true } as EditorPreferences;
@@ -438,7 +441,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             type="button"
             onClick={() => setShowAi((value) => !value)}
             aria-pressed={showAi}
-            aria-label="AI"
+            aria-label="AI 支援"
             title="AI 支援"
             className={`relative flex h-10 w-full items-center justify-center border-l-2 hover:text-foreground ${showAi ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}
           >
@@ -456,7 +459,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         </button>
       </nav>
       {sideView && (
-        <aside className="hidden w-56 shrink-0 flex-col overflow-y-auto border-r border-border bg-card md:flex" aria-label="サイドバー">
+        <WorkspaceSidebar>
           {sideView === "explorer" && (
             <div className="flex flex-col">
               <div className="flex h-9 shrink-0 items-center gap-1 px-3">
@@ -537,7 +540,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               }}
             />
           )}
-        </aside>
+        </WorkspaceSidebar>
       )}
 
       <div className="relative flex min-w-0 flex-1 flex-col">
@@ -581,18 +584,6 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           >
             <Save size={15} aria-hidden="true" />
           </button>
-          {desktop && (
-            <button
-              type="button"
-              onClick={() => setShowAi((value) => !value)}
-              aria-pressed={showAi}
-              aria-label="AI 支援"
-              title="AI 支援"
-              className={`rounded-md p-1.5 hover:bg-muted ${showAi ? "text-primary" : "text-muted-foreground"}`}
-            >
-              <Bot size={15} aria-hidden="true" />
-            </button>
-          )}
           <button
             type="button"
             onClick={() => setMoreOpen((value) => !value)}
@@ -605,8 +596,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           </button>
         </header>
         {moreOpen && (
-          <div role="menu" aria-label="その他の操作" className="absolute inset-x-0 top-10 z-20 mx-auto max-w-lg rounded-lg border border-border bg-card p-3 shadow-lg">
-            <p className="mb-1 text-xs font-semibold text-muted-foreground">書式</p>
+          <EditorActionsPopover onClose={() => setMoreOpen(false)}>
+            <p className="px-2 pb-1 pt-2 text-[11px] text-muted-foreground">書式</p>
             <GuiToolbar
                 onFormat={(kind: FormatKind) => vim.guiAtSelection((text, start, end) => formatRange(text, start, end, kind))}
                 onCheckbox={() => {
@@ -668,7 +659,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                 vimMode={MODE_JA[session.vimMode] ?? session.vimMode}
                 disabled={!desktop || !activeIsMarkdown}
               />
-            <div role="group" aria-label="移動基準" className="mt-2 flex gap-1">
+            <div role="group" aria-label="移動基準" className="my-1 flex items-center gap-1 border-y border-border px-2 py-2">
               {(["display", "source"] as NavBasis[]).map((basis) => (
                 <button
                   key={basis}
@@ -685,7 +676,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                 </button>
               ))}
             </div>
-            <div className="mt-2 grid grid-cols-2 gap-1">
+            <div role="menu" aria-label="その他の操作" className="py-1">
               {(
                 [
                   ["raw", "Neovim 画面"],
@@ -704,6 +695,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   key={id}
                   type="button"
                   role="menuitem"
+                  aria-label={label}
                   onClick={() => {
                     setMoreOpen(false);
                     if (id === "raw") setShowRaw((value) => !value);
@@ -722,13 +714,14 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                     else if (id === "recovery") void workspace.refreshRecovery();
                     else if (id === "settings") setSettings(true);
                   }}
-                  className="rounded-md border border-border px-2 py-1.5 text-left text-xs hover:bg-muted"
+                  className="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-[13px] hover:bg-muted focus:bg-muted focus:outline-none"
                 >
-                  {label}
+                  <span>{label}</span>
+                  <kbd className="text-[11px] text-muted-foreground">{id === "quick" ? "Ctrl+P" : id === "palette" ? "Ctrl+Shift+P" : id === "inline" ? "Ctrl+Shift+I" : id === "settings" ? "Ctrl+," : ""}</kbd>
                 </button>
               ))}
             </div>
-          </div>
+          </EditorActionsPopover>
         )}
 
         <div className="min-h-0 shrink-0 space-y-2 overflow-y-auto empty:hidden">
@@ -1030,7 +1023,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             onTheme={setTheme}
             preferences={preferences}
             onPreferences={updatePreferences}
-            onOpenAiSettings={desktop ? () => { setSettings(false); setShowAi(true); setAiSettingsToken((token) => token + 1); } : undefined}
+            aiSettings={<AiProviderSettings embedded provider={aiProvider} onProvider={setAiProvider} gateway={aiGateway} profileStore={aiProfileStore} />}
             configPath={workspace.configPath}
             configError={workspace.configError}
             onConfigPath={workspace.setConfigPath}
@@ -1070,7 +1063,6 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             ensureStaging={(contexts) => staging.ensureStagingFor(contexts, "agent")}
             provider={aiProvider}
             onProvider={setAiProvider}
-            openSettingsToken={aiSettingsToken}
             onClose={() => setShowAi(false)}
             contextLabels={contextLabels}
             disabled={staging.inlineBusy}
