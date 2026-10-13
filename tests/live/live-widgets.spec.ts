@@ -1,5 +1,50 @@
 import { expect, test, type Page } from "@playwright/test";
 
+test("browser IME composition sends only the final Unicode range edit", async ({ page, context }) => {
+  await page.goto("/tests/live/harness/live.html");
+  const before = "前😀後\n";
+  await page.evaluate((text) => window.__harness.setValue(text), before);
+  const content = page.locator(".cm-content");
+  await expect(content).toContainText("前😀後");
+  await page.evaluate(() => window.__harness.echoCursor(3, 3));
+  await content.focus();
+  const input = await context.newCDPSession(page);
+  // Chromium generates its actual composition/input events; this checks
+  // the browser engine, independently of native OS IME validation.
+  await input.send("Input.imeSetComposition", { text: "に", selectionStart: 1, selectionEnd: 1 });
+  await expect(content).toContainText("前😀に後");
+  expect(await page.evaluate(() => window.__harness.getEdits())).toEqual([]);
+  expect(await harnessValue(page)).toBe(before);
+  await input.send("Input.imeSetComposition", { text: "にほん", selectionStart: 3, selectionEnd: 3 });
+  await expect(content).toContainText("前😀にほん後");
+  expect(await page.evaluate(() => window.__harness.getEdits())).toEqual([]);
+  await input.send("Input.insertText", { text: "日本語😀" });
+  await expect.poll(() => harnessValue(page)).toBe("前😀日本語😀後\n");
+  expect(await page.evaluate(() => window.__harness.getEdits())).toEqual([
+    [{ range: { start: 3, end: 3 }, text: "日本語😀" }],
+  ]);
+  await input.detach();
+});
+
+test("cancelled browser IME composition sends no edit", async ({ page, context }) => {
+  await page.goto("/tests/live/harness/live.html");
+  const before = "取消😀\n";
+  await page.evaluate((text) => window.__harness.setValue(text), before);
+  const content = page.locator(".cm-content");
+  await expect(content).toContainText("取消😀");
+  await page.evaluate(() => window.__harness.echoCursor(2, 2));
+  await content.focus();
+  const input = await context.newCDPSession(page);
+  await input.send("Input.imeSetComposition", { text: "未確定", selectionStart: 3, selectionEnd: 3 });
+  await expect(content).toContainText("取消未確定😀");
+  expect(await page.evaluate(() => window.__harness.getEdits())).toEqual([]);
+  await input.send("Input.imeSetComposition", { text: "", selectionStart: 0, selectionEnd: 0 });
+  await expect(content).toContainText("取消😀");
+  expect(await harnessValue(page)).toBe(before);
+  expect(await page.evaluate(() => window.__harness.getEdits())).toEqual([]);
+  await input.detach();
+});
+
 // Issue #6 live widgets: real inline preview inside CodeMirror.
 // The harness mounts ONE CodeMirrorEditor with livePreview and no separate
 // preview pane. Meaningful assertions target widgets INSIDE `.cm-content`.
@@ -63,6 +108,39 @@ test("task checkbox emits a minimal range edit preserving unrelated bytes", asyn
   expect(after.slice(0, lineStart)).toBe(before.slice(0, lineStart));
   expect(after.slice(lineEnd)).toBe(before.slice(lineEnd));
   expect(after.slice(lineStart, lineEnd)).toBe("- [x] 未完了タスク");
+});
+
+test("rendered list and table use compact document spacing", async ({ page }) => {
+  await page.goto("/tests/live/harness/live.html");
+  await page.evaluate(() => window.__harness.setValue("# 見出し\n\n- [ ] 一つ\n- [ ] 二つ\n\n| 項目 | 状態 |\n| --- | --- |\n| 原文 | 保持 |\n"));
+  const list = page.locator(".marxen-live-widget ul");
+  const table = page.locator(".marxen-live-widget table");
+  await expect(table).toBeVisible();
+  const listBox = await list.boundingBox();
+  const tableBox = await table.boundingBox();
+  expect(listBox).not.toBeNull();
+  expect(tableBox).not.toBeNull();
+  expect(tableBox!.y - (listBox!.y + listBox!.height)).toBeLessThan(90);
+});
+
+test("highlighted code follows dark, light, and contrast themes without changing source", async ({ page }) => {
+  await page.goto("/tests/live/harness/live.html");
+  const source = '# 見出し\n\n```rust\nfn main() { println!("日本語 😀"); }\n```\n';
+  await page.evaluate((text) => window.__harness.setValue(text), source);
+  const code = page.locator(".cm-content .marxen-live-widget pre.shiki");
+  await expect(code).toBeVisible();
+  const stringToken = code.locator("span").filter({ hasText: /^"日本語 😀"$/ }).last();
+  for (const [theme, background, foreground] of [
+    ["dark", "rgb(36, 41, 46)", "rgb(158, 203, 255)"],
+    ["light", "rgb(255, 255, 255)", "rgb(3, 47, 98)"],
+    ["contrast", "rgb(255, 255, 255)", "rgb(0, 0, 0)"],
+  ]) {
+    await page.evaluate((name) => document.getElementById("root")!.setAttribute("data-theme", name), theme);
+    await expect(code).toHaveCSS("background-color", background);
+    await expect(stringToken).toHaveCSS("color", foreground);
+  }
+  expect(await harnessValue(page)).toBe(source);
+  expect(await page.evaluate(() => window.__harness.getEdits())).toHaveLength(0);
 });
 
 test("table cell click selects the source span; typing preserves neighbours", async ({ page }) => {

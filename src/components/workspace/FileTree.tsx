@@ -64,13 +64,15 @@ function Node({ node, activePath, onOpenFile, depth }: NodeProps) {
           type="button"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
-          className="w-full truncate rounded-md px-3 py-1.5 text-left text-sm text-muted-foreground hover:bg-muted"
-          style={{ paddingLeft: `${12 + depth * 12}px` }}
+          aria-label={node.path}
+          title={node.path}
+          className="w-full truncate rounded-md px-2 py-1 text-left text-xs text-muted-foreground hover:bg-muted"
+          style={{ paddingLeft: `${8 + depth * 12}px` }}
         >
           {open ? "▼" : "▶"} {node.name}
         </button>
         {open && (
-          <ul className="space-y-1">
+          <ul className="space-y-0.5">
             {(node.children ?? []).map((child) => (
               <Node key={child.path} node={child} activePath={activePath} onOpenFile={onOpenFile} depth={depth + 1} />
             ))}
@@ -81,7 +83,7 @@ function Node({ node, activePath, onOpenFile, depth }: NodeProps) {
   }
   if (!node.markdown) {
     return (
-      <li aria-disabled="true" title="Markdown ファイルのみ開けます" className="truncate rounded-md px-3 py-1.5 text-sm text-muted-foreground/60" style={{ paddingLeft: `${12 + depth * 12}px` }}>
+      <li aria-disabled="true" title={`${node.path}（Markdown ファイルのみ開けます）`} className="truncate rounded-md px-2 py-1 text-xs text-muted-foreground/60" style={{ paddingLeft: `${8 + depth * 12}px` }}>
         {node.name}
       </li>
     );
@@ -92,10 +94,12 @@ function Node({ node, activePath, onOpenFile, depth }: NodeProps) {
         type="button"
         onClick={() => onOpenFile(node.path)}
         aria-current={activePath === node.path ? "true" : undefined}
-        className={`w-full truncate rounded-md px-3 py-1.5 text-left text-sm hover:bg-muted ${activePath === node.path ? "bg-muted font-medium" : ""}`}
-        style={{ paddingLeft: `${12 + depth * 12}px` }}
+        aria-label={node.path}
+        title={node.path}
+        className={`w-full truncate rounded-md px-2 py-1 text-left text-xs hover:bg-muted ${activePath === node.path ? "bg-muted font-medium" : ""}`}
+        style={{ paddingLeft: `${8 + depth * 12}px` }}
       >
-        {node.path}
+        {node.name}
       </button>
     </li>
   );
@@ -104,7 +108,6 @@ function Node({ node, activePath, onOpenFile, depth }: NodeProps) {
 export function FileTree({ nodes, activePath, onOpenFile }: Props) {
   return (
     <nav data-testid="file-tree" aria-label="フォルダーツリー" className="overflow-auto">
-      <p className="px-3 pb-2 text-xs font-semibold tracking-wider text-muted-foreground">エクスプローラー</p>
       <ul className="space-y-1 px-2">
         {nodes.map((node) => (
           <Node key={node.path} node={node} activePath={activePath} onOpenFile={onOpenFile} depth={0} />

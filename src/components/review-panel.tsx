@@ -79,15 +79,19 @@ export default function ReviewPanel({
       )}
       {outcomes.length > 0 && (
         <ul className="mt-2 space-y-1" aria-label="承認結果">
-          {outcomes.map((outcome) => (
-            <li key={outcome.documentId} className="font-mono text-xs">
-              {outcome.documentId} rev {outcome.revision}{" "}
-              {outcome.applied ? "適用" : "未適用"}
-              {outcome.rolledBack ? " (ロールバック済み)" : ""}
-              {outcome.error ? ` 失敗: ${outcome.error}` : ""}
-              {outcome.rollbackError ? ` ロールバック失敗: ${outcome.rollbackError}` : ""}
-            </li>
-          ))}
+          {outcomes.map((outcome) => {
+            const failed = outcome.error !== null || outcome.rollbackError !== null || outcome.rolledBack;
+            const unchanged = !outcome.applied && !failed;
+            return (
+              <li key={outcome.documentId} className="font-mono text-xs">
+                {outcome.documentId} rev {outcome.revision}{" "}
+                {outcome.applied ? "適用" : unchanged ? "変更なし" : "未適用"}
+                {outcome.rolledBack ? " (ロールバック済み)" : ""}
+                {outcome.error ? ` 失敗: ${outcome.error}` : ""}
+                {outcome.rollbackError ? ` ロールバック失敗: ${outcome.rollbackError}` : ""}
+              </li>
+            );
+          })}
         </ul>
       )}
       {diffs.length > 0 && (

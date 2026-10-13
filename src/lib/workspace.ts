@@ -30,6 +30,8 @@ export const workspaceApi = {
     invoke<PasteResult>("paste_image", { ...request, name, bytes: Array.from(bytes), range }),
   input: (request: SaveRequest, keys: string) => invoke<DocumentSnapshot>("nvim_input", { ...request, keys }),
   fetchMode: (documentId: DocumentId) => invoke<ModeUpdate>("fetch_mode", { documentId }),
+  hasMapping: (documentId: DocumentId, mode: string, lhs: string) =>
+    invoke<boolean>("has_nvim_mapping", { documentId, mode, lhs }),
   fetchCursor: (documentId: DocumentId) => invoke<CursorUpdate>("fetch_cursor", { documentId }),
   reportCursor: (update: CursorUpdate) => invoke<CursorUpdate>("report_cursor", { ...update }),
   fetchGrid: (documentId: DocumentId, width = 80, height = 24) => invoke<GridUpdate>("fetch_grid", { documentId, width, height }),
