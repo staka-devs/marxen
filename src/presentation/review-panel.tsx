@@ -1,16 +1,24 @@
 import { useI18n } from "./i18n/I18nProvider";
 import { Button } from "./ui/button";
 import { Check, ChevronDown } from "lucide-react";
-import type { ApproveDocOutcome, IsolationDiff } from "../contracts/isolation-contracts";
+import type { ApproveDocOutcome, IsolationDiff, StagedNewFile } from "../contracts/isolation-contracts";
+import { ChangedFileList } from "./ai/agent-cards";
 
 /**
- * Props owned by Issue #8. UI mounts this next to AiPanel and wires callbacks
- * through the composition root. Full flow: AiPanel onProposal -> stage ->
- * ReviewPanel (fetch diff, approve, reject, cancel).
+ * Props owned by Issue #69 (agentic review). UI mounts this next to AiPanel
+ * and wires callbacks through the composition root. Full flow: AiPanel
+ * onProposal -> stage -> ReviewPanel (fetch diff, apply-and-save, reject,
+ * cancel). Applied changes retire approval actions; the final status reflects
+ * actual saved/failed files. No internal mechanics paragraph or raw
+ * live/staging identifiers appear in product text.
  */
 export interface ReviewPanelProps {
   copyId: string | null;
   diffs: IsolationDiff[];
+  /** New agent-created Markdown files for import in one action. */
+  newFiles?: StagedNewFile[];
+  /** True after apply-and-save retired approval actions. */
+  applied?: boolean;
   outcomes: ApproveDocOutcome[];
   busy: boolean;
   message: string | null;
@@ -19,7 +27,7 @@ export interface ReviewPanelProps {
   /** Refetch diffs for the staged copy. */
   onFetchDiff: () => void;
   onStageProposal: (() => void) | null;
-  /** Approve the staged copy, then resync views. */
+  /** Apply and save the staged copy in one natural action. */
   onApprove: () => void;
   /** Reject the staged copy without touching disk. */
   onReject: () => void;
@@ -28,9 +36,12 @@ export interface ReviewPanelProps {
   documentLabels?: Record<string, string>;
 }
 
-/** Render the isolation review panel with diffs and approve controls. */ export default function ReviewPanel({
+/** Render the agentic review panel with changed-file cards and single save. */
+export default function ReviewPanel({
   copyId,
   diffs,
+  newFiles = [],
+  applied = false,
   outcomes,
   busy,
   message,
@@ -44,11 +55,13 @@ export interface ReviewPanelProps {
   documentLabels,
 }: ReviewPanelProps) {
   const { t } = useI18n();
-  /** Map a document ID to its visible label without internal IDs. */ const label = (documentId: string) => documentLabels ? documentLabels[documentId] ?? t("文書") : documentId;
-  if (!diffs.some((diff) => diff.changed) && outcomes.length === 0 && !message && !onStageProposal) {
+  /** Map a document ID to its visible label without internal IDs. */
+  const label = (documentId: string) => documentLabels ? documentLabels[documentId] ?? t("文書") : documentId;
+  const hasChanges = diffs.some((diff) => diff.changed) || newFiles.length > 0;
+  if (!hasChanges && outcomes.length === 0 && !message && !onStageProposal) {
     return null;
   }
-  const completed = !copyId && !onStageProposal && !message && outcomes.length > 0;
+  const completed = (!copyId && !onStageProposal && !message && outcomes.length > 0) || applied;
   const allApplied = outcomes.every((outcome) => !outcome.error && !outcome.rollbackError && !outcome.rolledBack);
   if (completed && allApplied) {
     return <section aria-label={t("変更の確認")} className="border-t border-border px-3 py-2 text-xs">
@@ -65,9 +78,7 @@ export interface ReviewPanelProps {
   return (
     <section aria-labelledby="review-panel-title" className="border-t border-border px-3 py-3">
       <h2 id="review-panel-title" className="text-xs font-semibold">{t("変更の確認")}</h2>
-      <p className="mt-1 text-xs text-muted-foreground">
-        {t("適用すると編集中の文書が更新されます。ファイルの保存は別操作です。")}</p>
-      {proposalText !== null && onStageProposal !== null && (
+      {proposalText !== null && onStageProposal !== null && !applied && (
         <div className="mt-2 rounded-sm border border-border p-2">
           <p className="text-xs font-semibold text-muted-foreground">{t("取り込み待ちの提案")}</p>
           <p className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap text-xs">{proposalText}</p>
@@ -75,16 +86,18 @@ export interface ReviewPanelProps {
             {t("提案を作業コピーに取り込む")}</Button>
         </div>
       )}
-      <div className="mt-2 flex flex-wrap gap-1.5">
-        <Button variant="outline" size="sm" onClick={onFetchDiff} disabled={!copyId || busy}>
-          {t("差分を確認")}</Button>
-        <Button size="sm" onClick={onApprove} disabled={!copyId || busy}>
-          {t("承認して適用")}</Button>
-        <Button variant="outline" size="sm" onClick={onReject} disabled={!copyId || busy}>
-          {t("却下")}</Button>
-        <Button variant="outline" size="sm" onClick={onCancel} disabled={!copyId || busy}>
-          {t("取消")}</Button>
-      </div>
+      {!applied && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          <Button variant="outline" size="sm" onClick={onFetchDiff} disabled={!copyId || busy}>
+            {t("差分を確認")}</Button>
+          <Button size="sm" onClick={onApprove} disabled={!copyId || busy}>
+            {t("適用して保存")}</Button>
+          <Button variant="outline" size="sm" onClick={onReject} disabled={!copyId || busy}>
+            {t("却下")}</Button>
+          <Button variant="outline" size="sm" onClick={onCancel} disabled={!copyId || busy}>
+            {t("取消")}</Button>
+        </div>
+      )}
       {message && (
         <p role="alert" className="mt-2 text-sm font-medium text-red-600">
           {message}
@@ -101,7 +114,7 @@ export interface ReviewPanelProps {
             const failed = outcome.error !== null || outcome.rollbackError !== null || outcome.rolledBack;
             const unchanged = !outcome.applied && !failed;
             return (
-              <li key={outcome.documentId} className="font-mono text-xs">
+              <li key={outcome.documentId} className="text-xs">
                 {label(outcome.documentId)}{" "}
                 {outcome.applied ? t("適用") : unchanged ? t("変更なし") : t("未適用")}
                 {outcome.rolledBack ? t(" (ロールバック済み)") : ""}
@@ -112,20 +125,7 @@ export interface ReviewPanelProps {
           })}
         </ul>
       )}
-      {diffs.length > 0 && (
-        <ul className="mt-2 space-y-2">
-          {diffs.map((diff, index) => (
-            <li key={`${diff.documentId}-${index}`} className="rounded-sm border border-border p-2">
-              <p className="font-mono text-xs">
-                {label(diff.documentId)}
-                {diff.drifted ? t(" (外部変更あり・要再同期)") : ""} {diff.changed ? t("変更あり") : t("変更なし")}
-              </p>
-              <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap text-xs">{diff.unified}</pre>
-            </li>
-          ))}
-        </ul>
-      )}
+      <ChangedFileList diffs={diffs} newFiles={newFiles} documentLabels={documentLabels} />
     </section>
   );
 }
-

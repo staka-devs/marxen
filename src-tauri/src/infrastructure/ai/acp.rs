@@ -72,6 +72,146 @@ fn emit_prompt_response_usage(
     }
 }
 
+/// Emit validated tool-call, update, and plan notifications as nonterminal chat events.
+///
+/// Foreign sessions and malformed payloads yield no event; text and terminal
+/// handling stay unchanged. Tool content never fabricates a timeline: only
+/// wire-reported calls surface, and terminal executions never open a window.
+fn emit_agentic_notification(
+    note: &serde_json::Value,
+    session_id: &str,
+    staging_dir: &Path,
+    run_id: &AiRunId,
+    emit: &mut (dyn FnMut(AiStreamEvent) + Send),
+) {
+    if let Some(tool_call) = parse_tool_call_notification(note, session_id, staging_dir) {
+        emit(AiStreamEvent::ToolCall(StreamToolCall {
+            run_id: run_id.clone(),
+            tool_call,
+        }));
+        return;
+    }
+    if let Some(update) = parse_tool_call_update_notification(note, session_id, staging_dir) {
+        emit(AiStreamEvent::ToolCallUpdate(StreamToolCallUpdate {
+            run_id: run_id.clone(),
+            update,
+        }));
+        return;
+    }
+    if let Some(entries) = parse_plan_notification(note, session_id) {
+        emit(AiStreamEvent::Plan(StreamPlan {
+            run_id: run_id.clone(),
+            entries,
+        }));
+    }
+}
+
+/// Build a JSON-RPC error envelope for rejected agent file/permission requests.
+/// Wrong sessions and outside paths are rejected without touching the filesystem.
+fn agent_request_error(id: &Value, code: i64, message: &str) -> Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": code, "message": message }
+    })
+}
+
+/// Serve `fs/read_text_file` from the authorized staging directory.
+///
+/// Validates the claimed session, requires an absolute contained path, and
+/// rejects symlinks escaping the root. Wrong sessions and outside paths yield
+/// a JSON-RPC error; successes return `{ content }`.
+fn serve_fs_read(staging_dir: &Path, expected_session: &str, params: &Value) -> Result<Value, Value> {
+    let session = params.get("sessionId").and_then(|id| id.as_str()).unwrap_or("");
+    if session != expected_session {
+        return Err(agent_request_error(
+            &Value::Null,
+            -32602,
+            "unknown session for fs/read_text_file",
+        ));
+    }
+    let path = params.get("path").and_then(|path| path.as_str()).unwrap_or("");
+    if !staging_path_allowed(staging_dir, path) {
+        return Err(agent_request_error(
+            &Value::Null,
+            -32602,
+            "path is outside the authorized staging copy",
+        ));
+    }
+    let bytes = std::fs::read(Path::new(path)).map_err(|_| {
+        agent_request_error(&Value::Null, -32602, "staging file cannot be read")
+    })?;
+    let content = String::from_utf8(bytes)
+        .map_err(|_| agent_request_error(&Value::Null, -32602, "staging file is not UTF-8"))?;
+    if content.len() > MAX_EXCERPT_BYTES {
+        return Err(agent_request_error(
+            &Value::Null,
+            -32602,
+            "staging file is too large",
+        ));
+    }
+    Ok(serde_json::json!({ "content": content }))
+}
+
+/// Serve `fs/write_text_file` into the authorized staging directory.
+///
+/// Validates the claimed session and containment, creates parent directories,
+/// and writes UTF-8 text. `Ask` mode is read-only and rejects writes.
+/// Markdown-only enforcement happens at review time; the transport contains
+/// the write but never applies it to live buffers. Wrong sessions and outside
+/// paths yield a JSON-RPC error.
+fn serve_fs_write(
+    staging_dir: &Path,
+    expected_session: &str,
+    params: &Value,
+    mode: PromptMode,
+) -> Result<Value, Value> {
+    use crate::contracts::ai::PromptMode as Mode;
+    if mode == Mode::Ask {
+        return Err(agent_request_error(
+            &Value::Null,
+            -32602,
+            "ask mode is read-only",
+        ));
+    }
+    let session = params.get("sessionId").and_then(|id| id.as_str()).unwrap_or("");
+    if session != expected_session {
+        return Err(agent_request_error(
+            &Value::Null,
+            -32602,
+            "unknown session for fs/write_text_file",
+        ));
+    }
+    let path = params.get("path").and_then(|path| path.as_str()).unwrap_or("");
+    if !staging_path_allowed(staging_dir, path) {
+        return Err(agent_request_error(
+            &Value::Null,
+            -32602,
+            "path is outside the authorized staging copy",
+        ));
+    }
+    let content = params.get("content").and_then(|content| content.as_str()).ok_or_else(|| {
+        agent_request_error(&Value::Null, -32602, "fs/write_text_file requires content")
+    })?;
+    if content.len() > MAX_EXCERPT_BYTES {
+        return Err(agent_request_error(
+            &Value::Null,
+            -32602,
+            "staging content is too large",
+        ));
+    }
+    let target = Path::new(path);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|_| {
+            agent_request_error(&Value::Null, -32602, "staging parent cannot be created")
+        })?;
+    }
+    std::fs::write(target, content.as_bytes()).map_err(|_| {
+        agent_request_error(&Value::Null, -32602, "staging file cannot be written")
+    })?;
+    Ok(serde_json::json!({}))
+}
+
 /// Read `PATHEXT` order for executable probing, falling back to the bundled
 /// Windows default when the variable is absent or unparsable.
 /// Appends `ps1` after `PATHEXT` when missing so official npm shims resolve
@@ -544,7 +684,10 @@ impl AgentConn {
         }
     }
 
-    /// Answer permission requests by default denial and reject unsupported agent requests.
+    /// Answer handshake agent requests by default denial and reject unsupported methods.
+    ///
+    /// Handshake phases never surface permission UI; prompt turns use the
+    /// conversation handler with visible permission events instead.
     fn answer_agent_request(
         &mut self,
         id: &serde_json::Value,
@@ -876,7 +1019,11 @@ pub fn run_acp_prompt(
 }
 
 #[allow(clippy::too_many_arguments)]
-/// Drive one ACP conversation, deny permissions and enforce deadline and session identity.
+/// Drive one ACP conversation with visible tool/plan/permission events and
+/// authorized staging file access. Permissions are surfaced as chat events and
+/// answered by actual option IDs (deny by default, cancelled after cancel);
+/// fs reads/writes are contained to the staging directory with session and
+/// path rejection; terminals are never created in an external window.
 fn run_acp_conversation(
     params: &AcpRunParams,
     request: &AiPromptRequest,
@@ -1030,23 +1177,89 @@ fn run_acp_conversation(
                     }));
                 }
                 emit_usage_notification(&note, session_id, request, run_id, emit);
-                // Other updates (tool calls, file edits inside the staging
-                // copy) stay in the isolated copy for #8 to diff; only text
-                // is proposed.
+                emit_agentic_notification(&note, session_id, &params.staging_dir, run_id, emit);
             }
             AgentIncoming::AgentRequest {
                 id: req_id,
                 method: req_method,
                 params: req_params,
             } => {
-                // No approval UI exists: deny by default. After our own
-                // cancel, answer with the spec's `cancelled` outcome.
-                let mode = if cancel_sent || cancel.load(Ordering::SeqCst) {
-                    PermissionAnswer::Cancelled
+                if req_method == "fs/read_text_file" {
+                    let reply = match serve_fs_read(&params.staging_dir, session_id, &req_params) {
+                        Ok(result) => serde_json::json!({
+                            "jsonrpc": "2.0", "id": req_id, "result": result
+                        }),
+                        Err(error) => {
+                            let mut envelope = error;
+                            envelope["id"] = req_id.clone();
+                            envelope
+                        }
+                    };
+                    conn.write(&reply)?;
+                } else if req_method == "fs/write_text_file" {
+                    let reply = match serve_fs_write(&params.staging_dir, session_id, &req_params, request.mode) {
+                        Ok(result) => serde_json::json!({
+                            "jsonrpc": "2.0", "id": req_id, "result": result
+                        }),
+                        Err(error) => {
+                            let mut envelope = error;
+                            envelope["id"] = req_id.clone();
+                            envelope
+                        }
+                    };
+                    conn.write(&reply)?;
+                } else if req_method == "session/request_permission" {
+                    let cancelled = cancel_sent || cancel.load(Ordering::SeqCst);
+                    match parse_permission_request(&req_id, &req_params) {
+                        None => {
+                            let reply = agent_request_error(&req_id, -32602, "invalid permission request");
+                            conn.write(&reply)?;
+                        }
+                        Some(parsed) if parsed.session_id != session_id => {
+                            let reply = agent_request_error(&req_id, -32602, "unknown session for permission");
+                            conn.write(&reply)?;
+                        }
+                        Some(parsed) => {
+                            let request_id = stringify_request_id(&req_id)
+                                .unwrap_or_else(|| parsed.request_id.clone());
+                            emit(AiStreamEvent::Permission(StreamPermission {
+                                run_id: run_id.clone(),
+                                request_id,
+                                session_id: AcpSessionId(parsed.session_id.clone()),
+                                tool_call_id: parsed.tool_call_id.clone(),
+                                title: parsed.title.clone(),
+                                options: parsed
+                                    .options
+                                    .iter()
+                                    .map(|option| PermissionOption {
+                                        option_id: option.option_id.clone(),
+                                        name: option.name.clone(),
+                                        kind: option.kind,
+                                    })
+                                    .collect(),
+                            }));
+                            // Surfaced denial by actual IDs; interactive
+                            // allow/deny choice arrives via a future
+                            // `ai_permission_reply` integration (see ADR).
+                            // Cancellation settles once with the spec outcome.
+                            let mode = if cancelled {
+                                PermissionAnswer::Cancelled
+                            } else {
+                                PermissionAnswer::Deny
+                            };
+                            conn.answer_agent_request(&req_id, &req_method, &req_params, mode)?;
+                        }
+                    }
                 } else {
-                    PermissionAnswer::Deny
-                };
-                conn.answer_agent_request(&req_id, &req_method, &req_params, mode)?;
+                    // Terminals, elicitation, and unknown methods stay
+                    // unimplemented: no external window is ever created.
+                    let mode = if cancel_sent || cancel.load(Ordering::SeqCst) {
+                        PermissionAnswer::Cancelled
+                    } else {
+                        PermissionAnswer::Deny
+                    };
+                    conn.answer_agent_request(&req_id, &req_method, &req_params, mode)?;
+                }
             }
         }
     }

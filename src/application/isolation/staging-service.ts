@@ -152,7 +152,7 @@ export function summarizeApproveResult(result: ApproveResult, t: Translator = ja
       : appliedCount > 0 && unchangedCount > 0
         ? localizedMessage("{{value0}} 文書に適用し、{{value1}} 文書は変更なしでした。", { value0: appliedCount, value1: unchangedCount })
         : localizedMessage("承認して適用しました。");
-    const notice = localizedMessage("承認して適用しました。保存は保存ボタンで行います。");
+    const notice = localizedMessage("承認して適用しました。");
     return {
       outcomes: result.outcomes,
       appliedCount,
@@ -189,6 +189,46 @@ export function summarizeApproveResult(result: ApproveResult, t: Translator = ja
  */
 export function askOnlyStatus(): MessageDescriptor {
   return localizedMessage("質問モードは表示のみです。取り込みは行いません。");
+}
+
+/** Per-file save outcome for applied documents in a single apply-and-save action. */
+export interface SavedFileOutcome {
+  documentId: string;
+  saved: boolean;
+  error?: string;
+}
+
+/** Final status for an apply-and-save run reflecting actual saved/failed files. */
+export interface SavedSummary {
+  savedCount: number;
+  failedCount: number;
+  status: LocalizedText;
+  notice: LocalizedText;
+}
+
+/**
+ * Summarize actual saved/failed files after an apply-and-save action.
+ *
+ * Applied changes retire approval actions; the final status reflects saved
+ * versus failed files, never a generic approval message alone.
+ */
+export function summarizeSavedResult(outcomes: SavedFileOutcome[]): SavedSummary {
+  const savedCount = outcomes.filter((outcome) => outcome.saved).length;
+  const failedCount = outcomes.filter((outcome) => !outcome.saved).length;
+  if (failedCount === 0) {
+    return {
+      savedCount,
+      failedCount: 0,
+      status: localizedMessage("保存しました（{{value0}}件）。", { value0: savedCount }),
+      notice: localizedMessage("保存しました（{{value0}}件）。", { value0: savedCount }),
+    };
+  }
+  return {
+    savedCount,
+    failedCount,
+    status: localizedMessage("保存に失敗しました（{{value0}}件）。", { value0: failedCount }),
+    notice: localizedMessage("保存に失敗しました（{{value0}}件）。", { value0: failedCount }),
+  };
 }
 
 /**

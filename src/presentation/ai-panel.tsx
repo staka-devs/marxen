@@ -8,7 +8,7 @@ import { Button } from "./ui/button";
 import { ChoiceMenu } from "./ui/choice-menu";
 import { ChatHistory } from "./ai/ChatHistory";
 import "./ai-chat.css";
-import AiProviderSettings, { describeProviderSummary } from "./ai-provider-settings";
+import AiProviderSettings from "./ai-provider-settings";
 import { MarkdownPreview } from "./preview/MarkdownPreview";
 import {
   MODE_LABELS,
@@ -22,9 +22,12 @@ import {
   normalizeAiError,
 } from "../application/ai/ai-run-core";
 import { useAiRun } from "./ai/use-ai-run";
+import { ToolCard, PlanCard, PermissionCard } from "./ai/agent-cards";
 import { defaultProfile, type AiProfile } from "../domain/ai-profile";
 import {
+  addChatPermission,
   appendStreamingText,
+  applyToolUpdate,
   cancelAssistant,
   createConversation,
   createStreamingAssistant,
@@ -35,8 +38,10 @@ import {
   isBusy,
   lastUserPrompt,
   retryHistory,
+  setChatPlan,
   toHistoryPayload,
   truncatePrompt,
+  upsertToolCall,
   type ChatConversation,
 } from "../domain/conversation/ai-conversation";
 import type {
@@ -297,6 +302,26 @@ export default function AiPanel({
     if (event.type === "usage") return;
     if (run.isCancelRequested()) {
       if (event.type === "chunk" || event.type === "started") return;
+      if (event.type === "tool_call") {
+        applyToConversation(targetConversationId, (previous) => ({
+          ...previous, messages: upsertToolCall(previous.messages, assistant, { ...event.payload.toolCall, status: "cancelled" }),
+        }));
+        return;
+      }
+      if (event.type === "tool_call_update") return;
+      if (event.type === "plan") return;
+      if (event.type === "permission") {
+        applyToConversation(targetConversationId, (previous) => ({
+          ...previous,
+          messages: addChatPermission(previous.messages, assistant, {
+            requestId: event.payload.requestId,
+            toolCallId: event.payload.toolCallId,
+            title: event.payload.title,
+            options: event.payload.options,
+          }, true),
+        }));
+        return;
+      }
       run.markSettled(token);
       applyToConversation(targetConversationId, (previous) => ({
         ...previous, messages: cancelAssistant(previous.messages, assistant),
@@ -312,6 +337,35 @@ export default function AiPanel({
         applyToConversation(targetConversationId, (prev) => ({
           ...prev,
           messages: appendStreamingText(prev.messages, assistant, event.payload.text),
+        }));
+        break;
+      case "tool_call":
+        applyToConversation(targetConversationId, (prev) => ({
+          ...prev,
+          messages: upsertToolCall(prev.messages, assistant, event.payload.toolCall),
+        }));
+        break;
+      case "tool_call_update":
+        applyToConversation(targetConversationId, (prev) => ({
+          ...prev,
+          messages: applyToolUpdate(prev.messages, assistant, event.payload.update),
+        }));
+        break;
+      case "plan":
+        applyToConversation(targetConversationId, (prev) => ({
+          ...prev,
+          messages: setChatPlan(prev.messages, assistant, event.payload.entries),
+        }));
+        break;
+      case "permission":
+        applyToConversation(targetConversationId, (prev) => ({
+          ...prev,
+          messages: addChatPermission(prev.messages, assistant, {
+            requestId: event.payload.requestId,
+            toolCallId: event.payload.toolCallId,
+            title: event.payload.title,
+            options: event.payload.options,
+          }, false),
         }));
         break;
       case "done":
@@ -485,7 +539,7 @@ export default function AiPanel({
   }
 
   if (!conversation) return null;
-  const providerSummary = describeProviderSummary(provider, t);
+  const isDirectApi = provider.kind !== "acp";
 
   return (
     <div aria-label={t("チャット")} className="ai-chat-panel flex h-full min-h-0 flex-col">
@@ -515,7 +569,7 @@ export default function AiPanel({
           <span className="text-[11px] text-muted-foreground">{t("送信対象がありません。")}</span>
         ) : (
           contexts.map((context) => (
-            <span key={context.documentId} title={`rev ${context.revision} • ${providerSummary}`} className="ai-chat-chip inline-flex max-w-full items-center gap-0.5 rounded border border-border px-1.5 py-px text-[11px] leading-5 text-muted-foreground">
+            <span key={context.documentId} className="ai-chat-chip inline-flex max-w-full items-center gap-0.5 rounded border border-border px-1.5 py-px text-[11px] leading-5 text-muted-foreground">
               <span
                 className="truncate"
               >
@@ -566,12 +620,21 @@ export default function AiPanel({
                 <p className="ai-chat-role text-[11px] text-muted-foreground">
                   AI{message.state === "streaming" ? t("・生成中…") : message.state === "cancelled" ? t("・取消済み") : message.state === "error" ? t("・失敗") : ""}
                 </p>
+                {message.plan && message.plan.length > 0 && <PlanCard entries={message.plan} />}
+                {(message.tools ?? []).map((tool) => (
+                  <ToolCard key={tool.id} tool={tool} />
+                ))}
+                {(message.permissions ?? []).map((permission) => (
+                  <PermissionCard key={permission.requestId} permission={permission} />
+                ))}
                 {message.text && (message.state === "done"
                   ? <div className="marxen-chat-body mt-1"><MarkdownPreview text={message.text} label={t("AI の回答")} testId={`chat-response-${message.id}`} /></div>
                   : <p className="ai-chat-text mt-0.5 whitespace-pre-wrap leading-6">{message.text}</p>)}
-                {message.proposal && message.mode !== "ask" && (
-                  <p className="mt-1 text-[11px] text-muted-foreground">
-                    {t("変更は差分を確認して適用できます。")}</p>
+                {message.mode === "ask" && message.state === "done" && (
+                  <p className="mt-1 text-[11px] text-muted-foreground">{t("質問は読み取りのみです。")}</p>
+                )}
+                {isDirectApi && message.mode !== "ask" && message.state === "done" && (
+                  <p className="mt-1 text-[11px] text-muted-foreground">{t("直接APIは文章のみです。ファイル変更はACPで行います。")}</p>
                 )}
                 {message.state === "error" && message.error && (
                   <p role="alert" className="mt-1 text-xs font-medium text-red-600">{describeAiError(message.error, t)}</p>

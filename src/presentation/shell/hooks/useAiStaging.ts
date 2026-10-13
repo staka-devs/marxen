@@ -28,9 +28,10 @@ import {
   ensureStagingCopy,
   stageNonAskProposal,
   summarizeApproveResult,
+  summarizeSavedResult,
   toAiProposal,
 } from "../../../application/isolation/staging-service";
-import type { IsolationGateway } from "../../../application/ports";
+import type { IsolationGateway, WorkspaceGateway } from "../../../application/ports";
 import type { DocumentSession } from "./useDocumentSession";
 
 /** Injected ports for AI review and inline flow. */
@@ -43,6 +44,8 @@ export interface AiStagingArgs {
   session: DocumentSession;
   /** Isolation staging lifecycle pinned by Rust. */
   isolationGateway?: IsolationGateway;
+  /** Workspace files for new Markdown import; wired by the shell when available. */
+  workspaceGateway?: WorkspaceGateway;
 }
 
 /** AI staging state and review operations. */
@@ -75,6 +78,10 @@ export interface AiStaging {
   inlineKind: "selection" | "paragraph";
   /** Current isolation diffs for review. */
   diffs: IsolationDiff[];
+  /** New agent-created Markdown files for import. */
+  newFiles: import("../../../contracts/isolation-contracts").StagedNewFile[];
+  /** Whether the last apply-and-save retired approval actions. */
+  applied: boolean;
   /** Latest approve outcomes for review. */
   outcomes: ApproveDocOutcome[];
   /** Whether a review operation is in flight. */
@@ -101,7 +108,7 @@ export interface AiStaging {
   fetchReviewDiff: () => Promise<void>;
   /** Clear the shared staging slot and its review state. */
   clearStaging: () => void;
-  /** Approve the staged copy, then resync views. */
+  /** Apply and save the staged copy in one natural action, then resync views. */
   approveStaging: () => Promise<void>;
   /** Reject the staged copy without touching disk. */
   rejectStaging: () => Promise<void>;
@@ -117,7 +124,7 @@ export interface AiStaging {
  */
 export function useAiStaging(args: AiStagingArgs): AiStaging {
   const { t, message } = useI18n();
-  const { desktop, notify, session, isolationGateway } = args;
+  const { desktop, notify, session, isolationGateway, workspaceGateway } = args;
   const setNotice = notify;
   const {
     registry,
@@ -163,6 +170,8 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
   const [inlineSnapshot, setInlineSnapshot] = useState<PromptContext | null>(null);
   const [inlineKind, setInlineKind] = useState<"selection" | "paragraph">("selection");
   const [diffs, setDiffs] = useState<IsolationDiff[]>([]);
+  const [newFiles, setNewFiles] = useState<import("../../../contracts/isolation-contracts").StagedNewFile[]>([]);
+  const [applied, setApplied] = useState(false);
   const [outcomes, setOutcomes] = useState<ApproveDocOutcome[]>([]);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewMessage, setReviewMessage] = useState<LocalizedText | null>(null);
@@ -200,6 +209,12 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     setReviewMessage(null);
     setReviewStatus(result.drifted ? message("文書が更新されています。選択範囲を指定し直してください。") : result.statusMessage);
     setDiffs(result.diffs);
+    try {
+      setNewFiles(await isolationGateway.fetchNewFiles(copyId));
+    } catch {
+      setNewFiles([]);
+    }
+    setApplied(false);
   }
 
   /**
@@ -225,6 +240,8 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
           if (!isolationGateway) throw new LocalizedError(READONLY_MESSAGE);
           const fetched = await isolationGateway.fetchDiff(copyId);
           setDiffs(fetched);
+          setNewFiles([]);
+          setApplied(false);
           setReviewMessage(null);
         } catch (cause: unknown) {
           setReviewMessage(localizedFailure(cause, describeIsolationError));
@@ -305,6 +322,8 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
       registeredContextsRef.current = result.registration.contexts;
       if (result.isNew) {
         setDiffs([]);
+        setNewFiles([]);
+        setApplied(false);
         setOutcomes([]);
         setReviewMessage(null);
         setReviewStatus(message("送信範囲を自動登録しました。"));
@@ -384,6 +403,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
    * Fetch review diffs for the staged copy with drift detection.
    *
    * Drifted entries mean the live buffer moved; approve refuses until resync.
+   * New agent files refresh alongside diffs for changed-file cards.
    */
   const fetchReviewDiff = useCallback(async () => {
     const copyId = stagingRef.current;
@@ -393,6 +413,11 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
       if (!isolationGateway) throw new LocalizedError(READONLY_MESSAGE);
       const fetched = await isolationGateway.fetchDiff(copyId);
       setDiffs(fetched);
+      try {
+        setNewFiles(await isolationGateway.fetchNewFiles(copyId));
+      } catch {
+        setNewFiles([]);
+      }
       setReviewMessage(null);
       setReviewStatus(fetched.some((diff) => diff.drifted) ? message("文書が更新されています。選択範囲を指定し直してください。") : null);
     } catch (cause) {
@@ -411,18 +436,21 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
   const clearStaging = useCallback(() => {
     setStaging(null);
     setDiffs([]);
+    setNewFiles([]);
+    setApplied(false);
     setOutcomes([]);
     setReviewMessage(null);
     setReviewStatus(null);
   }, []);
 
   /**
-   * Approve the staged copy via the application service, then resync views.
+   * Apply and save the staged copy in one natural action, then resync views.
    *
    * Refuses drifted diffs before calling; applied buffers pull fresh
    * snapshots so the shell shows the same text, then refreshes mode/cursor.
-   * Summaries come from `summarizeApproveResult` so partial application is
-   * never presented as all-or-nothing.
+   * Each applied document saves at its new revision; new Markdown files
+   * import through the workspace gateway when wired. Applied changes retire
+   * approval actions; the final status reflects actual saved/failed files.
    */
   const approveStaging = useCallback(async () => {
     const copyId = stagingRef.current;
@@ -450,20 +478,72 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
         if (activeRef.current) await refreshModeCursor(activeRef.current);
       }
       const summary = summarizeApproveResult(result, t);
+      // Import new agent files when the shell wired the workspace gateway;
+      // otherwise they stay visible as new without touching disk.
+      let importedCount = 0;
+      if (workspaceGateway) {
+        for (const file of newFiles) {
+          try {
+            await workspaceGateway.createMarkdown(file.rel, file.content);
+            importedCount += 1;
+          } catch {
+            // Per-file import failures surface via the saved summary below.
+          }
+        }
+      }
+      // Save every applied document at its new revision; dirty user text is
+      // preserved because saves bind the exact applied revision.
+      const savedOutcomes: Array<{ documentId: string; saved: boolean; error?: string }> = [];
+      if (registry) {
+        for (const outcome of result.outcomes) {
+          if (!outcome.applied) continue;
+          try {
+            const current = docsRef.current[outcome.documentId];
+            await registry.save({ documentId: outcome.documentId, baseRevision: current?.revision ?? outcome.revision });
+            savedOutcomes.push({ documentId: outcome.documentId, saved: true });
+          } catch (cause: unknown) {
+            savedOutcomes.push({
+              documentId: outcome.documentId,
+              saved: false,
+              error: cause instanceof Error ? cause.message : String(cause),
+            });
+          }
+        }
+      }
+      const saved = summarizeSavedResult(savedOutcomes);
       setOutcomes(summary.outcomes);
       setStaging(null);
-      setDiffs([]);
+      setApplied(true);
       setAiProposal(null);
-      setReviewMessage(summary.messages.reviewMessage);
-      setReviewStatus(summary.messages.status);
-      setNotice(summary.messages.notice);
+      if (summary.failedCount > 0) {
+        setReviewMessage(summary.messages.reviewMessage);
+        setReviewStatus(summary.messages.status);
+        setNotice(summary.messages.notice);
+      } else if (saved.failedCount > 0) {
+        setReviewMessage(saved.status);
+        setReviewStatus(saved.status);
+        setNotice(saved.notice);
+      } else {
+        const total = savedOutcomes.length + importedCount;
+        const doneMessage = total > 0
+          ? message("保存しました（{{value0}}件）。", { value0: total })
+          : summary.messages.status;
+        setReviewMessage(null);
+        setReviewStatus(doneMessage);
+        setNotice(doneMessage);
+      }
+      try {
+        if (activeRef.current) await refreshModeCursor(activeRef.current);
+      } catch {
+        // Best-effort cursor refresh after save.
+      }
     } catch (cause) {
       setReviewMessage(localizedFailure(cause, describeIsolationError));
       setReviewStatus(message("再同期して範囲を再登録してください。"));
     } finally {
       setReviewBusy(false);
     }
-  }, [diffs, registry, mergeSnapshot, refreshModeCursor, isolationGateway, activeRef, notify]);
+  }, [diffs, newFiles, registry, docsRef, mergeSnapshot, refreshModeCursor, isolationGateway, workspaceGateway, activeRef, notify]);
 
   /** Reject the staged copy without touching disk. */
   const rejectStaging = useCallback(async () => {
@@ -514,6 +594,8 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     inlineSnapshot,
     inlineKind,
     diffs,
+    newFiles,
+    applied,
     outcomes,
     reviewBusy,
     reviewMessage: reviewMessage === null ? null : renderLocalizedText(reviewMessage, t),

@@ -69,6 +69,19 @@ pub struct StagedProposal {
     pub chars: u32,
 }
 
+/// One new Markdown file created by the agent inside the staging copy.
+///
+/// Only relative contained `.md` paths are reported; forbidden names
+/// (`.git`/`.env`/credentials) and non-Markdown files are never importable.
+/// The content is staged text, not yet applied to any live document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StagedNewFile {
+    pub rel: String,
+    pub chars: u32,
+    pub content: String,
+}
+
 /// Return exported isolation IPC TypeScript declarations with document/AI imports.
 /// Trim trailing whitespace from each line and finish with one LF; no files are written.
 pub fn typescript() -> String {
@@ -80,8 +93,9 @@ pub fn typescript() -> String {
         ApproveDocOutcome::decl(&cfg),
         ApproveResult::decl(&cfg),
         StagedProposal::decl(&cfg),
+        StagedNewFile::decl(&cfg),
     ];
-    let mut output = "// Generated from src-tauri/src/contracts/isolation.rs. Run npm run isolation-contracts:generate.\n// Do not edit by hand. Isolation IPC schema version 2.\n".to_owned();
+    let mut output = "// Generated from src-tauri/src/contracts/isolation.rs. Run npm run isolation-contracts:generate.\n// Do not edit by hand. Isolation IPC schema version 3.\n".to_owned();
     output.push_str("import type { DocumentId, Revision, Utf16Range } from \"./contracts\";\n");
     output.push_str("import type { IsolatedCopyId } from \"./ai-contracts\";\n");
     for declaration in declarations {

@@ -1,5 +1,5 @@
 // Generated from src-tauri/src/contracts/ai.rs. Run npm run ai-contracts:generate.
-// Do not edit by hand. AI IPC schema version 5.
+// Do not edit by hand. AI IPC schema version 6.
 import type { DocumentId, Revision, Utf16Range } from "./contracts";
 export type AiProviderKind = "acp" | "openai_compatible" | "anthropic";
 export type AcpPreset = "codex" | "opencode" | "copilot" | "custom";
@@ -43,6 +43,21 @@ export type ContextSummary = { documentId: DocumentId, revision: Revision, range
 export type StreamStarted = { runId: AiRunId, };
 export type StreamChunk = { runId: AiRunId, text: string, };
 export type StreamUsage = { runId: AiRunId, usage: ReportedUsage, };
+export type AcpToolKind = "read" | "edit" | "delete" | "move" | "search" | "execute" | "think" | "fetch" | "switch_mode" | "other";
+export type AcpToolStatus = "pending" | "in_progress" | "completed" | "failed" | "cancelled";
+export type ToolCallLocation = { path: string, line?: number, };
+export type ToolCallContent = { "type": "content", "text": string } | { "type": "diff", "path": string, "old_text": string | null, "new_text": string };
+export type AcpToolCall = { toolCallId: string, title: string, kind: AcpToolKind, status: AcpToolStatus, content?: Array<ToolCallContent>, locations?: Array<ToolCallLocation>, };
+export type AcpToolCallUpdate = { toolCallId: string, title?: string, kind?: AcpToolKind, status?: AcpToolStatus, content?: Array<ToolCallContent>, locations?: Array<ToolCallLocation>, };
+export type PlanEntryPriority = "high" | "medium" | "low";
+export type PlanEntryStatus = "pending" | "in_progress" | "completed";
+export type PlanEntry = { content: string, priority: PlanEntryPriority, status: PlanEntryStatus, };
+export type PermissionOptionKind = "allow_once" | "allow_always" | "reject_once" | "reject_always";
+export type PermissionOption = { optionId: string, name: string, kind: PermissionOptionKind, };
+export type StreamToolCall = { runId: AiRunId, toolCall: AcpToolCall, };
+export type StreamToolCallUpdate = { runId: AiRunId, update: AcpToolCallUpdate, };
+export type StreamPlan = { runId: AiRunId, entries: Array<PlanEntry>, };
+export type StreamPermission = { runId: AiRunId, requestId: string, sessionId: AcpSessionId, toolCallId?: string, title: string, options: Array<PermissionOption>, };
 export type StreamDone = { runId: AiRunId, proposal: ProposalText, sent: Array<ContextSummary>, };
 export type StreamError = { runId: AiRunId | null, error: AiError, };
 export type StreamCancelled = { runId: AiRunId, };
@@ -110,7 +125,7 @@ resetsAt?: number, };
 export type UsageCredits = { hasCredits: boolean, unlimited: boolean, balance?: string, };
 export type CodexUsageBucket = { id: string, name?: string, primary?: UsageWindow, secondary?: UsageWindow, credits?: UsageCredits, };
 export type CodexAccountUsage = { buckets: Array<CodexUsageBucket>, receivedMs: number, };
-export type AiStreamEvent = { "type": "started", "payload": StreamStarted } | { "type": "chunk", "payload": StreamChunk } | { "type": "usage", "payload": StreamUsage } | { "type": "done", "payload": StreamDone } | { "type": "error", "payload": StreamError } | { "type": "cancelled", "payload": StreamCancelled };
+export type AiStreamEvent = { "type": "started", "payload": StreamStarted } | { "type": "chunk", "payload": StreamChunk } | { "type": "usage", "payload": StreamUsage } | { "type": "tool_call", "payload": StreamToolCall } | { "type": "tool_call_update", "payload": StreamToolCallUpdate } | { "type": "plan", "payload": StreamPlan } | { "type": "permission", "payload": StreamPermission } | { "type": "done", "payload": StreamDone } | { "type": "error", "payload": StreamError } | { "type": "cancelled", "payload": StreamCancelled };
 export type AiError = { "code": "invalid_config", detail: string, } | { "code": "missing_credentials", provider: AiProviderKind, } | { "code": "missing_binary", command: string, } | { "code": "spawn_failed", detail: string, } | { "code": "connection_failed", detail: string, } | { "code": "auth_failed", detail: string, } | { "code": "stream_failed", detail: string, } | { "code": "request_cancelled" } | { "code": "session_required" } | { "code": "session_busy" } | { "code": "unknown_session" } | { "code": "staging_unresolved", copy_id: IsolatedCopyId, } | { "code": "live_target_rejected", detail: string, } | { "code": "unsupported_protocol", version: number, } | { "code": "claude_code_refused", command: string, } | { "code": "credential_store_failed", detail: string, };
 export type CredentialRef = { provider: AiProviderKind, hasSecret: boolean, };
 export type AiTestResult = { 

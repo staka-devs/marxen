@@ -2,7 +2,7 @@
 use crate::application::isolation::IsolationManager;
 use crate::application::workspace::Workspace;
 use crate::contracts::ai::{IsolatedCopyId, PromptContext, PromptMode, ProposalText};
-use crate::contracts::isolation::{ApproveResult, IsolatedCopyInfo, IsolationDiff, StagedProposal};
+use crate::contracts::isolation::{ApproveResult, IsolatedCopyInfo, IsolationDiff, StagedNewFile, StagedProposal};
 use crate::contracts::WorkspaceError;
 use crate::presentation::document::ActorState;
 
@@ -43,6 +43,20 @@ pub fn isolation_diff(
 ) -> Result<Vec<IsolationDiff>, WorkspaceError> {
     let id = IsolatedCopyId(copy_id);
     with_both(&workspace_state, &isolation, |w, m| m.diff(w, &id))
+}
+
+#[tauri::command(async)]
+/// List new agent-created Markdown files inside the staging copy for import.
+///
+/// Only contained relative `.md` paths are reported; forbidden and
+/// non-Markdown files are omitted. Content is staged text, never applied.
+pub fn isolation_new_files(
+    workspace_state: tauri::State<'_, ActorState>,
+    isolation: tauri::State<'_, IsolationState>,
+    copy_id: String,
+) -> Result<Vec<StagedNewFile>, WorkspaceError> {
+    let id = IsolatedCopyId(copy_id);
+    with_both(&workspace_state, &isolation, |w, m| m.staged_new_files(w, &id))
 }
 
 #[tauri::command(async)]

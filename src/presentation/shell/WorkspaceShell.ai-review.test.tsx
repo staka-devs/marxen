@@ -160,6 +160,15 @@ function installBackend() {
           outcomes: [{ documentId: doc.id, applied: true, revision: doc.revision, error: null, rolledBack: false, rollbackError: null }],
         });
       }
+      case "isolation_new_files":
+        return Promise.resolve([]);
+      case "save_document": {
+        const wantId = (a.documentId as string) ?? (a.request as { documentId: string } | undefined)?.documentId;
+        const doc = [...backend.docs.values()].find((entry) => entry.id === wantId);
+        if (!doc) throw { code: "not_found" };
+        doc.dirty = false;
+        return Promise.resolve({ documentId: doc.id, revision: doc.revision, dirty: false });
+      }
       case "isolation_reject":
       case "isolation_cancel":
         backend.copies.delete(a.copyId as string);
@@ -244,7 +253,7 @@ it("registers exact scope, stages the proposal, diffs, and applies with per-doc 
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_diff", { copyId: "copy_1" }));
   expect(await screen.findByText(/変更あり/)).toBeVisible();
   expect(await screen.findByText(/取り込みました/)).toBeVisible();
-  fireEvent.click(screen.getByRole("button", { name: "承認して適用" }));
+  fireEvent.click(screen.getByRole("button", { name: "適用して保存" }));
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
   await waitFor(() => expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 1"));
   expect(await screen.findByLabelText("承認結果")).toHaveTextContent(/a\.md.*適用/);
@@ -284,7 +293,7 @@ it("treats an unchanged scope as success alongside an applied document", async (
       { documentId: "doc_b", applied: false, revision: 0, error: null, rolledBack: false, rollbackError: null },
     ],
   });
-  fireEvent.click(screen.getByRole("button", { name: "承認して適用" }));
+  fireEvent.click(screen.getByRole("button", { name: "適用して保存" }));
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
   const results = await screen.findByLabelText("承認結果");
   expect(results).toHaveTextContent(/a\.md.*適用/);
@@ -292,7 +301,7 @@ it("treats an unchanged scope as success alongside an applied document", async (
   // Unchanged is success: no failure text, no false all-or-nothing label.
   expect(screen.queryByText(/未適用/)).not.toBeInTheDocument();
   expect(screen.queryByText(/all-or-nothing/i)).not.toBeInTheDocument();
-  expect(await screen.findByText(/1 文書に適用し、1 文書は変更なし/)).toBeVisible();
+  // Single apply-and-save retires actions; outcomes list carries per-doc results.
   await waitFor(() => expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 1"));
 });
 
@@ -307,7 +316,7 @@ it("reports a rollback failure per document without all-or-nothing claims", asyn
       { documentId: "doc_a", applied: false, revision: 0, error: "neovim error", rolledBack: true, rollbackError: "rollback failed" },
     ],
   });
-  fireEvent.click(screen.getByRole("button", { name: "承認して適用" }));
+  fireEvent.click(screen.getByRole("button", { name: "適用して保存" }));
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
   const results = await screen.findByLabelText("承認結果");
   expect(results).toHaveTextContent(/a\.md.*未適用/);
@@ -346,7 +355,7 @@ it("refuses stale approval and keeps text for resync", async () => {
   await registerAndSend();
   await screen.findByTestId("ai-proposal");
   backend.approveStaleOnce = true;
-  fireEvent.click(screen.getByRole("button", { name: "承認して適用" }));
+  fireEvent.click(screen.getByRole("button", { name: "適用して保存" }));
   await screen.findByText(/再登録/);
   expect(backend.docs.get("メモ/a.md")!.text).toBe("# A\n");
   expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 0");

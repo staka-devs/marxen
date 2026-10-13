@@ -12,6 +12,9 @@ import {
   normalizeAiError,
 } from "../application/ai/ai-run-core";
 import { useAiRun } from "./ai/use-ai-run";
+import { ToolCard, PlanCard, PermissionCard } from "./ai/agent-cards";
+import type { ChatPermission, ChatTool } from "../domain/conversation/ai-conversation";
+import type { PlanEntry } from "../contracts/ai-contracts";
 import { truncatePrompt } from "../domain/conversation/ai-conversation";
 import type {
   AiError,
@@ -88,6 +91,9 @@ export default function InlineChat({
   const [proposal, setProposal] = useState<ProposalText | null>(null);
   const [error, setError] = useState<AiError | null>(null);
   const [cancelled, setCancelled] = useState(false);
+  const [tools, setTools] = useState<ChatTool[]>([]);
+  const [plan, setPlan] = useState<PlanEntry[]>([]);
+  const [permissions, setPermissions] = useState<ChatPermission[]>([]);
   const run = useAiRun(onBusyChange);
   const setBusy = run.setBusy;
   const onProposalRef = useRef(onProposal);
@@ -147,6 +153,9 @@ export default function InlineChat({
     setProposal(null);
     setError(null);
     setCancelled(false);
+    setTools([]);
+    setPlan([]);
+    setPermissions([]);
     let resolved: StagingTarget;
     try {
       resolved = await ensureStaging([capturedContext]);
@@ -180,6 +189,34 @@ export default function InlineChat({
         if (event.type === "usage") return;
         if (run.isCancelRequested()) {
           if (event.type === "chunk" || event.type === "started") return;
+          if (event.type === "tool_call") {
+            setTools((prev) => {
+              const next = [...prev];
+              const record: ChatTool = {
+                id: event.payload.toolCall.toolCallId,
+                title: event.payload.toolCall.title,
+                kind: event.payload.toolCall.kind,
+                status: "cancelled",
+                locations: event.payload.toolCall.locations?.map((location) => ({ ...location })),
+              };
+              const index = next.findIndex((item) => item.id === record.id);
+              if (index >= 0) next[index] = { ...next[index], ...record };
+              else next.push(record);
+              return next;
+            });
+            return;
+          }
+          if (event.type === "tool_call_update" || event.type === "plan") return;
+          if (event.type === "permission") {
+            setPermissions((prev) => prev.some((item) => item.requestId === event.payload.requestId) ? prev : [...prev, {
+              requestId: event.payload.requestId,
+              toolCallId: event.payload.toolCallId,
+              title: event.payload.title,
+              options: event.payload.options.map((option) => ({ ...option })),
+              resolution: "cancelled",
+            }]);
+            return;
+          }
           run.markSettled(token);
           setCancelled(true);
           setRunning(false);
@@ -190,6 +227,43 @@ export default function InlineChat({
         switch (event.type) {
           case "chunk":
             setOutput((previous) => previous + event.payload.text);
+            break;
+          case "tool_call":
+            setTools((prev) => {
+              const next = [...prev];
+              const record: ChatTool = {
+                id: event.payload.toolCall.toolCallId,
+                title: event.payload.toolCall.title,
+                kind: event.payload.toolCall.kind,
+                status: event.payload.toolCall.status,
+                locations: event.payload.toolCall.locations?.map((location) => ({ ...location })),
+              };
+              const index = next.findIndex((item) => item.id === record.id);
+              if (index >= 0) next[index] = { ...next[index], ...record };
+              else next.push(record);
+              return next;
+            });
+            break;
+          case "tool_call_update":
+            setTools((prev) => prev.map((tool) => tool.id !== event.payload.update.toolCallId ? tool : {
+              ...tool,
+              title: event.payload.update.title ?? tool.title,
+              kind: event.payload.update.kind ?? tool.kind,
+              status: event.payload.update.status ?? tool.status,
+              locations: event.payload.update.locations ? event.payload.update.locations.map((location) => ({ ...location })) : tool.locations,
+            }));
+            break;
+          case "plan":
+            setPlan(event.payload.entries.map((entry) => ({ ...entry })));
+            break;
+          case "permission":
+            setPermissions((prev) => prev.some((item) => item.requestId === event.payload.requestId) ? prev : [...prev, {
+              requestId: event.payload.requestId,
+              toolCallId: event.payload.toolCallId,
+              title: event.payload.title,
+              options: event.payload.options.map((option) => ({ ...option })),
+              resolution: "denied",
+            }]);
             break;
           case "done":
             run.markSettled(token);
@@ -265,7 +339,7 @@ export default function InlineChat({
           <X size={13} aria-hidden="true" />
         </button>
       </div>
-      <p className="mt-0.5 truncate text-[11px] text-muted-foreground" title={`rev ${context.revision}`}>
+      <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
         {documentLabel}
       </p>
       {target.excerpt !== "" && (
@@ -304,6 +378,13 @@ export default function InlineChat({
       </div>
       {disabled && <p className="mt-1 text-[11px] text-muted-foreground">{t("他の応答を生成しています。")}</p>}
       <div aria-live="polite" className="ai-chat-inline-result mt-1 border-t border-border/60 pt-1.5 empty:hidden empty:border-t-0 empty:pt-0">
+        {plan.length > 0 && <PlanCard entries={plan} />}
+        {tools.map((tool) => (
+          <ToolCard key={tool.id} tool={tool} />
+        ))}
+        {permissions.map((permission) => (
+          <PermissionCard key={permission.requestId} permission={permission} />
+        ))}
         {output && !proposal && <p className="max-h-40 overflow-y-auto whitespace-pre-wrap text-[13px] leading-6">{output}</p>}
         {cancelled && <p className="text-xs text-muted-foreground">{t("取り消しました。")}</p>}
         {error && (

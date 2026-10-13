@@ -6,8 +6,12 @@ import { japaneseTranslator } from "../localization";
 
 import type {
   AiError,
+  AcpToolCall,
+  AcpToolCallUpdate,
   ChatHistoryMessage,
   ContextSummary,
+  PermissionOption,
+  PlanEntry,
   ProposalText,
   PromptContext,
   PromptMode,
@@ -17,6 +21,25 @@ export const MAX_HISTORY_TURNS = 32;
 export const MAX_PROMPT_CHARS = 20_000;
 
 export type ChatMessageState = "streaming" | "done" | "error" | "cancelled";
+
+/** Visible tool progress for one agent tool call in chat. */
+export interface ChatTool {
+  id: string;
+  title: string;
+  kind: string;
+  status: "pending" | "in_progress" | "completed" | "failed" | "cancelled";
+  locations?: Array<{ path: string; line?: number }>;
+}
+
+/** Surfaced permission request with actual user-choosable options. */
+export interface ChatPermission {
+  requestId: string;
+  toolCallId?: string;
+  title: string;
+  options: PermissionOption[];
+  /** Auto-denied by actual IDs; cancelled when the owning run was cancelled. */
+  resolution: "denied" | "cancelled";
+}
 
 export interface ChatMessage {
   id: string;
@@ -29,6 +52,12 @@ export interface ChatMessage {
   proposal?: ProposalText | null;
   sent?: ContextSummary[];
   error?: AiError | null;
+  /** Real tool progress in arrival order; never fabricated for HTTP backends. */
+  tools?: ChatTool[];
+  /** Latest complete execution plan; replaced on every plan event. */
+  plan?: PlanEntry[];
+  /** Surfaced permission requests with actual option IDs. */
+  permissions?: ChatPermission[];
 }
 
 export interface ChatConversation {
@@ -85,7 +114,113 @@ export function createUserMessage(prompt: string, mode: PromptMode, contexts: Pr
  */
 export function createStreamingAssistant(): ChatMessage {
   messageSeq += 1;
-  return { id: `msg_${Date.now()}_${messageSeq}`, role: "assistant", text: "", state: "streaming" };
+  return { id: `msg_${Date.now()}_${messageSeq}`, role: "assistant", text: "", state: "streaming", tools: [], plan: [], permissions: [] };
+}
+
+/**
+ * Upsert one announced tool call by ID, preserving arrival order.
+ *
+ * New IDs append; existing IDs replace title/kind/status/locations so
+ * lifecycle ordering stays visible without fabricating a timeline.
+ */
+export function upsertToolCall(messages: ChatMessage[], assistantId: string, tool: AcpToolCall): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.id !== assistantId || message.role !== "assistant") return message;
+    const tools = [...(message.tools ?? [])];
+    const record: ChatTool = {
+      id: tool.toolCallId,
+      title: tool.title,
+      kind: tool.kind,
+      status: tool.status,
+      locations: tool.locations?.map((location) => ({ ...location })),
+    };
+    const index = tools.findIndex((item) => item.id === record.id);
+    if (index >= 0) tools[index] = { ...tools[index], ...record };
+    else tools.push(record);
+    return { ...message, tools };
+  });
+}
+
+/**
+ * Apply one tool-call patch by ID, leaving unknown IDs untouched.
+ *
+ * Only supplied fields change; absent fields keep prior values so partial
+ * updates never clear progress. Wrong-session updates never reach here.
+ */
+export function applyToolUpdate(messages: ChatMessage[], assistantId: string, update: AcpToolCallUpdate): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.id !== assistantId || message.role !== "assistant") return message;
+    const tools = (message.tools ?? []).map((tool) => {
+      if (tool.id !== update.toolCallId) return tool;
+      return {
+        ...tool,
+        title: update.title ?? tool.title,
+        kind: update.kind ?? tool.kind,
+        status: update.status ?? tool.status,
+        locations: update.locations ? update.locations.map((location) => ({ ...location })) : tool.locations,
+      };
+    });
+    return { ...message, tools };
+  });
+}
+
+/**
+ * Replace the execution plan with the latest complete entry list.
+ *
+ * Plans always carry every entry; clients never merge partial plans.
+ */
+export function setChatPlan(messages: ChatMessage[], assistantId: string, entries: PlanEntry[]): ChatMessage[] {
+  return messages.map((message) =>
+    message.id === assistantId && message.role === "assistant"
+      ? { ...message, plan: entries.map((entry) => ({ ...entry })) }
+      : message,
+  );
+}
+
+/**
+ * Surface one permission request with its actual options for chat display.
+ *
+ * The Rust transport answers by actual option IDs (deny by default,
+ * cancelled after cancel); the chat records that resolution so approval is
+ * never presented as unconditional.
+ */
+export function addChatPermission(
+  messages: ChatMessage[],
+  assistantId: string,
+  permission: { requestId: string; toolCallId?: string; title: string; options: PermissionOption[] },
+  cancelled: boolean,
+): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.id !== assistantId || message.role !== "assistant") return message;
+    const permissions = [...(message.permissions ?? [])];
+    if (permissions.some((item) => item.requestId === permission.requestId)) return message;
+    permissions.push({
+      requestId: permission.requestId,
+      toolCallId: permission.toolCallId,
+      title: permission.title,
+      options: permission.options.map((option) => ({ ...option })),
+      resolution: cancelled ? "cancelled" : "denied",
+    });
+    return { ...message, permissions };
+  });
+}
+
+/**
+ * Mark every non-terminal tool as cancelled for a cancelled assistant turn.
+ *
+ * Mirrors the official prompt-turn rule: clients preemptively settle
+ * unfinished tools when cancellation is sent, exactly once per turn.
+ */
+export function cancelChatTools(messages: ChatMessage[], assistantId: string): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.id !== assistantId || message.role !== "assistant") return message;
+    const tools = (message.tools ?? []).map((tool) =>
+      tool.status === "pending" || tool.status === "in_progress"
+        ? { ...tool, status: "cancelled" as const }
+        : tool,
+    );
+    return { ...message, tools };
+  });
 }
 
 /** Only completed turns become Rust-validated history, oldest first. */
@@ -180,10 +315,14 @@ export function failAssistant(messages: ChatMessage[], assistantId: string, erro
  * Mark a streaming assistant as cancelled without persisting the turn.
  *
  * Cancelled exchanges drop from history so the next request stays clean.
+ * Unfinished tools settle as cancelled exactly once per turn.
  */
 export function cancelAssistant(messages: ChatMessage[], assistantId: string): ChatMessage[] {
-  return messages.map((message) =>
-    message.id === assistantId ? { ...message, state: "cancelled" as const } : message,
+  return cancelChatTools(
+    messages.map((message) =>
+      message.id === assistantId ? { ...message, state: "cancelled" as const } : message,
+    ),
+    assistantId,
   );
 }
 

@@ -399,4 +399,26 @@ impl StagingStorage for NativeStorage {
     fn check_no_symlink(&self, path: &Path, root: &Path) -> Result<(), WorkspaceError> {
         super::staging::check_no_symlink(path, root)
     }
+    /// Walk one staging directory, returning regular files without following symlinks.
+    fn list_staging_files(&self, dir: &Path) -> Result<Vec<PathBuf>, WorkspaceError> {
+        let mut out = Vec::new();
+        let mut stack = vec![dir.to_owned()];
+        while let Some(current) = stack.pop() {
+            let entries = fs::read_dir(&current).map_err(|_| WorkspaceError::NotFound)?;
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let kind = entry.file_type().map_err(|_| WorkspaceError::NotFound)?;
+                if kind.is_symlink() {
+                    continue;
+                }
+                if kind.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                out.push(path);
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
 }

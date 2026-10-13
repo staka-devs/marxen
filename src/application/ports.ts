@@ -235,6 +235,8 @@ export interface IsolationGateway {
   createCopy(contexts: PromptContext[]): Promise<IsolatedCopyInfo>;
   /** Fetch diffs with drift detection for a copy. */
   fetchDiff(copyId: IsolatedCopyId): Promise<IsolationDiff[]>;
+  /** List new agent-created Markdown files for import. */
+  fetchNewFiles(copyId: IsolatedCopyId): Promise<import("../contracts/isolation-contracts").StagedNewFile[]>;
   /** Stage a validated proposal into the copy. */
   stageProposal(copyId: IsolatedCopyId, proposal: ProposalText, mode: PromptMode): Promise<StagedProposal>;
   /** Approve and apply the staged copy with scoped rollback. */

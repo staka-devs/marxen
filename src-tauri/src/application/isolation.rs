@@ -595,6 +595,64 @@ impl IsolationManager {
         Ok(diffs)
     }
 
+    /// List new Markdown files the agent created inside the staging copy.
+    ///
+    /// Only relative contained `.md` paths not covered by registered bases are
+    /// reported; `.git`/`.env`/credential names and non-Markdown files are
+    /// never importable. Content is staged text, not yet applied. Allowed
+    /// while a run is active but may go stale; re-fetch after settlement
+    /// before importing. Rejects unknown/inactive copies and workspace
+    /// mismatches without touching live buffers or disk.
+    pub fn staged_new_files(
+        &self,
+        workspace: &Workspace,
+        copy_id: &IsolatedCopyId,
+    ) -> Result<Vec<crate::contracts::isolation::StagedNewFile>, WorkspaceError> {
+        use crate::contracts::isolation::StagedNewFile;
+        let copy = self.get_active(copy_id)?;
+        self.check_workspace(copy, workspace)?;
+        let known: std::collections::HashSet<String> =
+            copy.bases.iter().map(|base| base.staging_rel.clone()).collect();
+        let mut out = Vec::new();
+        for path in self.storage.list_staging_files(&copy.staging_dir)? {
+            if !path.starts_with(&copy.staging_dir) {
+                continue;
+            }
+            self.storage.check_no_symlink(&path, &self.staging_root)?;
+            let Ok(rel) = path.strip_prefix(&copy.staging_dir) else {
+                continue;
+            };
+            let rel_text = rel.to_string_lossy().replace('\\', "/");
+            if rel_text.is_empty() || known.contains(&rel_text) {
+                continue;
+            }
+            // Only importable Markdown survives; forbidden names are skipped
+            // silently so agents cannot smuggle credentials or VCS data.
+            if crate::domain::isolation::reject_forbidden_relative(&rel_text).is_err() {
+                continue;
+            }
+            let bytes = self
+                .storage
+                .read_disk(&path)?
+                .ok_or(WorkspaceError::NotFound)?;
+            let content =
+                String::from_utf8(bytes).map_err(|_| WorkspaceError::InvalidUtf8)?;
+            if content.len() > crate::domain::ai::MAX_EXCERPT_BYTES {
+                continue;
+            }
+            out.push(StagedNewFile {
+                rel: rel_text,
+                chars: content.chars().count() as u32,
+                content,
+            });
+            if out.len() >= 16 {
+                break;
+            }
+        }
+        out.sort_by(|a, b| a.rel.cmp(&b.rel));
+        Ok(out)
+    }
+
     /// Stage a validated text proposal into the copy. Questions only display
     /// and are refused here. Single-scope rewrite/generate replaces that one
     /// scope exactly; workspace proposals carry unambiguous structured range

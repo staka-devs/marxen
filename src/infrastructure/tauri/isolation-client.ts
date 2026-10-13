@@ -16,6 +16,7 @@ import type {
   ApproveResult,
   IsolationDiff,
   IsolatedCopyInfo,
+  StagedNewFile,
   StagedProposal,
 } from "../../contracts/isolation-contracts";
 import type { IsolationGateway } from "../../application/ports";
@@ -51,6 +52,17 @@ export async function createIsolatedCopy(contexts: PromptContext[]): Promise<Iso
 export async function fetchIsolationDiff(copyId: IsolatedCopyId): Promise<IsolationDiff[]> {
   requireDesktop();
   return invoke<IsolationDiff[]>("isolation_diff", { copyId });
+}
+
+/**
+ * Fetch new agent-created files for an isolated copy.
+ *
+ * Only contained Markdown survives Rust validation; callers display the
+ * relative names without internal identifiers.
+ */
+export async function fetchIsolationNewFiles(copyId: IsolatedCopyId): Promise<StagedNewFile[]> {
+  requireDesktop();
+  return invoke<StagedNewFile[]>("isolation_new_files", { copyId });
 }
 
 /**
@@ -104,6 +116,8 @@ export const isolationGateway: IsolationGateway = {
   createCopy: createIsolatedCopy,
   /** Fetch diffs with drift detection for a copy. */
   fetchDiff: fetchIsolationDiff,
+  /** List new agent-created Markdown files for import. */
+  fetchNewFiles: fetchIsolationNewFiles,
   /** Stage a validated proposal into the copy. */
   stageProposal,
   /** Approve and apply the staged copy with scoped rollback. */
@@ -114,4 +128,4 @@ export const isolationGateway: IsolationGateway = {
   cancelCopy: cancelIsolatedCopy,
 };
 
-export type { ApproveResult, IsolationDiff, IsolatedCopyInfo, StagedProposal };
+export type { ApproveResult, IsolationDiff, IsolatedCopyInfo, StagedNewFile, StagedProposal };

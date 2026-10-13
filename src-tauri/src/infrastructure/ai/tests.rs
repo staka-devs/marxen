@@ -580,6 +580,14 @@ mod regression {
         assert_eq!(init["method"], "initialize");
         assert_eq!(init["params"]["protocolVersion"], 1);
         assert_eq!(init["params"]["clientInfo"]["name"], "marxen");
+        assert_eq!(
+            init["params"]["clientCapabilities"]["fs"]["readTextFile"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            init["params"]["clientCapabilities"]["fs"]["writeTextFile"],
+            serde_json::json!(true)
+        );
         let dir = Path::new("/tmp/staging-copy");
         let new = acp_session_new(2, dir);
         assert_eq!(new["params"]["cwd"], "/tmp/staging-copy");
@@ -612,6 +620,153 @@ mod regression {
             "params": { "update": { "sessionUpdate": "tool_call" } }
         });
         assert_eq!(acp_update_text(&tool_call), None);
+    }
+
+    /// Parse real tool-call lifecycles in order without fabricating timelines.
+    ///
+    /// Pending announces, in-progress patches, and completed settlement keep
+    /// their IDs; foreign sessions and malformed lists are dropped.
+    #[test]
+    fn agentic_tool_lifecycle_orders_pending_to_completed() {
+        use std::path::Path;
+        let staging = Path::new("/tmp/staging-copy");
+        let announced = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "sess_1",
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "call_1",
+                    "title": "Reading file",
+                    "kind": "read",
+                    "status": "pending",
+                    "locations": [{ "path": "/tmp/staging-copy/a.md" }]
+                }
+            }
+        });
+        let call = parse_tool_call_notification(&announced, "sess_1", staging).expect("tool call");
+        assert_eq!(call.tool_call_id, "call_1");
+        assert_eq!(call.kind, AcpToolKind::Read);
+        assert_eq!(call.status, AcpToolStatus::Pending);
+        assert_eq!(call.locations.expect("locations")[0].path, "a.md");
+        let foreign = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "sess_other",
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "call_1",
+                    "title": "Reading file",
+                    "kind": "read",
+                    "status": "pending"
+                }
+            }
+        });
+        assert!(parse_tool_call_notification(&foreign, "sess_1", staging).is_none());
+        let progress = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "sess_1",
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "call_1",
+                    "status": "in_progress"
+                }
+            }
+        });
+        let update = parse_tool_call_update_notification(&progress, "sess_1", staging).expect("update");
+        assert_eq!(update.status, Some(AcpToolStatus::InProgress));
+        let done = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "sess_1",
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "call_1",
+                    "status": "completed",
+                    "content": [{ "type": "diff", "path": "/tmp/staging-copy/a.md", "oldText": "a", "newText": "b" }]
+                }
+            }
+        });
+        let finished = parse_tool_call_update_notification(&done, "sess_1", staging).expect("done");
+        assert_eq!(finished.status, Some(AcpToolStatus::Completed));
+        match finished.content.expect("diff").first().expect("item") {
+            ToolCallContent::Diff { path, new_text, .. } => {
+                assert_eq!(path, "/tmp/staging-copy/a.md");
+                assert_eq!(new_text, "b");
+            }
+            other => panic!("expected diff, got {other:?}"),
+        }
+    }
+
+    /// Replace execution plans completely and surface permission by actual IDs.
+    ///
+    /// Plans require every entry; permissions require real option IDs and
+    /// answer with the selected ID (deny) or the cancelled outcome.
+    #[test]
+    fn agentic_plan_and_permission_use_actual_ids() {
+        let plan = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "sess_1",
+                "update": {
+                    "sessionUpdate": "plan",
+                    "entries": [
+                        { "content": "Read", "priority": "high", "status": "pending" },
+                        { "content": "Edit", "priority": "medium", "status": "in_progress" }
+                    ]
+                }
+            }
+        });
+        let entries = parse_plan_notification(&plan, "sess_1").expect("plan");
+        assert_eq!(entries.len(), 2);
+        assert!(parse_plan_notification(&plan, "sess_other").is_none());
+        let params = serde_json::json!({
+            "sessionId": "sess_1",
+            "toolCall": { "toolCallId": "call_1", "title": "mock tool" },
+            "options": [
+                { "optionId": "mock_allow", "name": "allow", "kind": "allow_once" },
+                { "optionId": "mock_reject", "name": "deny", "kind": "reject_once" }
+            ]
+        });
+        let parsed = parse_permission_request(&serde_json::json!(900), &params).expect("permission");
+        assert_eq!(parsed.request_id, "900");
+        assert_eq!(parsed.options.len(), 2);
+        assert_eq!(
+            answer_permission_by_id("mock_reject", false),
+            serde_json::json!({ "outcome": { "outcome": "selected", "optionId": "mock_reject" } })
+        );
+        assert_eq!(
+            answer_permission_by_id("mock_reject", true),
+            serde_json::json!({ "outcome": { "outcome": "cancelled" } })
+        );
+        assert_eq!(stringify_request_id(&serde_json::json!(900)), Some("900".to_owned()));
+        assert!(stringify_request_id(&serde_json::json!(null)).is_none());
+    }
+
+    /// Contain file access to the authorized staging directory.
+    ///
+    /// Absolute outside paths, relative paths, and symlink escapes are
+    /// rejected; contained absolute paths are allowed for fs methods.
+    #[test]
+    fn agentic_staging_paths_reject_outside_access() {
+        use std::path::Path;
+        let staging = std::env::temp_dir().join("marxen-staging-test");
+        let inside = staging.join("a.md").to_string_lossy().replace('\\', "/");
+        let outside = std::env::temp_dir().join("other-a.md").to_string_lossy().replace('\\', "/");
+        // On Windows the lossy slash form stays absolute via the temp root.
+        let staging_abs = staging.to_string_lossy().replace('\\', "/");
+        assert!(staging_path_allowed(&staging, &inside));
+        assert!(!staging_path_allowed(&staging, &outside));
+        assert!(!staging_path_allowed(&staging, "relative/a.md"));
+        assert!(!staging_path_allowed(&staging, &staging_abs));
+        assert_eq!(display_path_for_staging(&inside, &staging), "a.md");
+        let _ = Path::new("/tmp");
     }
 
     /// Refuse prompts before a session opens, concurrent prompts, and foreign
