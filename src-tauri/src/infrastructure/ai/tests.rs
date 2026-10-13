@@ -781,6 +781,80 @@ mod regression {
         let _ = Path::new("/tmp");
     }
 
+    /// Accept staging paths that differ lexically but resolve canonically.
+    ///
+    /// macOS reports the agent `current_dir` as `/private/var/...` while the
+    /// test `temp_dir` keeps `/var/...`; Windows canonicalizes to UNC
+    /// `\\?\...` versus the drive-letter form. The domain rule stays purely
+    /// lexical, but the infrastructure gate must fall back to canonical
+    /// comparison for absolute existing paths so the mock's
+    /// `fs/read_text_file` round-trip succeeds. Outside, relative, and
+    /// symlink-escape paths stay rejected through every alias form.
+    #[test]
+    fn agentic_staging_paths_accept_canonical_aliases() {
+        let staging = std::env::temp_dir().join("marxen-staging-alias-test");
+        let _ = std::fs::remove_dir_all(&staging);
+        std::fs::create_dir_all(&staging).expect("staging dir");
+        std::fs::write(staging.join("a.md"), "# Seed\n").expect("seed file");
+        let outside = std::env::temp_dir().join("marxen-staging-alias-other.md");
+        std::fs::write(&outside, "other\n").expect("outside file");
+        let canonical_root = staging.canonicalize().expect("canonical staging");
+        let alias_inside = canonical_root.join("a.md");
+        let alias_str = alias_inside.to_string_lossy().into_owned();
+        let lexical_inside = staging.join("a.md").to_string_lossy().into_owned();
+        if alias_str != lexical_inside {
+            // Lexically different alias: the domain rule stays strict while
+            // the infrastructure gate resolves the identical file.
+            assert!(
+                !staging_path_is_contained(&staging, &alias_str),
+                "alias must differ lexically, got {alias_str}"
+            );
+            assert!(staging_path_allowed(&staging, &alias_str));
+            // The exact IPC read succeeds through the alias with verbatim bytes.
+            let params = serde_json::json!({"sessionId": "sess_1", "path": alias_str});
+            let reply = serve_fs_read(&staging, "sess_1", &params).expect("alias read");
+            assert_eq!(
+                reply.get("content").and_then(|content| content.as_str()),
+                Some("# Seed\n")
+            );
+            // Canonical escapes through the alias stay rejected.
+            let alias_outside = canonical_root
+                .join("..")
+                .join("marxen-staging-alias-other.md")
+                .to_string_lossy()
+                .into_owned();
+            assert!(!staging_path_allowed(&staging, &alias_outside));
+        }
+        // Symlink aliases resolve the same way on Unix; the link lives in the
+        // same parent so `..` escapes through it stay rejected as well.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let link = std::env::temp_dir().join("marxen-staging-alias-link");
+            let _ = std::fs::remove_file(&link);
+            symlink(&staging, &link).expect("staging symlink");
+            let linked = link.join("a.md").to_string_lossy().into_owned();
+            assert!(staging_path_allowed(&staging, &linked));
+            let params = serde_json::json!({"sessionId": "sess_1", "path": linked});
+            let reply = serve_fs_read(&staging, "sess_1", &params).expect("link read");
+            assert_eq!(
+                reply.get("content").and_then(|content| content.as_str()),
+                Some("# Seed\n")
+            );
+            let link_outside = link
+                .join("..")
+                .join("marxen-staging-alias-other.md")
+                .to_string_lossy()
+                .into_owned();
+            assert!(!staging_path_allowed(&staging, &link_outside));
+            let _ = std::fs::remove_file(&link);
+        }
+        // The plain lexical path keeps working and guards stay intact.
+        assert!(staging_path_allowed(&staging, &lexical_inside));
+        let _ = std::fs::remove_dir_all(&staging);
+        let _ = std::fs::remove_file(&outside);
+    }
+
     /// Bind permission replies to exact run/request IDs and offered options.
     ///
     /// Unknown runs, stale requests, and unoffered options fail without

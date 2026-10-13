@@ -110,21 +110,31 @@ fn emit_agentic_notification(
 ///
 /// Lexical containment from the domain rules plus a canonical filesystem
 /// check when the file exists: symlinks escaping the root fail even when
-/// their names look contained. Absolute outside paths and traversal yield
-/// false without touching the filesystem beyond these two reads.
+/// their names look contained. Platform aliases (macOS `/var` versus
+/// `/private/var` reported by `current_dir`, Windows UNC `\\?\` versus the
+/// drive-letter form) differ lexically but resolve identically, so a lexical
+/// miss falls back to canonical comparison for absolute existing paths.
+/// Absolute outside paths, relative paths, and traversal yield false without
+/// touching the filesystem beyond these two reads.
 pub(crate) fn staging_path_allowed(staging_dir: &Path, abs_path: &str) -> bool {
-    if !staging_path_is_contained(staging_dir, abs_path) {
+    let candidate = Path::new(abs_path);
+    if staging_path_is_contained(staging_dir, abs_path) {
+        if candidate.exists() {
+            if let (Ok(canonical_root), Ok(canonical)) =
+                (staging_dir.canonicalize(), candidate.canonicalize())
+            {
+                return canonical.starts_with(&canonical_root);
+            }
+        }
+        return true;
+    }
+    if !candidate.is_absolute() || !candidate.exists() {
         return false;
     }
-    let candidate = Path::new(abs_path);
-    if candidate.exists() {
-        if let (Ok(canonical_root), Ok(canonical)) =
-            (staging_dir.canonicalize(), candidate.canonicalize())
-        {
-            return canonical.starts_with(&canonical_root);
-        }
+    match (staging_dir.canonicalize(), candidate.canonicalize()) {
+        (Ok(canonical_root), Ok(canonical)) => canonical.starts_with(&canonical_root),
+        _ => false,
     }
-    true
 }
 
 /// Build a JSON-RPC error envelope for rejected agent file/permission requests.
@@ -1111,6 +1121,35 @@ fn cancelled_or_timed_out(
     }
 }
 
+/// Write one agent-request reply, settling explicit cancellation when the agent is already gone.
+///
+/// Killing a cancelled child closes its stdio pipes, so the next reply write
+/// fails on strict platforms while lenient ones still accept it. An
+/// explicitly cancelled run must settle as cancelled either way, never as a
+/// stream error. Non-cancel write failures keep their error. Returns true
+/// when the run settled as cancelled and the caller must stop the loop.
+#[allow(clippy::too_many_arguments)]
+fn write_agent_reply_or_settle_cancelled(
+    conn: &mut AgentConn,
+    reply: &Value,
+    run_id: &AiRunId,
+    registry: &RunRegistry,
+    cancel: &AtomicBool,
+    cancel_sent: bool,
+    tracker: &mut AcpSessionTracker,
+    emit: &mut (dyn FnMut(AiStreamEvent) + Send),
+) -> Result<bool, AiError> {
+    match conn.write(reply) {
+        Ok(()) => Ok(false),
+        Err(_error) if cancel.load(Ordering::SeqCst) || cancel_sent => {
+            cancelled_or_timed_out(run_id, registry, emit);
+            tracker.prompt_finished();
+            Ok(true)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Run an authorized scoped ACP prompt with cancellation, child ownership and streamed events.
 pub fn run_acp_prompt(
     params: &AcpRunParams,
@@ -1367,7 +1406,18 @@ fn run_acp_conversation(
                             envelope
                         }
                     };
-                    conn.write(&reply)?;
+                    if write_agent_reply_or_settle_cancelled(
+                        conn,
+                        &reply,
+                        run_id,
+                        registry,
+                        cancel,
+                        cancel_sent,
+                        &mut tracker,
+                        emit,
+                    )? {
+                        return Ok(());
+                    }
                 } else if req_method == "fs/write_text_file" {
                     let reply = match serve_fs_write(
                         &params.staging_dir,
@@ -1384,9 +1434,20 @@ fn run_acp_conversation(
                             envelope
                         }
                     };
-                    conn.write(&reply)?;
+                    if write_agent_reply_or_settle_cancelled(
+                        conn,
+                        &reply,
+                        run_id,
+                        registry,
+                        cancel,
+                        cancel_sent,
+                        &mut tracker,
+                        emit,
+                    )? {
+                        return Ok(());
+                    }
                 } else if req_method == "session/request_permission" {
-                    answer_permission_interactive(
+                    match answer_permission_interactive(
                         conn,
                         run_id,
                         registry,
@@ -1399,7 +1460,15 @@ fn run_acp_conversation(
                         &req_params,
                         request.mode == PromptMode::Ask,
                         emit,
-                    )?;
+                    ) {
+                        Ok(()) => {}
+                        Err(_error) if cancel.load(Ordering::SeqCst) || cancel_sent => {
+                            cancelled_or_timed_out(run_id, registry, emit);
+                            tracker.prompt_finished();
+                            return Ok(());
+                        }
+                        Err(error) => return Err(error),
+                    }
                 } else {
                     // Terminals, elicitation, and unknown methods stay
                     // unimplemented: no external window is ever created.
@@ -1408,7 +1477,15 @@ fn run_acp_conversation(
                     } else {
                         PermissionAnswer::Deny
                     };
-                    conn.answer_agent_request(&req_id, &req_method, &req_params, mode)?;
+                    match conn.answer_agent_request(&req_id, &req_method, &req_params, mode) {
+                        Ok(()) => {}
+                        Err(_error) if cancel.load(Ordering::SeqCst) || cancel_sent => {
+                            cancelled_or_timed_out(run_id, registry, emit);
+                            tracker.prompt_finished();
+                            return Ok(());
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
             }
         }
