@@ -27,6 +27,7 @@ function livePort(): number {
 const port = livePort();
 
 export default defineConfig({
+  workers: 2,
   testDir: "./tests/live",
   outputDir: "./test-results/live",
   // The first navigation compiles the live harness's local renderers. Allow

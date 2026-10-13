@@ -17,6 +17,8 @@ env:
   CARGO_BUILD_JOBS: 2
   NODE_OPTIONS: --max-old-space-size=512
   RAYON_NUM_THREADS: 2
+  GOMAXPROCS: 2
+  GOMEMLIMIT: 512MiB
 
 jobs:
   native:

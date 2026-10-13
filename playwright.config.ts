@@ -7,6 +7,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
+  workers: 2,
   testDir: "./tests/e2e",
   outputDir: "./test-results/product",
   use: { baseURL, trace: "retain-on-failure" },
