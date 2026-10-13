@@ -89,6 +89,68 @@ pub fn has_mapping(client: &EmbedClient, mode: &str, lhs: &str) -> Result<bool, 
         .ok_or_else(|| RpcError::Invalid("mapping query returned non-boolean".into()))
 }
 
+/// Read global/buffer mappings with buffer precedence and a strict numeric/boolean opt-in.
+pub fn editor_presentation(
+    client: &EmbedClient,
+    mode: &str,
+) -> Result<crate::contracts::EditorPresentation, RpcError> {
+    let result = client.call("nvim_exec_lua", vec![Value::from(r#"
+      local mode = ...
+      local effective = {}
+      for _, entries in ipairs({vim.api.nvim_get_keymap(mode), vim.api.nvim_buf_get_keymap(0, mode)}) do
+        for _, entry in ipairs(entries) do
+          effective[entry.lhs] = {lhs = entry.lhs, rhs = entry.rhs or entry.desc or '[Lua callback]'}
+        end
+      end
+      local mappings = {}
+      for _, entry in pairs(effective) do table.insert(mappings, entry) end
+      table.sort(mappings, function(a, b) return a.lhs < b.lhs end)
+      local flag = vim.g.marxen_selection_toolbar
+      return { editable = vim.bo.modifiable and not vim.bo.readonly, selectionToolbar = flag == true or flag == 1, mappings = mappings }
+    "#), Value::Array(vec![Value::from(mode)])])?;
+    let mut selection_toolbar = false;
+    let mut editable = false;
+    let mut mappings = Vec::new();
+    let Value::Map(entries) = result else {
+        return Err(RpcError::Invalid(
+            "editor presentation returned non-map".into(),
+        ));
+    };
+    for (key, value) in entries {
+        match value_to_string(&key).as_deref() {
+            Some("editable") => editable = value.as_bool().unwrap_or(false),
+            Some("selectionToolbar") => selection_toolbar = value.as_bool().unwrap_or(false),
+            Some("mappings") => {
+                if let Value::Array(items) = value {
+                    for item in items {
+                        let Value::Map(fields) = item else {
+                            continue;
+                        };
+                        let mut lhs = None;
+                        let mut rhs = None;
+                        for (name, value) in fields {
+                            match value_to_string(&name).as_deref() {
+                                Some("lhs") => lhs = value_to_string(&value),
+                                Some("rhs") => rhs = value_to_string(&value),
+                                _ => {}
+                            }
+                        }
+                        if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
+                            mappings.push(crate::contracts::EditorMapping { lhs, rhs });
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(crate::contracts::EditorPresentation {
+        editable,
+        selection_toolbar,
+        mappings,
+    })
+}
+
 /// Apply user Lua that registers mappings. Used by tests and the future
 /// config loader; never installs competing defaults.
 pub fn apply_user_lua(client: &EmbedClient, lua: &str) -> Result<Value, RpcError> {

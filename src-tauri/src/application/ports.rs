@@ -74,6 +74,8 @@ pub trait Buffer: Send {
     fn config_report(&self) -> &ConfigReport;
     /// Determine whether the selected mode has a mapping for the supplied prefix.
     fn has_mapping(&self, mode: &str, lhs: &str) -> Result<bool, BufferError>;
+    /// Read the selection-toolbar opt-in and actual effective mappings for one native mode.
+    fn editor_presentation(&self, mode: &str) -> Result<EditorPresentation, BufferError>;
     /// Apply validated row/byte edits as one native undo entry, from tail to head.
     fn apply_ranges(&self, edits: &[PositionedEdit]) -> Result<(), BufferError>;
     /// Read whether the native selection excludes its final character.

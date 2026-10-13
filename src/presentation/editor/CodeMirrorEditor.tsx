@@ -10,6 +10,7 @@ import { blockCursorWidth } from "./cursorWidth";
 import type { ImageResolver } from "../../domain/image-sources";
 import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../domain/editor-preferences";
 import { useI18n } from "../i18n/I18nProvider";
+import type { EditorMenuPoint } from "./EditorMenu";
 
 export interface EditorSelection {
   anchor: number;
@@ -28,6 +29,8 @@ export interface ExternalCursor {
 }
 
 interface Props {
+  /** Open the editor-only menu after capturing a pointer or keyboard gesture. */
+  onEditorMenu?: (point: EditorMenuPoint) => void;
   value: string;
   /** Canonical identity also reconciles rejected edits whose text/revision did not change. */
   snapshot?: DocumentSnapshot;
@@ -107,7 +110,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   return [{ range: { start, end: endBefore }, text: after.slice(start, endAfter) }];
 }
 
-/** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, snapshot, shouldUseNativeCursor, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true, focusRequest = 0 }: Props) {
+/** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, snapshot, shouldUseNativeCursor, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true, focusRequest = 0, onEditorMenu }: Props) {
   const { t, language } = useI18n();
   const languageRef = useRef(language);
   languageRef.current = language;
@@ -127,8 +130,8 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   const compositionNativeCursor = useRef(false);
   const allowTextInputRef = useRef(allowTextInput);
   allowTextInputRef.current = allowTextInput;
-  const callbacks = useRef({ onGuiEdits, onSelectionChange, shouldUseNativeCursor });
-  callbacks.current = { onGuiEdits, onSelectionChange, shouldUseNativeCursor };
+  const callbacks = useRef({ onGuiEdits, onSelectionChange, shouldUseNativeCursor, onEditorMenu });
+  callbacks.current = { onGuiEdits, onSelectionChange, shouldUseNativeCursor, onEditorMenu };
   const valueRef = useRef(value);
   valueRef.current = value;
   const editableRefValue = useRef(editable);
@@ -220,7 +223,42 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
     const dom = view.contentDOM;
     /** Capture printable keyboard identity before CodeMirror commits its text. */
     const onKeyDown = (event: KeyboardEvent) => {
+      if (callbacks.current.onEditorMenu && (event.key === "ContextMenu" || event.key === "Menu" || (event.key === "F10" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey))) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (composing.current || event.isComposing || event.keyCode === 229) return;
+        let caret: ReturnType<EditorView["coordsAtPos"]> = null;
+        try { caret = view.coordsAtPos(view.state.selection.main.head); } catch { /* Hidden/offscreen views use their editor bounds. */ }
+        const bounds = dom.getBoundingClientRect();
+        callbacks.current.onEditorMenu({ x: caret?.left ?? bounds.left, y: caret?.bottom ?? bounds.top, keyboard: true,
+          /** Restore the originating editor after keyboard-menu dismissal. */
+          restoreFocus: () => view.focus(),
+        });
+        return;
+      }
       printableKey.current = !event.isComposing && !event.ctrlKey && !event.metaKey && !event.altKey && event.key.length === 1 ? event.key : undefined;
+    };
+    /** Preserve native Visual selection and open only the editor's custom context menu. */
+    const onContextMenu = (event: MouseEvent) => {
+      if (!callbacks.current.onEditorMenu) return;
+      event.preventDefault();
+      if (composing.current) return;
+      view.focus();
+      if (view.state.selection.main.empty) {
+        let at: number | null = null;
+        try { at = view.posAtCoords({ x: event.clientX, y: event.clientY }); } catch { /* Keep the authoritative cursor when layout is unavailable. */ }
+        if (at !== null) view.dispatch({ selection: { anchor: at, head: at } });
+      }
+      callbacks.current.onEditorMenu({ x: event.clientX, y: event.clientY, keyboard: false,
+        /** Restore the originating editor after a native menu action. */
+        restoreFocus: () => view.focus(),
+      });
+    };
+    /** Preserve Vim Visual selection before the browser's right-button DOM selection update. */
+    const onMenuMouseDown = (event: MouseEvent) => {
+      if (event.button !== 2 || !callbacks.current.onEditorMenu) return;
+      event.preventDefault();
+      if (!composing.current) view.focus();
     };
     /** Prevent a key without a text transaction from tagging later input. */
     const onKeyUp = () => { printableKey.current = undefined; };
@@ -254,11 +292,15 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
       else callbacks.current.onSelectionChange?.({ anchor: sel.anchor, head: sel.head });
     };
     dom.addEventListener("keydown", onKeyDown, true);
+    dom.addEventListener("contextmenu", onContextMenu);
+    dom.addEventListener("mousedown", onMenuMouseDown, true);
     dom.addEventListener("keyup", onKeyUp);
     dom.addEventListener("compositionstart", onStart);
     dom.addEventListener("compositionend", onEnd);
     return () => {
       dom.removeEventListener("keydown", onKeyDown, true);
+      dom.removeEventListener("contextmenu", onContextMenu);
+      dom.removeEventListener("mousedown", onMenuMouseDown, true);
       dom.removeEventListener("keyup", onKeyUp);
       dom.removeEventListener("compositionstart", onStart);
       dom.removeEventListener("compositionend", onEnd);

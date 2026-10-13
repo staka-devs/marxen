@@ -229,6 +229,14 @@ impl DocumentActor {
         // Pick up any Vim-side drift first so a stale base is reported
         // truthfully instead of applied on the wrong text.
         Self::sync_locked(&mut state)?;
+        Self::apply_edits_locked(&mut state, request)
+    }
+
+    /// Apply a preflighted request while the caller already owns the actor lock.
+    fn apply_edits_locked(
+        state: &mut ActorState,
+        request: EditRequest,
+    ) -> Result<DocumentSnapshot, ActorError> {
         let byte_ranges = validate_edit(&state.snapshot, &request)?;
         // Convert global ranges to (row, col) against the base text, then
         // apply tail-first so earlier offsets stay valid.
@@ -252,8 +260,32 @@ impl DocumentActor {
             text,
             dirty,
         };
-        Self::checkpoint_locked(&state)?;
+        Self::checkpoint_locked(state)?;
         Ok(state.snapshot.clone())
+    }
+
+    /// Reject cursor drift before a menu formatting edit modifies the authoritative buffer.
+    pub fn apply_editor_edits(
+        &self,
+        request: EditRequest,
+        expected: CursorUpdate,
+    ) -> Result<DocumentSnapshot, ActorError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
+        Self::sync_locked(&mut state)?;
+        validate_cursor(&state.snapshot, &expected)?;
+        if Self::cursor_locked(&mut state)? != expected {
+            return Err(ActorError::Nvim(
+                "native selection changed; reopen the editor menu".into(),
+            ));
+        }
+        if !state.nvim.editor_presentation("n")?.editable {
+            return Err(ActorError::Nvim("native buffer is read-only".into()));
+        }
+        Self::apply_edits_locked(&mut state, request)
     }
 
     /// Re-read the Neovim buffer. When Vim-side keys, mappings, or undo
@@ -653,9 +685,14 @@ impl DocumentActor {
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         Self::sync_locked(&mut state)?;
+        Self::cursor_locked(&mut state)
+    }
+
+    /// Read one authoritative selection without releasing the actor mutation lock.
+    fn cursor_locked(state: &mut ActorState) -> Result<CursorUpdate, ActorError> {
         let (mode, blocking) = state.nvim.mode_state()?;
         if blocking {
-            return Ok(Self::cached_cursor(&state));
+            return Ok(Self::cached_cursor(state));
         }
         if matches!(mode, VimMode::Visual | VimMode::VisualLine) {
             let (start_row, start_col, end_row, end_col, newline, forward) =
@@ -674,7 +711,7 @@ impl DocumentActor {
                 end.0 += 1;
             }
             state.last_cursor = if forward { (start, end) } else { (end, start) };
-            return Ok(Self::cached_cursor(&state));
+            return Ok(Self::cached_cursor(state));
         }
         let (row, col) = state.nvim.win_cursor()?;
         let offset = crate::domain::coordinates::line_byte_to_global_utf16(
@@ -683,7 +720,148 @@ impl DocumentActor {
             col as u32,
         )?;
         state.last_cursor = (offset, offset);
-        Ok(Self::cached_cursor(&state))
+        Ok(Self::cached_cursor(state))
+    }
+
+    /// Capture native selection, effective mappings and opt-in at the exact request revision.
+    pub fn editor_context(
+        &self,
+        request: SaveRequest,
+    ) -> Result<crate::contracts::EditorContext, ActorError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
+        Self::sync_locked(&mut state)?;
+        validate_save(&state.snapshot, &request)?;
+        let cursor = Self::cursor_locked(&mut state)?;
+        let mode = state.nvim.mode()?;
+        let mapping_mode = match mode {
+            VimMode::Insert | VimMode::Replace => "i",
+            VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock => "x",
+            VimMode::CommandLine => "c",
+            VimMode::Terminal => "t",
+            VimMode::Normal => "n",
+        };
+        let presentation = state.nvim.editor_presentation(mapping_mode)?;
+        Ok(crate::contracts::EditorContext {
+            cursor,
+            mode,
+            presentation,
+        })
+    }
+
+    /// Validate the captured revision before traversing authoritative Neovim history.
+    pub fn editor_history(
+        &self,
+        request: SaveRequest,
+        redo: bool,
+    ) -> Result<DocumentSnapshot, ActorError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
+        Self::sync_locked(&mut state)?;
+        validate_save(&state.snapshot, &request)?;
+        if !state.nvim.editor_presentation("n")?.editable {
+            return Err(ActorError::Nvim("native buffer is read-only".into()));
+        }
+        state.ready_yank = None;
+        if redo {
+            state.nvim.redo()?;
+        } else {
+            state.nvim.undo()?;
+        }
+        Self::sync_locked(&mut state)?;
+        Ok(state.snapshot.clone())
+    }
+
+    /// Copy/cut/paste only the captured native selection under a revision and cursor guard.
+    pub fn editor_clipboard(
+        &self,
+        expected: CursorUpdate,
+        action: &str,
+        clipboard: &dyn crate::application::clipboard::Clipboard,
+    ) -> Result<DocumentSnapshot, ActorError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        Self::require_ready(&state)?;
+        Self::sync_locked(&mut state)?;
+        validate_cursor(&state.snapshot, &expected)?;
+        if action != "copy" && !state.nvim.editor_presentation("n")?.editable {
+            return Err(ActorError::Nvim("native buffer is read-only".into()));
+        }
+        if !matches!(
+            state.nvim.mode()?,
+            VimMode::Normal
+                | VimMode::Insert
+                | VimMode::Replace
+                | VimMode::Visual
+                | VimMode::VisualLine
+        ) {
+            return Err(ActorError::Nvim(
+                "clipboard action unavailable in this mode".into(),
+            ));
+        }
+        let cursor = Self::cursor_locked(&mut state)?;
+        if cursor != expected {
+            return Err(ActorError::Nvim(
+                "native selection changed; reopen the editor menu".into(),
+            ));
+        }
+        let start = Utf16Offset(cursor.anchor.0.min(cursor.head.0));
+        let end = Utf16Offset(cursor.anchor.0.max(cursor.head.0));
+        let replacement = match action {
+            "copy" | "cut" => {
+                if start == end {
+                    return Err(ActorError::Nvim(
+                        "select text in Neovim before copying".into(),
+                    ));
+                }
+                let from = crate::domain::validation::utf16_to_utf8(&state.snapshot.text, start)?.0
+                    as usize;
+                let to =
+                    crate::domain::validation::utf16_to_utf8(&state.snapshot.text, end)?.0 as usize;
+                clipboard
+                    .write(state.snapshot.text[from..to].to_owned(), None, None)
+                    .map_err(ActorError::Nvim)?;
+                if action == "copy" {
+                    return Ok(state.snapshot.clone());
+                }
+                String::new()
+            }
+            "paste" => clipboard
+                .read_text()
+                .map_err(ActorError::Nvim)?
+                .replace("\r\n", "\n"),
+            _ => return Err(ActorError::Nvim("invalid clipboard action".into())),
+        };
+        if replacement.is_empty() && start == end {
+            return Ok(state.snapshot.clone());
+        }
+        let head = Utf16Offset(start.0 + replacement.encode_utf16().count() as u32);
+        if matches!(state.nvim.mode()?, VimMode::Visual | VimMode::VisualLine) {
+            state.nvim.exit_visual()?;
+        }
+        state.ready_yank = None;
+        let request = EditRequest {
+            document_id: expected.document_id,
+            base_revision: expected.revision,
+            source: crate::contracts::EditSource::Gui,
+            edits: vec![crate::contracts::TextEdit {
+                range: crate::contracts::Utf16Range { start, end },
+                text: replacement,
+            }],
+        };
+        Self::apply_edits_locked(&mut state, request)?;
+        let (row, column) = global_utf16_to_line_byte(&state.snapshot.text, head)?;
+        state.nvim.set_cursor(row, column)?;
+        state.last_cursor = (head, head);
+        Ok(state.snapshot.clone())
     }
 
     /// Validate GUI selection revision and install its native anchor and head positions.

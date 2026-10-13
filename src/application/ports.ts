@@ -8,6 +8,7 @@
 import type {
   CloseAction,
   CursorUpdate,
+  EditorContext,
   DocumentId,
   DocumentSnapshot,
   GridUpdate,
@@ -50,6 +51,12 @@ import type { ImageResolver } from "../domain/image-sources";
 
 /** Revision-aware document gateway owned by the registry transport. */
 export interface DocumentGateway {
+  /** Format only a captured native selection at its exact source and revision. */
+  formatEditorSelection(cursor: CursorUpdate, beforeText: string, kind: import("../domain/markdown-gui").FormatKind): Promise<DocumentSnapshot>;
+  /** Capture authoritative menu data at queue execution. */
+  fetchEditorContext(documentId: DocumentId): Promise<EditorContext>;
+  /** Run one guarded menu action against the captured native cursor/revision. */
+  editorAction(cursor: CursorUpdate, action: EditorAction): Promise<DocumentSnapshot>;
   /** Record an authoritative snapshot (newer-or-equal wins). */
   noteSnapshot(snapshot: DocumentSnapshot): void;
   /** Apply GUI edits serially, resyncing once on stale. */
@@ -62,6 +69,10 @@ export interface DocumentGateway {
   vimInput(documentId: DocumentId, keys: string): Promise<DocumentSnapshot>;
   /** Feed keys natively with copy side effects in queue order. */
   vimInputWithCopy(documentId: DocumentId, keys: string, onCopy: (copy: YankCopy) => Promise<void>): Promise<VimInputResult>;
+  /** Route Enter with an optional Markdown hard break at the queued native cursor. */
+  routeEditorEnter(documentId: DocumentId, hardBreak: boolean, hasSelection: boolean, onCopy: (copy: YankCopy) => Promise<void>): Promise<VimInputResult>;
+  /** Navigate source table cells in Insert mode while preserving actual Tab mappings. */
+  routeTableTab(documentId: DocumentId, backwards: boolean, offset: number, beforeText: string, onCopy?: (copy: YankCopy) => Promise<void>): Promise<VimInputResult | { cursor: CursorUpdate }>;
   /** Route one printable char using native mode and optional captured GUI source. */
   routeCharKey(
     documentId: DocumentId,
@@ -123,8 +134,14 @@ export interface DocumentGateway {
  * root injects it directly with no forwarding wrappers.
  */
 export interface DocumentTransport {
+  /** Read native selection, active mappings and the explicit popup opt-in. */
+  fetchEditorContext(request: SaveRequest): Promise<EditorContext>;
+  /** Copy/cut/paste a native selection guarded against cursor or revision drift. */
+  editorClipboard(cursor: CursorUpdate, action: "copy" | "cut" | "paste"): Promise<DocumentSnapshot>;
+  /** Undo/redo native history after atomically validating the requested revision. */
+  editorHistory(request: SaveRequest, redo: boolean): Promise<DocumentSnapshot>;
   /** Apply GUI range edits at the given base revision. */
-  applyEdits(request: SaveRequest, edits: TextEdit[]): Promise<DocumentSnapshot>;
+  applyEdits(request: SaveRequest, edits: TextEdit[], expectedCursor?: CursorUpdate): Promise<DocumentSnapshot>;
   /** Feed raw keys through real Neovim. */
   input(request: SaveRequest, keys: string): Promise<DocumentSnapshot>;
   /** Feed keys natively and report yank/copy side effects. */
@@ -162,6 +179,8 @@ export interface DocumentTransport {
   /** Fetch the current Neovim config state for a document. */
   fetchConfig(documentId: DocumentId): Promise<NvimConfig>;
 }
+/** Explicit native editor-menu actions; no browser history or clipboard state. */
+export type EditorAction = "copy" | "cut" | "paste" | "undo" | "redo";
 
 /** Workspace file and recovery gateway over native IPC. */
 export interface WorkspaceGateway {

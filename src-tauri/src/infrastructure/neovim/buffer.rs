@@ -126,6 +126,13 @@ impl Buffer for NativeBuffer {
     fn has_mapping(&self, mode: &str, lhs: &str) -> Result<bool, BufferError> {
         Ok(super::mapping::has_mapping(self.0.client(), mode, lhs)?)
     }
+    /// Read trusted runtime configuration without executing user-provided GUI expressions.
+    fn editor_presentation(
+        &self,
+        mode: &str,
+    ) -> Result<crate::contracts::EditorPresentation, BufferError> {
+        Ok(super::mapping::editor_presentation(self.0.client(), mode)?)
+    }
     /// Apply prevalidated ascending ranges in reverse order using zero-based rows
     /// and UTF-8 byte columns, joining later edits into the first edit's undo block.
     /// An RPC error may follow earlier successful edits; this adapter does not roll them back.

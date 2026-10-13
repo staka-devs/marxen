@@ -20,6 +20,8 @@ export interface EditorPreferences {
   /** Show source line numbers in Markdown and split editors; live preview omits them. */
   lineNumbers: boolean;
   highlightActiveLine: boolean;
+  /** Add Markdown hard-break spaces on Insert-mode prose-line Enter. */
+  hardBreakOnEnter: boolean;
   notificationPosition: NotificationPosition;
 }
 
@@ -27,6 +29,7 @@ export interface EditorPreferences {
 export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
   theme: "dark", fontSize: 15, lineHeight: 1.7,
   wordWrap: true, lineNumbers: true, highlightActiveLine: true,
+  hardBreakOnEnter: false,
   notificationPosition: "bottom-right",
 };
 
@@ -51,6 +54,7 @@ export function normalizeEditorPreferences(value: unknown): EditorPreferences {
     wordWrap: bool("wordWrap", fallback.wordWrap),
     lineNumbers: bool("lineNumbers", fallback.lineNumbers),
     highlightActiveLine: bool("highlightActiveLine", fallback.highlightActiveLine),
+    hardBreakOnEnter: bool("hardBreakOnEnter", fallback.hardBreakOnEnter),
     notificationPosition: NOTIFICATION_POSITIONS.includes(raw.notificationPosition as NotificationPosition)
       ? raw.notificationPosition as NotificationPosition : fallback.notificationPosition,
   };
