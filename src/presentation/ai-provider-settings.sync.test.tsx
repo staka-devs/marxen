@@ -14,9 +14,9 @@ it("reflects a provider edited in the other settings surface without publishing 
   next.openai!.endpoint = "http://localhost:3000/v1";
   next.openai!.model = "local-model";
   rerender(<AiProviderSettings embedded provider={next} onProvider={onProvider} />);
-  await waitFor(() => expect(screen.getByLabelText("endpoint")).toHaveValue("http://localhost:3000/v1"));
-  expect(screen.getByLabelText("model")).toHaveValue("local-model");
+  await waitFor(() => expect(screen.getByLabelText("API エンドポイント")).toHaveValue("http://localhost:3000/v1"));
+  expect(screen.getByLabelText("モデル")).toHaveValue("local-model");
   expect(onProvider).not.toHaveBeenCalled();
-  fireEvent.change(screen.getByLabelText("model"), { target: { value: "edited-model" } });
+  fireEvent.change(screen.getByLabelText("モデル"), { target: { value: "edited-model" } });
   await waitFor(() => expect(onProvider).toHaveBeenCalledWith(expect.objectContaining({ openai: expect.objectContaining({ endpoint: "http://localhost:3000/v1", model: "edited-model" }) })));
 });

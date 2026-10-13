@@ -1,3 +1,5 @@
+import type { Translator } from "../../contracts/localization";
+import { japaneseTranslator } from "../../domain/localization";
 // Native clipboard writer via Tauri (infrastructure).
 //
 // Clipboard HTML uses the same sanitized renderer as the editor with local
@@ -27,17 +29,17 @@ import type { ClipboardGateway } from "../../application/ports";
  * through the Rust loader and must be bytes-backed, or the copy throws.
  * Diagram/map/3D previews keep their escaped source fallback.
  */
-export async function prepareClipboard(copy: YankCopy, resolveImage?: (path: string) => Promise<string | null>): Promise<ClipboardPayload> {
+export async function prepareClipboard(copy: YankCopy, resolveImage?: (path: string) => Promise<string | null>, t: Translator = japaneseTranslator): Promise<ClipboardPayload> {
   if (copy.format === "markdown") return { text: copy.text, html: null, rtf: null };
   const plain = markdownToPlainText(copy.text);
   if (copy.format === "text") return { text: plain, html: null, rtf: null };
-  const rendered = await renderMarkdownDocument(copy.text);
+  const rendered = await renderMarkdownDocument(copy.text, t);
   const template = document.createElement("template");
   template.innerHTML = rendered.html;
   const mathSources: string[] = [];
   const mathTree = unified().use(remarkParse).use(remarkMath).parse(copy.text);
   visit(mathTree, (node) => {
-    if ((node.type === "math" || node.type === "inlineMath") && "value" in node && validateMathContent(String(node.value)).ok) {
+    if ((node.type === "math" || node.type === "inlineMath") && "value" in node && validateMathContent(String(node.value), t).ok) {
       mathSources.push(String(node.value));
     }
   });
@@ -49,7 +51,7 @@ export async function prepareClipboard(copy: YankCopy, resolveImage?: (path: str
     if (resolveImage && isRelativeImageSrc(source)) {
       const embedded = await resolveImage(decodeImageSrc(source));
       if (!embedded || !/^data:image\/(png|jpeg|gif|webp);base64,/i.test(embedded)) {
-        throw new Error(`画像をコピーできません: ${decodeImageSrc(source)}`);
+        throw new Error(t("画像をコピーできません: {{value0}}", { value0: (decodeImageSrc(source)) }));
       }
       img.src = embedded;
     }
@@ -86,11 +88,11 @@ export async function prepareClipboard(copy: YankCopy, resolveImage?: (path: str
  * Resolves relative images via the document loader to data URLs, then writes
  * through `write_clipboard` without depending on browser key activation.
  */
-export async function copyYankToClipboard(copy: YankCopy, documentId: string): Promise<void> {
+export async function copyYankToClipboard(copy: YankCopy, documentId: string, t: Translator = japaneseTranslator): Promise<void> {
   const payload = await prepareClipboard(copy, async (path) => {
     const data = await workspaceApi.loadImage(documentId, path);
     return bytesToDataUrl(data.mime, data.bytes);
-  });
+  }, t);
   await invoke<void>("write_clipboard", payload as unknown as Record<string, unknown>);
 }
 

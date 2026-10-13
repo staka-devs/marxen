@@ -1,3 +1,5 @@
+import type { Translator } from "../../contracts/localization";
+import { japaneseTranslator } from "../localization";
 // Agent / inline conversation state. UI-only: history sent to Rust is the
 // explicit bounded `history` array on AiPromptRequest, validated there.
 // Cancelled or failed turns never persist into the next request.
@@ -52,9 +54,9 @@ export function createConversation(providerKey?: string): ChatConversation {
 }
 
 /** Identify a conversation by its first request without exposing internal identifiers. */
-export function conversationTitle(conversation: ChatConversation): string {
+export function conversationTitle(conversation: ChatConversation, t: Translator = japaneseTranslator): string {
   const prompt = conversation.messages.find((message) => message.role === "user")?.text.trim().replace(/\s+/g, " ");
-  if (!prompt) return "新しいチャット";
+  if (!prompt) return t("新しいチャット");
   const characters = Array.from(prompt);
   return characters.slice(0, 48).join("") + (characters.length > 48 ? "…" : "");
 }

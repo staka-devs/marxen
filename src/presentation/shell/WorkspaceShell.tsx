@@ -1,3 +1,7 @@
+import { localizedFailure } from "../../domain/localization";
+import type { LocalizedText } from "../../contracts/localization";
+import type { LabelKey } from "../../contracts/localization";
+import { useI18n } from "../i18n/I18nProvider";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { MessageSquare, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronDown, ChevronRight, FileText, FilePlus2 } from "lucide-react";
 import { CodeMirrorEditor } from "../editor/CodeMirrorEditor";
@@ -38,7 +42,6 @@ import {
 } from "../../domain/markdown-gui";
 import type { ThemeId } from "../../domain/workspace-content";
 import {
-  READONLY_MESSAGE,
   workspaceErrorText,
 } from "../../domain/document-errors";
 import { COPY_LABELS } from "../../domain/clipboard-text";
@@ -76,6 +79,9 @@ export type { ViewMode, NavBasis, SideView } from "./shellView";
  * imports infrastructure directly; tests inject fakes for the same surface.
  */
 export interface WorkspaceShellProps {
+  languagePreference?: import("../../contracts/language").LanguagePreference;
+  /** Select and persist the active presentation language without remounting the workspace. */
+  onLanguagePreference?: (preference: import("../../contracts/language").LanguagePreference) => void;
   /** Serial revision-aware document gateway (registry or read-only). */
   documentGateway?: DocumentGateway;
   /** Workspace file and recovery gateway over native IPC. */
@@ -132,6 +138,7 @@ const MODE_LABEL: Record<ViewMode, string> = {
  * authoritative with stale resync, generation fencing, and scoped approval.
  */
 export function WorkspaceShell(props: WorkspaceShellProps = {}) {
+  const { t, message, language } = useI18n();
   const {
     documentGateway,
     workspaceGateway,
@@ -188,9 +195,9 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     setPreferences(normalized);
     try {
       const ok = editorPreferencesStore?.save(normalized);
-      if (ok === false) setNotice("設定を保存できませんでした。この起動中は変更を保持します。");
+      if (ok === false) setNotice(message("設定を保存できませんでした。この起動中は変更を保持します。"));
     } catch {
-      setNotice("設定を保存できませんでした。この起動中は変更を保持します。");
+      setNotice(message("設定を保存できませんでした。この起動中は変更を保持します。"));
     }
   }, [editorPreferencesStore]);
   /**
@@ -206,7 +213,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   const [notice, setNoticeState] = useState<Notice | null>(null);
   const noticeSequence = useRef(0);
   /** Emit a distinct notification occurrence without changing the editor's layout. */
-  const setNotice = useCallback((message: string | null, kind: NoticeKind = "info") => {
+  const setNotice = useCallback((message: LocalizedText | null, kind: NoticeKind = "info") => {
     setNoticeState(message === null ? null : { id: ++noticeSequence.current, message, kind });
   }, []);
   /** Dismiss only the notification whose timeout or close action is still current. */
@@ -307,28 +314,28 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
 
   const commands: PaletteCommand[] = useMemo(
     () => [
-      { id: "view-live", label: "表示: ライブにする" },
-      { id: "view-source", label: "表示: Markdownにする" },
-      { id: "view-read", label: "表示: 閲覧にする" },
-      { id: "view-split", label: "表示: 分割にする" },
-      { id: "nav-display", label: "移動: 表示基準にする" },
-      { id: "nav-source", label: "移動: Vim の移動にする" },
-      { id: "file-new", label: "ファイル: 新規作成する" },
-      { id: "file-rename", label: "ファイル: 名前を変更する" },
-      { id: "file-save", label: "ファイル: 保存する" },
-      { id: "file-reload", label: "ファイル: 再読込する" },
-      { id: "file-close", label: "ファイル: 閉じる" },
-      { id: "edit-undo", label: "編集: 元に戻す" },
-      { id: "edit-redo", label: "編集: やり直す" },
-      { id: "palette-quickopen", label: "移動: ファイルをすばやく開く" },
-      { id: "palette-raw", label: "表示: Neovim 画面を切り替える" },
-      { id: "palette-raw-refresh", label: "表示: Neovim 画面を更新する" },
-      { id: "palette-recovery", label: "復旧: 復旧一覧を更新する" },
-      { id: "palette-ai", label: "AI: AI 支援を開く" },
-      { id: "inline-chat", label: "インライン: チャットを開く" },
-      { id: "palette-settings", label: "設定: 設定を開く" },
+      { id: "view-live", label: t("表示: ライブにする") },
+      { id: "view-source", label: t("表示: Markdownにする") },
+      { id: "view-read", label: t("表示: 閲覧にする") },
+      { id: "view-split", label: t("表示: 分割にする") },
+      { id: "nav-display", label: t("移動: 表示基準にする") },
+      { id: "nav-source", label: t("移動: Vim の移動にする") },
+      { id: "file-new", label: t("ファイル: 新規作成する") },
+      { id: "file-rename", label: t("ファイル: 名前を変更する") },
+      { id: "file-save", label: t("ファイル: 保存する") },
+      { id: "file-reload", label: t("ファイル: 再読込する") },
+      { id: "file-close", label: t("ファイル: 閉じる") },
+      { id: "edit-undo", label: t("編集: 元に戻す") },
+      { id: "edit-redo", label: t("編集: やり直す") },
+      { id: "palette-quickopen", label: t("移動: ファイルをすばやく開く") },
+      { id: "palette-raw", label: t("表示: Neovim 画面を切り替える") },
+      { id: "palette-raw-refresh", label: t("表示: Neovim 画面を更新する") },
+      { id: "palette-recovery", label: t("復旧: 復旧一覧を更新する") },
+      { id: "palette-ai", label: t("AI: AI 支援を開く") },
+      { id: "inline-chat", label: t("インライン: チャットを開く") },
+      { id: "palette-settings", label: t("設定: 設定を開く") },
     ],
-    [],
+    [language],
   );
 
   /** Run a palette command by ID for views, files, and AI. */ const runCommand = useCallback(
@@ -355,10 +362,10 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       else if (id === "palette-raw-refresh") workspace.handleRawGridRefresh();
       else if (id === "palette-recovery") { setRecoveryPromptOpen(true); void workspace.refreshRecovery(); }
       else if (id === "palette-ai") {
-        if (!desktop) setNotice(READONLY_MESSAGE);
+        if (!desktop) setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
         else setShowAi(true);
       } else if (id === "inline-chat") {
-        if (!desktop) setNotice(READONLY_MESSAGE);
+        if (!desktop) setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
         else staging.openInlineChat();
       } else if (id === "palette-settings") setSettings(true);
     },
@@ -452,12 +459,12 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
 
   return (
     <div data-theme={theme} data-testid="workspace-shell" style={{ "--editor-font-size": `${preferences.fontSize}px`, "--editor-line-height": preferences.lineHeight } as CSSProperties} className="marxen-workspace relative flex h-dvh overflow-hidden bg-background text-foreground">
-      <nav aria-label="アクティビティ" className="marxen-activity flex w-12 shrink-0 flex-col items-center border-r border-border bg-card py-1">
+      <nav aria-label={t("アクティビティ")} className="marxen-activity flex w-12 shrink-0 flex-col items-center border-r border-border bg-card py-1">
         {(
           [
-            { id: "explorer", label: "エクスプローラー", icon: <Files size={19} aria-hidden="true" /> },
-            { id: "search", label: "検索", icon: <Search size={19} aria-hidden="true" /> },
-            { id: "outline", label: "アウトライン", icon: <ListTree size={19} aria-hidden="true" /> },
+            { id: "explorer", label: t("エクスプローラー"), icon: <Files size={19} aria-hidden="true" /> },
+            { id: "search", label: t("検索"), icon: <Search size={19} aria-hidden="true" /> },
+            { id: "outline", label: t("アウトライン"), icon: <ListTree size={19} aria-hidden="true" /> },
           ] as Array<{ id: SideView; label: string; icon: ReactNode }>
         ).map((item) => (
           <button
@@ -475,8 +482,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         <button
           type="button"
           onClick={() => setSettings(true)}
-          aria-label="設定表示切替"
-          title="設定"
+          aria-label={t("設定表示切替")}
+          title={t("設定")}
           className="mt-auto flex h-11 w-full items-center justify-center text-muted-foreground hover:text-foreground"
         >
           <SettingsIcon size={19} aria-hidden="true" />
@@ -487,15 +494,15 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           {sideView === "explorer" && (
             <div className="flex flex-col">
               <div className="flex h-10 shrink-0 items-center gap-1 px-4">
-                <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground">エクスプローラー</span>
+                <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground">{t("エクスプローラー")}</span>
                 {desktop && (
                   <>
-                    <button type="button" aria-label="新しいファイル" title="新しいファイル" disabled={!workspace.wsRoot} onClick={() => { workspace.setNewFilePath(""); workspace.setNewFileOpen(true); }} className="rounded-sm p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"><FilePlus2 size={15} aria-hidden="true" /></button>
+                    <button type="button" aria-label={t("新しいファイル")} title={t("新しいファイル")} disabled={!workspace.wsRoot} onClick={() => { workspace.setNewFilePath(""); workspace.setNewFileOpen(true); }} className="rounded-sm p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"><FilePlus2 size={15} aria-hidden="true" /></button>
                     <button
                       type="button"
                       onClick={() => void workspace.pickFolderAndOpen()}
-                      aria-label="フォルダーを開く"
-                      title="フォルダーを開く"
+                      aria-label={t("フォルダーを開く")}
+                      title={t("フォルダーを開く")}
                       className="rounded-sm p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
                       <FolderOpen size={15} aria-hidden="true" />
@@ -504,8 +511,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                       type="button"
                       onClick={() => setManualFolder((value) => !value)}
                       aria-expanded={manualFolder}
-                      aria-label="パスを入力する"
-                      title="パスを入力する"
+                      aria-label={t("パスを入力する")}
+                      title={t("パスを入力する")}
                       className="rounded-sm p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
                       <Ellipsis size={15} aria-hidden="true" />
@@ -518,18 +525,17 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   <input
                     value={folderInput}
                     onChange={(event) => setFolderInput(event.target.value)}
-                    placeholder="フォルダーの絶対パス…"
-                    aria-label="開くフォルダーの絶対パス"
+                    placeholder={t("フォルダーの絶対パス…")}
+                    aria-label={t("開くフォルダーの絶対パス")}
                     className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs"
                   />
                   <button type="button" onClick={() => void workspace.openWorkspaceFolder(folderInput)} className="rounded-md border border-border px-2 py-1.5 text-xs">
-                    開く
-                  </button>
+                    {t("開く")}</button>
                 </div>
               )}
-              {desktop && workspace.wsRoot && <button type="button" onClick={() => setRootCollapsed((value) => !value)} aria-expanded={!rootCollapsed} aria-label="ワークスペースのフォルダー" className="flex h-8 w-full items-center gap-1.5 px-3 text-left text-xs font-semibold hover:bg-muted/50" title={workspace.wsRoot}>{rootCollapsed ? <ChevronRight size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" /> : <ChevronDown size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />}<FolderOpen size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" /><span className="truncate">{workspace.wsRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace.wsRoot}</span></button>}
+              {desktop && workspace.wsRoot && <button type="button" onClick={() => setRootCollapsed((value) => !value)} aria-expanded={!rootCollapsed} aria-label={t("ワークスペースのフォルダー")} className="flex h-8 w-full items-center gap-1.5 px-3 text-left text-xs font-semibold hover:bg-muted/50" title={workspace.wsRoot}>{rootCollapsed ? <ChevronRight size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" /> : <ChevronDown size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />}<FolderOpen size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" /><span className="truncate">{workspace.wsRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace.wsRoot}</span></button>}
               {(!desktop || !rootCollapsed) && <FileTree desktop={desktop} nodes={treeNodes} activePath={activeImage ?? active?.path ?? null} onOpenFile={(path) => { void openFileForEditing(path); if (window.innerWidth < 768) setSideView(null); }} />}
-              {desktop && !workspace.wsRoot && <p className="px-4 py-3 text-xs leading-5 text-muted-foreground">フォルダーが選択されていません。</p>}
+              {desktop && !workspace.wsRoot && <p className="px-4 py-3 text-xs leading-5 text-muted-foreground">{t("フォルダーが選択されていません。")}</p>}
             </div>
           )}
           {sideView === "search" && (
@@ -562,13 +568,13 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           <div className="min-w-0 flex-1">
             <Tabs tabs={tabItems} activeId={activeId} onSelect={(id) => { session.setActiveId(id); const path = session.docsRef.current[id]?.path; if (path) setEditorFocus((previous) => ({ path, sequence: (previous?.sequence ?? 0) + 1 })); }} onClose={(id) => void session.closeTab(id)} />
           </div>
-          {desktop && <button type="button" aria-label="チャットを切り替える" aria-pressed={showAi} title="チャット (Ctrl+Alt+I)" onClick={() => setShowAi((value) => !value)} className={`rounded-sm p-1.5 hover:bg-muted ${showAi ? "text-foreground" : "text-muted-foreground"}`}><MessageSquare size={16} aria-hidden="true" /></button>}
+          {desktop && <button type="button" aria-label={t("チャットを切り替える")} aria-pressed={showAi} title={t("チャット (Ctrl+Alt+I)")} onClick={() => setShowAi((value) => !value)} className={`rounded-sm p-1.5 hover:bg-muted ${showAi ? "text-foreground" : "text-muted-foreground"}`}><MessageSquare size={16} aria-hidden="true" /></button>}
           <button
             type="button"
             onClick={() => void session.handleSave()}
             disabled={!desktop || !active}
-            title={desktop ? "保存" : READONLY_MESSAGE}
-            aria-label="保存"
+            title={desktop ? t("保存") : t("ブラウザ表示では編集できません。デスクトップで開いてください。")}
+            aria-label={t("保存")}
             className="rounded-md p-1.5 text-muted-foreground hover:bg-muted disabled:opacity-50"
           >
             <Save size={15} aria-hidden="true" />
@@ -577,43 +583,43 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             type="button"
             onClick={() => setMoreOpen((value) => !value)}
             aria-expanded={moreOpen}
-            aria-label="その他の操作"
-            title="その他の操作"
+            data-editor-actions-trigger aria-label={t("その他の操作")}
+            title={t("その他の操作")}
             className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"
           >
             <Ellipsis size={15} aria-hidden="true" />
           </button>
         </header>
         {(active || activeImage) && <div className="marxen-context-bar flex h-8 shrink-0 items-center gap-2 border-b border-border px-4 text-xs text-muted-foreground">
-          <nav aria-label="ファイルの場所" className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden" title={activeImage ?? active?.path ?? undefined}>
-            {(activeImage ?? active?.path ?? "無題").split(/[\\/]/).filter(Boolean).map((part, index, parts) => <span key={index} className="flex min-w-0 items-center gap-1">
+          <nav aria-label={t("ファイルの場所")} className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden" title={activeImage ?? active?.path ?? undefined}>
+            {(activeImage ?? active?.path ?? t("無題")).split(/[\\/]/).filter(Boolean).map((part, index, parts) => <span key={index} className="flex min-w-0 items-center gap-1">
               {index > 0 && <ChevronRight size={12} className="shrink-0 opacity-50" aria-hidden="true" />}
               {index === parts.length - 1 && <FileText size={13} className="shrink-0 text-primary/70" aria-hidden="true" />}
               <span className={index === parts.length - 1 ? "truncate text-foreground/80" : "truncate max-sm:hidden"}>{part}</span>
             </span>)}
           </nav>
-          <label className="sr-only" htmlFor="view-mode-select">表示モード</label>
+          <label className="sr-only" htmlFor="view-mode-select">{t("表示モード")}</label>
           <select
             id="view-mode-select"
             value={effectiveViewMode}
             disabled={!activeIsMarkdown}
             onChange={(event) => setViewMode(event.target.value as ViewMode)}
-            aria-label="表示モード"
+            aria-label={t("表示モード")}
             className="h-7 max-w-36 rounded bg-transparent px-1 text-xs text-muted-foreground hover:bg-muted"
           >
             {(Object.keys(MODE_LABEL) as ViewMode[]).map((mode) => (
               <option key={mode} value={mode}>
-                {MODE_LABEL[mode]}
+                {t(MODE_LABEL[mode] as LabelKey)}
               </option>
             ))}
           </select>
           <button
             type="button"
             onClick={() => setViewMode((mode) => mode === "split" ? "live" : "split")}
-            aria-label="プレビューを横に開く"
+            aria-label={t("プレビューを横に開く")}
             disabled={!activeIsMarkdown}
             aria-pressed={viewMode === "split"}
-            title="プレビューを横に開く"
+            title={t("プレビューを横に開く")}
             className={`rounded p-1.5 hover:bg-muted ${viewMode === "split" ? "text-primary" : "text-muted-foreground"}`}
           >
             <PanelsLeftRight size={16} aria-hidden="true" />
@@ -622,13 +628,13 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         </div>}
         {moreOpen && (
           <EditorActionsPopover onClose={() => setMoreOpen(false)}>
-            <p className="px-2 pb-1 pt-2 text-[11px] text-muted-foreground">書式</p>
+            <p className="px-2 pb-1 pt-2 text-[11px] text-muted-foreground">{t("書式")}</p>
             <GuiToolbar
                 onFormat={(kind: FormatKind) => vim.guiAtSelection((text, start, end) => formatRange(text, start, end, kind))}
                 onCheckbox={() => {
                   const id = session.activeRef.current;
                   if (!id || !session.registry) {
-                    setNotice(READONLY_MESSAGE);
+                    setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
                     return;
                   }
                   const current = session.docsRef.current[id];
@@ -639,7 +645,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                 onTable={() => {
                   const id = session.activeRef.current;
                   if (!id || !session.registry) {
-                    setNotice(READONLY_MESSAGE);
+                    setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
                     return;
                   }
                   const current = session.docsRef.current[id];
@@ -650,7 +656,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                 onTableRow={() => {
                   const id = session.activeRef.current;
                   if (!id || !session.registry) {
-                    setNotice(READONLY_MESSAGE);
+                    setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
                     return;
                   }
                   const current = session.docsRef.current[id];
@@ -659,13 +665,13 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   try {
                     void session.applyEdits(id, tableAddRow(current.text, Math.min(sel.head, current.text.length)));
                   } catch (cause) {
-                    setNotice(workspaceErrorText(cause));
+                    setNotice(localizedFailure(cause, workspaceErrorText));
                   }
                 }}
                 onTableColumn={() => {
                   const id = session.activeRef.current;
                   if (!id || !session.registry) {
-                    setNotice(READONLY_MESSAGE);
+                    setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
                     return;
                   }
                   const current = session.docsRef.current[id];
@@ -674,17 +680,17 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   try {
                     void session.applyEdits(id, tableAddColumn(current.text, Math.min(sel.head, current.text.length)));
                   } catch (cause) {
-                    setNotice(workspaceErrorText(cause));
+                    setNotice(localizedFailure(cause, workspaceErrorText));
                   }
                 }}
                 onLink={() => vim.guiAtSelection((text, start, end) => insertLink(text, start, end, "https://example.com"))}
                 onImage={() => vim.guiAtSelection((text, start, end) => insertImage(text, start, end, "images/paste.png"))}
                 onUndo={() => void session.handleUndo()}
                 onRedo={() => void session.handleRedo()}
-                vimMode={MODE_JA[session.vimMode] ?? session.vimMode}
+                vimMode={MODE_JA[session.vimMode] ? t(MODE_JA[session.vimMode] as LabelKey) : session.vimMode}
                 disabled={!desktop || !activeIsMarkdown}
               />
-            <div role="group" aria-label="移動基準" className="my-1 flex items-center gap-1 border-y border-border px-2 py-2">
+            <div role="group" aria-label={t("移動基準")} className="my-1 flex items-center gap-1 border-y border-border px-2 py-2">
               {(["display", "source"] as NavBasis[]).map((basis) => (
                 <button
                   key={basis}
@@ -694,26 +700,26 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                     setMoreOpen(false);
                   }}
                   aria-pressed={navBasis === basis}
-                  title={basis === "display" ? "折り返し行の上下・行頭末は表示基準で移動します" : "上下・行頭末・単語・テキストオブジェクト・マクロは実 Neovim のVim の移動で動作します"}
+                  title={basis === "display" ? t("折り返し行の上下・行頭末は表示基準で移動します") : t("上下・行頭末・単語・テキストオブジェクト・マクロは実 Neovim のVim の移動で動作します")}
                   className={`rounded-md px-2 py-1 text-xs ${navBasis === basis ? "bg-primary text-primary-foreground" : "border border-border"}`}
                 >
-                  {basis === "display" ? "表示行" : "Vim"}
+                  {basis === "display" ? t("表示行") : "Vim"}
                 </button>
               ))}
             </div>
-            <div role="menu" aria-label="その他の操作" className="py-1">
+            <div role="menu" data-editor-actions-trigger aria-label={t("その他の操作")} className="py-1">
               {(
                 [
-                  ["raw", "Neovim 画面"],
-                  ["quick", "クイックオープン"],
-                  ["palette", "コマンドパレット"],
-                  ["inline", "インラインチャット"],
-                  ["new", "新規ファイル"],
-                  ["rename", "名前を変更"],
-                  ["reload", "再読込"],
-                  ["close", "閉じる"],
-                  ["recovery", "復旧一覧"],
-                  ["settings", "設定"],
+                  ["raw", t("Neovim 画面")],
+                  ["quick", t("クイックオープン")],
+                  ["palette", t("コマンドパレット")],
+                  ["inline", t("インラインチャット")],
+                  ["new", t("新規ファイル")],
+                  ["rename", t("名前を変更")],
+                  ["reload", t("再読込")],
+                  ["close", t("閉じる")],
+                  ["recovery", t("復旧一覧")],
+                  ["settings", t("設定")],
                 ] as Array<[string, string]>
               ).map(([id, label]) => (
                 <button
@@ -752,17 +758,16 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           {notice && <NotificationToast theme={theme} notice={notice} onDismiss={dismissNotice} />}
           {activeExternal && active && activeExternal !== dismissedExternal && (
             <NotificationToast theme={theme} testId="external-banner" raised={notice !== null}
-              notice={{ id: 0, kind: "info", message: `${activeExternal.deleted ? "ファイルが外部で削除されました。" : "ファイルが外部で変更されました。"}${active.dirty ? "未保存の変更を保持しています。" : ""}` }}
+              notice={{ id: 0, kind: "info", message: t("{{value0}}{{value1}}", { value0: (activeExternal.deleted ? t("ファイルが外部で削除されました。") : t("ファイルが外部で変更されました。")), value1: (active.dirty ? t("未保存の変更を保持しています。") : "") }) }}
               onDismiss={() => setDismissedExternal(activeExternal)}
               actions={!active.dirty && !activeExternal.deleted ? (
                 <button type="button" onClick={() => void session.handleReload()} className="rounded-md border border-border px-3 py-1">
-                  再読込する
-                </button>
+                  {t("再読込する")}</button>
               ) : undefined} />
           )}
           {isConflicted && active && (
-            <WorkspaceDialog theme={theme} label="保存競合" testId="conflict-banner" onDismiss={() => session.setConflictDoc(null)}>
-              <p className="mb-3">ディスク上のファイルが変更されています。本文は保持しています。</p>
+            <WorkspaceDialog theme={theme} label={t("保存競合")} testId="conflict-banner" onDismiss={() => session.setConflictDoc(null)}>
+              <p className="mb-3">{t("ディスク上のファイルが変更されています。本文は保持しています。")}</p>
               <div className="flex flex-wrap gap-2">
               <button
                 type="button"
@@ -779,95 +784,84 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                       session.setTabs((prev) => prev.map((tab) => (tab === id ? doc.documentId : tab)));
                       session.setActiveId(doc.documentId);
                       session.setConflictDoc(null);
-                      setNotice("最新のMarkdownに再読込しました（未保存の変更は破棄）。");
+                      setNotice(message("最新のMarkdownに再読込しました（未保存の変更は破棄）。"));
                     } catch (cause) {
-                      setNotice(workspaceErrorText(cause));
+                      setNotice(localizedFailure(cause, workspaceErrorText));
                     }
                   })();
                 }}
                 className="rounded-md border border-border px-3 py-1"
               >
-                再読込（未保存を破棄）
-              </button>
+                {t("再読込（未保存を破棄）")}</button>
               <button type="button" onClick={() => session.setConflictDoc(null)} className="rounded-md border border-border px-3 py-1">
-                保持する
-              </button>
+                {t("保持する")}</button>
               </div>
             </WorkspaceDialog>
           )}
           {recoveryPromptOpen && workspace.recovery.length > 0 && !session.closeDecision && !isConflicted && !workspace.newFileOpen && !workspace.renameDoc && (
-            <WorkspaceDialog theme={theme} label="未保存の文書を復元" testId="recovery-dialog" onDismiss={() => setRecoveryPromptOpen(false)}>
-              <p className="mb-3 text-muted-foreground">前回終了時の未保存の変更があります。復元する文書を選んでください。</p>
+            <WorkspaceDialog theme={theme} label={t("未保存の文書を復元")} testId="recovery-dialog" onDismiss={() => setRecoveryPromptOpen(false)}>
+              <p className="mb-3 text-muted-foreground">{t("前回終了時の未保存の変更があります。復元する文書を選んでください。")}</p>
               <ul className="divide-y divide-border">
                 {workspace.recovery.map((entry) => (
                   <li key={entry.documentId} className="flex flex-wrap items-center gap-2 py-2">
                     <span className="min-w-0 flex-1 break-words" title={entry.path ?? undefined}>
                       {entry.path ?? entry.documentId}
-                      {entry.conflict ? "（ディスクも変更あり）" : ""}
+                      {entry.conflict ? t("（ディスクも変更あり）") : ""}
                     </span>
                     <button type="button" onClick={() => void workspace.restoreEntry(entry.documentId, false)} className="rounded border border-border px-2 py-1">
-                      復元する
-                    </button>
+                      {t("復元する")}</button>
                     <button type="button" onClick={() => void workspace.restoreEntry(entry.documentId, true)} className="rounded border border-border px-2 py-1">
-                      破棄する
-                    </button>
+                      {t("破棄する")}</button>
                   </li>
                 ))}
               </ul>
-              <div className="mt-4 flex justify-end"><button type="button" onClick={() => setRecoveryPromptOpen(false)} className="rounded-md border border-border px-3 py-1">後で</button></div>
+              <div className="mt-4 flex justify-end"><button type="button" onClick={() => setRecoveryPromptOpen(false)} className="rounded-md border border-border px-3 py-1">{t("後で")}</button></div>
             </WorkspaceDialog>
           )}
           {session.closeDecision && (
-            <WorkspaceDialog theme={theme} label="閉じる確認" testId="close-dialog" onDismiss={() => void session.resolveCloseDecision("cancel")}>
-              <p className="mb-2">未保存の変更があります。どうしますか。</p>
+            <WorkspaceDialog theme={theme} label={t("閉じる確認")} testId="close-dialog" onDismiss={() => void session.resolveCloseDecision("cancel")}>
+              <p className="mb-2">{t("未保存の変更があります。どうしますか。")}</p>
               <div className="flex gap-2">
                 <button type="button" onClick={() => void session.resolveCloseDecision("save")} className="rounded-md border border-border px-3 py-1">
-                  保存して閉じる
-                </button>
+                  {t("保存して閉じる")}</button>
                 <button type="button" onClick={() => void session.resolveCloseDecision("discard")} className="rounded-md border border-border px-3 py-1">
-                  破棄して閉じる
-                </button>
+                  {t("破棄して閉じる")}</button>
                 <button type="button" onClick={() => void session.resolveCloseDecision("cancel")} className="rounded-md border border-border px-3 py-1">
-                  キャンセル
-                </button>
+                  {t("キャンセル")}</button>
               </div>
             </WorkspaceDialog>
           )}
           {workspace.newFileOpen && (
-            <WorkspaceDialog theme={theme} label="新規ファイル" onDismiss={() => workspace.setNewFileOpen(false)}>
+            <WorkspaceDialog theme={theme} label={t("新規ファイル")} onDismiss={() => workspace.setNewFileOpen(false)}>
               <div className="flex flex-wrap items-center gap-2">
               <input
                 value={workspace.newFilePath}
                 onChange={(event) => workspace.setNewFilePath(event.target.value)}
                 placeholder="メモ/新規.md"
-                aria-label="新規ファイルのパス"
+                aria-label={t("新規ファイルのパス")}
                 className="min-w-40 flex-1 rounded-md border border-border bg-background px-3 py-1.5"
               />
               <button type="button" onClick={() => void workspace.createFile()} className="rounded-md border border-border px-3 py-1">
-                作成する
-              </button>
+                {t("作成する")}</button>
               <button type="button" onClick={() => workspace.setNewFileOpen(false)} className="rounded-md border border-border px-3 py-1">
-                閉じる
-              </button>
+                {t("閉じる")}</button>
               </div>
             </WorkspaceDialog>
           )}
           {workspace.renameDoc && (
-            <WorkspaceDialog theme={theme} label="名前の変更" onDismiss={() => workspace.setRenameDoc(null)}>
+            <WorkspaceDialog theme={theme} label={t("名前の変更")} onDismiss={() => workspace.setRenameDoc(null)}>
               <div className="flex flex-wrap items-center gap-2">
               <input
                 value={workspace.renamePath}
                 onChange={(event) => workspace.setRenamePath(event.target.value)}
                 placeholder="メモ/新名.md"
-                aria-label="新しいパス"
+                aria-label={t("新しいパス")}
                 className="min-w-40 flex-1 rounded-md border border-border bg-background px-3 py-1.5"
               />
               <button type="button" onClick={() => void workspace.renameFile()} className="rounded-md border border-border px-3 py-1">
-                変更する
-              </button>
+                {t("変更する")}</button>
               <button type="button" onClick={() => workspace.setRenameDoc(null)} className="rounded-md border border-border px-3 py-1">
-                閉じる
-              </button>
+                {t("閉じる")}</button>
               </div>
             </WorkspaceDialog>
           )}
@@ -875,7 +869,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         <main
           className="grid min-h-0 min-w-0 flex-1 overflow-hidden"
           style={{ gridTemplateColumns: effectiveViewMode === "split" && activeIsMarkdown && active ? `minmax(0, ${splitRatio}fr) 5px minmax(0, ${100 - splitRatio}fr)` : "minmax(0, 1fr)" }}
-          aria-label="編集領域"
+          aria-label={t("編集領域")}
         >
           {/* One editor-primary at a time: live owns the inline preview
               pane, source/split own the raw pane. Selections live in shell
@@ -888,7 +882,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   key={`live-${active.documentId}`}
                   value={active.text}
                   editable={desktop}
-                  ariaLabel={`${active.path ?? active.documentId}の${activeIsMarkdown ? "Markdown" : "テキスト"}エディタ`}
+                  ariaLabel={t("{{value0}}の{{value1}}エディタ", { value0: (active.path ?? active.documentId), value1: (activeIsMarkdown ? "Markdown" : t("テキスト")) })}
                   testId="editor-primary"
                   focusRequest={editorFocus?.path === active.path ? editorFocus.sequence : 0}
                   initialSelection={selections[active.documentId] ?? null}
@@ -918,7 +912,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   key={`primary-${active.documentId}`}
                   value={active.text}
                   editable={desktop}
-                  ariaLabel={`${active.path ?? active.documentId}の${activeIsMarkdown ? "Markdown" : "テキスト"}エディタ`}
+                  ariaLabel={t("{{value0}}の{{value1}}エディタ", { value0: (active.path ?? active.documentId), value1: (activeIsMarkdown ? "Markdown" : t("テキスト")) })}
                   testId="editor-primary"
                   focusRequest={editorFocus?.path === active.path ? editorFocus.sequence : 0}
                   preferences={preferences}
@@ -939,11 +933,11 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               <div className="w-full max-w-sm">
                 <FileText size={36} strokeWidth={1} className="mb-5 text-muted-foreground/40" aria-hidden="true" />
                 <h1 className="text-2xl font-semibold tracking-tight">Marxen</h1>
-                <p className="mt-2 text-sm text-muted-foreground">Markdown を書くためのワークスペース</p>
+                <p className="mt-2 text-sm text-muted-foreground">{t("Markdown を書くためのワークスペース")}</p>
                 <div className="mt-8 flex flex-col gap-1">
-                  {desktop && <button type="button" onClick={() => void workspace.pickFolderAndOpen()} className="flex h-10 items-center gap-3 rounded px-2 text-left text-sm text-primary hover:bg-muted"><FolderOpen size={16} />フォルダーを開く</button>}
-                  <button type="button" onClick={() => setQuickOpen(true)} className="flex h-10 items-center justify-between rounded px-2 text-left text-sm hover:bg-muted"><span className="flex items-center gap-3"><Search size={16} className="text-muted-foreground" />ファイルを探す</span><kbd className="text-xs text-muted-foreground">Ctrl+P</kbd></button>
-                  <button type="button" onClick={() => setPalette(true)} className="flex h-10 items-center justify-between rounded px-2 text-left text-sm hover:bg-muted"><span className="flex items-center gap-3"><Ellipsis size={16} className="text-muted-foreground" />コマンドを実行</span><kbd className="text-xs text-muted-foreground">Ctrl+Shift+P</kbd></button>
+                  {desktop && <button type="button" onClick={() => void workspace.pickFolderAndOpen()} className="flex h-10 items-center gap-3 rounded px-2 text-left text-sm text-primary hover:bg-muted"><FolderOpen size={16} />{t("フォルダーを開く")}</button>}
+                  <button type="button" onClick={() => setQuickOpen(true)} className="flex h-10 items-center justify-between rounded px-2 text-left text-sm hover:bg-muted"><span className="flex items-center gap-3"><Search size={16} className="text-muted-foreground" />{t("ファイルを探す")}</span><kbd className="text-xs text-muted-foreground">Ctrl+P</kbd></button>
+                  <button type="button" onClick={() => setPalette(true)} className="flex h-10 items-center justify-between rounded px-2 text-left text-sm hover:bg-muted"><span className="flex items-center gap-3"><Ellipsis size={16} className="text-muted-foreground" />{t("コマンドを実行")}</span><kbd className="text-xs text-muted-foreground">Ctrl+Shift+P</kbd></button>
                 </div>
               </div>
             </div>
@@ -957,7 +951,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             <>
               <div
                 role="separator"
-                aria-label="Markdown とプレビューの幅"
+                aria-label={t("Markdown とプレビューの幅")}
                 aria-orientation="vertical"
                 aria-valuemin={25}
                 aria-valuemax={75}
@@ -979,7 +973,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                 }}
               />
               <div className="flex min-h-0 min-w-0 flex-col" data-testid="split-preview-pane">
-                <div className="flex h-7 shrink-0 items-center border-b border-border px-3 text-xs text-muted-foreground">プレビュー</div>
+                <div className="flex h-7 shrink-0 items-center border-b border-border px-3 text-xs text-muted-foreground">{t("プレビュー")}</div>
                 <div className="min-h-0 flex-1">
                   <MarkdownPreview key={`split-${active.documentId}`} text={active.text} resolveImage={image.readResolver} />
                 </div>
@@ -1001,20 +995,20 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         )}
 
         <footer className="marxen-status flex h-6 shrink-0 items-center gap-3 whitespace-nowrap border-t border-border bg-card px-3 text-[11px] text-muted-foreground">
-          {desktop && active && <span data-testid="vim-footer-mode" className="flex h-5 shrink-0 items-center rounded-sm bg-primary/10 px-1.5 font-medium text-primary">{MODE_JA[vimMode] ?? vimMode}</span>}
+          {desktop && active && <span data-testid="vim-footer-mode" className="flex h-5 shrink-0 items-center rounded-sm bg-primary/10 px-1.5 font-medium text-primary">{MODE_JA[vimMode] ? t(MODE_JA[vimMode] as LabelKey) : vimMode}</span>}
           <span className="min-w-0 flex-1 truncate">{workspace.wsRoot?.split(/[\\/]/).filter(Boolean).at(-1) ?? ""}</span>
-          {cursorPos && <span data-testid="cursor" title="カーソル位置"><span className="sr-only">カーソル </span>{cursorPos}</span>}
-          <span data-testid="dirty">{!active || active.dirty ? (active ? "未保存" : "—") : "保存済み"}</span>
-          {desktop && session.copyReady === activeId && <span data-testid="copy-ready" className="min-w-0 max-w-72 truncate" title={Object.entries(workspace.copyKeys).map(([format, key]) => `${key} ${COPY_LABELS[format as keyof typeof COPY_LABELS]}`).join(" / ")}>コピー形式を選択</span>}
-          {!desktop && <span data-testid="readonly-note">ブラウザ表示は読み取り専用です</span>}
+          {cursorPos && <span data-testid="cursor" title={t("カーソル位置")}><span className="sr-only">{t("カーソル")}{" "}</span>{cursorPos}</span>}
+          <span data-testid="dirty">{!active || active.dirty ? (active ? t("未保存") : "—") : t("保存済み")}</span>
+          {desktop && session.copyReady === activeId && <span data-testid="copy-ready" className="min-w-0 max-w-72 truncate" title={Object.entries(workspace.copyKeys).map(([format, key]) => `${key} ${t(COPY_LABELS[format as keyof typeof COPY_LABELS] as LabelKey)}`).join(" / ")}>{t("コピー形式を選択")}</span>}
+          {!desktop && <span data-testid="readonly-note">{t("ブラウザ表示は読み取り専用です")}</span>}
           <span role="status" className="shrink-0">
-            {workspace.runtime ? (workspace.runtime.connection === "disconnected" ? "Neovim 未接続" : workspace.runtime.connection === "connected" ? "Neovim 接続済み" : workspace.runtime.detail) : "接続状態を確認中…"}
+            {workspace.runtime ? (workspace.runtime.connection === "disconnected" ? t("Neovim 未接続") : workspace.runtime.connection === "connected" ? t("Neovim 接続済み") : workspace.runtime.detail) : t("接続状態を確認中…")}
           </span>
           <details className="relative shrink-0">
-            <summary aria-label="エディターの接続情報" title="エディターの接続情報" className="flex cursor-pointer list-none items-center rounded-sm p-0.5 hover:bg-muted"><Info size={13} aria-hidden="true" /></summary>
+            <summary aria-label={t("エディターの接続情報")} title={t("エディターの接続情報")} className="flex cursor-pointer list-none items-center rounded-sm p-0.5 hover:bg-muted"><Info size={13} aria-hidden="true" /></summary>
             <div className="absolute bottom-7 right-0 z-20 min-w-44 rounded border border-border bg-card p-3 shadow-lg">
-              <span data-testid="revision" className="block">リビジョン {active?.revision ?? "—"}</span>
-              {desktop && session.vimKeys !== "" && <span data-testid="vim-keys" className="mt-1 block">Vim入力 {session.vimKeys}</span>}
+          <span data-testid="revision" className="block">{t("リビジョン {{value0}}", { value0: active?.revision ?? "—" })}</span>
+              {desktop && session.vimKeys !== "" && <span data-testid="vim-keys" className="mt-1 block">{t("Vim入力 {{value0}}", { value0: session.vimKeys })}</span>}
             </div>
           </details>
         </footer>
@@ -1022,7 +1016,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         <QuickOpen
           open={quickOpen}
           paths={quickPaths}
-          label="クイックオープン"
+          label={t("クイックオープン")}
           testId="quick-open"
           onSelect={(path) => void openFileForEditing(path)}
           onClose={() => setQuickOpen(false)}
@@ -1033,7 +1027,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               key={`${staging.inlineSnapshot.documentId}:${staging.inlineSnapshot.revision}:${staging.inlineSnapshot.ranges[0]?.start}:${staging.inlineSnapshot.ranges[0]?.end}`}
               anchor={staging.inlineAnchor}
               documentId={staging.inlineSnapshot.documentId}
-              documentLabel={contextLabels[staging.inlineSnapshot.documentId] ?? "現在の文書"}
+              documentLabel={contextLabels[staging.inlineSnapshot.documentId] ?? t("現在の文書")}
               target={{
                 start: staging.inlineSnapshot.ranges[0]?.start ?? 0,
                 end: staging.inlineSnapshot.ranges[0]?.end ?? 0,
@@ -1057,6 +1051,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         <CommandPalette open={palette} commands={commands} onRun={runCommand} onClose={() => setPalette(false)} />
         {settings && (
           <SettingsPanel
+            languagePreference={props.languagePreference}
+            onLanguagePreference={props.onLanguagePreference}
             theme={theme}
             onTheme={setTheme}
             preferences={preferences}
@@ -1070,7 +1066,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               desktop
                 ? () =>
                     void (async () => {
-                      const picked = await dialogGateway!.pickConfigFile();
+                      const picked = await dialogGateway!.pickConfigFile(t("Neovim 設定ファイル"));
                       if (picked) workspace.setConfigPath(picked);
                     })()
                 : undefined
@@ -1087,7 +1083,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       {desktop && (
         <aside
           data-testid="ai-sidebar"
-          aria-label="AI サイドバー"
+          aria-label={t("AI サイドバー")}
           aria-hidden={!showAi}
           className={
             showAi
@@ -1133,24 +1129,22 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           </div>
           {staging.aiDismissed && active && (
             <button type="button" onClick={() => staging.setAiDismissed(false)} className="mt-2 w-full rounded-md border border-border px-3 py-1.5 text-xs">
-              現在の選択を送る
-            </button>
+              {t("現在の選択を送る")}</button>
           )}
           {staging.aiProposal && staging.aiProposal.mode !== "ask" && (
             <details data-testid="ai-proposal" className="mt-3 max-h-48 min-h-0 overflow-y-auto border-t border-border pt-2 text-xs">
-              <summary className="cursor-pointer text-muted-foreground">提案の Markdown</summary>
-              <p className="font-medium">AI の提案</p>
+              <summary className="cursor-pointer text-muted-foreground">{t("提案の Markdown")}</summary>
+              <p className="font-medium">{t("AI の提案")}</p>
               <p className="mt-1 whitespace-pre-wrap">{staging.aiProposal.proposal.text}</p>
               <p
                 className="mt-1 text-muted-foreground"
                 title={staging.aiProposal.proposal.baseContexts.map((ref) => `rev ${ref.revision}`).join(", ")}
               >
-                対象: {staging.aiProposal.proposal.baseContexts.map((ref) => contextLabels[ref.documentId] ?? "現在の文書").join(", ")}
+                {t("対象:")}{staging.aiProposal.proposal.baseContexts.map((ref) => contextLabels[ref.documentId] ?? t("現在の文書")).join(", ")}
               </p>
-              <p className="mt-1 text-muted-foreground">適用は上の差分レビューで行います。</p>
+              <p className="mt-1 text-muted-foreground">{t("適用は上の差分レビューで行います。")}</p>
               <button type="button" onClick={() => staging.setAiProposal(null)} className="mt-2 w-full rounded-md border border-border px-3 py-1.5">
-                却下する
-              </button>
+                {t("却下する")}</button>
             </details>
           )}
         </aside>

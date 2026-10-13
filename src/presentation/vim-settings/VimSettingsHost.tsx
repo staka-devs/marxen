@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n/I18nProvider";
 import type { VimSettingsGateway } from "../../application/vim-settings/ports";
 import type { DialogGateway } from "../../application/ports";
 import { useVimSettings } from "./useVimSettings";
@@ -13,10 +14,11 @@ interface Props {
 
 /** Bind the settings editor to injected native ports without restarting Neovim on save. */
 export function VimSettingsHost({ gateway, initialPath, onSaved, dialogGateway }: Props) {
+  const { t } = useI18n();
   const model = useVimSettings({ gateway, initialPath, onSaved });
   /** Browse for one config file and load it through the same guarded editor. */
   async function browse() {
-    const picked = await dialogGateway?.pickConfigFile();
+    const picked = await dialogGateway?.pickConfigFile(t("Neovim 設定ファイル"));
     if (picked) model.setSelectedPath(picked);
   }
   return <VimSettingsPanel model={model} onBrowseConfig={dialogGateway ? () => void browse() : undefined} />;

@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n/I18nProvider";
 import { useMemo, useState } from "react";
 import { fuzzyMatch } from "../../domain/workspace-content";
 import { QuickPicker } from "./QuickPicker";
@@ -22,7 +23,8 @@ export function CommandPalette({ open, ...props }: Props) {
 
 /** Filter commands with the shared picker while preserving their accessible labels. */
 function CommandPicker({ commands, onRun, onClose }: Omit<Props, "open">) {
+  const { t } = useI18n();
   const [query, setQuery] = useState("");
   const items = useMemo(() => commands.filter((command) => fuzzyMatch(query, command.label)).slice(0, 20), [commands, query]);
-  return <QuickPicker label="コマンドパレット" inputLabel="コマンドで絞り込む" placeholder="コマンドを入力…" testId="command-palette" query={query} items={items} emptyText="一致するコマンドがありません" onQuery={setQuery} onSelect={onRun} onClose={onClose} />;
+  return <QuickPicker label={t("コマンドパレット")} inputLabel={t("コマンドで絞り込む")} placeholder={t("コマンドを入力…")} testId="command-palette" query={query} items={items} emptyText={t("一致するコマンドがありません")} onQuery={setQuery} onSelect={onRun} onClose={onClose} />;
 }

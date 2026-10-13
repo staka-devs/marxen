@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n/I18nProvider";
 import { useRef, useState } from "react";
 import { ChevronDown, ChevronRight, FileCode2, FileText, Folder, FolderOpen, Image } from "lucide-react";
 import type { WorkspaceEntry, WorkspaceFileKind } from "../../contracts/contracts";
@@ -135,8 +136,9 @@ function Node({ node, activePath, onOpenFile, depth, desktop = false }: NodeProp
  * injects it so this view never imports the Tauri transport directly.
  */
 export function FileTree({ nodes, activePath, onOpenFile, desktop = false }: Props) {
-  return <nav data-testid="file-tree" aria-label="フォルダーツリー" className="overflow-auto">
-    <ul role="tree" aria-label="ワークスペース" className="py-1">{nodes.map(node =>
+  const { t } = useI18n();
+  return <nav data-testid="file-tree" aria-label={t("フォルダーツリー")} className="overflow-auto">
+    <ul role="tree" aria-label={t("ワークスペース")} className="py-1">{nodes.map(node =>
       <Node key={node.path} node={node} activePath={activePath} onOpenFile={onOpenFile} depth={0} desktop={desktop} />
     )}</ul>
   </nav>;

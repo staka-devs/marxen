@@ -1,6 +1,6 @@
 # Marxen の実装契約
 
-Rust / Tauri v2、React / TypeScript / Vite / Tailwind / shadcn/ui、CodeMirror 6 を使い、同梱した実 Neovim を文書の正本にする。日本語 UI、ライブプレビュー、Vim 操作を既定とする。
+Rust / Tauri v2、React / TypeScript / Vite / Tailwind / shadcn/ui、CodeMirror 6 を使い、同梱した実 Neovim を文書の正本にする。初回の表示言語はホストの主言語から日本語または英語を選び、設定で言語と地域表現を変更できる。ライブプレビュー、Vim 操作を既定とする。
 
 ## 作業と担当
 

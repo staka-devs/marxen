@@ -1,3 +1,4 @@
+import { useI18n } from "./i18n/I18nProvider";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Send, Square, X } from "lucide-react";
 import { Button } from "./ui/button";
@@ -78,6 +79,7 @@ export default function InlineChat({
   startPrompt: startPromptProp,
   modelControls,
 }: InlineChatProps) {
+  const { t } = useI18n();
   /** Injected streaming transport; throws visibly when not wired. */
   const startPromptFn: AiGateway["startPrompt"] = startPromptProp ?? (async () => { throw new Error("AI transport is not wired."); });
   const [prompt, setPrompt] = useState("");
@@ -152,7 +154,7 @@ export default function InlineChat({
       if (!run.isCurrent(token)) { setBusy(false, token); return; }
       setRunning(false);
       setBusy(false);
-      setError(normalizeAiError(cause));
+      setError(normalizeAiError(cause, t));
       return;
     }
     if (!run.isCurrent(token)) { setBusy(false, token); return; }
@@ -175,6 +177,7 @@ export default function InlineChat({
       const session = await startPromptFn(request, (event) => {
         if (!run.isCurrent(token)) return;
         if (run.isSettled(token)) return;
+        if (event.type === "usage") return;
         if (run.isCancelRequested()) {
           if (event.type === "chunk" || event.type === "started") return;
           run.markSettled(token);
@@ -220,7 +223,7 @@ export default function InlineChat({
       run.markSettled(token);
       setRunning(false);
       setBusy(false);
-      setError(normalizeAiError(cause));
+      setError(normalizeAiError(cause, t));
     }
   }
 
@@ -239,7 +242,7 @@ export default function InlineChat({
     <div
       ref={dialogRef}
       role="dialog"
-      aria-label="インラインチャット"
+      aria-label={t("インラインチャット")}
       data-testid="inline-chat"
       className="ai-chat-inline fixed z-40 max-h-[calc(100dvh-24px)] w-80 max-w-[calc(100vw-24px)] overflow-y-auto rounded-md border border-border bg-card px-2.5 py-2 shadow-lg"
       style={anchor ? position : undefined}
@@ -247,13 +250,13 @@ export default function InlineChat({
     >
       <div className="ai-chat-inline-header flex items-center gap-1">
         <p className="min-w-0 flex-1 truncate text-xs font-semibold">
-          インラインチャット（{target.kind === "selection" ? "選択" : "段落"}）
+          {t("インラインチャット（")}{target.kind === "selection" ? t("選択") : t("段落")}）
         </p>
-        <span className="shrink-0 rounded border border-border px-1 py-px text-[10px] leading-4 text-muted-foreground">書き換え</span>
+        <span className="shrink-0 rounded border border-border px-1 py-px text-[10px] leading-4 text-muted-foreground">{t("書き換え")}</span>
         <button
           type="button"
-          aria-label="インラインチャットを閉じる"
-          title="閉じる"
+          aria-label={t("インラインチャットを閉じる")}
+          title={t("閉じる")}
           className="shrink-0 rounded p-1 hover:bg-muted"
           onClick={() => {
             void handleCancel().finally(() => onClose());
@@ -276,42 +279,40 @@ export default function InlineChat({
         )}
         <textarea
           ref={inputRef}
-          aria-label="インライン指示"
+          aria-label={t("インライン指示")}
           className="ai-chat-composer-input block max-h-32 min-h-10 w-full overflow-y-auto px-1 py-1 text-[13px] leading-6"
           rows={2}
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
-          placeholder="選択範囲への指示を書きます"
+          placeholder={t("選択範囲への指示を書きます")}
         />
         <div className="mt-1 flex items-center gap-1">
-          <Button size="sm" aria-label="インライン送信" title="インライン送信" onClick={() => void handleSend()} disabled={running || disabled || prompt.trim() === ""} className="ai-chat-action shrink-0">
+          <Button size="sm" aria-label={t("インライン送信")} title={t("インライン送信")} onClick={() => void handleSend()} disabled={running || disabled || prompt.trim() === ""} className="ai-chat-action shrink-0">
             <Send size={13} aria-hidden="true" />
-            {running ? "送信中…" : "送信"}
+            {running ? t("送信中…") : t("送信")}
           </Button>
           {running && (
-            <Button variant="outline" size="sm" aria-label="インライン取消" title="インライン取消" onClick={() => void handleCancel()} className="ai-chat-action shrink-0">
+            <Button variant="outline" size="sm" aria-label={t("インライン取消")} title={t("インライン取消")} onClick={() => void handleCancel()} className="ai-chat-action shrink-0">
               <Square size={12} aria-hidden="true" />
-              取消
-            </Button>
+              {t("取消")}</Button>
           )}
           {proposal && (
-            <Button variant="outline" size="sm" aria-label="差分を確認" title="提案を作業コピーに取り込み差分を確認します" onClick={onReview} className="ai-chat-action shrink-0">
-              差分を確認
-            </Button>
+            <Button variant="outline" size="sm" aria-label={t("差分を確認")} title={t("提案を作業コピーに取り込み差分を確認します")} onClick={onReview} className="ai-chat-action shrink-0">
+              {t("差分を確認")}</Button>
           )}
         </div>
       </div>
-      {disabled && <p className="mt-1 text-[11px] text-muted-foreground">他の応答を生成しています。</p>}
+      {disabled && <p className="mt-1 text-[11px] text-muted-foreground">{t("他の応答を生成しています。")}</p>}
       <div aria-live="polite" className="ai-chat-inline-result mt-1 border-t border-border/60 pt-1.5 empty:hidden empty:border-t-0 empty:pt-0">
         {output && !proposal && <p className="max-h-40 overflow-y-auto whitespace-pre-wrap text-[13px] leading-6">{output}</p>}
-        {cancelled && <p className="text-xs text-muted-foreground">取り消しました。</p>}
+        {cancelled && <p className="text-xs text-muted-foreground">{t("取り消しました。")}</p>}
         {error && (
-          <p role="alert" className="text-xs font-medium text-red-600">{describeAiError(error)}</p>
+          <p role="alert" className="text-xs font-medium text-red-600">{describeAiError(error, t)}</p>
         )}
         {proposal && (
           <div className="py-0.5">
-            <p className="text-[11px] text-muted-foreground">提案 • 差分確認のうえ取り込みます</p>
-            <div className="marxen-chat-body mt-1 max-h-48 overflow-y-auto"><MarkdownPreview text={proposal.text} label="インラインの提案" testId="inline-response" /></div>
+            <p className="text-[11px] text-muted-foreground">{t("提案 • 差分確認のうえ取り込みます")}</p>
+            <div className="marxen-chat-body mt-1 max-h-48 overflow-y-auto"><MarkdownPreview text={proposal.text} label={t("インラインの提案")} testId="inline-response" /></div>
           </div>
         )}
       </div>

@@ -1,3 +1,4 @@
+import { LocalizedError } from "../../domain/localized-error";
 // Tauri AI transport (infrastructure).
 //
 // `ai_*` IPC, credential store, and stream subscription. The early-event
@@ -21,13 +22,13 @@ import { cancelPromptSafe as cancelPromptSafeCore } from "../../application/ai/a
 import type { AiGateway } from "../../application/ports";
 
 /**
- * Require the desktop transport, throwing a Japanese message in the browser.
+ * Require the desktop transport, throwing a localizable error in the browser.
  *
  * AI features never run in the read-only browser demo.
  */
 export function requireDesktop(): void {
   if (!isTauri()) {
-    throw new Error("AI 機能はデスクトップアプリで利用します。ブラウザ表示では使えません。");
+    throw new LocalizedError("AI 機能はデスクトップアプリで利用します。ブラウザ表示では使えません。");
   }
 }
 

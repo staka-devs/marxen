@@ -1,3 +1,4 @@
+import { LocalizedError } from "../../domain/localized-error";
 // Tauri vim-settings gateway (infrastructure).
 //
 // All `vim_settings_*` IPC lives here. No React, no DOM rendering: callers
@@ -15,7 +16,7 @@ import type { VimConfigRead, VimConfigWrite, VimSettings } from "../../contracts
  * rejects outside Tauri so the browser demo keeps manual inputs only.
  */
 async function readVimSettings(path: string | null): Promise<VimConfigRead> {
-  if (!isTauri()) throw new Error("Vim設定ファイルの読込はデスクトップアプリで行います。");
+  if (!isTauri()) throw new LocalizedError("Vim設定ファイルの読込はデスクトップアプリで行います。");
   return invoke<VimConfigRead>("vim_settings_read", { path });
 }
 
@@ -29,7 +30,7 @@ async function writeManagedVimSettings(
   expectedFingerprint: string | null,
   settings: VimSettings,
 ): Promise<VimConfigWrite> {
-  if (!isTauri()) throw new Error("Vim設定ファイルの保存はデスクトップアプリで行います。");
+  if (!isTauri()) throw new LocalizedError("Vim設定ファイルの保存はデスクトップアプリで行います。");
   return invoke<VimConfigWrite>("vim_settings_write_managed", {
     path,
     expectedFingerprint,
@@ -47,7 +48,7 @@ async function writeRawVimSettings(
   expectedFingerprint: string | null,
   raw: string,
 ): Promise<VimConfigWrite> {
-  if (!isTauri()) throw new Error("Vim設定ファイルの保存はデスクトップアプリで行います。");
+  if (!isTauri()) throw new LocalizedError("Vim設定ファイルの保存はデスクトップアプリで行います。");
   return invoke<VimConfigWrite>("vim_settings_write_raw", { path, expectedFingerprint, raw });
 }
 

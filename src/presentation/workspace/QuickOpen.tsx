@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n/I18nProvider";
 import { useMemo, useState } from "react";
 import { FileText, Image } from "lucide-react";
 import { filterPaths } from "../../domain/workspace-content";
@@ -22,6 +23,7 @@ export function QuickOpen({ open, ...props }: Props) {
 
 /** Search workspace paths with filename, folder, and type icon in separate columns. */
 function FilePicker({ paths, label, testId, onSelect, onClose }: Omit<Props, "open">) {
+  const { t } = useI18n();
   const [query, setQuery] = useState("");
   const items = useMemo(() => filterPaths(paths, query).slice(0, 20).map((path) => {
     const normalized = path.replaceAll("\\", "/");
@@ -29,5 +31,5 @@ function FilePicker({ paths, label, testId, onSelect, onClose }: Omit<Props, "op
     const Icon = isImagePath(path) ? Image : FileText;
     return { id: path, accessibleLabel: path, label: normalized.slice(at + 1), detail: at < 0 ? "" : normalized.slice(0, at), icon: <Icon size={14} className="shrink-0 text-primary/70" aria-hidden="true" /> };
   }), [paths, query]);
-  return <QuickPicker label={label} inputLabel="ファイル名で絞り込む" placeholder="ファイル名を入力…" testId={testId} query={query} items={items} emptyText="一致するファイルがありません" onQuery={setQuery} onSelect={onSelect} onClose={onClose} />;
+  return <QuickPicker label={label} inputLabel={t("ファイル名で絞り込む")} placeholder={t("ファイル名を入力…")} testId={testId} query={query} items={items} emptyText={t("一致するファイルがありません")} onQuery={setQuery} onSelect={onSelect} onClose={onClose} />;
 }

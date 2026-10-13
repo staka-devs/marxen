@@ -9,6 +9,7 @@ import { createLivePreview, type LivePreviewCallbacks } from "./livePreview";
 import { blockCursorWidth } from "./cursorWidth";
 import type { ImageResolver } from "../../domain/image-sources";
 import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../domain/editor-preferences";
+import { useI18n } from "../i18n/I18nProvider";
 
 export interface EditorSelection {
   anchor: number;
@@ -107,11 +108,17 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
 }
 
 /** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, snapshot, shouldUseNativeCursor, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true, focusRequest = 0 }: Props) {
+  const { t, language } = useI18n();
+  const languageRef = useRef(language);
+  languageRef.current = language;
+  const translatorRef = useRef(t);
+  translatorRef.current = t;
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const editableRef = useRef(new Compartment());
   const liveRef = useRef(new Compartment());
   const appearanceRef = useRef(new Compartment());
+  const accessibilityRef = useRef(new Compartment());
   const syncing = useRef(false);
   const composing = useRef(false);
   const printableKey = useRef<string | undefined>(undefined);
@@ -137,6 +144,8 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
       /** Forward widget edits to the current GUI handler. */
       onGuiEdits: (edits) => callbacks.current.onGuiEdits?.(edits, viewRef.current?.state.doc.toString() ?? valueRef.current),
       resolveImage: resolveImageRef.current,
+      translator: translatorRef.current,
+      language: languageRef.current,
       /** Move the editor cursor into a source span and focus it. */
       focusSource: (from, to) => {
         const view = viewRef.current;
@@ -172,7 +181,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
           appearanceRef.current.of([]),
           editableRef.current.of(EditorView.editable.of(editableRefValue.current)),
           liveRef.current.of([]),
-          EditorView.contentAttributes.of({ "aria-label": ariaLabel, role: "textbox", tabindex: "0" }),
+          accessibilityRef.current.of(EditorView.contentAttributes.of({ "aria-label": ariaLabel, role: "textbox", tabindex: "0" })),
           EditorView.theme({
             "&": { backgroundColor: "transparent", fontSize: "14px", height: "100%" },
             ".cm-content": { fontFamily: "inherit", padding: "32px 0 80px" },
@@ -256,9 +265,13 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
       view.destroy();
       viewRef.current = null;
     };
-    // Mount once; value/editable sync below. ariaLabel/testId are static per pane.
+    // Mount once; document, selection, editable and translated labels sync below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: accessibilityRef.current.reconfigure(EditorView.contentAttributes.of({ "aria-label": ariaLabel, role: "textbox", tabindex: "0" })) });
+  }, [ariaLabel]);
 
   useEffect(() => {
     if (focusRequest <= 0 || document.querySelector('[aria-modal="true"]')) return;
@@ -315,7 +328,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
     view.dispatch({
       effects: liveRef.current.reconfigure(livePreview ? createLivePreview(getLiveCallbacks) : []),
     });
-  }, [livePreview, getLiveCallbacks]);
+  }, [livePreview, getLiveCallbacks, t, language]);
 
   // Vim cursor echo: apply once per sequence token without disturbing
   // composition or the user's active selection gestures. The programmatic

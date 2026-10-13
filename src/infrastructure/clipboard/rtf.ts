@@ -1,3 +1,4 @@
+import { LocalizedError } from "../../domain/localized-error";
 /**
  * Escape text for RTF output, preserving emoji as UTF-16 escapes.
  *
@@ -34,7 +35,7 @@ async function picture(img: HTMLImageElement): Promise<string> {
   if (/^data:image\/png;base64,/i.test(source)) {
     const binary = atob(source.slice(source.indexOf(",") + 1));
     const bytes = Uint8Array.from(binary.slice(0, 24), (char) => char.charCodeAt(0));
-    if (bytes.length < 24) throw new Error("コピー画像の PNG ヘッダーが不正です。");
+    if (bytes.length < 24) throw new LocalizedError("コピー画像の PNG ヘッダーが不正です。");
     const view = new DataView(bytes.buffer);
     width = view.getUint32(16);
     height = view.getUint32(20);
@@ -45,18 +46,18 @@ async function picture(img: HTMLImageElement): Promise<string> {
     try {
       await Promise.race([
         decoded.decode(),
-        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("コピー画像の読み込みがタイムアウトしました。")), 10_000); }),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new LocalizedError("コピー画像の読み込みがタイムアウトしました。")), 10_000); }),
       ]);
       width = decoded.naturalWidth;
       height = decoded.naturalHeight;
       if (/^data:image\/jpeg;base64,/i.test(source)) kind = "jpegblip";
       else {
-        if (width * height > 40_000_000) throw new Error("コピー画像の寸法が大きすぎます。");
+        if (width * height > 40_000_000) throw new LocalizedError("コピー画像の寸法が大きすぎます。");
         const canvas = document.createElement("canvas");
         canvas.width = width;
         canvas.height = height;
         const context = canvas.getContext("2d");
-        if (!context) throw new Error("コピー画像の変換に失敗しました。");
+        if (!context) throw new LocalizedError("コピー画像の変換に失敗しました。");
         context.drawImage(decoded, 0, 0);
         source = canvas.toDataURL("image/png");
       }
@@ -64,7 +65,7 @@ async function picture(img: HTMLImageElement): Promise<string> {
       clearTimeout(timer);
     }
   }
-  if (width === 0 || height === 0 || width > 32768 || height > 32768) throw new Error("コピー画像の寸法が不正です。");
+  if (width === 0 || height === 0 || width > 32768 || height > 32768) throw new LocalizedError("コピー画像の寸法が不正です。");
   const binary = atob(source.slice(source.indexOf(",") + 1));
   const hex = Array.from(binary, (char) => char.charCodeAt(0).toString(16).padStart(2, "0")).join("");
   const scale = Math.min(1, 640 / width);

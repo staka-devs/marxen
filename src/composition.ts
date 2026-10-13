@@ -18,6 +18,9 @@ import { aiProfileStore } from "./infrastructure/storage/ai-profile-store";
 import { editorPreferencesStore } from "./infrastructure/storage/editor-preferences-store";
 import { imageLoader } from "./infrastructure/images/image-loader";
 import { vimSettingsGateway } from "./infrastructure/vim-settings/tauri-vim-settings";
+import { languagePreferenceStore } from "./infrastructure/storage/language-preference-store";
+import { createTranslator } from "./infrastructure/localization/i18next-translator";
+import { systemLocaleSource } from "./infrastructure/localization/browser-locale";
 import type {
   DocumentGateway,
   DocumentTransport,
@@ -53,6 +56,9 @@ export function createComposition() {
     editorPreferencesStore,
     imageLoader,
     vimSettingsGateway: desktop ? vimSettingsGateway : undefined,
+    languagePreferenceStore,
+    createTranslator,
+    systemLocaleSource,
   };
 }
 

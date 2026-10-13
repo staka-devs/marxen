@@ -6,6 +6,7 @@
 
 import { isDesktop } from "../tauri/workspace-api";
 import type { DialogGateway } from "../../application/ports";
+import { japaneseMessages } from "../../contracts/localization-messages";
 
 /**
  * Open the native folder picker, returning the selected absolute path.
@@ -13,10 +14,10 @@ import type { DialogGateway } from "../../application/ports";
  * Returns null when cancelled or when running outside Tauri (browser demo,
  * jsdom) so callers fall back to manual inputs.
  */
-export async function pickFolder(): Promise<string | null> {
+export async function pickFolder(title: string = japaneseMessages["フォルダーを開く"]): Promise<string | null> {
   if (!isDesktop()) return null;
   const { open } = await import("@tauri-apps/plugin-dialog");
-  const selected = await open({ directory: true, multiple: false, title: "フォルダーを開く" });
+  const selected = await open({ directory: true, multiple: false, title });
   return typeof selected === "string" ? selected : null;
 }
 
@@ -26,10 +27,10 @@ export async function pickFolder(): Promise<string | null> {
  * The filename is validated by the caller against supported vimrc names;
  * returns null when cancelled or unavailable.
  */
-export async function pickConfigFile(): Promise<string | null> {
+export async function pickConfigFile(title: string = japaneseMessages["Neovim 設定ファイル"]): Promise<string | null> {
   if (!isDesktop()) return null;
   const { open } = await import("@tauri-apps/plugin-dialog");
-  const selected = await open({ directory: false, multiple: false, title: "Neovim 設定ファイルを選ぶ" });
+  const selected = await open({ directory: false, multiple: false, title });
   return typeof selected === "string" ? selected : null;
 }
 

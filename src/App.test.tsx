@@ -21,7 +21,11 @@ vi.mock("@tauri-apps/api/core", () => ({
   /** Browser demo flag for read-only shell tests. */
   isTauri: () => false,
 }));
-beforeEach(() => vi.resetAllMocks());
+beforeEach(() => {
+  vi.resetAllMocks();
+  window.localStorage.clear();
+  vi.spyOn(navigator, "language", "get").mockReturnValue("ja-JP");
+});
 
 it("shows the Japanese workspace shell with disconnected status", async () => {
   vi.mocked(readRuntimeStatus).mockResolvedValue({
@@ -89,4 +93,31 @@ it("switches live/source/read/split without losing the document", async () => {
   expect(screen.getByTestId("preview").textContent).toBe(before);
   fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "live" } });
   expect(screen.getByTestId("editor-primary")).toBeVisible();
+});
+
+it("renders English menus from the OS locale and restores an explicit Japanese choice after recreation", async () => {
+  vi.spyOn(navigator, "language", "get").mockReturnValue("en-US");
+  vi.mocked(readRuntimeStatus).mockResolvedValue({ contractVersion: 1, connection: "disconnected", detail: "browser" });
+  const first = render(<App />);
+  await screen.findByTestId("editor-primary");
+  expect(screen.getByRole("navigation", { name: "Activity" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+  expect(screen.getByRole("menuitem", { name: "Quick open" })).toBeVisible();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Command palette" }));
+  expect(await screen.findByText("File: Save")).toBeVisible();
+  fireEvent.keyDown(screen.getByLabelText("Filter commands"), { key: "Escape" });
+  fireEvent.click(screen.getByRole("button", { name: "Toggle settings" }));
+  fireEvent.change(screen.getByLabelText("Search settings"), { target: { value: "font size" } });
+  expect(screen.getByLabelText("Font size")).toBeVisible();
+  fireEvent.change(screen.getByLabelText("Search settings"), { target: { value: "" } });
+  fireEvent.change(screen.getByLabelText("Language"), { target: { value: "ja-JP" } });
+  expect(screen.getByRole("dialog", { name: "設定" })).toBeVisible();
+  fireEvent.keyDown(screen.getByRole("dialog", { name: "設定" }), { key: "Escape" });
+  fireEvent.click(screen.getByRole("button", { name: "その他の操作" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "コマンドパレット" }));
+  expect(await screen.findByText("ファイル: 保存する")).toBeVisible();
+  first.unmount();
+  render(<App />);
+  await screen.findByTestId("editor-primary");
+  expect(screen.getByRole("navigation", { name: "アクティビティ" })).toBeVisible();
 });

@@ -1,3 +1,5 @@
+import type { Translator } from "../../contracts/localization";
+import { japaneseTranslator } from "../../domain/localization";
 // Inline live preview for the CodeMirror editor (Issue #6, ADR-0061).
 //
 // A CodeMirror StateField maps shared-AST block ranges to replacement
@@ -25,6 +27,8 @@ import type { ImageResolver } from "../../domain/image-sources";
 import type { TextEdit } from "../../contracts/contracts";
 
 export interface LivePreviewCallbacks {
+  translator?: Translator;
+  language?: import("../../contracts/language").Language;
   /** Forward widget commits as wire range edits. */
   onGuiEdits?: (edits: TextEdit[]) => void;
   /** Move the editor cursor into a source span (activates its block). */
@@ -38,8 +42,8 @@ const htmlCache = new Map<string, string>();
 const inflight = new Map<string, Promise<string>>();
 const MAX_CACHE_ENTRIES = 300;
 
-/** Cache key pinning exact block text and link definitions. */ function cacheKey(kind: string, blockText: string, defs: string): string {
-  return `${kind}\n${blockText}<DEFS>${defs}`;
+/** Cache key pinning exact block text and link definitions. */ function cacheKey(kind: string, blockText: string, defs: string, language: string): string {
+  return `${language}\n${kind}\n${blockText}<DEFS>${defs}`;
 }
 
 /** Remember rendered HTML with LRU eviction at 300 entries. */ function rememberHtml(key: string, html: string): void {
@@ -50,18 +54,18 @@ const MAX_CACHE_ENTRIES = 300;
   }
 }
 
-/** Render one block to HTML with cache and inflight dedup, never throwing. */ function renderBlockHtml(key: string, blockText: string, defs: string): Promise<string> {
+/** Render one block to HTML with cache and inflight dedup, never throwing. */ function renderBlockHtml(key: string, blockText: string, defs: string, t: Translator = japaneseTranslator): Promise<string> {
   const hit = htmlCache.get(key);
   if (hit !== undefined) return Promise.resolve(hit);
   const running = inflight.get(key);
   if (running) return running;
-  const task = renderMarkdownDocument(blockText + (defs === "" ? "" : `\n\n${defs}`))
+  const task = renderMarkdownDocument(blockText + (defs === "" ? "" : `\n\n${defs}`), t)
     .then((result) => {
       rememberHtml(key, result.html);
       return result.html;
     })
     .catch(() => {
-      const fallback = `<div class="marxen-error" role="alert">描画できませんでした。Markdownは保持されています。</div>`;
+      const fallback = t("<div class=\"marxen-error\" role=\"alert\">描画できませんでした。Markdownは保持されています。</div>");
       rememberHtml(key, fallback);
       return fallback;
     })
@@ -151,7 +155,7 @@ class LiveBlockWidget extends WidgetType {
     if (dom.dataset.liveFilled !== this.key) {
       abortHost(dom);
       disposeMarkdownView(dom);
-      dom.innerHTML = `<div class="marxen-live-loading" aria-hidden="true">描画しています…</div>`;
+      dom.innerHTML = `<div class="marxen-live-loading" aria-hidden="true">${(this.getCallbacks().translator ?? japaneseTranslator)("描画しています…")}</div>`;
       void this.fillAsync(dom, view);
     }
     return true;
@@ -185,7 +189,7 @@ class LiveBlockWidget extends WidgetType {
     if (cached !== undefined) {
       this.fill(host, cached);
     } else {
-      host.innerHTML = `<div class="marxen-live-loading" aria-hidden="true">描画しています…</div>`;
+      host.innerHTML = `<div class="marxen-live-loading" aria-hidden="true">${(this.getCallbacks().translator ?? japaneseTranslator)("描画しています…")}</div>`;
       void this.fillAsync(host, view);
     }
     return host;
@@ -197,7 +201,7 @@ class LiveBlockWidget extends WidgetType {
   }
 
   /** Fill asynchronously with stale guards for replaced views. */ private async fillAsync(host: HTMLElement, view: EditorView): Promise<void> {
-    const html = await renderBlockHtml(this.key, this.blockText, this.defs);
+    const html = await renderBlockHtml(this.key, this.blockText, this.defs, this.getCallbacks().translator ?? japaneseTranslator);
     // Stale guard: the widget may have been replaced or the view destroyed
     // while rendering. The key pins exact block text, so a connected node
     // with this key is always current.
@@ -226,7 +230,7 @@ class LiveBlockWidget extends WidgetType {
     abortHost(host);
     const controller = new AbortController();
     (host as unknown as { __liveController?: AbortController }).__liveController = controller;
-    void hydrateMarkdownView(body, controller.signal);
+    void hydrateMarkdownView(body, controller.signal, this.getCallbacks().translator ?? japaneseTranslator);
     // Local images resolve on the same widget lifecycle: abort and dispose
     // (via destroy) also cancel or detach their late bytes. The binding
     // carries the current resolver so rebinds never use a stale loader.
@@ -358,7 +362,7 @@ class LiveBlockWidget extends WidgetType {
     }
     const text = docText.slice(block.from, block.to);
     decorations.push(Decoration.replace({
-        widget: new LiveBlockWidget(cacheKey(block.kind, text, defs), block.kind, block.from, text, defs, getCallbacks),
+        widget: new LiveBlockWidget(cacheKey(block.kind, text, defs, getCallbacks().language ?? "ja-JP"), block.kind, block.from, text, defs, getCallbacks),
         block: true,
       }).range(block.from, block.to));
   }

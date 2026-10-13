@@ -1,3 +1,7 @@
+import { opaqueErrorText } from "../../domain/localized-error";
+import type { LocalizedText } from "../../contracts/localization";
+import { localizedFailure, renderLocalizedText } from "../../domain/localization";
+import { useI18n } from "../i18n/I18nProvider";
 // Vim-settings editor state over the application use case (presentation).
 //
 // Owns the selected config path, the loaded fingerprint-guarded file, the
@@ -78,6 +82,7 @@ export interface VimSettingsModel {
  * touched here, so unsaved text survives saves and applies.
  */
 export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
+  const { t, message, language } = useI18n();
   const { gateway, initialPath = null, onSaved } = args;
   const [selectedPath, changeSelectedPath] = useState(initialPath ?? "");
   const selectedPathRef = useRef(selectedPath);
@@ -89,8 +94,8 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
   const [busy, setBusy] = useState(false);
   const [settings, setSettings] = useState<VimSettings>(defaultVimSettings());
   const [rawDraft, setRawDraft] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<LocalizedText | null>(null);
+  const [notice, setNotice] = useState<LocalizedText | null>(null);
   /** Latest gateway without retriggering the load effect on identity change. */
   const gatewayRef = useRef(gateway);
   gatewayRef.current = gateway;
@@ -125,9 +130,9 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
       setLoaded(read);
       setSettings(read.managedError ? defaultVimSettings() : read.settings);
       setRawDraft(read.raw);
-      setNotice(read.exists ? null : "設定ファイルはまだありません。保存すると新規作成します。");
+      setNotice(read.exists ? null : message("設定ファイルはまだありません。保存すると新規作成します。"));
     } catch (cause) {
-      if (token === operation.current) setError(cause instanceof Error ? cause.message : String(cause));
+      if (token === operation.current) setError(localizedFailure(cause, opaqueErrorText));
     } finally {
       if (token === operation.current) setBusy(false);
     }
@@ -142,7 +147,7 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
   const saveManaged = useCallback(async () => {
     if (writing.current || busy || !loaded || loadedFor.current !== selectedPath) return;
     if (rawDraft !== loaded.raw) {
-      setError("設定コードに未保存の変更があります。先に設定コードを保存してください。");
+      setError(message("設定コードに未保存の変更があります。先に設定コードを保存してください。"));
       return;
     }
     writing.current = true;
@@ -156,17 +161,16 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
         gatewayRef.current,
         path,
         loaded?.fingerprint ?? null,
-        settings,
-      );
+        settings, t);
       const read = await loadVimSettings(gatewayRef.current, path);
       if (token !== operation.current) return;
       setLoaded(read);
       setSettings(read.managedError ? defaultVimSettings() : read.settings);
       setRawDraft(read.raw);
-      setNotice("管理ブロックを保存しました。設定の適用でNeovimを再起動します。");
+      setNotice(message("管理ブロックを保存しました。設定の適用でNeovimを再起動します。"));
       savedRef.current?.(written.path);
     } catch (cause) {
-      if (token === operation.current) setError(cause instanceof Error ? cause.message : String(cause));
+      if (token === operation.current) setError(localizedFailure(cause, opaqueErrorText));
     } finally {
       writing.current = false;
       if (token === operation.current) setBusy(false);
@@ -189,10 +193,10 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
       setLoaded(read);
       setSettings(read.managedError ? defaultVimSettings() : read.settings);
       setRawDraft(read.raw);
-      setNotice("設定コードを保存しました。設定の適用でNeovimを再起動します。");
+      setNotice(message("設定コードを保存しました。設定の適用でNeovimを再起動します。"));
       savedRef.current?.(written.path);
     } catch (cause) {
-      if (token === operation.current) setError(cause instanceof Error ? cause.message : String(cause));
+      if (token === operation.current) setError(localizedFailure(cause, opaqueErrorText));
     } finally {
       writing.current = false;
       if (token === operation.current) setBusy(false);
@@ -200,7 +204,7 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
   }, [selectedPath, loaded, rawDraft, busy]);
 
   /** Structured validation details for the current draft. */
-  const validation = useMemo(() => validateVimSettings(settings), [settings]);
+  const validation = useMemo(() => validateVimSettings(settings, t), [settings, language]);
   /** Whether the loaded file is Lua raw-only. */
   const isLua = loaded?.isLua ?? false;
   /** Managed-block parse failure from the last load, if any. */
@@ -208,16 +212,16 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
   const previewed = useMemo(() => {
     if (!loaded) return { preview: null as string | null, previewError: null as string | null, changed: false };
     try {
-      const { next, changed } = previewVimSettings(loaded.raw, settings, loaded.path);
+      const { next, changed } = previewVimSettings(loaded.raw, settings, loaded.path, t);
       return { preview: next, previewError: null as string | null, changed };
     } catch (cause) {
       return {
         preview: null as string | null,
-        previewError: cause instanceof Error ? cause.message : String(cause),
+        previewError: localizedFailure(cause, opaqueErrorText),
         changed: false,
       };
     }
-  }, [loaded, settings]);
+  }, [loaded, settings, language]);
 
   return {
     selectedPath,
@@ -232,11 +236,11 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
     managedError,
     validation,
     preview: previewed.preview,
-    previewError: previewed.previewError,
+    previewError: previewed.previewError === null ? null : renderLocalizedText(previewed.previewError, t),
     changed: previewed.changed,
     rawDirty: loaded ? rawDraft !== loaded.raw : false,
-    error,
-    notice,
+    error: error === null ? null : renderLocalizedText(error, t),
+    notice: notice === null ? null : renderLocalizedText(notice, t),
     reload,
     saveManaged,
     saveRaw,

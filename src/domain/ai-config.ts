@@ -1,3 +1,8 @@
+import type { LabelKey } from "../contracts/localization";
+import type { FrontendAiError, Translator } from "../contracts/localization";
+import { japaneseTranslator } from "./localization";
+import { renderLocalizedText } from "./localization";
+import { LocalizableError } from "./localized-error";
 // Deterministic AI provider configuration (domain).
 //
 // Pure labels, defaults, builders, and error text. No Tauri, DOM, React, or
@@ -155,54 +160,55 @@ export function formatRanges(context: PromptContext): string {
  * Includes document ID, revision, ranges, and Unicode character count so
  * review surfaces never show internal IDs alone.
  */
-export function summarizeContext(context: PromptContext): string {
+export function summarizeContext(context: PromptContext, t: Translator = japaneseTranslator): string {
   const chars = [...context.text].length;
-  return `${context.documentId} rev ${context.revision} ${formatRanges(context)} ${chars}文字`;
+  return t("{{value0}} rev {{value1}} {{value2}} {{value3}}文字", { value0: (context.documentId), value1: (context.revision), value2: (formatRanges(context)), value3: (chars) });
 }
 
 /**
- * Describe an AI error in Japanese for notices and chat states.
+ * Describe an AI error using the supplied locale, defaulting to standard Japanese.
  *
  * Every wire code maps to an actionable message; unknown shapes fall back to
  * their detail text instead of leaking `undefined`.
  */
-export function describeAiError(error: AiError): string {
+export function describeAiError(error: AiError, t: Translator = japaneseTranslator): string {
+  if ("frontendMessage" in error) return renderLocalizedText((error as FrontendAiError).frontendMessage, t);
   switch (error.code) {
     case "invalid_config":
-      return `設定が正しくありません: ${error.detail}`;
+      return t("設定が正しくありません: {{value0}}", { value0: (error.detail) });
     case "missing_credentials":
-      return `${KIND_LABELS[error.provider]} の資格情報が OS ストアにありません。`;
+      return t("{{value0}} の資格情報が OS ストアにありません。", { value0: (t(KIND_LABELS[error.provider] as LabelKey)) });
     case "missing_binary":
-      return `${error.command} が見つかりません。CLI をインストールして PATH を通してください。`;
+      return t("{{value0}} が見つかりません。CLI をインストールして PATH を通してください。", { value0: (error.command) });
     case "spawn_failed":
-      return `エージェントを起動できません: ${error.detail}`;
+      return t("エージェントを起動できません: {{value0}}", { value0: (error.detail) });
     case "connection_failed":
-      return `接続できません: ${error.detail}`;
+      return t("接続できません: {{value0}}", { value0: (error.detail) });
     case "auth_failed":
-      return `認証に失敗しました: ${error.detail}`;
+      return t("認証に失敗しました: {{value0}}", { value0: (error.detail) });
     case "stream_failed":
-      return `応答の受信に失敗しました: ${error.detail}`;
+      return t("応答の受信に失敗しました: {{value0}}", { value0: (error.detail) });
     case "request_cancelled":
-      return "取り消しました。";
+      return t("取り消しました。");
     case "session_required":
-      return "セッションが必要です。";
+      return t("セッションが必要です。");
     case "session_busy":
-      return "実行中のため、新しい送信はできません。";
+      return t("実行中のため、新しい送信はできません。");
     case "unknown_session":
-      return "この接続は再開できません。新しい会話を開始してください。";
+      return t("この接続は再開できません。新しい会話を開始してください。");
     case "staging_unresolved":
-      return "作業コピーを準備できません。文書を開いて対象範囲を指定してください。";
+      return t("作業コピーを準備できません。文書を開いて対象範囲を指定してください。");
     case "live_target_rejected":
-      return `Markdownファイルは直接指定できません: ${error.detail}`;
+      return t("Markdownファイルは直接指定できません: {{value0}}", { value0: (error.detail) });
     case "unsupported_protocol":
-      return `protocol version ${error.version} には未対応です。接続を閉じました。`;
+      return t("protocol version {{value0}} には未対応です。接続を閉じました。", { value0: (error.version) });
     case "claude_code_refused":
-      return `${error.command} は起動しません。Codex / OpenCode / カスタムを使います。`;
+      return t("{{value0}} は起動しません。Codex / OpenCode / カスタムを使います。", { value0: (error.command) });
     case "credential_store_failed":
-      return `資格情報ストアの操作に失敗しました: ${error.detail}`;
+      return t("資格情報ストアの操作に失敗しました: {{value0}}", { value0: (error.detail) });
     default: {
       const failure = error as { detail?: unknown };
-      return typeof failure.detail === "string" ? failure.detail : "処理に失敗しました。";
+      return typeof failure.detail === "string" ? failure.detail : JSON.stringify(error) || t("処理に失敗しました。");
     }
   }
 }
@@ -213,9 +219,10 @@ export function describeAiError(error: AiError): string {
  * Passes wire errors to {@link describeAiError}; transport `Error`s keep
  * their message so browser-side failures stay readable.
  */
-export function describeInvokeError(cause: unknown): string {
+export function describeInvokeError(cause: unknown, t: Translator = japaneseTranslator): string {
+  if (cause instanceof LocalizableError) return renderLocalizedText(cause.localized, t);
   if (typeof cause === "object" && cause !== null && "code" in cause) {
-    return describeAiError(cause as AiError);
+    return describeAiError(cause as AiError, t);
   }
   return cause instanceof Error ? cause.message : String(cause);
 }

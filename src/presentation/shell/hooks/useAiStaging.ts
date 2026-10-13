@@ -1,3 +1,7 @@
+import { LocalizedError } from "../../../domain/localized-error";
+import { localizedFailure, renderLocalizedText } from "../../../domain/localization";
+import type { LocalizedText } from "../../../contracts/localization";
+import { useI18n } from "../../i18n/I18nProvider";
 // AI review and inline flow for the shell (presentation).
 //
 // Owns the single shared staging slot with mutual exclusion between the
@@ -34,7 +38,7 @@ export interface AiStagingArgs {
   /** True on desktop; the browser demo never stages. */
   desktop: boolean;
   /** Surface a notice without importing shell state. */
-  notify: (message: string | null) => void;
+  notify: (message: LocalizedText | null) => void;
   /** Document session owning docs, selections, and snapshots. */
   session: DocumentSession;
   /** Isolation staging lifecycle pinned by Rust. */
@@ -112,6 +116,7 @@ export interface AiStaging {
  * them with the Agent panel, inline composer, and review panel.
  */
 export function useAiStaging(args: AiStagingArgs): AiStaging {
+  const { t, message } = useI18n();
   const { desktop, notify, session, isolationGateway } = args;
   const setNotice = notify;
   const {
@@ -160,8 +165,8 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
   const [diffs, setDiffs] = useState<IsolationDiff[]>([]);
   const [outcomes, setOutcomes] = useState<ApproveDocOutcome[]>([]);
   const [reviewBusy, setReviewBusy] = useState(false);
-  const [reviewMessage, setReviewMessage] = useState<string | null>(null);
-  const [reviewStatus, setReviewStatus] = useState<string | null>(null);
+  const [reviewMessage, setReviewMessage] = useState<LocalizedText | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<LocalizedText | null>(null);
 
   // Exact AI scope: the active document at its live revision with the GUI
   // selection as the single range. Dismissed per document; questions never
@@ -190,10 +195,10 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
    * diffs surface a resync notice. Throws for the caller to report.
    */
   async function stageNonAskCopy(copyId: string, proposal: ProposalText, mode: PromptMode) {
-    if (!isolationGateway) throw new Error(READONLY_MESSAGE);
-    const result = await stageNonAskProposal(isolationGateway, copyId, proposal, mode);
+    if (!isolationGateway) throw new LocalizedError(READONLY_MESSAGE);
+    const result = await stageNonAskProposal(isolationGateway, copyId, proposal, mode, t);
     setReviewMessage(null);
-    setReviewStatus(result.drifted ? "文書が更新されています。選択範囲を指定し直してください。" : result.status);
+    setReviewStatus(result.drifted ? message("文書が更新されています。選択範囲を指定し直してください。") : result.statusMessage);
     setDiffs(result.diffs);
   }
 
@@ -209,7 +214,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
       setAiProposal(toAiProposal(proposal, sent, mode));
       const copyId = stagingRef.current;
       if (!copyId) {
-        setNotice("AI の提案を受け取りました。差分を確認してください。");
+        setNotice(message("AI の提案を受け取りました。差分を確認してください。"));
         return;
       }
       if (mode === "ask") {
@@ -217,12 +222,12 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
         setReviewStatus(askOnlyStatus());
         setReviewBusy(true);
         try {
-          if (!isolationGateway) throw new Error(READONLY_MESSAGE);
+          if (!isolationGateway) throw new LocalizedError(READONLY_MESSAGE);
           const fetched = await isolationGateway.fetchDiff(copyId);
           setDiffs(fetched);
           setReviewMessage(null);
         } catch (cause: unknown) {
-          setReviewMessage(describeIsolationError(cause));
+          setReviewMessage(localizedFailure(cause, describeIsolationError));
         } finally {
           setReviewBusy(false);
         }
@@ -232,9 +237,9 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
       try {
         await stageNonAskCopy(copyId, proposal, mode);
       } catch (cause: unknown) {
-        setReviewMessage(describeIsolationError(cause));
+        setReviewMessage(localizedFailure(cause, describeIsolationError));
         try {
-          if (!isolationGateway) throw new Error(READONLY_MESSAGE);
+          if (!isolationGateway) throw new LocalizedError(READONLY_MESSAGE);
           const fetched = await isolationGateway.fetchDiff(copyId);
           setDiffs(fetched);
         } catch {
@@ -256,14 +261,14 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     const stored = aiProposal;
     if (!copyId || !stored) return;
     if (stored.mode === "ask") {
-      setReviewMessage("質問モードは表示のみです。取り込みは行いません。");
+      setReviewMessage(message("質問モードは表示のみです。取り込みは行いません。"));
       return;
     }
     setReviewBusy(true);
     try {
       await stageNonAskCopy(copyId, stored.proposal, stored.mode);
     } catch (cause: unknown) {
-      setReviewMessage(describeIsolationError(cause));
+      setReviewMessage(localizedFailure(cause, describeIsolationError));
     } finally {
       setReviewBusy(false);
     }
@@ -294,8 +299,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
         owner,
         chatOwnerRef.current,
         !registry,
-        READONLY_MESSAGE,
-      );
+        READONLY_MESSAGE, t);
       stagingRef.current = result.copyId;
       setStaging({ copyId: result.copyId });
       registeredContextsRef.current = result.registration.contexts;
@@ -303,7 +307,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
         setDiffs([]);
         setOutcomes([]);
         setReviewMessage(null);
-        setReviewStatus("送信範囲を自動登録しました。");
+        setReviewStatus(message("送信範囲を自動登録しました。"));
       }
       return { copyId: result.copyId };
     },
@@ -312,7 +316,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
 
   /** Open inline chat resolving selection or paragraph target. */
   const openInlineChat = useCallback(() => {
-    if (inlineBusy) { setNotice("インラインチャットの応答が終わるか、停止するまでお待ちください。"); return; }
+    if (inlineBusy) { setNotice(message("インラインチャットの応答が終わるか、停止するまでお待ちください。")); return; }
     const doc = activeRef.current ? docsRef.current[activeRef.current] : undefined;
     if (!doc || !registry) {
       setNotice(READONLY_MESSAGE);
@@ -386,13 +390,13 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     if (!copyId) return;
     setReviewBusy(true);
     try {
-      if (!isolationGateway) throw new Error(READONLY_MESSAGE);
+      if (!isolationGateway) throw new LocalizedError(READONLY_MESSAGE);
       const fetched = await isolationGateway.fetchDiff(copyId);
       setDiffs(fetched);
       setReviewMessage(null);
-      setReviewStatus(fetched.some((diff) => diff.drifted) ? "文書が更新されています。選択範囲を指定し直してください。" : null);
+      setReviewStatus(fetched.some((diff) => diff.drifted) ? message("文書が更新されています。選択範囲を指定し直してください。") : null);
     } catch (cause) {
-      setReviewMessage(describeIsolationError(cause));
+      setReviewMessage(localizedFailure(cause, describeIsolationError));
     } finally {
       setReviewBusy(false);
     }
@@ -424,12 +428,12 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     const copyId = stagingRef.current;
     if (!copyId) return;
     if (diffs.some((diff) => diff.drifted)) {
-      setReviewMessage("文書が更新されています。選択範囲を指定し直してください。");
+      setReviewMessage(message("文書が更新されています。選択範囲を指定し直してください。"));
       return;
     }
     setReviewBusy(true);
     try {
-      if (!isolationGateway) throw new Error(READONLY_MESSAGE);
+      if (!isolationGateway) throw new LocalizedError(READONLY_MESSAGE);
       const result = await isolationGateway.approveCopy(copyId);
       // Applied buffers moved in Neovim; pull fresh snapshots so the shell
       // shows the same text, then refresh mode/cursor.
@@ -445,17 +449,17 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
         }
         if (activeRef.current) await refreshModeCursor(activeRef.current);
       }
-      const summary = summarizeApproveResult(result);
+      const summary = summarizeApproveResult(result, t);
       setOutcomes(summary.outcomes);
       setStaging(null);
       setDiffs([]);
       setAiProposal(null);
-      setReviewMessage(summary.reviewMessage);
-      setReviewStatus(summary.status);
-      setNotice(summary.notice);
+      setReviewMessage(summary.messages.reviewMessage);
+      setReviewStatus(summary.messages.status);
+      setNotice(summary.messages.notice);
     } catch (cause) {
-      setReviewMessage(describeIsolationError(cause));
-      setReviewStatus("再同期して範囲を再登録してください。");
+      setReviewMessage(localizedFailure(cause, describeIsolationError));
+      setReviewStatus(message("再同期して範囲を再登録してください。"));
     } finally {
       setReviewBusy(false);
     }
@@ -470,9 +474,9 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
       await isolationGateway!.rejectCopy(copyId);
       clearStaging();
       setAiProposal(null);
-      setNotice("提案を却下しました。Markdownとディスクは変更していません。");
+      setNotice(message("提案を却下しました。Markdownとディスクは変更していません。"));
     } catch (cause) {
-      setReviewMessage(describeIsolationError(cause));
+      setReviewMessage(localizedFailure(cause, describeIsolationError));
     } finally {
       setReviewBusy(false);
     }
@@ -488,9 +492,9 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
       await isolationGateway!.cancelCopy(copyId);
       clearStaging();
       setAiProposal(null);
-      setNotice("取り消しました。Markdownとディスクは変更していません。");
+      setNotice(message("取り消しました。Markdownとディスクは変更していません。"));
     } catch (cause) {
-      setReviewMessage(describeIsolationError(cause));
+      setReviewMessage(localizedFailure(cause, describeIsolationError));
     } finally {
       setReviewBusy(false);
     }
@@ -512,8 +516,8 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     diffs,
     outcomes,
     reviewBusy,
-    reviewMessage,
-    reviewStatus,
+    reviewMessage: reviewMessage === null ? null : renderLocalizedText(reviewMessage, t),
+    reviewStatus: reviewStatus === null ? null : renderLocalizedText(reviewStatus, t),
     aiContexts,
     handleProposal,
     stageStoredProposal,

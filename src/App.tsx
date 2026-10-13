@@ -1,6 +1,9 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { WorkspaceShell } from "./presentation/shell/WorkspaceShell";
 import { createComposition } from "./composition";
+import { createLanguageService } from "./application/language/language-service";
+import { I18nProvider } from "./presentation/i18n/I18nProvider";
+import type { LanguagePreference } from "./contracts/language";
 
 /**
  * Root component wiring concrete adapters into the shell via props.
@@ -11,10 +14,15 @@ import { createComposition } from "./composition";
 export default function App() {
   /** Memoized composition so gateways stay stable across renders. */
   const composition = useMemo(() => createComposition(), []);
+  const languageService = useMemo(() => createLanguageService(composition.languagePreferenceStore), [composition]);
+  const [languageState, setLanguageState] = useState(() => languageService.load(composition.systemLocaleSource.read()));
+  /** Persist a language choice and update controls while retaining mounted workspace state. */
+  const chooseLanguage = (preference: LanguagePreference) => setLanguageState({ preference, language: languageService.select(preference, composition.systemLocaleSource.read()) });
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <h1 className="sr-only">Marxen</h1>
-      <WorkspaceShell
+    <I18nProvider language={languageState.language} createTranslator={composition.createTranslator}>
+      <div lang={languageState.language} className="min-h-screen bg-background text-foreground">
+        <h1 className="sr-only">Marxen</h1>
+        <WorkspaceShell
         desktop={composition.desktop}
         documentGateway={composition.documentGateway}
         workspaceGateway={composition.workspaceGateway}
@@ -29,7 +37,10 @@ export default function App() {
         editorPreferencesStore={composition.editorPreferencesStore}
         imageLoader={composition.imageLoader}
         vimSettingsGateway={composition.vimSettingsGateway}
+        languagePreference={languageState.preference}
+        onLanguagePreference={chooseLanguage}
       />
-    </div>
+      </div>
+    </I18nProvider>
   );
 }

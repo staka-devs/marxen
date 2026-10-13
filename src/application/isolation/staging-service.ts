@@ -1,3 +1,7 @@
+import type { Translator } from "../../contracts/localization";
+import { japaneseTranslator } from "../../domain/localization";
+import { localizedMessage, localizedParts, renderLocalizedText } from "../../domain/localization";
+import type { LocalizedText, MessageDescriptor } from "../../contracts/localization";
 // Isolated staging use cases for AI proposals (application).
 //
 // Owns the single shared staging slot, generation fencing, run ownership, and
@@ -38,11 +42,11 @@ export async function ensureStagingCopy(
   owner: "agent" | "inline",
   chatOwner: "agent" | "inline" | null,
   isReadonly: boolean,
-  readonlyMessage: string,
+  readonlyMessage: string, t: Translator = japaneseTranslator
 ): Promise<{ copyId: string; registration: StagingRegistration; isNew: boolean }> {
   if (chatOwner !== owner) throw { code: "session_busy" };
   if (!gateway || isReadonly) throw new Error(readonlyMessage);
-  if (wanted.length === 0) throw { code: "staging_unresolved", copy_id: "(未解決)" };
+  if (wanted.length === 0) throw { code: "staging_unresolved", copy_id: t("(未解決)") };
   const same = current !== null && contextsEqualShallow(registered, wanted);
   if (same && current) return { copyId: current.copyId, registration: current, isNew: false };
   if (current) await gateway.cancelCopy(current.copyId).catch(() => undefined);
@@ -84,6 +88,7 @@ export interface StagedReview {
   diffs: IsolationDiff[];
   drifted: boolean;
   status: string;
+  statusMessage: MessageDescriptor;
 }
 
 /**
@@ -96,19 +101,21 @@ export async function stageNonAskProposal(
   gateway: IsolationGateway,
   copyId: string,
   proposal: ProposalText,
-  mode: PromptMode,
+  mode: PromptMode, t: Translator = japaneseTranslator
 ): Promise<StagedReview> {
   const staged = await gateway.stageProposal(copyId, proposal, mode);
   const fetched = await gateway.fetchDiff(copyId);
   const drifted = fetched.some((diff) => diff.drifted);
+  const statusMessage = staged.updated.length > 0
+    ? localizedMessage("{{value0}} 文書に取り込みました（{{value1}}文字）。", { value0: staged.updated.length, value1: staged.chars })
+    : localizedMessage("取り込みましたが変更はありません。");
   return {
     stagedChars: staged.chars,
     updatedCount: staged.updated.length,
     diffs: fetched,
     drifted,
-    status: staged.updated.length > 0
-      ? `${staged.updated.length} 文書に取り込みました（${staged.chars}文字）。`
-      : "取り込みましたが変更はありません。",
+    status: renderLocalizedText(statusMessage, t),
+    statusMessage,
   };
 }
 
@@ -121,6 +128,7 @@ export interface ApproveSummary {
   status: string;
   notice: string;
   reviewMessage: string | null;
+  messages: { status: LocalizedText; notice: LocalizedText; reviewMessage: LocalizedText | null };
 }
 
 /**
@@ -130,7 +138,7 @@ export interface ApproveSummary {
  * refresh mode/cursor. Partial application is never presented as
  * all-or-nothing; only error/rollback outcomes fail.
  */
-export function summarizeApproveResult(result: ApproveResult): ApproveSummary {
+export function summarizeApproveResult(result: ApproveResult, t: Translator = japaneseTranslator): ApproveSummary {
   const failed = result.outcomes.filter(
     (outcome) => outcome.error !== null || outcome.rollbackError !== null || outcome.rolledBack,
   );
@@ -139,28 +147,37 @@ export function summarizeApproveResult(result: ApproveResult): ApproveSummary {
     (outcome) => !outcome.applied && outcome.error === null && outcome.rollbackError === null && !outcome.rolledBack,
   ).length;
   if (failed.length === 0) {
+    const status = unchangedCount > 0 && appliedCount === 0
+      ? localizedMessage("変更はありませんでした。")
+      : appliedCount > 0 && unchangedCount > 0
+        ? localizedMessage("{{value0}} 文書に適用し、{{value1}} 文書は変更なしでした。", { value0: appliedCount, value1: unchangedCount })
+        : localizedMessage("承認して適用しました。");
+    const notice = localizedMessage("承認して適用しました。保存は保存ボタンで行います。");
     return {
       outcomes: result.outcomes,
       appliedCount,
       unchangedCount,
       failedCount: 0,
-      status: unchangedCount > 0 && appliedCount === 0
-        ? "変更はありませんでした。"
-        : appliedCount > 0 && unchangedCount > 0
-          ? `${appliedCount} 文書に適用し、${unchangedCount} 文書は変更なしでした。`
-          : "承認して適用しました。",
-      notice: "承認して適用しました。保存は保存ボタンで行います。",
+      status: renderLocalizedText(status, t),
+      notice: renderLocalizedText(notice, t),
       reviewMessage: null,
+      messages: { status, notice, reviewMessage: null },
     };
   }
+  const status = localizedMessage("失敗時は新規コピーで再同期してください。");
+  const notice = localizedMessage("一部が未適用です。承認結果を確認してください。");
+  const rows = failed.map(outcome => localizedParts(outcome.documentId, outcome.error ? ` (${outcome.error})` : "", outcome.rolledBack ? localizedMessage("（ロールバック済み）") : "", outcome.rollbackError ? localizedMessage("（ロールバック失敗: {{value0}}）", { value0: outcome.rollbackError }) : ""));
+  const details = localizedParts(...rows.flatMap((row, index) => index === 0 ? [row] : [", ", row]));
+  const reviewMessage = localizedMessage("{{value0}} 文書が未適用です: {{value1}}。", { value0: failed.length, value1: details });
   return {
     outcomes: result.outcomes,
     appliedCount,
     unchangedCount,
     failedCount: failed.length,
-    status: "失敗時は新規コピーで再同期してください。",
-    notice: "一部が未適用です。承認結果を確認してください。",
-    reviewMessage: `${failed.length} 文書が未適用です: ${failed.map((outcome) => `${outcome.documentId}${outcome.error ? ` (${outcome.error})` : ""}${outcome.rolledBack ? "（ロールバック済み）" : ""}${outcome.rollbackError ? `（ロールバック失敗: ${outcome.rollbackError}）` : ""}`).join(", ")}。`,
+    status: renderLocalizedText(status, t),
+    notice: renderLocalizedText(notice, t),
+    reviewMessage: renderLocalizedText(reviewMessage, t),
+    messages: { status, notice, reviewMessage },
   };
 }
 
@@ -170,8 +187,8 @@ export function summarizeApproveResult(result: ApproveResult): ApproveSummary {
  * Questions display only; non-ask proposals flow through `stageNonAskProposal`.
  * Returns the status text for ask mode.
  */
-export function askOnlyStatus(): string {
-  return "質問モードは表示のみです。取り込みは行いません。";
+export function askOnlyStatus(): MessageDescriptor {
+  return localizedMessage("質問モードは表示のみです。取り込みは行いません。");
 }
 
 /**

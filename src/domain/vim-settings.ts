@@ -1,3 +1,6 @@
+import { localizedException } from "./localized-error";
+import type { Translator } from "../contracts/localization";
+import { japaneseTranslator } from "./localization";
 // Managed vim-settings model, validation, and block rewrite (domain).
 //
 // Pure helpers for the Settings GUI: structured settings over the Marxen
@@ -71,21 +74,21 @@ function isMarker(line: string, marker: string): boolean {
  * or `<...>` notation within 64 bytes, mirroring the native copy-config
  * check so GUI input and sourced behavior agree.
  */
-export function validateCopyKey(name: string, value: string): string | null {
+export function validateCopyKey(name: string, value: string, t: Translator = japaneseTranslator): string | null {
   if (value === "") return null;
   if (new TextEncoder().encode(value).length > 64) {
-    return `g:marxen_copy_${name}_key: 一つのキーを指定してください。`;
+    return t("g:marxen_copy_{{value0}}_key: 一つのキーを指定してください。", { value0: (name) });
   }
   const single =
     Array.from(value).length === 1 ||
     (value.startsWith("<") && value.endsWith(">") && value.length >= 3 && !/[<>]/.test(value.slice(1, -1)));
-  if (!single) return `g:marxen_copy_${name}_key: 一つのキーを指定してください。`;
-  if (value.includes("'")) return `g:marxen_copy_${name}_key: 設定コードエディターで指定してください。`;
+  if (!single) return t("g:marxen_copy_{{value0}}_key: 一つのキーを指定してください。", { value0: (name) });
+  if (value.includes("'")) return t("g:marxen_copy_{{value0}}_key: 設定コードエディターで指定してください。", { value0: (name) });
   const lower = value.toLowerCase();
   const reserved = ["<left>", "<right>", "<up>", "<down>", "<home>", "<end>"].includes(lower);
   const appShortcut = (lower.includes("c-") || lower.includes("d-")) && (lower.endsWith("p>") || lower.endsWith("s>"));
   if (reserved || appShortcut) {
-    return `g:marxen_copy_${name}_key: アプリのショートカット・表示行移動のキーは指定できません。`;
+    return t("g:marxen_copy_{{value0}}_key: アプリのショートカット・表示行移動のキーは指定できません。", { value0: (name) });
   }
   return null;
 }
@@ -96,21 +99,21 @@ export function validateCopyKey(name: string, value: string): string | null {
  * Only `noremap` variants in known modes are managed; anything richer
  * belongs in the raw editor outside the block.
  */
-export function validateVimMapping(mapping: VimMapping): string | null {
+export function validateVimMapping(mapping: VimMapping, t: Translator = japaneseTranslator): string | null {
   if (!(VIM_MAPPING_MODES as readonly string[]).includes(mapping.mode)) {
-    return `mapping ${mapping.mode}: モードは n/i/v/x/s/o/c/t で指定してください。`;
+    return t("mapping {{value0}}: モードは n/i/v/x/s/o/c/t で指定してください。", { value0: (mapping.mode) });
   }
   const lhs = Array.from(mapping.lhs).length;
-  if (lhs === 0 || lhs > 64) return "mapping: キーは1〜64文字で指定してください。";
+  if (lhs === 0 || lhs > 64) return t("mapping: キーは1〜64文字で指定してください。");
   if (/\s/.test(mapping.lhs) || /[\0|]/.test(mapping.lhs) || /[\p{Cc}]/u.test(mapping.lhs)) {
     return mapping.lhs.includes("|")
-      ? "mapping: キーに | は使えません（<Bar>を使うか設定コードで編集してください）。"
-      : "mapping: キーに空白や制御文字は使えません。";
+      ? t("mapping: キーに | は使えません（<Bar>を使うか設定コードで編集してください）。")
+      : t("mapping: キーに空白や制御文字は使えません。");
   }
   const rhs = Array.from(mapping.rhs).length;
-  if (rhs === 0 || rhs > 256) return "mapping: 置換内容は1〜256文字で指定してください。";
+  if (rhs === 0 || rhs > 256) return t("mapping: 置換内容は1〜256文字で指定してください。");
   if (/[\0\n\r|]/.test(mapping.rhs) || /[\p{Cc}]/u.test(mapping.rhs.replace(/\t/g, ""))) {
-    return "mapping: 置換内容に | や改行や制御文字は使えません。";
+    return t("mapping: 置換内容に | や改行や制御文字は使えません。");
   }
   return null;
 }
@@ -121,16 +124,16 @@ export function validateVimMapping(mapping: VimMapping): string | null {
  * Returns an empty list when the settings can be rendered; callers surface
  * the first entry or the whole list without touching the filesystem.
  */
-export function validateVimSettings(settings: VimSettings): string[] {
+export function validateVimSettings(settings: VimSettings, t: Translator = japaneseTranslator): string[] {
   const errors: string[] = [];
   if (!Number.isInteger(settings.tabstop) || settings.tabstop < 1 || settings.tabstop > 32) {
-    errors.push("tabstop は 1〜32 で指定してください。");
+    errors.push(t("tabstop は 1〜32 で指定してください。"));
   }
   if (!Number.isInteger(settings.shiftwidth) || settings.shiftwidth < 1 || settings.shiftwidth > 32) {
-    errors.push("shiftwidth は 1〜32 で指定してください。");
+    errors.push(t("shiftwidth は 1〜32 で指定してください。"));
   }
   if (Array.from(settings.leader).length !== 1 || /[\p{Cc}]/u.test(settings.leader)) {
-    errors.push("leader は1文字で指定してください。");
+    errors.push(t("leader は1文字で指定してください。"));
   }
   const copies: Array<[string, string]> = [
     ["markdown", settings.copyKeys.markdown],
@@ -139,27 +142,27 @@ export function validateVimSettings(settings: VimSettings): string[] {
     ["html", settings.copyKeys.html],
   ];
   for (const [name, value] of copies) {
-    const detail = validateCopyKey(name, value);
+    const detail = validateCopyKey(name, value, t);
     if (detail) errors.push(detail);
   }
   const seen = new Map<string, string>();
   for (const [, value] of copies) {
     if (value === "") continue;
     const key = value.toLowerCase();
-    if (seen.has(key)) errors.push(`${value}: コピー形式キーと重複しています。`);
+    if (seen.has(key)) errors.push(t("{{value0}}: コピー形式キーと重複しています。", { value0: (value) }));
     else seen.set(key, value);
   }
   if (settings.mappings.length > VIM_MAX_MAPPINGS) {
-    errors.push(`mapping は最大 ${VIM_MAX_MAPPINGS} 件です。`);
+    errors.push(t("mapping は最大 {{value0}} 件です。", { value0: (VIM_MAX_MAPPINGS) }));
   }
   for (const mapping of settings.mappings) {
-    const detail = validateVimMapping(mapping);
+    const detail = validateVimMapping(mapping, t);
     if (detail) errors.push(detail);
   }
   const pairs = new Set<string>();
   for (const mapping of settings.mappings) {
     const key = `${mapping.mode}\0${mapping.lhs}`;
-    if (pairs.has(key)) errors.push(`mapping ${mapping.mode} ${mapping.lhs}: 重複しています。`);
+    if (pairs.has(key)) errors.push(t("mapping {{value0}} {{value1}}: 重複しています。", { value0: (mapping.mode), value1: (mapping.lhs) }));
     else pairs.add(key);
   }
   return errors;
@@ -239,7 +242,7 @@ export function renderManagedBlock(settings: VimSettings): string[] {
  * Duplicate markers, a missing end, or a reversed order are rejections so
  * repeated edits never duplicate the block.
  */
-export function findManagedBlock(lines: string[]): { start: number; end: number } | null {
+export function findManagedBlock(lines: string[], t: Translator = japaneseTranslator): { start: number; end: number } | null {
   const starts: number[] = [];
   const ends: number[] = [];
   lines.forEach((line, index) => {
@@ -251,9 +254,9 @@ export function findManagedBlock(lines: string[]): { start: number; end: number 
     return { start: starts[0], end: ends[0] };
   }
   if (starts.length !== 1 || ends.length !== 1) {
-    throw new Error("管理ブロックのマーカーが重複または不足しています。設定コードエディターで1組に修正してください。");
+    throw localizedException(t, "管理ブロックのマーカーが重複または不足しています。設定コードエディターで1組に修正してください。");
   }
-  throw new Error("管理ブロックの開始と終了の順序が正しくありません。設定コードエディターで修正してください。");
+  throw localizedException(t, "管理ブロックの開始と終了の順序が正しくありません。設定コードエディターで修正してください。");
 }
 
 /**
@@ -262,15 +265,15 @@ export function findManagedBlock(lines: string[]): { start: number; end: number 
  * Combined `set` lines are accepted token-wise; any token outside the owned
  * subset rejects the block so full Vim language is never pretended.
  */
-function parseSetTokens(tokens: string[], settings: VimSettings, lineNo: number): void {
+function parseSetTokens(tokens: string[], settings: VimSettings, lineNo: number, t: Translator = japaneseTranslator): void {
   for (const token of tokens) {
     if (token.startsWith("tabstop=")) {
       const value = Number(token.slice("tabstop=".length));
-      if (!Number.isInteger(value)) throw new Error(`管理ブロック${lineNo}行目: tabstop の値が正しくありません。`);
+      if (!Number.isInteger(value)) throw localizedException(t, "管理ブロック{{value0}}行目: tabstop の値が正しくありません。", { value0: (lineNo) });
       settings.tabstop = value;
     } else if (token.startsWith("shiftwidth=")) {
       const value = Number(token.slice("shiftwidth=".length));
-      if (!Number.isInteger(value)) throw new Error(`管理ブロック${lineNo}行目: shiftwidth の値が正しくありません。`);
+      if (!Number.isInteger(value)) throw localizedException(t, "管理ブロック{{value0}}行目: shiftwidth の値が正しくありません。", { value0: (lineNo) });
       settings.shiftwidth = value;
     } else if (token === "expandtab") settings.expandtab = true;
     else if (token === "noexpandtab") settings.expandtab = false;
@@ -278,7 +281,7 @@ function parseSetTokens(tokens: string[], settings: VimSettings, lineNo: number)
     else if (token === "noignorecase") settings.ignorecase = false;
     else if (token === "smartcase") settings.smartcase = true;
     else if (token === "nosmartcase") settings.smartcase = false;
-    else throw new Error(`管理ブロック${lineNo}行目: 対応していない設定です（${token}）。ブロック外へ移動するか設定コードで編集してください。`);
+    else throw localizedException(t, "管理ブロック{{value0}}行目: 対応していない設定です（{{value1}}）。ブロック外へ移動するか設定コードで編集してください。", { value0: (lineNo), value1: (token) });
   }
 }
 
@@ -288,13 +291,13 @@ function parseSetTokens(tokens: string[], settings: VimSettings, lineNo: number)
  * Blank lines and `"` comments are skipped; every other line must be an
  * owned `set`, `let`, or `noremap` form.
  */
-function parseBlockLine(line: string, settings: VimSettings, lineNo: number): void {
+function parseBlockLine(line: string, settings: VimSettings, lineNo: number, t: Translator = japaneseTranslator): void {
   const trimmed = line.replace(/\r$/, "").trim();
   if (trimmed === "" || trimmed.startsWith("\"")) return;
   if (trimmed.startsWith("set ")) {
     const tokens = trimmed.slice("set ".length).split(/\s+/).filter(Boolean);
-    if (tokens.length === 0) throw new Error(`管理ブロック${lineNo}行目: set の内容がありません。`);
-    parseSetTokens(tokens, settings, lineNo);
+    if (tokens.length === 0) throw localizedException(t, "管理ブロック{{value0}}行目: set の内容がありません。", { value0: (lineNo) });
+    parseSetTokens(tokens, settings, lineNo, t);
     return;
   }
   if (trimmed.startsWith("let ")) {
@@ -302,7 +305,7 @@ function parseBlockLine(line: string, settings: VimSettings, lineNo: number): vo
     for (const prefix of ["mapleader=", "g:mapleader="]) {
       if (body.startsWith(prefix)) {
         const leader = unescapeLeader(body.slice(prefix.length).trim());
-        if (leader === null) throw new Error(`管理ブロック${lineNo}行目: mapleader の引用が正しくありません。`);
+        if (leader === null) throw localizedException(t, "管理ブロック{{value0}}行目: mapleader の引用が正しくありません。", { value0: (lineNo) });
         settings.leader = leader;
         return;
       }
@@ -325,12 +328,12 @@ function parseBlockLine(line: string, settings: VimSettings, lineNo: number): vo
             keys[name] = value;
             return;
           }
-          throw new Error(`管理ブロック${lineNo}行目: 対応していないコピー形式です（${name}）。`);
+          throw localizedException(t, "管理ブロック{{value0}}行目: 対応していないコピー形式です（{{value1}}）。", { value0: (lineNo), value1: (name) });
         }
-        throw new Error(`管理ブロック${lineNo}行目: コピー形式キーの引用が正しくありません。`);
+        throw localizedException(t, "管理ブロック{{value0}}行目: コピー形式キーの引用が正しくありません。", { value0: (lineNo) });
       }
     }
-    throw new Error(`管理ブロック${lineNo}行目: 対応していない let です。ブロック外へ移動してください。`);
+    throw localizedException(t, "管理ブロック{{value0}}行目: 対応していない let です。ブロック外へ移動してください。", { value0: (lineNo) });
   }
   for (const mode of VIM_MAPPING_MODES) {
     const prefix = `${mode}noremap `;
@@ -338,13 +341,13 @@ function parseBlockLine(line: string, settings: VimSettings, lineNo: number): vo
       const rest = trimmed.slice(prefix.length).trim();
       const gap = rest.search(/\s/);
       if (gap <= 0 || rest.slice(gap).trim() === "") {
-        throw new Error(`管理ブロック${lineNo}行目: mapping の形式が正しくありません。`);
+        throw localizedException(t, "管理ブロック{{value0}}行目: mapping の形式が正しくありません。", { value0: (lineNo) });
       }
       settings.mappings.push({ mode, lhs: rest.slice(0, gap), rhs: rest.slice(gap).trim() });
       return;
     }
   }
-  throw new Error(`管理ブロック${lineNo}行目: 対応していない行です（${trimmed}）。ブロック外へ移動してください。`);
+  throw localizedException(t, "管理ブロック{{value0}}行目: 対応していない行です（{{value1}}）。ブロック外へ移動してください。", { value0: (lineNo), value1: (trimmed) });
 }
 
 /**
@@ -354,13 +357,13 @@ function parseBlockLine(line: string, settings: VimSettings, lineNo: number): vo
  * any body line outside the owned subset so unknown Vim language is never
  * silently reinterpreted.
  */
-export function parseManagedBlock(raw: string): VimSettings | null {
+export function parseManagedBlock(raw: string, t: Translator = japaneseTranslator): VimSettings | null {
   const lines = raw.split("\n");
-  const found = findManagedBlock(lines);
+  const found = findManagedBlock(lines, t);
   if (!found) return null;
   const settings = defaultVimSettings();
   for (let i = found.start + 1; i < found.end; i += 1) {
-    parseBlockLine(lines[i], settings, i + 1);
+    parseBlockLine(lines[i], settings, i + 1, t);
   }
   return settings;
 }
@@ -373,16 +376,16 @@ export function parseManagedBlock(raw: string): VimSettings | null {
  * block in place otherwise. Unknown text outside the block is preserved;
  * repeated calls with the same settings are idempotent.
  */
-export function rewriteManagedBlock(raw: string, settings: VimSettings, isLua: boolean): string {
-  if (isLua) throw new Error("init.lua は設定コード編集のみです。管理ブロックを挿入しません。");
-  const failures = validateVimSettings(settings);
+export function rewriteManagedBlock(raw: string, settings: VimSettings, isLua: boolean, t: Translator = japaneseTranslator): string {
+  if (isLua) throw localizedException(t, "init.lua は設定コード編集のみです。管理ブロックを挿入しません。");
+  const failures = validateVimSettings(settings, t);
   if (failures.length > 0) throw new Error(failures[0]);
   // Reject an ambiguous existing block before discarding anything.
-  parseManagedBlock(raw);
+  parseManagedBlock(raw, t);
   const block = renderManagedBlock(settings).join("\n");
   if (raw === "") return `${block}\n`;
   const lines = raw.split("\n");
-  const found = findManagedBlock(lines);
+  const found = findManagedBlock(lines, t);
   if (!found) {
     const separator = raw.endsWith("\n") ? "" : "\n";
     return `${raw}${separator}${block}\n`;
@@ -407,9 +410,9 @@ export function rewriteManagedBlock(raw: string, settings: VimSettings, isLua: b
 export function previewManagedChange(
   raw: string,
   settings: VimSettings,
-  isLua: boolean,
+  isLua: boolean, t: Translator = japaneseTranslator
 ): { next: string; changed: boolean } {
-  const next = rewriteManagedBlock(raw, settings, isLua);
+  const next = rewriteManagedBlock(raw, settings, isLua, t);
   return { next, changed: next !== raw };
 }
 

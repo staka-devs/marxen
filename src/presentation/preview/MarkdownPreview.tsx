@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n/I18nProvider";
 import { useEffect, useRef, useState } from "react";
 import { renderMarkdownDocument, type RenderResult } from "../../domain/render/pipeline";
 import { disposeMarkdownView, hydrateMarkdownView } from "./hydrate";
@@ -26,7 +27,8 @@ interface Props {
  * GeoJSON / TopoJSON / STL) hydrate locally with bundled libraries; raw
  * source and Japanese errors stay visible for malformed input.
  */
-export function MarkdownPreview({ text, label = "プレビュー", testId = "preview", resolveImage }: Props) {
+export function MarkdownPreview({ text, label, testId = "preview", resolveImage }: Props) {
+  const { t, language } = useI18n();
   const [result, setResult] = useState<RenderResult | null>(null);
   const hostRef = useRef<HTMLElement | null>(null);
   const latestPipeline = useRef<Promise<RenderResult> | null>(null);
@@ -36,7 +38,7 @@ export function MarkdownPreview({ text, label = "プレビュー", testId = "pre
     setResult(null);
     // Superseded renders are discarded: only the latest text wins, so a
     // slow pass can never overwrite newer HTML (stale-result guard).
-    const pipeline = renderMarkdownDocument(text);
+    const pipeline = renderMarkdownDocument(text, t);
     pipeline
       .then((next) => {
         if (!cancelled && pipeline === latestPipeline.current) setResult(next);
@@ -44,7 +46,7 @@ export function MarkdownPreview({ text, label = "プレビュー", testId = "pre
       .catch(() => {
         if (!cancelled && pipeline === latestPipeline.current) {
           setResult({
-            html: "<div class=\"marxen-error\" role=\"alert\">描画できませんでした。Markdownは保持されています。</div>",
+            html: t("<div class=\"marxen-error\" role=\"alert\">描画できませんでした。Markdownは保持されています。</div>"),
             diagnostics: [],
             blocks: [],
           });
@@ -54,7 +56,7 @@ export function MarkdownPreview({ text, label = "プレビュー", testId = "pre
     return () => {
       cancelled = true;
     };
-  }, [text]);
+  }, [text, t, language]);
 
   useEffect(() => {
     if (!result || !hostRef.current) return;
@@ -63,23 +65,23 @@ export function MarkdownPreview({ text, label = "プレビュー", testId = "pre
     // and GL resources before fresh placeholders are enhanced. Local images
     // resolve on the same lifecycle so late bytes never land on stale HTML.
     const controller = new AbortController();
-    const pending: Array<Promise<unknown>> = [hydrateMarkdownView(host, controller.signal)];
+    const pending: Array<Promise<unknown>> = [hydrateMarkdownView(host, controller.signal, t)];
     if (resolveImage) pending.push(hydrateLocalImages(host, resolveImage, controller.signal));
     void Promise.allSettled(pending);
     return () => {
       controller.abort();
       disposeMarkdownView(host);
     };
-  }, [result, resolveImage]);
+  }, [result, resolveImage, t]);
 
   if (!result) {
     return (
       <article
         data-testid={testId}
-        aria-label={label}
+        aria-label={label ?? t("プレビュー")}
         className="marxen-md h-full overflow-auto bg-background px-6 py-4 text-sm leading-7"
       >
-        <p className="text-muted-foreground">描画を準備しています…</p>
+        <p className="text-muted-foreground">{t("描画を準備しています…")}</p>
       </article>
     );
   }
@@ -88,7 +90,7 @@ export function MarkdownPreview({ text, label = "プレビュー", testId = "pre
     <article
       ref={hostRef}
       data-testid={testId}
-      aria-label={label}
+      aria-label={label ?? t("プレビュー")}
       data-diagnostics={result.diagnostics.length}
       className="marxen-md h-full overflow-auto bg-background px-6 py-4 text-sm leading-7"
       // Sanitized by renderMarkdownDocument: no raw HTML or scripts pass through.

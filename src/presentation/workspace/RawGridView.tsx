@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n/I18nProvider";
 import type { CSSProperties } from "react";
 import { RotateCw } from "lucide-react";
 import { gridColor, type NvimGridState } from "../../domain/coordinates/grid";
@@ -15,6 +16,7 @@ interface Props {
 }
 
 /** Neovim raw grid screen with Vim key routing and refresh. */ export function RawGridView({ text, lines, revision, onRefresh, grid, onVimKeys }: Props) {
+  const { t } = useI18n();
   const rendered = lines ?? text.split("\n").slice(0, 24);
   const cursorGrid = grid?.cursor?.grid ?? 1;
   const screenId = grid?.grids[cursorGrid] ? cursorGrid : Number(Object.keys(grid?.grids ?? {})[0] ?? 1);
@@ -25,7 +27,7 @@ interface Props {
     <section
       data-testid="raw-grid"
       role="textbox"
-      aria-label="Neovim 画面"
+      aria-label={t("Neovim 画面")}
       aria-multiline="true"
       aria-readonly={!onVimKeys}
       tabIndex={0}
@@ -48,7 +50,7 @@ interface Props {
       style={{ color: defaultForeground, backgroundColor: defaultBackground }}
     >
       {onRefresh && (
-        <button type="button" onClick={(event) => { event.stopPropagation(); onRefresh(); }} aria-label="Neovim 画面を更新する" title="再描画" className="absolute right-2 top-2 z-10 rounded p-1 text-muted-foreground hover:bg-muted">
+        <button type="button" onClick={(event) => { event.stopPropagation(); onRefresh(); }} aria-label={t("Neovim 画面を更新する")} title={t("再描画")} className="absolute right-2 top-2 z-10 rounded p-1 text-muted-foreground hover:bg-muted">
           <RotateCw size={14} aria-hidden="true" />
         </button>
       )}

@@ -1,3 +1,4 @@
+import { LocalizedError } from "../../domain/localized-error";
 // Tauri isolation transport (infrastructure).
 //
 // Isolated copy lifecycle pinned by Rust until stream settlement. No React or
@@ -22,11 +23,11 @@ import type { IsolationGateway } from "../../application/ports";
 /**
  * Require the desktop transport for isolation copies.
  *
- * Throws a Japanese message in the browser demo, which never stages.
+ * Throws a localizable error in the browser demo, which never stages.
  */
 export function requireDesktop(): void {
   if (!isTauri()) {
-    throw new Error("隔離コピー機能はデスクトップアプリで利用します。");
+    throw new LocalizedError("隔離コピー機能はデスクトップアプリで利用します。");
   }
 }
 
