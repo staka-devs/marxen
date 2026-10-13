@@ -618,7 +618,21 @@ export const japaneseMessages = {
   "選択範囲を読みやすく書き直してください。": "選択範囲を読みやすく書き直してください。",
   "{{count}} 件の依頼": "{{count}} 件の依頼",
   "{{count}} 件": "{{count}} 件",
-  "{{count}} 件を置換しました。": "{{count}} 件を置換しました。"
+  "{{count}} 件を置換しました。": "{{count}} 件を置換しました。",
+  "アカウントの利用枠": "アカウントの利用枠",
+  "利用枠は報告されていません。": "利用枠は報告されていません。",
+  "利用枠": "利用枠",
+  "利用枠の使用率": "利用枠の使用率",
+  "使用済み": "使用済み",
+  "リセット": "リセット",
+  "クレジット残高": "クレジット残高",
+  "無制限": "無制限",
+  "利用できるクレジットなし": "利用できるクレジットなし",
+  "Codex の利用枠を読み込み中…": "Codex の利用枠を読み込み中…",
+  "Codex の利用枠を取得できませんでした。": "Codex の利用枠を取得できませんでした。",
+  "まだセッションの使用量報告がありません。": "まだセッションの使用量報告がありません。",
+  "セッションの報告": "セッションの報告",
+  "料金やクレジットの消費量は推計しません。": "料金やクレジットの消費量は推計しません。"
 } as const;
 
 /** Complete English catalog checked against every Japanese key. */
@@ -1241,7 +1255,21 @@ export const englishMessages = {
   "選択範囲を読みやすく書き直してください。": "Rewrite the selection to make it easier to read.",
   "{{count}} 件の依頼": "{{count}} requests",
   "{{count}} 件": "{{count}} matches",
-  "{{count}} 件を置換しました。": "Replaced {{count}} matches."
+  "{{count}} 件を置換しました。": "Replaced {{count}} matches.",
+  "アカウントの利用枠": "Account limits",
+  "利用枠は報告されていません。": "No account limits were reported.",
+  "利用枠": "Quota",
+  "利用枠の使用率": "Quota usage",
+  "使用済み": "used",
+  "リセット": "Resets",
+  "クレジット残高": "Credit balance",
+  "無制限": "Unlimited",
+  "利用できるクレジットなし": "No available credits",
+  "Codex の利用枠を読み込み中…": "Loading Codex account limits…",
+  "Codex の利用枠を取得できませんでした。": "Could not read Codex account limits.",
+  "まだセッションの使用量報告がありません。": "No session usage has been reported yet.",
+  "セッションの報告": "Session reports",
+  "料金やクレジットの消費量は推計しません。": "Costs and credit consumption are not estimated."
 } satisfies Record<keyof typeof japaneseMessages, string>;
 
 /** Regional overlays reviewed per message; all other keys use standard Japanese. */

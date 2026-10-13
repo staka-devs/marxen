@@ -18,6 +18,7 @@ import { aiProfileStore } from "./infrastructure/storage/ai-profile-store";
 import { editorPreferencesStore } from "./infrastructure/storage/editor-preferences-store";
 import { imageLoader } from "./infrastructure/images/image-loader";
 import { vimSettingsGateway } from "./infrastructure/vim-settings/tauri-vim-settings";
+import { aiUsageGateway, codexAccountUsageGateway } from "./infrastructure/tauri/ai-usage";
 import { languagePreferenceStore } from "./infrastructure/storage/language-preference-store";
 import { createTranslator } from "./infrastructure/localization/i18next-translator";
 import { systemLocaleSource } from "./infrastructure/localization/browser-locale";
@@ -47,6 +48,8 @@ export function createComposition() {
     workspaceGateway,
     eventSource: workspaceEventSource,
     aiGateway,
+    aiUsageGateway: desktop ? aiUsageGateway : undefined,
+    codexAccountUsageGateway: desktop ? codexAccountUsageGateway : undefined,
     isolationGateway,
     runtimeGateway,
     dialogGateway,

@@ -96,6 +96,8 @@ export interface AiPanelProps {
    * model IDs or lists and leaves selection state to the owner.
    */
   modelControls?: ReactNode;
+  /** Read-only actions placed beside the conversation and connection controls. */
+  headerActions?: ReactNode;
 }
 
 const MODE_ORDER: PromptMode[] = ["ask", "generate", "rewrite", "workspace"];
@@ -162,6 +164,7 @@ export default function AiPanel({
   profileStore,
   aiGateway,
   modelControls,
+  headerActions,
 }: AiPanelProps) {
   const { t } = useI18n();
   /** Streaming transport: injected prop wins, otherwise the test fallback throws visibly. */
@@ -488,6 +491,7 @@ export default function AiPanel({
     <div aria-label={t("チャット")} className="ai-chat-panel flex h-full min-h-0 flex-col">
       <div className="ai-chat-header flex shrink-0 items-center gap-1">
         <h2 id="ai-panel-title" className="min-w-0 flex-1 truncate text-[13px] font-medium">{historyOpen ? t("チャットの履歴") : t("チャット")}</h2>
+        {headerActions}
         <AiProviderSettings compact provider={provider} onProvider={changeProvider} openToken={openSettingsToken} gateway={aiGateway} profileStore={profileStore} />
         <button type="button" aria-label={historyOpen ? t("チャットに戻る") : t("履歴を開く")} aria-pressed={historyOpen} title={historyOpen ? t("チャットに戻る") : t("チャットの履歴")} className="rounded-sm p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setHistoryOpen((value) => !value)}><History size={15} aria-hidden="true" /></button>
         <button type="button" aria-label={t("新しい会話")} title={t("新しいチャット")} onClick={handleNewConversation} className="shrink-0 rounded-sm p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground">

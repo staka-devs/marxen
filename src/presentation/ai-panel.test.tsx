@@ -46,15 +46,19 @@ describe("agent chat", () => {
     /** Owned stop handle recording cancellation. */
     const stop = vi.fn(async () => undefined);
     const onProposal = vi.fn();
+    const onBusyChange = vi.fn();
     mockStartPrompt.mockImplementation(async (_request, onEvent) => {
       handler = onEvent;
       return { runId: "cancel-race", stop };
     });
-    render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} onProposal={onProposal} />);
+    render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} onProposal={onProposal} onBusyChange={onBusyChange} />);
     fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "停止する" } });
     fireEvent.click(screen.getByRole("button", { name: "送信" }));
     await vi.waitFor(() => expect(mockStartPrompt).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("button", { name: "取り消し" }));
+    handler({ type: "usage", payload: { runId: "cancel-race", usage: { provider: "acp", preset: "codex", runId: "cancel-race", sessionId: "session", source: "usage_update", scope: "session", used: 25, size: 100, receivedMs: 1 } } });
+    expect(onBusyChange).toHaveBeenLastCalledWith(true);
+    expect(screen.queryByText("取り消しました。")).not.toBeInTheDocument();
     handler({ type: "done", payload: { runId: "cancel-race", proposal: { text: "遅い回答", baseContexts: [] }, sent: [] } });
     expect(await screen.findByText("取り消しました。")).toBeVisible();
     expect(onProposal).not.toHaveBeenCalled();
