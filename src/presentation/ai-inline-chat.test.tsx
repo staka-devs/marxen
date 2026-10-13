@@ -44,6 +44,7 @@ describe("inline chat", () => {
   it("discards a response completed after the user requested cancellation", async () => {
     let handler!: (event: AiStreamEvent) => void;
     const onProposal = vi.fn();
+    const onBusyChange = vi.fn();
     mockStartPrompt.mockImplementation(async (_request, onEvent) => {
       handler = onEvent;
       return {
@@ -52,11 +53,14 @@ describe("inline chat", () => {
         stop: vi.fn(async () => undefined),
       };
     });
-    renderInline({ onProposal });
+    renderInline({ onProposal, onBusyChange });
     fireEvent.change(screen.getByLabelText("インライン指示"), { target: { value: "止める" } });
     fireEvent.click(screen.getByRole("button", { name: "インライン送信" }));
     await vi.waitFor(() => expect(mockStartPrompt).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("button", { name: "インライン取消" }));
+    handler({ type: "usage", payload: { runId: "inline-cancel", usage: { provider: "acp", preset: "codex", runId: "inline-cancel", sessionId: "session", source: "usage_update", scope: "session", used: 25, size: 100, receivedMs: 1 } } });
+    expect(onBusyChange).toHaveBeenLastCalledWith(true);
+    expect(screen.queryByText("取り消しました。")).not.toBeInTheDocument();
     handler({ type: "done", payload: { runId: "inline-cancel", proposal: { text: "取消後の提案", baseContexts: [] }, sent: [] } });
     expect(await screen.findByText("取り消しました。")).toBeVisible();
     expect(onProposal).not.toHaveBeenCalled();

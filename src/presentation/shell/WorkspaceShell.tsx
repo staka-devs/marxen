@@ -7,6 +7,8 @@ import { MessageSquare, Files, FolderOpen, ListTree, Save, Search, Settings as S
 import { CodeMirrorEditor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
 import AiPanel from "../ai-panel";
+import { AiUsagePopover } from "../ai/AiUsagePopover";
+import type { AiUsageGateway, CodexAccountUsageGateway } from "../../application/ai/usage-ports";
 import { AiModelControls } from "../ai-model-controls";
 import { useAiModels } from "./hooks/useAiModels";
 import AiProviderSettings from "../ai-provider-settings";
@@ -90,6 +92,10 @@ export interface WorkspaceShellProps {
   eventSource?: WorkspaceEventSource;
   /** AI streaming, credentials, and connection tests. */
   aiGateway?: AiGateway;
+  /** Read retained usage and observe metadata without starting an AI prompt. */
+  aiUsageGateway?: AiUsageGateway;
+  /** Read the authenticated Codex account's officially reported limits. */
+  codexAccountUsageGateway?: CodexAccountUsageGateway;
   /** Isolation staging lifecycle pinned by Rust. */
   isolationGateway?: IsolationGateway;
   /** Runtime connectivity status. */
@@ -144,6 +150,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     workspaceGateway,
     eventSource,
     aiGateway,
+    aiUsageGateway,
+    codexAccountUsageGateway,
     isolationGateway,
     runtimeGateway,
     dialogGateway,
@@ -1093,6 +1101,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         >
           <div className="flex min-h-0 flex-1 flex-col">
           <AiPanel
+            headerActions={aiUsageGateway ? <AiUsagePopover gateway={aiUsageGateway} accountGateway={codexAccountUsageGateway} theme={theme} /> : undefined}
             modelControls={modelControls}
             contexts={staging.aiContexts}
             staging={staging.staging}

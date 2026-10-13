@@ -28,6 +28,8 @@ export default function App() {
         workspaceGateway={composition.workspaceGateway}
         eventSource={composition.eventSource}
         aiGateway={composition.aiGateway}
+        aiUsageGateway={composition.aiUsageGateway}
+        codexAccountUsageGateway={composition.codexAccountUsageGateway}
         isolationGateway={composition.isolationGateway}
         runtimeGateway={composition.runtimeGateway}
         dialogGateway={composition.dialogGateway}

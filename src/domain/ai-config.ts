@@ -21,7 +21,7 @@ import type {
 export const AI_STREAM_EVENT = "ai-stream";
 
 /** AI IPC schema version mirrored from the Rust side. */
-export const AI_CONTRACT_VERSION = 3;
+export const AI_CONTRACT_VERSION = 5;
 
 /** Japanese labels for provider kinds shown in settings. */
 export const KIND_LABELS: Record<AiProviderKind, string> = {
