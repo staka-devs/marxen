@@ -27,6 +27,7 @@ import type {
   YankCopy,
 } from "../../contracts/contracts";
 import { isStaleError, READONLY_MESSAGE, StaleResync } from "../../domain/document-errors";
+import { applyTextEdits } from "../../domain/coordinates/utf16";
 import type { DocumentTransport } from "../ports";
 
 /** Paste-image arguments pairing a save request with bytes and a range. */
@@ -48,6 +49,7 @@ export interface PasteImageArgs {
 export class RegistryClient {
   private queues = new Map<DocumentId, Promise<unknown>>();
   private rev = new Map<DocumentId, number>();
+  private source = new Map<DocumentId, string>();
   private cursorStaged = new Map<DocumentId, Array<{ anchor: number; head: number }>>();
   /** Insert-mode mapping prefix per document, owned inside the serial queue. */
   private pendingPrefix = new Map<DocumentId, string>();
@@ -69,6 +71,7 @@ export class RegistryClient {
     const current = this.rev.get(snapshot.documentId);
     if (current === undefined || snapshot.revision >= current) {
       this.rev.set(snapshot.documentId, snapshot.revision);
+      this.source.set(snapshot.documentId, snapshot.text);
     }
   }
 
@@ -78,8 +81,32 @@ export class RegistryClient {
    * Updates the execution-time revision before the caller merges the view.
    */
   private bump(snapshot: DocumentSnapshot): DocumentSnapshot {
-    this.rev.set(snapshot.documentId, snapshot.revision);
+    this.noteSnapshot(snapshot);
     return snapshot;
+  }
+
+  /** Bind a queued GUI edit only when its captured source is still canonical. */
+  applyGuiEdits(request: SaveRequest, beforeText: string, edits: TextEdit[], selection?: { anchor: number; head: number }): Promise<DocumentSnapshot> {
+    return this.enqueue(request.documentId, async () => {
+      if (this.pendingPrefix.get(request.documentId) && selection && edits.length === 1 && edits[0].range.start === edits[0].range.end) return this.insertNativeTextNow(request.documentId, edits[0].text);
+      const revision = this.rev.get(request.documentId);
+      if (revision === undefined || this.source.get(request.documentId) !== beforeText) await this.resync(request.documentId);
+      try {
+        const expected = applyTextEdits(beforeText, edits);
+        const snapshot = await this.transport.applyEdits({ documentId: request.documentId, baseRevision: revision! }, edits);
+        if (snapshot.text !== expected) {
+          this.noteSnapshot(snapshot);
+          throw new StaleResync(snapshot);
+        }
+        this.bump(snapshot);
+        if (selection) await this.transport.reportCursor({ documentId: request.documentId, revision: snapshot.revision, ...selection });
+        return snapshot;
+      } catch (cause) {
+        if (cause instanceof StaleResync) throw cause;
+        if (isStaleError(cause)) return this.resync(request.documentId);
+        throw cause;
+      }
+    });
   }
 
   /**
@@ -131,8 +158,9 @@ export class RegistryClient {
    * this same task, at the committed revision, so Enter, mappings, and Escape
    * cannot run between the text acknowledgement and its cursor update.
    */
-  private async replaceGuiRange(documentId: DocumentId, revision: number, range: Utf16Range, text: string): Promise<DocumentSnapshot> {
+  private async replaceGuiRange(documentId: DocumentId, revision: number, range: Utf16Range, text: string, beforeText?: string): Promise<DocumentSnapshot> {
     const snapshot = this.bump(await this.transport.applyEdits({ documentId, baseRevision: revision }, [{ range, text }]));
+    if (beforeText !== undefined && snapshot.text !== applyTextEdits(beforeText, [{ range, text }])) throw new StaleResync(snapshot);
     const head = range.start + text.length;
     await this.transport.reportCursor({ documentId, revision: snapshot.revision, anchor: head, head });
     return snapshot;
@@ -156,6 +184,25 @@ export class RegistryClient {
     });
   }
 
+  /** Insert literal committed text only when the queued native mode permits it. */
+  insertNativeText(documentId: DocumentId, text: string): Promise<DocumentSnapshot> {
+    return this.enqueue(documentId, () => this.insertNativeTextNow(documentId, text));
+  }
+
+  /** Execute committed text inside an already-owned document queue task. */
+  private async insertNativeTextNow(documentId: DocumentId, text: string): Promise<DocumentSnapshot> {
+    const revision = this.rev.get(documentId) ?? 0;
+    const mode = await this.transport.fetchMode(documentId);
+    if (mode.revision !== revision || (mode.mode !== "insert" && mode.mode !== "replace")) return this.resync(documentId);
+    this.pendingPrefix.delete(documentId);
+    try {
+      return this.bump(await this.transport.input({ documentId, baseRevision: revision }, text.replaceAll("<", "<lt>")));
+    } catch (cause) {
+      if (isStaleError(cause)) return this.resync(documentId);
+      throw cause;
+    }
+  }
+
   /**
    * Feed keys through real Neovim, binding the revision at execution time.
    *
@@ -164,6 +211,7 @@ export class RegistryClient {
    */
   vimInput(documentId: DocumentId, keys: string): Promise<DocumentSnapshot> {
     return this.enqueue(documentId, async () => {
+      if (keys.length !== 1) this.pendingPrefix.delete(documentId);
       const revision = this.rev.get(documentId) ?? 0;
       try {
         return this.bump(await this.transport.input({ documentId, baseRevision: revision }, keys));
@@ -186,6 +234,7 @@ export class RegistryClient {
     onCopy: (copy: YankCopy) => Promise<void>,
   ): Promise<VimInputResult> {
     return this.enqueue(documentId, async () => {
+      if (keys.length !== 1) this.pendingPrefix.delete(documentId);
       const revision = this.rev.get(documentId) ?? 0;
       try {
         const result = await this.transport.inputWithCopy({ documentId, baseRevision: revision }, keys);
@@ -212,8 +261,11 @@ export class RegistryClient {
     key: string,
     range: { start: number; end: number },
     onCopy?: (copy: YankCopy) => Promise<void>,
+    beforeText?: string,
   ): Promise<{ action: "vim"; snapshot: DocumentSnapshot; copyReady?: boolean } | { action: "gui"; snapshot: DocumentSnapshot }> {
     return this.enqueue(documentId, async () => {
+      const pending = this.pendingPrefix.get(documentId) ?? "";
+      if (beforeText !== undefined && this.source.get(documentId) !== beforeText && pending === "") await this.resync(documentId);
       // A mode revision is never proof of known source text: on mismatch the
       // buffer moved out of band (external/native/AI edit), so refresh and
       // reject instead of mutating offsets that may point elsewhere.
@@ -236,17 +288,19 @@ export class RegistryClient {
           throw cause;
         }
       }
-      const pending = this.pendingPrefix.get(documentId) ?? "";
       const mapped = await this.transport.hasMapping(documentId, "i", pending + key);
       try {
-        if (mapped) {
-          this.pendingPrefix.set(documentId, (pending + key).slice(-16));
+        if (mapped || pending !== "") {
+          // A mapping prefix is native input already buffered by Neovim.
+          // Its next key must also stay native, including an unmatched key
+          // that releases the prefix as literal text; no GUI range is used.
+          this.pendingPrefix.set(documentId, mapped ? (pending + key).slice(-16) : "");
           return { action: "vim" as const, snapshot: this.bump(await this.transport.input({ documentId, baseRevision: revision }, key)) };
         }
         this.pendingPrefix.set(documentId, "");
         return {
           action: "gui" as const,
-          snapshot: await this.replaceGuiRange(documentId, revision, range, key),
+          snapshot: await this.replaceGuiRange(documentId, revision, range, key, beforeText),
         };
       } catch (cause) {
         if (isStaleError(cause)) await this.resync(documentId);
@@ -268,8 +322,11 @@ export class RegistryClient {
     keyNotation: string | null,
     text: string,
     range: { start: number; end: number },
+    beforeText?: string,
+    nativeCursor = false,
   ): Promise<{ action: "vim"; snapshot: DocumentSnapshot } | { action: "gui"; snapshot: DocumentSnapshot }> {
     return this.enqueue(documentId, async () => {
+      if (!nativeCursor && beforeText !== undefined && this.source.get(documentId) !== beforeText) return this.resync(documentId);
       // A mode revision is never proof of known source text: on mismatch the
       // buffer moved out of band (external/native/AI edit), so refresh and
       // reject instead of mutating offsets that may point elsewhere.
@@ -295,10 +352,17 @@ export class RegistryClient {
           throw cause;
         }
       }
+      let target = range;
+      if (nativeCursor) {
+        if (update.mode !== "insert" && update.mode !== "replace") return this.resync(documentId);
+        const cursor = await this.transport.fetchCursor(documentId);
+        if (cursor.revision !== revision) return this.resync(documentId);
+        target = { start: cursor.head, end: cursor.head };
+      }
       try {
         return {
           action: "gui" as const,
-          snapshot: await this.replaceGuiRange(documentId, revision, range, text),
+          snapshot: await this.replaceGuiRange(documentId, revision, target, text, nativeCursor ? this.source.get(documentId) : beforeText),
         };
       } catch (cause) {
         if (isStaleError(cause)) await this.resync(documentId);
@@ -531,6 +595,12 @@ export class ReadonlyRegistry {
   applyEdits(): Promise<never> {
     return this.reject();
   }
+  /** Reject captured GUI edits in the browser demo. */
+  applyGuiEdits(): Promise<never> {
+    return this.reject();
+  }
+  /** Reject native text insertion in the browser demo. */
+  insertNativeText(): Promise<never> { return this.reject(); }
   /** Reject Vim input in the browser demo. */
   vimInput(_documentId?: string, _keys?: string): Promise<never> {
     return this.reject();

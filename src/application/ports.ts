@@ -53,16 +53,21 @@ export interface DocumentGateway {
   noteSnapshot(snapshot: DocumentSnapshot): void;
   /** Apply GUI edits serially, resyncing once on stale. */
   applyEdits(request: SaveRequest, edits: TextEdit[]): Promise<DocumentSnapshot>;
+  /** Commit a locally captured GUI change only against its exact source text. */
+  applyGuiEdits(request: SaveRequest, beforeText: string, edits: TextEdit[], selection?: { anchor: number; head: number }): Promise<DocumentSnapshot>;
+  /** Insert committed text at the native cursor after queued mode transitions. */
+  insertNativeText(documentId: DocumentId, text: string): Promise<DocumentSnapshot>;
   /** Feed keys through real Neovim, binding the revision at execution time. */
   vimInput(documentId: DocumentId, keys: string): Promise<DocumentSnapshot>;
   /** Feed keys natively with copy side effects in queue order. */
   vimInputWithCopy(documentId: DocumentId, keys: string, onCopy: (copy: YankCopy) => Promise<void>): Promise<VimInputResult>;
-  /** Route one printable char using the execution-time native mode. */
+  /** Route one printable char using native mode and optional captured GUI source. */
   routeCharKey(
     documentId: DocumentId,
     key: string,
     range: { start: number; end: number },
     onCopy?: (copy: YankCopy) => Promise<void>,
+    beforeText?: string,
   ): Promise<{ action: "vim"; snapshot: DocumentSnapshot; copyReady?: boolean } | { action: "gui"; snapshot: DocumentSnapshot }>;
   /** Apply one captured paste as a single serial task. */
   routeCapturedPaste(
@@ -70,6 +75,8 @@ export interface DocumentGateway {
     keyNotation: string | null,
     text: string,
     range: { start: number; end: number },
+    beforeText?: string,
+    nativeCursor?: boolean,
   ): Promise<{ action: "vim"; snapshot: DocumentSnapshot } | { action: "gui"; snapshot: DocumentSnapshot }>;
   /** Undo through the native stack. */
   undo(documentId: DocumentId): Promise<DocumentSnapshot>;

@@ -1,8 +1,9 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import App from "../../App";
 import { readRuntimeStatus } from "../../infrastructure/tauri/runtime-client";
 import { invoke } from "@tauri-apps/api/core";
+import { EditorView } from "@codemirror/view";
 
 vi.mock("../../infrastructure/tauri/runtime-client", () => {
   /** Mocked status reader controllable per test. */
@@ -327,6 +328,44 @@ it("sends GUI edits with the live revision and native undo reverts them", async 
   expect(mockedInvoke).toHaveBeenCalledWith("undo_document", { documentId: "doc_a" });
 });
 
+it.each(["日本語", "日😀本a語"])("keeps a %s burst through delayed older GUI ACKs", async (burst) => {
+  const initial = "abc\nx本文です\n";
+  scenario.files.set("メモ/a.md", { id: "doc_a", path: "メモ/a.md", text: initial, revision: 0, dirty: false, history: [initial] });
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("x本文です"));
+  scenario.mode = "insert";
+  fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
+  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await waitFor(() => expect(screen.getByTestId("vim-footer-mode")).toHaveTextContent("挿入"));
+  scenario.deferApplies = true;
+  const editorDom = screen.getByTestId("editor-primary").querySelector(".cm-editor")! as HTMLElement;
+  const view = EditorView.findFromDOM(editorDom)!;
+  expect(view).not.toBeNull();
+  let offset = 5;
+  for (const char of burst) {
+    if (char === "a") fireEvent.keyDown(view.contentDOM, { key: char });
+    act(() => view.dispatch({ changes: { from: offset, to: offset, insert: char }, selection: { anchor: offset + char.length } }));
+    if (char === "a") fireEvent.keyUp(view.contentDOM, { key: char });
+    offset += char.length;
+  }
+  const expected = "abc\nx" + burst + "本文です\n";
+  const count = [...burst].length;
+  expect(view.state.doc.toString()).toBe(expected);
+  await waitFor(() => expect(scenario.deferredReleases).toHaveLength(1));
+  for (let revision = 1; revision <= count; revision += 1) {
+    scenario.deferredReleases.shift()!();
+    if (revision < count) {
+      await waitFor(() => expect(scenario.deferredReleases).toHaveLength(1));
+      expect(view.state.doc.toString()).toBe(expected);
+      expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 0");
+    }
+  }
+  await waitFor(() => expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン " + count));
+  expect(view.state.doc.toString()).toBe(expected);
+  expect(scenario.files.get("メモ/a.md")!.text).toBe(expected);
+});
+
 it("resyncs stale revisions from the fresh snapshot", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
@@ -458,7 +497,7 @@ it("keeps display-basis arrows in the editor and routes Vim keys natively", asyn
   );
 });
 
-it("routes claimed insert keys natively and unclaimed keys as GUI inserts", async () => {
+it("keeps a mapping prefix native before returning unmapped keys to GUI edits", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
   await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
@@ -479,12 +518,10 @@ it("routes claimed insert keys natively and unclaimed keys as GUI inserts", asyn
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
   scenario.mappingResult = false;
   fireEvent.keyDown(editor, { key: "x" });
-  await waitFor(() =>
-    expect(mockedInvoke).toHaveBeenCalledWith(
-      "apply_gui_edits",
-      expect.objectContaining({ documentId: "doc_a", edits: [{ range: { start: 0, end: 0 }, text: "x" }] }),
-    ),
-  );
+  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 1, keys: "x" }));
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+  fireEvent.keyDown(editor, { key: "q" });
+  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("apply_gui_edits", expect.objectContaining({ documentId: "doc_a", edits: [{ range: { start: 0, end: 0 }, text: "q" }] })));
 });
 
 it("keeps fast insert bursts in source order", async () => {
@@ -1030,5 +1067,39 @@ it("keeps text typed immediately after Enter on the native queue until cursor re
     const inputs = mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input_with_copy");
     expect(inputs.map(([, args]) => (args as { keys: string }).keys)).toEqual(["<CR>", "x"]);
   });
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+});
+
+it("keeps native insert mappings for printable CodeMirror keyboard input", async () => {
+  await openInsertDoc();
+  scenario.mappingResult = true;
+  const view = EditorView.findFromDOM(screen.getByTestId("editor-primary").querySelector(".cm-editor") as HTMLElement)!;
+  fireEvent.keyDown(view.contentDOM, { key: "j" });
+  act(() => view.dispatch({ changes: { from: 0, insert: "j" }, selection: { anchor: 1 } }));
+  fireEvent.keyUp(view.contentDOM, { key: "j" });
+  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", expect.objectContaining({ documentId: "doc_a", keys: "j" })));
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+  expect(mockedInvoke).toHaveBeenCalledWith("has_nvim_mapping", { documentId: "doc_a", mode: "i", lhs: "j" });
+});
+
+it("keeps Unicode committed immediately after Enter on the native cursor queue", async () => {
+  await openInsertDoc();
+  const view = EditorView.findFromDOM(screen.getByTestId("editor-primary").querySelector(".cm-editor") as HTMLElement)!;
+  fireEvent.keyDown(view.contentDOM, { key: "Enter" });
+  act(() => view.dispatch({ changes: { from: 0, insert: "日本語" }, selection: { anchor: 3 } }));
+  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 1, keys: "日本語" }));
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+});
+
+it("retains the native cursor for composition started before Enter acknowledgement", async () => {
+  await openInsertDoc();
+  const view = EditorView.findFromDOM(screen.getByTestId("editor-primary").querySelector(".cm-editor") as HTMLElement)!;
+  fireEvent.keyDown(view.contentDOM, { key: "Enter" });
+  fireEvent.compositionStart(view.contentDOM);
+  act(() => view.dispatch({ changes: { from: 0, insert: "日本語" }, selection: { anchor: 3 } }));
+  await waitFor(() => expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 1"));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  fireEvent.compositionEnd(view.contentDOM);
+  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("nvim_input", { documentId: "doc_a", baseRevision: 1, keys: "日本語" }));
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
 });

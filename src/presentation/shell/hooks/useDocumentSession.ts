@@ -114,10 +114,12 @@ export interface DocumentSession {
   handleSelection: (id: string, selection: EditorSelection) => void;
   /** Jump to offsets with an immediate cursor report. */
   jumpToOffset: (id: string, anchor: number, head: number) => Promise<void>;
-  /** Apply GUI edits serially with stale resync instead of retry. */
-  applyEdits: (id: string, edits: TextEdit[]) => Promise<void>;
   /** Copy a yank via Rust and clear the ready indicator. */
   writeYankToClipboard: (copy: YankCopy, id: string) => Promise<void>;
+  /** Insert committed text after a pending native cursor transition. */
+  applyNativeText: (id: string, text: string) => Promise<void>;
+  /** Apply GUI edits serially with stale resync instead of retry. */
+  applyEdits: (id: string, edits: TextEdit[], beforeText?: string, selection?: EditorSelection, key?: string) => Promise<void>;
   /** Undo through the native stack for the active document. */
   handleUndo: () => Promise<void>;
   /** Redo through the native stack for the active document. */
@@ -178,6 +180,8 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
 
   const docsRef = useRef(docs);
   docsRef.current = docs;
+  const pendingGui = useRef<Record<string, number>>({});
+  const deferredSnapshots = useRef<Record<string, DocumentSnapshot>>({});
   const activeRef = useRef(activeId);
   activeRef.current = activeId;
   // Dedicated cursor sequence: every echo gets a fresh token so navigation
@@ -237,6 +241,11 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
   const mergeSnapshot = useCallback(
     (snapshot: DocumentSnapshot) => {
       if (registry) registry.noteSnapshot(snapshot);
+      if ((pendingGui.current[snapshot.documentId] ?? 0) > 0) {
+        const prior = deferredSnapshots.current[snapshot.documentId];
+        if (!prior || snapshot.revision >= prior.revision) deferredSnapshots.current[snapshot.documentId] = snapshot;
+        return;
+      }
       setDocs((prev) => {
         const doc = prev[snapshot.documentId];
         if (!doc || snapshot.revision < doc.revision) return prev;
@@ -254,10 +263,11 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       // async completions whose generation went stale never overwrite a
       // newer selection, echo, or mode display.
       const ticket = gen ?? selectionGenRef.current[id] ?? 0;
+      let nativeMode: string | undefined;
       try {
         const mode = await registry.fetchMode(id);
         if (!isSelectionGenCurrent(id, ticket)) return;
-        if (activeRef.current === id) setVimMode(mode.mode);
+        nativeMode = mode.mode;
       } catch {
         // Best-effort display only.
       }
@@ -267,6 +277,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
         setSelections((prev) => ({ ...prev, [id]: { anchor: cursor.anchor, head: cursor.head } }));
         caretRef.current[id] = cursor.head;
         echoCursor(id, cursor.anchor, cursor.head);
+        if (nativeMode !== undefined && activeRef.current === id) setVimMode(nativeMode);
       } catch {
         // Best-effort display only.
       }
@@ -348,26 +359,38 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
     [registry, echoCursor, refreshModeCursor, bumpSelectionGen, isSelectionGenCurrent],
   );
 
-  /** Apply GUI edits serially with stale resync instead of retry. */
-  const applyEdits = useCallback(
-    async (id: string, edits: TextEdit[]) => {
-      if (!registry) {
-        setNotice(READONLY_MESSAGE);
-        return;
-      }
-      const current = docsRef.current[id];
-      if (!current || edits.length === 0) return;
-      bumpSelectionGen(id);
-      try {
-        const snapshot = await registry.applyEdits({ documentId: id, baseRevision: current.revision }, edits);
-        mergeSnapshot(snapshot);
-      } catch (cause) {
-        if (cause instanceof StaleResync) sayStale(cause.snapshot);
-        else setNotice(workspaceErrorText(cause));
-      }
-    },
-    [registry, mergeSnapshot, sayStale, bumpSelectionGen, notify],
-  );
+  /** Flush the newest deferred native snapshot after the last GUI input settles. */
+  const finishGuiInput = useCallback((id: string) => {
+    pendingGui.current[id] -= 1;
+    if (pendingGui.current[id] === 0) {
+      const snapshot = deferredSnapshots.current[id];
+      delete deferredSnapshots.current[id];
+      if (snapshot) mergeSnapshot(snapshot);
+    }
+  }, [mergeSnapshot]);
+
+  /** Reconcile rejected GUI input while preserving its actual validation error. */
+  const recoverGuiInput = useCallback(async (id: string, cause: unknown, gen: number) => {
+    if (cause instanceof StaleResync) mergeSnapshot(cause.snapshot);
+    else {
+      try { if (registry) mergeSnapshot(await registry.fetchSnapshot(id)); } catch { /* The original error remains the useful notice. */ }
+    }
+    await refreshModeCursor(id, gen);
+    setNotice(workspaceErrorText(cause));
+  }, [registry, mergeSnapshot, refreshModeCursor, notify]);
+
+  /** Commit text at the native cursor when preceding keys have moved it. */
+  const applyNativeText = useCallback(async (id: string, text: string) => {
+    if (!registry || !docsRef.current[id] || text.length === 0) return;
+    const gen = bumpSelectionGen(id);
+    pendingGui.current[id] = (pendingGui.current[id] ?? 0) + 1;
+    try {
+      mergeSnapshot(await registry.insertNativeText(id, text));
+      await refreshModeCursor(id, gen);
+    } catch (cause) {
+      await recoverGuiInput(id, cause, gen);
+    } finally { finishGuiInput(id); }
+  }, [registry, mergeSnapshot, refreshModeCursor, bumpSelectionGen, finishGuiInput, recoverGuiInput]);
 
   /** Copy a yank via Rust and clear the ready indicator. */
   const writeYankToClipboard = useCallback(async (copy: YankCopy, id: string) => {
@@ -378,6 +401,44 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       setCopyReady((ready) => ready === id ? null : ready);
     }
   }, [clipboardGateway, notify]);
+
+  /** Apply GUI edits serially with stale resync instead of retry. */
+  const applyEdits = useCallback(
+    async (id: string, edits: TextEdit[], beforeText?: string, selection?: EditorSelection, key?: string) => {
+      if (!registry) {
+        setNotice(READONLY_MESSAGE);
+        return;
+      }
+      const current = docsRef.current[id];
+      if (!current || edits.length === 0) return;
+      const gen = bumpSelectionGen(id);
+      if (selection) {
+        setSelections((prev) => ({ ...prev, [id]: selection }));
+        caretRef.current[id] = selection.head;
+      }
+      if (beforeText !== undefined) pendingGui.current[id] = (pendingGui.current[id] ?? 0) + 1;
+      try {
+        const request = { documentId: id, baseRevision: current.revision };
+        if (key !== undefined && beforeText !== undefined && edits.length === 1 && edits[0].text === key) {
+          const decision = await registry.routeCharKey(id, key, edits[0].range, (copy) => writeYankToClipboard(copy, id), beforeText);
+          mergeSnapshot(decision.snapshot);
+          if (decision.action === "vim") await refreshModeCursor(id, gen);
+        } else {
+          const snapshot = beforeText === undefined
+            ? await registry.applyEdits(request, edits)
+            : await registry.applyGuiEdits(request, beforeText, edits, selection);
+          mergeSnapshot(snapshot);
+        }
+      } catch (cause) {
+        await recoverGuiInput(id, cause, gen);
+      } finally {
+        if (beforeText !== undefined) {
+          finishGuiInput(id);
+        }
+      }
+    },
+    [registry, mergeSnapshot, sayStale, bumpSelectionGen, writeYankToClipboard, refreshModeCursor, finishGuiInput, recoverGuiInput],
+  );
 
   /** Undo through the native stack for the active document. */
   const handleUndo = useCallback(async () => {
@@ -622,6 +683,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
     refreshModeAfterSelection,
     handleSelection,
     jumpToOffset,
+    applyNativeText,
     applyEdits,
     writeYankToClipboard,
     handleUndo,
