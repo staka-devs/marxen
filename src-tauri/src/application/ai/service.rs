@@ -1,5 +1,5 @@
 //! AI use cases own scope authorization, credential readiness, cancellation, and terminal order.
-use super::{credentials::AgentKeyring, runs::*, transport::*};
+use super::{credentials::AgentKeyring, runs::*, transport::*, usage::UsageRegistry};
 use crate::application::{isolation::IsolationManager, workspace::Workspace};
 use crate::contracts::ai::*;
 use crate::domain::ai::*;
@@ -9,6 +9,7 @@ pub struct AiService {
     pub transport: Arc<dyn AiTransport>,
     pub spawner: Arc<dyn TaskSpawner>,
     pub runs: Arc<RunRegistry>,
+    pub usage: Arc<UsageRegistry>,
 }
 /// Map workspace authorization failures to AI errors without exposing live paths.
 fn scope_error(request: &AiPromptRequest, error: crate::contracts::WorkspaceError) -> AiError {
@@ -159,7 +160,9 @@ impl AiService {
                 // inactive, or out-of-scope copies are refused before spawning.
                 let staging_dir = prepare_scoped_run(&workspace_state, &isolation, &request)?;
                 let (run_id, cancel) = self.runs.register();
+                self.usage.reset_for_run(&run_id);
                 let registry = self.runs.clone();
+                let usage = self.usage.clone();
                 let owned_run_id = run_id.clone();
                 let owned_request = request.clone();
                 let transport = self.transport.clone();
@@ -183,7 +186,12 @@ impl AiService {
                             &registry,
                             &cancel,
                             &mut |event| {
-                                gate.push(event, &mut |live| emit(live));
+                                gate.push(event, &mut |live| {
+                                    if let AiStreamEvent::Usage(report) = &live {
+                                        usage.record(report.usage.clone());
+                                    }
+                                    emit(live);
+                                });
                             },
                         );
                         (gate, inner)
@@ -210,6 +218,7 @@ impl AiService {
                     resolve_http_request(self.keyring.as_ref(), &request.provider)?;
                 prepare_scoped_run(&workspace_state, &isolation, &request)?;
                 let (run_id, cancel) = self.runs.register();
+                self.usage.reset_for_run(&run_id);
                 let registry = self.runs.clone();
                 let owned_run_id = run_id.clone();
                 let owned_request = request.clone();
@@ -258,5 +267,11 @@ impl AiService {
     pub fn cancel(&self, run_id: AiRunId) -> Result<bool, AiError> {
         validate_run_id(&run_id)?;
         Ok(self.runs.cancel(&run_id))
+    }
+
+    /// Return the latest reported ACP usage for popup refresh.
+    /// This is read-only: it never sends a prompt or starts inference.
+    pub fn usage_snapshot(&self) -> Vec<ReportedUsage> {
+        self.usage.snapshot()
     }
 }

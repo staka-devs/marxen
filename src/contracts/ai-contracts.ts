@@ -1,5 +1,5 @@
 // Generated from src-tauri/src/contracts/ai.rs. Run npm run ai-contracts:generate.
-// Do not edit by hand. AI IPC schema version 3.
+// Do not edit by hand. AI IPC schema version 5.
 import type { DocumentId, Revision, Utf16Range } from "./contracts";
 export type AiProviderKind = "acp" | "openai_compatible" | "anthropic";
 export type AcpPreset = "codex" | "opencode" | "copilot" | "custom";
@@ -42,10 +42,75 @@ export type ProposalText = { text: string, baseContexts: Array<ContextRef>, };
 export type ContextSummary = { documentId: DocumentId, revision: Revision, ranges: Array<Utf16Range>, chars: number, };
 export type StreamStarted = { runId: AiRunId, };
 export type StreamChunk = { runId: AiRunId, text: string, };
+export type StreamUsage = { runId: AiRunId, usage: ReportedUsage, };
 export type StreamDone = { runId: AiRunId, proposal: ProposalText, sent: Array<ContextSummary>, };
 export type StreamError = { runId: AiRunId | null, error: AiError, };
 export type StreamCancelled = { runId: AiRunId, };
-export type AiStreamEvent = { "type": "started", "payload": StreamStarted } | { "type": "chunk", "payload": StreamChunk } | { "type": "done", "payload": StreamDone } | { "type": "error", "payload": StreamError } | { "type": "cancelled", "payload": StreamCancelled };
+export type AcpUsageSource = "usage_update" | "prompt_response";
+export type AcpUsageScope = "session" | "prompt_response_undefined";
+export type UsageCost = { 
+/**
+ * Decimal amount text from the validated wire number (for example `"12.34"`).
+ */
+amount: string, 
+/**
+ * ISO 4217 code as reported (for example `"USD"`).
+ */
+currency: string, };
+export type ReportedUsage = { provider: AiProviderKind, 
+/**
+ * ACP preset that produced the report, when the provider is ACP.
+ */
+preset?: AcpPreset, runId: AiRunId, sessionId: AcpSessionId, source: AcpUsageSource, scope: AcpUsageScope, 
+/**
+ * Tokens currently in context (`usage_update.used`).
+ */
+used?: number, 
+/**
+ * Total context window size in tokens (`usage_update.size`).
+ */
+size?: number, 
+/**
+ * Reported input tokens (`PromptResponse.usage.inputTokens`).
+ */
+inputTokens?: number, 
+/**
+ * Reported output tokens (`PromptResponse.usage.outputTokens`).
+ */
+outputTokens?: number, 
+/**
+ * Reported total tokens (`PromptResponse.usage.totalTokens`).
+ */
+totalTokens?: number, 
+/**
+ * Reported cache-read tokens (`PromptResponse.usage.cachedReadTokens`).
+ */
+cachedReadTokens?: number, 
+/**
+ * Reported cache-write tokens (`PromptResponse.usage.cachedWriteTokens`).
+ */
+cachedWriteTokens?: number, 
+/**
+ * Reported reasoning tokens (official `thoughtTokens`).
+ */
+reasoningTokens?: number, 
+/**
+ * Cumulative session cost exactly as reported in `usage_update.cost`.
+ */
+cost?: UsageCost, 
+/**
+ * Unix milliseconds when Rust received the report.
+ */
+receivedMs: number, };
+export type UsageWindow = { usedPercent: number, windowDurationMins?: number, 
+/**
+ * Unix seconds reported for the next reset; omitted when unavailable.
+ */
+resetsAt?: number, };
+export type UsageCredits = { hasCredits: boolean, unlimited: boolean, balance?: string, };
+export type CodexUsageBucket = { id: string, name?: string, primary?: UsageWindow, secondary?: UsageWindow, credits?: UsageCredits, };
+export type CodexAccountUsage = { buckets: Array<CodexUsageBucket>, receivedMs: number, };
+export type AiStreamEvent = { "type": "started", "payload": StreamStarted } | { "type": "chunk", "payload": StreamChunk } | { "type": "usage", "payload": StreamUsage } | { "type": "done", "payload": StreamDone } | { "type": "error", "payload": StreamError } | { "type": "cancelled", "payload": StreamCancelled };
 export type AiError = { "code": "invalid_config", detail: string, } | { "code": "missing_credentials", provider: AiProviderKind, } | { "code": "missing_binary", command: string, } | { "code": "spawn_failed", detail: string, } | { "code": "connection_failed", detail: string, } | { "code": "auth_failed", detail: string, } | { "code": "stream_failed", detail: string, } | { "code": "request_cancelled" } | { "code": "session_required" } | { "code": "session_busy" } | { "code": "unknown_session" } | { "code": "staging_unresolved", copy_id: IsolatedCopyId, } | { "code": "live_target_rejected", detail: string, } | { "code": "unsupported_protocol", version: number, } | { "code": "claude_code_refused", command: string, } | { "code": "credential_store_failed", detail: string, };
 export type CredentialRef = { provider: AiProviderKind, hasSecret: boolean, };
 export type AiTestResult = { 

@@ -14,6 +14,63 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[test]
+/// Read official account metadata while proving no conversation, inference or reset is requested.
+fn codex_account_reader_only_requests_read_only_methods() {
+    let markers = tempfile::tempdir().unwrap();
+    let argv = AcpArgv {
+        command: env!("CARGO_BIN_EXE_mock-acp-agent").into(),
+        args: vec![
+            "--codex-account-usage".into(),
+            "--flag-dir".into(),
+            markers.path().to_string_lossy().into_owned(),
+        ],
+    };
+    let reports = marxen_lib::infrastructure::ai::account_usage::read_codex_with_argv(
+        &argv,
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].primary.as_ref().unwrap().used_percent, 25.0);
+    assert_eq!(
+        reports[0].credits.as_ref().unwrap().balance.as_deref(),
+        Some("0")
+    );
+    let methods: Vec<String> = serde_json::from_slice(
+        &std::fs::read(markers.path().join("account-methods.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        methods,
+        ["initialize", "initialized", "account/rateLimits/read"]
+    );
+}
+
+#[test]
+/// Time out silent readers and suppress private provider error bodies.
+fn codex_account_reader_bounds_waiting_and_never_returns_private_error_bodies() {
+    for args in [
+        vec!["--codex-account-usage", "--respond-after-ms", "200"],
+        vec!["--codex-account-usage", "--account-private-error"],
+    ] {
+        let timeout = if args.contains(&"200") {
+            Duration::from_millis(25)
+        } else {
+            Duration::from_secs(5)
+        };
+        let argv = AcpArgv {
+            command: env!("CARGO_BIN_EXE_mock-acp-agent").into(),
+            args: args.into_iter().map(str::to_owned).collect(),
+        };
+        let error =
+            marxen_lib::infrastructure::ai::account_usage::read_codex_with_argv(&argv, timeout)
+                .unwrap_err();
+        assert!(matches!(error, AiError::ConnectionFailed { .. }));
+        assert!(!format!("{error:?}").contains("private-provider-body"));
+    }
+}
+
 /// Build a fixed revision context containing emoji and Japanese text for wire and streaming checks.
 fn context() -> PromptContext {
     PromptContext {

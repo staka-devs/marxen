@@ -6,6 +6,7 @@
 //! Flags: --respond-after-ms N, --no-chunks, --no-early-notify,
 //! --no-permission, --fragment, --coalesce, --huge-line,
 //! --cancel-graceful, --exit-early, --flag-dir PATH,
+//! --codex-account-usage serves a read-only App Server fixture and refuses inference.
 //! --write-staging REL --write-text TEXT (fake CLI edit of the staging cwd).
 //! --write-after-response-ms N delays that edit until after the prompt
 //! terminal, while the child is still being reaped.
@@ -241,6 +242,51 @@ fn model_options(model: &str, effort: &str) -> serde_json::Value {
     ])
 }
 
+/// Serve the independent Codex account fixture, recording methods and refusing model turns.
+fn serve_account_usage() {
+    let mut methods = Vec::new();
+    let mut out = std::io::stdout().lock();
+    for line in std::io::stdin().lock().lines() {
+        let message: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        assert!(
+            message.get("jsonrpc").is_none(),
+            "App Server omits the JSON-RPC header"
+        );
+        let method = message["method"].as_str().unwrap();
+        methods.push(method.to_owned());
+        let body = match method {
+            "initialize" => {
+                serde_json::json!({"id": message["id"], "result": {"userAgent": "fixture"}})
+            }
+            "initialized" => continue,
+            "account/rateLimits/read" => {
+                if let Some(folder) = flag_dir() {
+                    std::fs::write(
+                        folder.join("account-methods.json"),
+                        serde_json::to_vec(&methods).unwrap(),
+                    )
+                    .unwrap();
+                }
+                if has_flag("--account-private-error") {
+                    serde_json::json!({"id": message["id"], "error": {"code": -32000, "message": "private-provider-body-do-not-expose"}})
+                } else {
+                    serde_json::json!({"id": message["id"], "result": {"rateLimitsByLimitId": {"codex": {
+                        "primary": {"usedPercent": 25, "windowDurationMins": 300, "resetsAt": 1800000000},
+                        "credits": {"hasCredits": false, "unlimited": false, "balance": "0"}
+                    }}}})
+                }
+            }
+            _ => panic!("account reader requested a forbidden operation: {method}"),
+        };
+        let delay = flag_value("--respond-after-ms")
+            .and_then(|text| text.parse::<u64>().ok())
+            .unwrap_or(0);
+        std::thread::sleep(Duration::from_millis(delay));
+        out.write_all(&encode(&body)).unwrap();
+        out.flush().unwrap();
+    }
+}
+
 /// Serve independent ACP initialize/session/prompt fixtures over stdio until EOF.
 /// Flags inject interleaving, fragmentation/coalescing, delays, huge lines,
 /// permission denial, graceful cancellation, and staging writes before/after completion.
@@ -248,6 +294,10 @@ fn model_options(model: &str, effort: &str) -> serde_json::Value {
 fn main() {
     if has_flag("--exit-early") {
         std::process::exit(1);
+    }
+    if has_flag("--codex-account-usage") {
+        serve_account_usage();
+        return;
     }
     let delay_ms: u64 = flag_value("--respond-after-ms")
         .and_then(|value| value.parse().ok())

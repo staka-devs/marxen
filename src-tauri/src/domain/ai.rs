@@ -939,6 +939,181 @@ pub fn acp_update_text(message: &serde_json::Value) -> Option<String> {
     }
 }
 
+// ---- ACP usage reporting (Issue #59, official schema only) ----
+
+/// Largest integer exactly representable in a JavaScript number.
+/// Wire counters above this bound are rejected instead of being silently rounded.
+pub const JS_SAFE_INTEGER_MAX: u64 = 9_007_199_254_740_991;
+
+/// Validate one official token counter as an exact integer within the
+/// JavaScript-safe range. Negative, fractional, and out-of-range values yield
+/// `None` so callers drop the report instead of recording dishonest data.
+pub fn validate_token_counter(value: &Value) -> Option<u64> {
+    let counter = value.as_u64()?;
+    (counter <= JS_SAFE_INTEGER_MAX).then_some(counter)
+}
+
+/// Validate one official cost amount as a finite non-negative JSON number
+/// within the JavaScript-safe range and render it as decimal text.
+/// Non-numbers, negative, non-finite, and out-of-range amounts yield `None`.
+/// The text form keeps the `Eq` contract without binary float rounding.
+pub fn validate_cost_amount(value: &Value) -> Option<String> {
+    if let Some(number) = value.as_u64() {
+        return (number <= JS_SAFE_INTEGER_MAX).then(|| number.to_string());
+    }
+    let amount = value.as_f64()?;
+    if !amount.is_finite() || amount < 0.0 || amount > JS_SAFE_INTEGER_MAX as f64 {
+        return None;
+    }
+    Some(format!("{amount}"))
+}
+
+/// Validate an ISO 4217 currency code as three ASCII letters and normalize it
+/// to uppercase. Any other shape yields `None` so malformed costs are dropped.
+pub fn validate_currency_code(code: &str) -> Option<String> {
+    if code.len() == 3 && code.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        Some(code.to_ascii_uppercase())
+    } else {
+        None
+    }
+}
+
+/// Return the ACP preset carried by the request provider, if any.
+/// This labels reports for the popup; it never reads wire `_meta`.
+pub fn acp_preset_of(provider: &AiProviderConfig) -> Option<AcpPreset> {
+    match provider.kind {
+        AiProviderKind::Acp => provider.acp.as_ref().map(|config| config.preset),
+        AiProviderKind::OpenaiCompatible | AiProviderKind::Anthropic => None,
+    }
+}
+
+/// Map a wire source to its honestly reported scope. `usage_update` is
+/// session-scoped; unstable `PromptResponse.usage` keeps the undefined scope
+/// label because turn-versus-session meaning differs across implementations.
+pub fn usage_scope_for_source(source: AcpUsageSource) -> AcpUsageScope {
+    match source {
+        AcpUsageSource::UsageUpdate => AcpUsageScope::Session,
+        AcpUsageSource::PromptResponse => AcpUsageScope::PromptResponseUndefined,
+    }
+}
+
+/// Validate one official `Cost` object into IPC form. Malformed amounts or
+/// currency codes yield `None`; callers keep the surrounding context counters
+/// while dropping only the dishonest cost.
+fn validate_usage_cost(cost: &Value) -> Option<UsageCost> {
+    if cost.is_null() {
+        return None;
+    }
+    let amount = validate_cost_amount(cost.get("amount")?)?;
+    let currency = validate_currency_code(cost.get("currency")?.as_str()?)?;
+    Some(UsageCost { amount, currency })
+}
+
+/// Parse one official `session/update` with `sessionUpdate == "usage_update"`.
+/// The wire `sessionId` must equal `expected_session`; foreign sessions yield
+/// `None` so notifications never mix costs across sessions. `used`/`size` are
+/// current context occupancy (not a plan quota) and are required; a malformed
+/// cost is dropped while valid context counters are still reported. Arbitrary
+/// `_meta` names are never read.
+pub fn parse_usage_update_notification(
+    note: &Value,
+    expected_session: &str,
+    provider: AiProviderKind,
+    preset: Option<AcpPreset>,
+    run_id: &AiRunId,
+    received_ms: u64,
+) -> Option<ReportedUsage> {
+    if note.get("method")?.as_str()? != "session/update" {
+        return None;
+    }
+    let params = note.get("params")?;
+    if params.get("sessionId")?.as_str()? != expected_session {
+        return None;
+    }
+    let update = params.get("update")?;
+    if update.get("sessionUpdate")?.as_str()? != "usage_update" {
+        return None;
+    }
+    let used = validate_token_counter(update.get("used")?)?;
+    let size = validate_token_counter(update.get("size")?)?;
+    let cost = update.get("cost").and_then(validate_usage_cost);
+    Some(ReportedUsage {
+        provider,
+        preset,
+        run_id: run_id.clone(),
+        session_id: AcpSessionId(expected_session.to_owned()),
+        source: AcpUsageSource::UsageUpdate,
+        scope: usage_scope_for_source(AcpUsageSource::UsageUpdate),
+        used: Some(used),
+        size: Some(size),
+        input_tokens: None,
+        output_tokens: None,
+        total_tokens: None,
+        cached_read_tokens: None,
+        cached_write_tokens: None,
+        reasoning_tokens: None,
+        cost,
+        received_ms,
+    })
+}
+
+/// Read one optional token counter from unstable `PromptResponse.usage`.
+/// Absent or null fields stay absent; a present field that fails validation
+/// rejects the whole report with `None`.
+fn optional_usage_counter(usage: &Value, name: &str) -> Option<Option<u64>> {
+    match usage.get(name) {
+        None | Some(Value::Null) => Some(None),
+        Some(value) => validate_token_counter(value).map(Some),
+    }
+}
+
+/// Parse unstable `result.usage` from a `session/prompt` response body.
+/// Absent or null usage yields `None` (no report, not an error). Present
+/// usage requires integer `inputTokens`/`outputTokens`/`totalTokens` within
+/// the JavaScript-safe range; any malformed present field rejects the whole
+/// report. The returned scope stays `PromptResponseUndefined` and callers must
+/// never sum such reports. Arbitrary `_meta` names are never read.
+pub fn parse_prompt_response_usage(
+    body: &Value,
+    provider: AiProviderKind,
+    preset: Option<AcpPreset>,
+    run_id: &AiRunId,
+    session_id: &str,
+    received_ms: u64,
+) -> Option<ReportedUsage> {
+    let usage = body.pointer("/result/usage")?;
+    if usage.is_null() {
+        return None;
+    }
+    if !usage.is_object() {
+        return None;
+    }
+    let input_tokens = validate_token_counter(usage.get("inputTokens")?)?;
+    let output_tokens = validate_token_counter(usage.get("outputTokens")?)?;
+    let total_tokens = validate_token_counter(usage.get("totalTokens")?)?;
+    let reasoning_tokens = optional_usage_counter(usage, "thoughtTokens")?;
+    let cached_read_tokens = optional_usage_counter(usage, "cachedReadTokens")?;
+    let cached_write_tokens = optional_usage_counter(usage, "cachedWriteTokens")?;
+    Some(ReportedUsage {
+        provider,
+        preset,
+        run_id: run_id.clone(),
+        session_id: AcpSessionId(session_id.to_owned()),
+        source: AcpUsageSource::PromptResponse,
+        scope: usage_scope_for_source(AcpUsageSource::PromptResponse),
+        used: None,
+        size: None,
+        input_tokens: Some(input_tokens),
+        output_tokens: Some(output_tokens),
+        total_tokens: Some(total_tokens),
+        cached_read_tokens,
+        cached_write_tokens,
+        reasoning_tokens,
+        cost: None,
+        received_ms,
+    })
+}
+
 // ---- ACP session lifecycle tracker ----
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

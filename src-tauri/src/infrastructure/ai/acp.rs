@@ -11,6 +11,67 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::time::Instant;
+/// Return Unix milliseconds for usage receipt stamps.
+/// Clock failures fall back to zero rather than failing the owning run.
+fn usage_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+/// Emit one validated `usage_update` notification as a nonterminal usage event.
+/// Foreign sessions and malformed reports yield no event; text and terminal
+/// handling stay unchanged.
+fn emit_usage_notification(
+    note: &serde_json::Value,
+    session_id: &str,
+    request: &AiPromptRequest,
+    run_id: &AiRunId,
+    emit: &mut (dyn FnMut(AiStreamEvent) + Send),
+) {
+    let usage = parse_usage_update_notification(
+        note,
+        session_id,
+        request.provider.kind,
+        acp_preset_of(&request.provider),
+        run_id,
+        usage_now_ms(),
+    );
+    if let Some(usage) = usage {
+        emit(AiStreamEvent::Usage(StreamUsage {
+            run_id: run_id.clone(),
+            usage,
+        }));
+    }
+}
+
+/// Emit validated unstable `PromptResponse.usage` as a nonterminal usage event.
+/// Absent usage yields no event; malformed usage is dropped without affecting
+/// the terminal settlement that follows.
+fn emit_prompt_response_usage(
+    body: &serde_json::Value,
+    session_id: &str,
+    request: &AiPromptRequest,
+    run_id: &AiRunId,
+    emit: &mut (dyn FnMut(AiStreamEvent) + Send),
+) {
+    let usage = parse_prompt_response_usage(
+        body,
+        request.provider.kind,
+        acp_preset_of(&request.provider),
+        run_id,
+        session_id,
+        usage_now_ms(),
+    );
+    if let Some(usage) = usage {
+        emit(AiStreamEvent::Usage(StreamUsage {
+            run_id: run_id.clone(),
+            usage,
+        }));
+    }
+}
+
 /// Read `PATHEXT` order for executable probing, falling back to the bundled
 /// Windows default when the variable is absent or unparsable.
 /// Appends `ps1` after `PATHEXT` when missing so official npm shims resolve
@@ -130,7 +191,7 @@ fn resolve_explicit_launch(path: &Path, args: &[String]) -> Result<ResolvedAcpLa
     })
 }
 
-/// Find the Node.js executable backing a `codex-acp` npm shim.
+/// Find the Node.js executable backing an official codex-acp npm shim.
 /// Prefers a `node.exe` sibling of the npm root, then PATH lookup.
 fn find_node_program(npm_root: &Path) -> Option<PathBuf> {
     let sibling = npm_root.join("node.exe");
@@ -145,6 +206,7 @@ fn find_node_program(npm_root: &Path) -> Option<PathBuf> {
 /// Resolve a known official npm shim to its bundled target without a shell.
 /// `opencode` maps to `node_modules/@opencode/cli/bin/opencode.exe`;
 /// `codex-acp` maps to `node <npm>/node_modules/@agentclientprotocol/codex-acp/dist/index.js`.
+/// `codex` maps directly to the published native executable, avoiding a Node parent process.
 /// All other shims return `None` so callers keep searching or report missing.
 fn resolve_npm_shim_target(shim: &Path, original_args: &[String]) -> Option<ResolvedAcpLaunch> {
     let stem = shim
@@ -165,6 +227,10 @@ fn resolve_npm_shim_target(shim: &Path, original_args: &[String]) -> Option<Reso
                 args: original_args.to_vec(),
             })
         }
+        "codex" => codex_npm_program(npm_root).map(|program| ResolvedAcpLaunch {
+            program,
+            args: original_args.to_vec(),
+        }),
         "codex-acp" => {
             let script = npm_root
                 .join("node_modules")
@@ -186,6 +252,34 @@ fn resolve_npm_shim_target(shim: &Path, original_args: &[String]) -> Option<Reso
         }
         _ => None,
     }
+}
+
+/// Resolve the published Codex platform package or its bundled vendor fallback.
+/// Native launches own one process rather than a Node launcher plus a native child.
+pub(super) fn codex_npm_program(npm_root: &Path) -> Option<PathBuf> {
+    let (package, target, executable) = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => ("codex-win32-x64", "x86_64-pc-windows-msvc", "codex.exe"),
+        ("windows", "aarch64") => ("codex-win32-arm64", "aarch64-pc-windows-msvc", "codex.exe"),
+        ("macos", "x86_64") => ("codex-darwin-x64", "x86_64-apple-darwin", "codex"),
+        ("macos", "aarch64") => ("codex-darwin-arm64", "aarch64-apple-darwin", "codex"),
+        ("linux", "x86_64") => ("codex-linux-x64", "x86_64-unknown-linux-musl", "codex"),
+        ("linux", "aarch64") => ("codex-linux-arm64", "aarch64-unknown-linux-musl", "codex"),
+        _ => return None,
+    };
+    let openai = npm_root.join("node_modules").join("@openai");
+    [openai.join(package), openai.join("codex")]
+        .into_iter()
+        .find_map(|root| {
+            let candidate = root
+                .join("vendor")
+                .join(target)
+                .join("bin")
+                .join(executable);
+            candidate
+                .is_file()
+                .then(|| std::path::absolute(candidate).ok())
+                .flatten()
+        })
 }
 
 /// Resolve bare PATH commands to directly spawnable launches in directory order.
@@ -904,6 +998,7 @@ fn run_acp_conversation(
                 if let Some(error) = rpc_error("prompt に失敗しました", &body) {
                     return Err(error);
                 }
+                emit_prompt_response_usage(&body, session_id, request, run_id, emit);
                 match parse_stop_reason(&body)? {
                     StopReason::Cancelled => {
                         emit(AiStreamEvent::Cancelled(StreamCancelled {
@@ -934,6 +1029,7 @@ fn run_acp_conversation(
                         text,
                     }));
                 }
+                emit_usage_notification(&note, session_id, request, run_id, emit);
                 // Other updates (tool calls, file edits inside the staging
                 // copy) stay in the isolated copy for #8 to diff; only text
                 // is proposed.
