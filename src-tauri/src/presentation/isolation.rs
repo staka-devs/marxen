@@ -2,7 +2,10 @@
 use crate::application::isolation::IsolationManager;
 use crate::application::workspace::Workspace;
 use crate::contracts::ai::{IsolatedCopyId, PromptContext, PromptMode, ProposalText};
-use crate::contracts::isolation::{ApproveResult, IsolatedCopyInfo, IsolationDiff, StagedNewFile, StagedProposal};
+use crate::contracts::isolation::{
+    ApproveResult, IsolatedCopyInfo, IsolationDiff, StagedImportOutcome, StagedNewFile,
+    StagedProposal,
+};
 use crate::contracts::WorkspaceError;
 use crate::presentation::document::ActorState;
 
@@ -10,7 +13,7 @@ use crate::presentation::document::ActorState;
 fn with_both<T>(
     workspace: &ActorState,
     isolation: &IsolationState,
-    call: impl FnOnce(&Workspace, &mut IsolationManager) -> Result<T, WorkspaceError>,
+    call: impl FnOnce(&mut Workspace, &mut IsolationManager) -> Result<T, WorkspaceError>,
 ) -> Result<T, WorkspaceError> {
     let mut wguard = workspace.workspace.lock().map_err(|_| WorkspaceError::Io {
         detail: "workspace lock poisoned".into(),
@@ -56,7 +59,28 @@ pub fn isolation_new_files(
     copy_id: String,
 ) -> Result<Vec<StagedNewFile>, WorkspaceError> {
     let id = IsolatedCopyId(copy_id);
-    with_both(&workspace_state, &isolation, |w, m| m.staged_new_files(w, &id))
+    with_both(&workspace_state, &isolation, |w, m| {
+        m.staged_new_files(w, &id)
+    })
+}
+
+#[tauri::command(async)]
+/// Import staged new files into the approved copy's original workspace.
+///
+/// Active copies must approve first and are refused before any file is
+/// created. Validates the copy's recorded workspace root under the workspace
+/// lock, so a folder switch since approval refuses before any file is
+/// created.
+pub fn isolation_import_new(
+    workspace_state: tauri::State<'_, ActorState>,
+    isolation: tauri::State<'_, IsolationState>,
+    copy_id: String,
+    files: Vec<crate::contracts::isolation::ImportFileRequest>,
+) -> Result<Vec<StagedImportOutcome>, WorkspaceError> {
+    let id = IsolatedCopyId(copy_id);
+    with_both(&workspace_state, &isolation, |w, m| {
+        m.import_new_files(w, &id, &files)
+    })
 }
 
 #[tauri::command(async)]

@@ -59,6 +59,7 @@ const backend = {
   copies: new Map<string, { documentId: string; revision: number }>(),
   copySeq: 0,
   approveStaleOnce: false,
+  editAfterSave: null as string | null,
 };
 
 /** Reset the fake native backend to one sample document. */
@@ -69,6 +70,7 @@ function resetBackend() {
   backend.copies = new Map();
   backend.copySeq = 0;
   backend.approveStaleOnce = false;
+  backend.editAfterSave = null;
 }
 
 /** Install the fake Tauri backend answering workspace and isolation commands. */
@@ -162,12 +164,20 @@ function installBackend() {
       }
       case "isolation_new_files":
         return Promise.resolve([]);
+      case "isolation_import_new":
+        return Promise.resolve([]);
       case "save_document": {
         const wantId = (a.documentId as string) ?? (a.request as { documentId: string } | undefined)?.documentId;
         const doc = [...backend.docs.values()].find((entry) => entry.id === wantId);
         if (!doc) throw { code: "not_found" };
         doc.dirty = false;
-        return Promise.resolve({ documentId: doc.id, revision: doc.revision, dirty: false });
+        const savedRevision = doc.revision;
+        if (backend.editAfterSave !== null) {
+          doc.text += backend.editAfterSave;
+          doc.revision += 1;
+          doc.dirty = true;
+        }
+        return Promise.resolve({ documentId: doc.id, revision: savedRevision, dirty: false });
       }
       case "isolation_reject":
       case "isolation_cancel":
@@ -259,6 +269,35 @@ it("registers exact scope, stages the proposal, diffs, and applies with per-doc 
   expect(await screen.findByLabelText("承認結果")).toHaveTextContent(/a\.md.*適用/);
   expect(screen.queryByTestId("ai-proposal")).not.toBeInTheDocument();
   expect(backend.docs.get("メモ/a.md")!.text).toContain("[適用]");
+});
+
+it("shows Saved in the footer after a successful AI apply-and-save", async () => {
+  mockStream();
+  await openDocAndAi();
+  await registerAndSend();
+  await screen.findByTestId("ai-proposal");
+  fireEvent.click(screen.getByRole("button", { name: "適用して保存" }));
+  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
+  const saved = await screen.findAllByText(/保存しました/);
+  expect(saved.length).toBeGreaterThan(0);
+  await waitFor(() => expect(screen.getByTestId("dirty")).toHaveTextContent("保存済み"));
+  expect(screen.queryByRole("button", { name: "適用して保存" })).not.toBeInTheDocument();
+});
+
+it("keeps a concurrent later user edit dirty after AI save", async () => {
+  mockStream();
+  await openDocAndAi();
+  await registerAndSend();
+  await screen.findByTestId("ai-proposal");
+  // A user edit landing between the AI save and the post-save snapshot must
+  // survive with its newer revision instead of being overwritten as clean.
+  backend.editAfterSave = "[user]";
+  fireEvent.click(screen.getByRole("button", { name: "適用して保存" }));
+  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
+  const saved = await screen.findAllByText(/保存しました/);
+  expect(saved.length).toBeGreaterThan(0);
+  await waitFor(() => expect(screen.getByTestId("dirty")).toHaveTextContent("未保存"));
+  expect(screen.getByTestId("editor-primary")).toHaveTextContent("[user]");
 });
 
 it("displays ask proposals without staging", async () => {

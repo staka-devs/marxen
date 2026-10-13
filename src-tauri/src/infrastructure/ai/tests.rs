@@ -677,7 +677,8 @@ mod regression {
                 }
             }
         });
-        let update = parse_tool_call_update_notification(&progress, "sess_1", staging).expect("update");
+        let update =
+            parse_tool_call_update_notification(&progress, "sess_1", staging).expect("update");
         assert_eq!(update.status, Some(AcpToolStatus::InProgress));
         let done = serde_json::json!({
             "jsonrpc": "2.0",
@@ -734,7 +735,8 @@ mod regression {
                 { "optionId": "mock_reject", "name": "deny", "kind": "reject_once" }
             ]
         });
-        let parsed = parse_permission_request(&serde_json::json!(900), &params).expect("permission");
+        let parsed =
+            parse_permission_request(&serde_json::json!(900), &params).expect("permission");
         assert_eq!(parsed.request_id, "900");
         assert_eq!(parsed.options.len(), 2);
         assert_eq!(
@@ -745,7 +747,10 @@ mod regression {
             answer_permission_by_id("mock_reject", true),
             serde_json::json!({ "outcome": { "outcome": "cancelled" } })
         );
-        assert_eq!(stringify_request_id(&serde_json::json!(900)), Some("900".to_owned()));
+        assert_eq!(
+            stringify_request_id(&serde_json::json!(900)),
+            Some("900".to_owned())
+        );
         assert!(stringify_request_id(&serde_json::json!(null)).is_none());
     }
 
@@ -760,7 +765,10 @@ mod regression {
         use std::path::Path;
         let staging = std::env::temp_dir().join("marxen-staging-test");
         let inside = staging.join("a.md").to_string_lossy().replace('\\', "/");
-        let outside = std::env::temp_dir().join("other-a.md").to_string_lossy().replace('\\', "/");
+        let outside = std::env::temp_dir()
+            .join("other-a.md")
+            .to_string_lossy()
+            .replace('\\', "/");
         // On Windows the lossy slash form stays absolute via the temp root.
         let staging_abs = staging.to_string_lossy().replace('\\', "/");
         for check in [staging_path_is_contained, staging_path_allowed] {
@@ -883,7 +891,9 @@ mod regression {
                 },
             ]
         };
-        registry.register_permission(&run_id, "900", "sess_1", options()).unwrap();
+        registry
+            .register_permission(&run_id, "900", "sess_1", options())
+            .unwrap();
         let first = Arc::new(std::sync::Mutex::new(Vec::new()));
         let handles: Vec<_> = ["mock_allow", "mock_reject"]
             .into_iter()
@@ -893,7 +903,10 @@ mod regression {
                 let first = Arc::clone(&first);
                 std::thread::spawn(move || {
                     let outcome = registry.reply_permission(&run_id, "900", choice);
-                    first.lock().expect("result lock").push((choice, outcome.is_ok()));
+                    first
+                        .lock()
+                        .expect("result lock")
+                        .push((choice, outcome.is_ok()));
                 })
             })
             .collect();
@@ -922,6 +935,96 @@ mod regression {
         ));
     }
 
+    /// Build the two mock permission options shared by reply-race tests.
+    fn mock_permission_options() -> Vec<PermissionOption> {
+        vec![
+            PermissionOption {
+                option_id: "mock_allow".into(),
+                name: "allow".into(),
+                kind: PermissionOptionKind::AllowOnce,
+            },
+            PermissionOption {
+                option_id: "mock_reject".into(),
+                name: "deny".into(),
+                kind: PermissionOptionKind::RejectOnce,
+            },
+        ]
+    }
+
+    /// Reject a second reply arriving after take but before driver drop.
+    ///
+    /// The driver consumes the deliverable first and drops the slot second;
+    /// the retained consumed state keeps the gap from accepting the same
+    /// request twice. Cleanup still resets the slot so a retried agent
+    /// request with the same ID answers again.
+    #[test]
+    fn agentic_permission_reply_rejected_after_take_before_drop() {
+        let registry = RunRegistry::new();
+        let (run_id, _) = registry.register();
+        registry
+            .register_permission(&run_id, "900", "sess_1", mock_permission_options())
+            .unwrap();
+        registry
+            .reply_permission(&run_id, "900", "mock_allow")
+            .unwrap();
+        // Driver consumes the deliverable before dropping the slot.
+        assert_eq!(
+            registry.take_permission_reply(&run_id, "900"),
+            Some("mock_allow".to_owned())
+        );
+        // A reply in the take-before-drop gap is a duplicate, not a new vote.
+        assert!(matches!(
+            registry.reply_permission(&run_id, "900", "mock_reject"),
+            Err(AiError::InvalidConfig { .. })
+        ));
+        assert_eq!(registry.take_permission_reply(&run_id, "900"), None);
+        // Driver cleanup drops the slot; late replies fail as stale.
+        registry.drop_permission(&run_id, "900");
+        assert!(matches!(
+            registry.reply_permission(&run_id, "900", "mock_reject"),
+            Err(AiError::UnknownSession)
+        ));
+        // A retried agent request reusing the same ID starts unanswered.
+        registry
+            .register_permission(&run_id, "900", "sess_1", mock_permission_options())
+            .unwrap();
+        registry
+            .reply_permission(&run_id, "900", "mock_reject")
+            .unwrap();
+        assert_eq!(
+            registry.take_permission_reply(&run_id, "900"),
+            Some("mock_reject".to_owned())
+        );
+    }
+
+    /// Reject permission replies for a cancelled run that is still registered.
+    ///
+    /// Cancellation only flips the run flag; settlement removes the run
+    /// later. Registration alone therefore cannot decide replyability: the
+    /// cancel flag rejects the reply while the run entry still exists.
+    #[test]
+    fn agentic_permission_reply_rejected_for_cancelled_run() {
+        let registry = RunRegistry::new();
+        let (run_id, _) = registry.register();
+        registry
+            .register_permission(&run_id, "900", "sess_1", mock_permission_options())
+            .unwrap();
+        assert!(registry.cancel(&run_id));
+        // The run is still registered, but its cancelled flag refuses replies.
+        assert!(registry.cancel_flag(&run_id).is_some());
+        assert!(matches!(
+            registry.reply_permission(&run_id, "900", "mock_allow"),
+            Err(AiError::RequestCancelled)
+        ));
+        assert_eq!(registry.take_permission_reply(&run_id, "900"), None);
+        // Settlement removes the run; replies then fail as stale.
+        registry.remove(&run_id);
+        assert!(matches!(
+            registry.reply_permission(&run_id, "900", "mock_allow"),
+            Err(AiError::UnknownSession)
+        ));
+    }
+
     /// Reject unauthorized staged file access without touching the filesystem.
     ///
     /// Wrong sessions, outside paths, and `ask`-mode writes fail; a contained
@@ -937,33 +1040,27 @@ mod regression {
         let outside_text = outside.to_string_lossy().into_owned();
         std::fs::write(&outside, "outside").unwrap();
         // Wrong sessions never read, wherever the path points.
-        assert!(
-            serve_fs_read(
-                &staging,
-                "sess_1",
-                &serde_json::json!({ "sessionId": "sess_other", "path": inside_text }),
-            )
-            .is_err()
-        );
+        assert!(serve_fs_read(
+            &staging,
+            "sess_1",
+            &serde_json::json!({ "sessionId": "sess_other", "path": inside_text }),
+        )
+        .is_err());
         // Outside paths never read, even with the right session.
-        assert!(
-            serve_fs_read(
-                &staging,
-                "sess_1",
-                &serde_json::json!({ "sessionId": "sess_1", "path": outside_text }),
-            )
-            .is_err()
-        );
+        assert!(serve_fs_read(
+            &staging,
+            "sess_1",
+            &serde_json::json!({ "sessionId": "sess_1", "path": outside_text }),
+        )
+        .is_err());
         // `ask` turns never write, even inside their own staging copy.
-        assert!(
-            serve_fs_write(
-                &staging,
-                "sess_1",
-                &serde_json::json!({ "sessionId": "sess_1", "path": inside_text, "content": "x" }),
-                PromptMode::Ask,
-            )
-            .is_err()
-        );
+        assert!(serve_fs_write(
+            &staging,
+            "sess_1",
+            &serde_json::json!({ "sessionId": "sess_1", "path": inside_text, "content": "x" }),
+            PromptMode::Ask,
+        )
+        .is_err());
         // A contained workspace write/read roundtrip succeeds verbatim.
         serve_fs_write(
             &staging,

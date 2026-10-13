@@ -16,6 +16,7 @@ import type {
   ApproveResult,
   IsolationDiff,
   IsolatedCopyInfo,
+  StagedImportOutcome,
   StagedNewFile,
   StagedProposal,
 } from "../../contracts/isolation-contracts";
@@ -63,6 +64,20 @@ export async function fetchIsolationDiff(copyId: IsolatedCopyId): Promise<Isolat
 export async function fetchIsolationNewFiles(copyId: IsolatedCopyId): Promise<StagedNewFile[]> {
   requireDesktop();
   return invoke<StagedNewFile[]>("isolation_new_files", { copyId });
+}
+
+/**
+ * Import staged files into the approved copy's original workspace.
+ *
+ * Native validation under the workspace lock refuses folder switches before
+ * any file is created; per-file outcomes carry opened snapshots or details.
+ */
+export async function importIsolationFiles(
+  copyId: IsolatedCopyId,
+  files: Array<{ rel: string; content: string }>,
+): Promise<StagedImportOutcome[]> {
+  requireDesktop();
+  return invoke<StagedImportOutcome[]>("isolation_import_new", { copyId, files });
 }
 
 /**
@@ -118,6 +133,8 @@ export const isolationGateway: IsolationGateway = {
   fetchDiff: fetchIsolationDiff,
   /** List new agent-created Markdown files for import. */
   fetchNewFiles: fetchIsolationNewFiles,
+  /** Import staged files into the approved copy's original workspace. */
+  importNewFiles: importIsolationFiles,
   /** Stage a validated proposal into the copy. */
   stageProposal,
   /** Approve and apply the staged copy with scoped rollback. */
@@ -128,4 +145,4 @@ export const isolationGateway: IsolationGateway = {
   cancelCopy: cancelIsolatedCopy,
 };
 
-export type { ApproveResult, IsolationDiff, IsolatedCopyInfo, StagedNewFile, StagedProposal };
+export type { ApproveResult, IsolationDiff, IsolatedCopyInfo, StagedImportOutcome, StagedNewFile, StagedProposal };

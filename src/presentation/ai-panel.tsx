@@ -509,8 +509,9 @@ export default function AiPanel({
    * Answer one pending permission request with the exact chosen option ID.
    *
    * Replies through the injected gateway so the waiting driver delivers the
-   * choice to the agent; stale or foreign IDs surface as stream errors and
-   * leave the card pending.
+   * choice to the agent; the returned promise lets the card disable its
+   * buttons while the IPC is pending. Recoverable failures set the visible
+   * error first and then propagate so the card becomes retryable again.
    */
   async function handlePermissionChoice(messageId: string, runId: string, requestId: string, optionId: string) {
     try {
@@ -525,6 +526,7 @@ export default function AiPanel({
       }));
     } catch (cause) {
       setStreamError(normalizeAiError(cause, t));
+      throw cause;
     }
   }
 
@@ -653,7 +655,7 @@ export default function AiPanel({
                   <PermissionCard
                     key={permission.requestId}
                     permission={permission}
-                    onChoose={(optionId) => void handlePermissionChoice(message.id, permission.runId, permission.requestId, optionId)}
+                    onChoose={(optionId) => handlePermissionChoice(message.id, permission.runId, permission.requestId, optionId)}
                   />
                 ))}
                 {message.text && (message.state === "done"

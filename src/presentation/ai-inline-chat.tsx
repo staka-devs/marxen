@@ -316,7 +316,9 @@ export default function InlineChat({
    * Answer one pending permission request with the exact chosen option ID.
    *
    * Replies through the injected gateway so the waiting driver delivers the
-   * choice; stale IDs surface as errors and leave the card pending.
+   * choice; the returned promise keeps the card disabled while the IPC is
+   * pending. Recoverable failures surface inline first and then propagate
+   * so the card becomes retryable again.
    */
   async function handlePermissionChoice(runId: string, requestId: string, optionId: string) {
     try {
@@ -330,6 +332,7 @@ export default function InlineChat({
       ));
     } catch (cause) {
       setError(normalizeAiError(cause, t));
+      throw cause;
     }
   }
 
@@ -414,7 +417,7 @@ export default function InlineChat({
           <PermissionCard
             key={permission.requestId}
             permission={permission}
-            onChoose={(optionId) => void handlePermissionChoice(permission.runId, permission.requestId, optionId)}
+            onChoose={(optionId) => handlePermissionChoice(permission.runId, permission.requestId, optionId)}
           />
         ))}
         {output && !proposal && <p className="max-h-40 overflow-y-auto whitespace-pre-wrap text-[13px] leading-6">{output}</p>}

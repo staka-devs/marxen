@@ -42,6 +42,7 @@ import type {
   ApproveResult,
   IsolationDiff,
   IsolatedCopyInfo,
+  StagedImportOutcome,
   StagedProposal,
 } from "../contracts/isolation-contracts";
 import type { PromptContext, PromptMode, ProposalText, IsolatedCopyId } from "../contracts/ai-contracts";
@@ -239,6 +240,8 @@ export interface IsolationGateway {
   fetchDiff(copyId: IsolatedCopyId): Promise<IsolationDiff[]>;
   /** List new agent-created Markdown files for import. */
   fetchNewFiles(copyId: IsolatedCopyId): Promise<import("../contracts/isolation-contracts").StagedNewFile[]>;
+  /** Import staged files into the approved copy's original workspace. */
+  importNewFiles(copyId: IsolatedCopyId, files: Array<{ rel: string; content: string }>): Promise<StagedImportOutcome[]>;
   /** Stage a validated proposal into the copy. */
   stageProposal(copyId: IsolatedCopyId, proposal: ProposalText, mode: PromptMode): Promise<StagedProposal>;
   /** Approve and apply the staged copy with scoped rollback. */

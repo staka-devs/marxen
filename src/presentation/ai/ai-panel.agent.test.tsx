@@ -187,4 +187,58 @@ describe("agentic chat", () => {
     expect(await screen.findByText("質問は読み取りのみです。")).toBeVisible();
     expect(screen.queryByTestId("plan-card")).not.toBeInTheDocument();
   });
+
+  it("disables permission buttons during pending IPC and retries after failure", async () => {
+    let handler: ((event: AiStreamEvent) => void) | null = null;
+    mockStartPrompt.mockImplementation(async (_request, onEvent) => {
+      handler = onEvent;
+      return { runId: "run_deferred", stop: vi.fn() };
+    });
+    let attempt = 0;
+    let release!: () => void;
+    /** Deferred reply gate failing the first choice, then succeeding. */
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    /** Deferred permission gateway rejecting once, then resolving. */
+    const replyPermission = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        await gate;
+        throw new Error("stale");
+      }
+    });
+    renderPanel({ replyPermission });
+    fireEvent.click(screen.getByRole("combobox", { name: "モード" }));
+    fireEvent.click(screen.getByRole("option", { name: /文書編集/ }));
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "直して" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(handler).not.toBeNull());
+    handler!({ type: "started", payload: { runId: "run_deferred" } });
+    handler!({
+      type: "permission",
+      payload: {
+        runId: "run_deferred",
+        requestId: "900",
+        sessionId: "sess_1",
+        toolCallId: "call_1",
+        title: "mock tool",
+        options: [
+          { optionId: "mock_allow", name: "許可", kind: "allow_once" },
+          { optionId: "mock_reject", name: "拒否", kind: "reject_once" },
+        ],
+      },
+    });
+    expect(await screen.findByTestId("permission-card-900")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "許可" }));
+    await vi.waitFor(() => expect(replyPermission).toHaveBeenCalledTimes(1));
+    // Buttons stay disabled while the real IPC reply is still pending.
+    expect(screen.getByRole("button", { name: "許可" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "拒否" })).toBeDisabled();
+    release();
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: "許可" })).toBeEnabled());
+    expect(await screen.findByRole("alert")).toHaveTextContent("stale");
+    fireEvent.click(screen.getByRole("button", { name: "許可" }));
+    await vi.waitFor(() => expect(replyPermission).toHaveBeenCalledTimes(2));
+    expect(replyPermission).toHaveBeenLastCalledWith("run_deferred", "900", "mock_allow");
+    expect(await screen.findByText(/選択しました/)).toBeVisible();
+  });
 });

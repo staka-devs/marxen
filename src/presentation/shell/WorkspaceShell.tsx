@@ -283,7 +283,6 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     notify: setNotice,
     session,
     isolationGateway,
-    workspaceGateway,
     onWorkspaceChanged: refreshAfterImport,
   });
   const modelControls = <AiModelControls provider={aiProvider} onProvider={setAiProvider} {...aiModels} preferences={aiView.preferences} onManageVisibility={() => setAiVisibilityOpen(true)} onRefresh={() => void aiModels.refresh()} disabled={staging.agentBusy || staging.inlineBusy} />;

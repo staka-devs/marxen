@@ -171,6 +171,7 @@ pub fn run() {
             presentation::isolation::isolation_create,
             presentation::isolation::isolation_diff,
             presentation::isolation::isolation_new_files,
+            presentation::isolation::isolation_import_new,
             presentation::isolation::isolation_stage_proposal,
             presentation::isolation::isolation_approve,
             presentation::isolation::isolation_reject,
