@@ -158,7 +158,7 @@ let handler: ((event: AiStreamEvent) => void) | null = null;
   await screen.findByRole("button", { name: "メモ/a.md" });
   fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
   await vi.waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# A"));
-  fireEvent.click(screen.getByRole("button", { name: "AI 支援" }));
+  fireEvent.click(screen.getByRole("button", { name: "チャットを切り替える" }));
   await screen.findByTestId("ai-sidebar");
 }
 
@@ -237,9 +237,9 @@ it("preserves the Agent transcript across hide and show", async () => {
     },
   });
   expect(await within(within(sidebar).getByLabelText("会話")).findByText("保持される回答")).toBeVisible();
-  fireEvent.click(screen.getByRole("button", { name: "AI 支援" }));
+  fireEvent.click(screen.getByRole("button", { name: "チャットを切り替える" }));
   expect(screen.getByTestId("ai-sidebar").className).toContain("hidden");
-  fireEvent.click(screen.getByRole("button", { name: "AI 支援" }));
+  fireEvent.click(screen.getByRole("button", { name: "チャットを切り替える" }));
   expect(screen.getAllByText("保持される回答").length).toBeGreaterThanOrEqual(1);
 });
 

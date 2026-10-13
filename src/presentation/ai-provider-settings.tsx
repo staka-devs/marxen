@@ -2,6 +2,7 @@ import { createPortal } from "react-dom";
 import { trapDialogTab } from "./workspace/dialogFocus";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./ui/button";
+import { Settings } from "lucide-react";
 import {
   DEFAULT_ENDPOINTS,
   PRESET_LABELS,
@@ -31,6 +32,8 @@ export interface AiProviderSettingsProps {
   profileStore?: AiProfileStore;
   /** Render the shared connection fields directly in the main settings page. */
   embedded?: boolean;
+  /** Show an icon trigger in the chat header instead of the full connection summary. */
+  compact?: boolean;
 }
 
 const KIND_ORDER: AiProviderKind[] = ["acp", "openai_compatible", "anthropic"];
@@ -106,7 +109,7 @@ export function sanitizeProfileForTest(raw: unknown): AiProfile {
  * All native calls go through the injected `gateway`; profile persistence
  * goes through `profileStore`. No direct Tauri or storage imports.
  */
-export default function AiProviderSettings({ provider, onProvider, openToken, gateway, profileStore, embedded = false }: AiProviderSettingsProps) {
+export default function AiProviderSettings({ provider, onProvider, openToken, gateway, profileStore, embedded = false, compact = false }: AiProviderSettingsProps) {
   const [kind, setKind] = useState<AiProviderKind>(provider.kind);
   const [preset, setPreset] = useState<AcpPreset>(provider.acp?.preset ?? "codex");
   const [command, setCommand] = useState(provider.acp?.argv?.command ?? "");
@@ -427,18 +430,19 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
       </div>
   );
   return embedded ? <div data-testid="ai-provider-settings">{fields}</div> : (
-    <div data-testid="ai-provider-settings" className="ai-provider-settings">
+    <div data-testid="ai-provider-settings" className={compact ? "inline-flex" : "ai-provider-settings"}>
       <button
         ref={triggerRef}
         type="button"
         onClick={openSettings}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title={summary}
-        className="ai-provider-trigger flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs"
+        aria-label="接続設定を開く"
+        title={`接続設定 · ${summary}`}
+        className={compact ? "rounded-sm p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" : "ai-provider-trigger flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs"}
       >
-        <span className="shrink-0 font-medium">接続設定</span>
-        <span className="min-w-0 flex-1 truncate text-[11px] font-normal text-muted-foreground">• {summary}</span>
+        {compact ? <Settings size={15} aria-hidden="true" /> : <><span className="shrink-0 font-medium">接続設定</span>
+        <span className="min-w-0 flex-1 truncate text-[11px] font-normal text-muted-foreground">• {summary}</span></>}
       </button>
       {open && createPortal(
         <div

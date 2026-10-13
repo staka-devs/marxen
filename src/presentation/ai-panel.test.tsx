@@ -211,9 +211,9 @@ describe("agent chat", () => {
     expect(await screen.findByText("回答")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "新しい会話" }));
     expect(screen.queryByText("回答")).not.toBeInTheDocument();
-    const select = screen.getByLabelText("会話の選択");
-    expect(select).toBeVisible();
-    fireEvent.change(select, { target: { value: (select as HTMLSelectElement).options[0].value } });
+    fireEvent.click(screen.getByRole("button", { name: "履歴を開く" }));
+    expect(screen.getByRole("searchbox", { name: "履歴を検索" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: /質問/ }));
     expect(await screen.findByText("回答")).toBeVisible();
     // The fresh conversation starts with empty history.
     fireEvent.click(screen.getByRole("button", { name: "新しい会話" }));
@@ -347,24 +347,20 @@ describe("agent chat", () => {
   it("offers every prompt mode in the unified mode selector", () => {
     render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} contextLabels={labels} />);
     expect(screen.getByRole("group", { name: "プロンプトの種類" })).toBeVisible();
-    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "質問",
-      "生成",
-      "選択書き換え",
-      "ワークスペース編集",
-    ]);
+    fireEvent.click(screen.getByRole("combobox", { name: "モード" }));
+    for (const label of ["相談", "執筆", "推敲", "文書編集"]) expect(screen.getByRole("option", { name: new RegExp(label) })).toBeVisible();
   });
 
   it("closes the pane through the optional header control", () => {
     const onClose = vi.fn();
     const { rerender } = render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} contextLabels={labels} onClose={onClose} />);
-    fireEvent.click(screen.getByRole("button", { name: "Agent チャットを閉じる" }));
+    fireEvent.click(screen.getByRole("button", { name: "チャットを閉じる" }));
     expect(onClose).toHaveBeenCalledTimes(1);
     rerender(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} contextLabels={labels} />);
-    expect(screen.queryByRole("button", { name: "Agent チャットを閉じる" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "チャットを閉じる" })).not.toBeInTheDocument();
   });
 
-  it("reports the captured mode even when the mode changes mid-run", async () => {
+  it("locks the mode during a run and reports the captured mode", async () => {
     let handler: ((event: AiStreamEvent) => void) | null = null;
     const onProposal = vi.fn();
     mockStartPrompt.mockImplementation(async (request, onEvent) => {
@@ -373,11 +369,12 @@ describe("agent chat", () => {
       return { runId: "run_m", stop: vi.fn() };
     });
     render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} contextLabels={labels} onProposal={onProposal} />);
-    fireEvent.change(screen.getByLabelText("モード"), { target: { value: "rewrite" } });
+    fireEvent.click(screen.getByRole("combobox", { name: "モード" }));
+    fireEvent.click(screen.getByRole("option", { name: /推敲/ }));
     fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "書いて" } });
     fireEvent.click(screen.getByRole("button", { name: "送信" }));
     await vi.waitFor(() => expect(handler).not.toBeNull());
-    fireEvent.change(screen.getByLabelText("モード"), { target: { value: "ask" } });
+    expect(screen.getByRole("combobox", { name: "モード" })).toBeDisabled();
     handler!({
       type: "done",
       payload: {
