@@ -109,54 +109,66 @@ fn emit_agentic_notification(
 /// Check whether an absolute wire path stays inside the authorized staging directory.
 ///
 /// Traversal (`..`) is never authorized even when it resolves inside: it is
-/// rejected before either lexical or canonical acceptance, matching the
-/// method docs and the domain containment contract. Lexical containment from
-/// the domain rules plus a canonical filesystem check when the file exists:
-/// symlinks escaping the root fail even when their names look contained.
-/// Platform aliases (macOS `/var` versus `/private/var` reported by
-/// `current_dir`, Windows UNC `\\?\` versus the drive-letter form) differ
-/// lexically but resolve identically, so a lexical miss falls back to
-/// canonical comparison for absolute existing alias paths without `..`.
-/// Absolute outside paths, relative paths, and traversal yield false without
-/// touching the filesystem beyond these two reads.
+/// rejected before any other check, matching the method docs and the domain
+/// containment contract. Every other absolute path resolves through one
+/// common gate: the entry itself counts when present (`symlink_metadata`
+/// detects dangling links as entries so they fail closed instead of being
+/// skipped toward a benign parent), otherwise the nearest existing ancestor
+/// does, authorizing absent destinations reached through valid canonical
+/// aliases (macOS `/var` versus `/private/var`, Windows UNC `\\?\` versus
+/// the drive-letter form, owned-root symlinks). The ancestor must resolve
+/// inside the canonical staging root, and the destination itself must sit
+/// strictly below it (a proper lexical prefix guarantees a non-empty
+/// `..`-free remainder); outside paths, the root itself, relative paths,
+/// and any canonicalization failure yield false.
 pub(crate) fn staging_path_allowed(staging_dir: &Path, abs_path: &str) -> bool {
     use std::path::Component;
     let candidate = Path::new(abs_path);
+    if !candidate.is_absolute() {
+        return false;
+    }
     if candidate
         .components()
         .any(|component| matches!(component, Component::ParentDir))
     {
         return false;
     }
-    if staging_path_is_contained(staging_dir, abs_path) {
-        if candidate.exists() {
-            if let (Ok(canonical_root), Ok(canonical)) =
-                (staging_dir.canonicalize(), candidate.canonicalize())
-            {
-                return canonical.starts_with(&canonical_root);
-            }
+    let anchor: PathBuf = if std::fs::symlink_metadata(candidate).is_ok() {
+        candidate.to_path_buf()
+    } else {
+        match nearest_existing_ancestor(candidate) {
+            Some(ancestor) => ancestor,
+            None => return false,
         }
-        return true;
-    }
-    if !candidate.is_absolute() || !candidate.exists() {
+    };
+    let (root, base) = match (staging_dir.canonicalize(), anchor.canonicalize()) {
+        (Ok(root), Ok(base)) => (root, base),
+        _ => return false,
+    };
+    if !base.starts_with(&root) {
         return false;
     }
-    match (staging_dir.canonicalize(), candidate.canonicalize()) {
-        (Ok(canonical_root), Ok(canonical)) => canonical.starts_with(&canonical_root),
-        _ => false,
+    if anchor == candidate {
+        // An existing entry must sit strictly below the root itself.
+        return base != root;
     }
+    // A proper lexical prefix leaves a non-empty remainder without `..`, so
+    // the absent destination always lands strictly below its resolved ancestor.
+    true
 }
 
 /// Find the nearest existing ancestor of a not-yet-created path.
 ///
-/// Walks up from the candidate until an existing file or directory is found.
-/// Yields `None` only when no ancestor exists. Callers canonicalize the
-/// result to detect symlinked parents resolving outside the owned staging
-/// root before creating any directory or file.
+/// Walks up from the candidate until an entry is found. Uses
+/// `symlink_metadata` so dangling links count as entries instead of being
+/// skipped toward a benign parent; callers canonicalize the result, which
+/// fails closed for dangling links. Yields `None` only when no ancestor
+/// exists. Callers use the result to detect symlinked parents resolving
+/// outside the owned staging root before creating any directory or file.
 fn nearest_existing_ancestor(candidate: &Path) -> Option<PathBuf> {
     let mut current = candidate;
     loop {
-        if current.exists() {
+        if std::fs::symlink_metadata(current).is_ok() {
             return Some(current.to_path_buf());
         }
         current = current.parent()?;
@@ -342,13 +354,15 @@ pub(crate) fn serve_fs_read(
 
 /// Serve `fs/write_text_file` into the authorized staging directory.
 ///
-/// Validates the claimed session and containment, resolves the nearest
-/// existing ancestor before creating anything, and writes UTF-8 text.
-/// `Ask` mode is read-only and rejects writes. Markdown-only enforcement
-/// happens at review time; the transport contains the write but never applies
-/// it to live buffers. Wrong sessions, outside paths, symlinked parents
-/// resolving outside the owned root, and unresolvable ancestors yield a
-/// JSON-RPC error before any directory or file is created.
+/// Validates the claimed session and containment through the single staging
+/// gate (which resolves the nearest existing ancestor, so absent destinations
+/// below outside-pointing symlinked parents fail before anything is created),
+/// then creates parent directories and writes UTF-8 text. `Ask` mode is
+/// read-only and rejects writes. Markdown-only enforcement happens at review
+/// time; the transport contains the write but never applies it to live
+/// buffers. Wrong sessions, outside paths, symlinked parents resolving
+/// outside the owned root, and unresolvable ancestors yield a JSON-RPC error
+/// before any directory or file is created.
 pub(crate) fn serve_fs_write(
     staging_dir: &Path,
     expected_session: &str,
@@ -399,28 +413,6 @@ pub(crate) fn serve_fs_write(
         ));
     }
     let target = Path::new(path);
-    // Resolve the nearest existing ancestor before creating anything: a
-    // symlinked parent outside the owned root must refuse creation even when
-    // the destination itself does not exist yet. Unresolvable ancestors fail
-    // closed with the same outside-path error.
-    let ancestor = nearest_existing_ancestor(target).ok_or_else(|| {
-        agent_request_error(
-            &Value::Null,
-            -32602,
-            "path is outside the authorized staging copy",
-        )
-    })?;
-    let resolved_inside = staging_dir
-        .canonicalize()
-        .and_then(|root| ancestor.canonicalize().map(|leaf| leaf.starts_with(&root)))
-        .unwrap_or(false);
-    if !resolved_inside {
-        return Err(agent_request_error(
-            &Value::Null,
-            -32602,
-            "path is outside the authorized staging copy",
-        ));
-    }
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|_| {
             agent_request_error(&Value::Null, -32602, "staging parent cannot be created")
