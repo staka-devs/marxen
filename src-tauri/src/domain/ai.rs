@@ -1358,30 +1358,21 @@ pub fn answer_permission_by_id(option_id: &str, cancelled: bool) -> Value {
     })
 }
 
-/// Check whether an absolute wire path stays inside the authorized staging directory.
-/// Lexical containment plus a canonical filesystem check when the file exists;
-/// symlinks escaping the root, absolute outside paths, and traversal yield false.
-pub fn staging_path_allowed(staging_dir: &Path, abs_path: &str) -> bool {
+/// Check whether an absolute wire path is lexically contained in the staging directory.
+///
+/// Pure path rules with no filesystem access: the candidate must be absolute,
+/// strip to a non-empty relative path under the staging root. Existence,
+/// canonicalization, and symlink escapes are checked by the infrastructure
+/// file handlers, never here.
+pub fn staging_path_is_contained(staging_dir: &Path, abs_path: &str) -> bool {
     let candidate = Path::new(abs_path);
     if !candidate.is_absolute() {
         return false;
     }
-    if let Ok(rel) = candidate.strip_prefix(staging_dir) {
-        if rel.components().count() == 0 {
-            return false;
-        }
-        // Existing files must canonicalize inside the root (symlink escape).
-        if candidate.exists() {
-            if let (Ok(canonical_root), Ok(canonical)) = (
-                staging_dir.canonicalize(),
-                candidate.canonicalize(),
-            ) {
-                return canonical.starts_with(&canonical_root);
-            }
-        }
-        return true;
+    match candidate.strip_prefix(staging_dir) {
+        Ok(rel) => rel.components().count() != 0,
+        Err(_) => false,
     }
-    false
 }
 
 // ---- ACP usage reporting (Issue #59, official schema only) ----

@@ -106,6 +106,27 @@ fn emit_agentic_notification(
     }
 }
 
+/// Check whether an absolute wire path stays inside the authorized staging directory.
+///
+/// Lexical containment from the domain rules plus a canonical filesystem
+/// check when the file exists: symlinks escaping the root fail even when
+/// their names look contained. Absolute outside paths and traversal yield
+/// false without touching the filesystem beyond these two reads.
+pub(crate) fn staging_path_allowed(staging_dir: &Path, abs_path: &str) -> bool {
+    if !staging_path_is_contained(staging_dir, abs_path) {
+        return false;
+    }
+    let candidate = Path::new(abs_path);
+    if candidate.exists() {
+        if let (Ok(canonical_root), Ok(canonical)) =
+            (staging_dir.canonicalize(), candidate.canonicalize())
+        {
+            return canonical.starts_with(&canonical_root);
+        }
+    }
+    true
+}
+
 /// Build a JSON-RPC error envelope for rejected agent file/permission requests.
 /// Wrong sessions and outside paths are rejected without touching the filesystem.
 fn agent_request_error(id: &Value, code: i64, message: &str) -> Value {

@@ -753,6 +753,8 @@ mod regression {
     ///
     /// Absolute outside paths, relative paths, and symlink escapes are
     /// rejected; contained absolute paths are allowed for fs methods.
+    /// Domain rules stay pure lexical; the infrastructure check adds the
+    /// canonical filesystem read for existing files.
     #[test]
     fn agentic_staging_paths_reject_outside_access() {
         use std::path::Path;
@@ -761,10 +763,12 @@ mod regression {
         let outside = std::env::temp_dir().join("other-a.md").to_string_lossy().replace('\\', "/");
         // On Windows the lossy slash form stays absolute via the temp root.
         let staging_abs = staging.to_string_lossy().replace('\\', "/");
-        assert!(staging_path_allowed(&staging, &inside));
-        assert!(!staging_path_allowed(&staging, &outside));
-        assert!(!staging_path_allowed(&staging, "relative/a.md"));
-        assert!(!staging_path_allowed(&staging, &staging_abs));
+        for check in [staging_path_is_contained, staging_path_allowed] {
+            assert!(check(&staging, &inside));
+            assert!(!check(&staging, &outside));
+            assert!(!check(&staging, "relative/a.md"));
+            assert!(!check(&staging, &staging_abs));
+        }
         assert_eq!(display_path_for_staging(&inside, &staging), "a.md");
         let _ = Path::new("/tmp");
     }
