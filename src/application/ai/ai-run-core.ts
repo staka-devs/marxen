@@ -1,3 +1,6 @@
+import type { FrontendAiError, Translator } from "../../contracts/localization";
+import { japaneseTranslator, localizedMessage } from "../../domain/localization";
+import { LocalizableError } from "../../domain/localized-error";
 // Shared AI run fencing core (application).
 //
 // Pure run tokens, cancel/settled guards, owned stop handles, and busy
@@ -14,10 +17,14 @@ import type { AiError, AiProviderConfig } from "../../contracts/ai-contracts";
  * Wire errors pass through; unknown shapes become `connection_failed` with
  * the invoke text so chat states stay actionable.
  */
-export function normalizeAiError(cause: unknown): AiError {
+export function normalizeAiError(cause: unknown, t: Translator = japaneseTranslator): AiError {
+  if (cause instanceof LocalizableError) {
+    const normalized: FrontendAiError = { code: "connection_failed", detail: describeInvokeError(cause, t), frontendMessage: localizedMessage("接続できません: {{value0}}", { value0: cause.localized }) };
+    return normalized;
+  }
   return typeof cause === "object" && cause !== null && "code" in cause
     ? (cause as AiError)
-    : { code: "connection_failed", detail: describeInvokeError(cause) };
+    : { code: "connection_failed", detail: describeInvokeError(cause, t) };
 }
 
 /**

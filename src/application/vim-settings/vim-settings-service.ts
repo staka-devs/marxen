@@ -1,3 +1,7 @@
+import { localizedException } from "../../domain/localized-error";
+import { LocalizableError } from "../../domain/localized-error";
+import type { Translator } from "../../contracts/localization";
+import { japaneseTranslator } from "../../domain/localization";
 // Vim-settings use case orchestration (application).
 //
 // Validates structured settings, previews managed rewrites purely, and
@@ -29,8 +33,8 @@ export async function loadVimSettings(gateway: VimSettingsGateway, path: string 
  * Returns validation details (empty when valid) so the panel can block the
  * save without a native round trip.
  */
-export function checkVimSettings(settings: VimSettings): string[] {
-  return validateVimSettings(settings);
+export function checkVimSettings(settings: VimSettings, t: Translator = japaneseTranslator): string[] {
+  return validateVimSettings(settings, t);
 }
 
 /**
@@ -42,9 +46,9 @@ export function checkVimSettings(settings: VimSettings): string[] {
 export function previewVimSettings(
   raw: string,
   settings: VimSettings,
-  path: string,
+  path: string, t: Translator = japaneseTranslator
 ): { next: string; changed: boolean } {
-  return previewManagedChange(raw, settings, isLuaConfigPath(path));
+  return previewManagedChange(raw, settings, isLuaConfigPath(path), t);
 }
 
 /**
@@ -57,12 +61,18 @@ export async function saveManagedVimSettings(
   gateway: VimSettingsGateway,
   path: string | null,
   expectedFingerprint: string | null,
-  settings: VimSettings,
+  settings: VimSettings, t: Translator = japaneseTranslator
 ): Promise<VimConfigWrite> {
-  const failures = validateVimSettings(settings);
-  if (failures.length > 0) throw new Error(failures[0]);
+  const failures = validateVimSettings(settings, t);
+  if (failures.length > 0) {
+    const snapshot = { ...settings, copyKeys: { ...settings.copyKeys }, mappings: settings.mappings.map(mapping => ({ ...mapping })) };
+    throw new LocalizableError({
+      /** Recompute the retained draft's validation explanation in the active language. */
+      format: (current) => validateVimSettings(snapshot, current)[0] ?? current("処理に失敗しました。"),
+    }, t);
+  }
   if (path && isLuaConfigPath(path)) {
-    throw new Error("init.lua は原文編集のみです。管理ブロックを挿入しません。");
+    throw localizedException(t, "init.lua は原文編集のみです。管理ブロックを挿入しません。");
   }
   return gateway.writeManaged(path, expectedFingerprint, settings);
 }

@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n/I18nProvider";
 import type { SearchHitItem } from "../../domain/search-hit";
 
 interface Props {
@@ -19,14 +20,15 @@ interface Props {
 }
 
 /** Full-text search panel with jump and revision-aware replace. */ export function SearchPanel({ query, onQuery, hits, searching, canReplace, replaceText, onReplaceText, onJump, onReplaceOne, onReplaceAll }: Props) {
+  const { t } = useI18n();
   return (
-    <section data-testid="search-panel" aria-label="全文検索" className="px-3 pb-3">
-      <p className="flex h-9 items-center text-[11px] font-medium text-muted-foreground">検索</p>
+    <section data-testid="search-panel" aria-label={t("全文検索")} className="px-3 pb-3">
+      <p className="flex h-9 items-center text-[11px] font-medium text-muted-foreground">{t("検索")}</p>
       <input
         value={query}
         onChange={(event) => onQuery(event.target.value)}
-        placeholder="検索語句…"
-        aria-label="検索語句"
+        placeholder={t("検索語句…")}
+        aria-label={t("検索語句")}
         className="h-7 w-full rounded-sm border border-border bg-background px-2 text-xs"
       />
       {canReplace && (
@@ -34,13 +36,12 @@ interface Props {
           <input
             value={replaceText}
             onChange={(event) => onReplaceText(event.target.value)}
-            placeholder="置換後…"
-            aria-label="置換後の文字列"
+            placeholder={t("置換後…")}
+            aria-label={t("置換後の文字列")}
             className="h-7 min-w-0 flex-1 rounded-sm border border-border bg-background px-2 text-xs"
           />
-          <button type="button" onClick={onReplaceAll} disabled={query === ""} aria-label="すべて置換する" className="rounded-md border border-border px-3 py-1 text-xs disabled:opacity-50">
-            一括置換
-          </button>
+          <button type="button" onClick={onReplaceAll} disabled={query === ""} aria-label={t("すべて置換する")} className="rounded-md border border-border px-3 py-1 text-xs disabled:opacity-50">
+            {t("一括置換")}</button>
         </div>
       )}
       <ul className="mt-2 space-y-1">
@@ -50,14 +51,13 @@ interface Props {
               {hit.path}:{hit.line + 1} {hit.preview}
             </button>
             {canReplace && (
-              <button type="button" onClick={() => onReplaceOne(hit)} aria-label={`${hit.path}の一致を置換する`} className="shrink-0 rounded border border-border px-2 py-1 text-xs">
-                置換
-              </button>
+              <button type="button" onClick={() => onReplaceOne(hit)} aria-label={t("{{value0}}の一致を置換する", { value0: (hit.path) })} className="shrink-0 rounded border border-border px-2 py-1 text-xs">
+                {t("置換")}</button>
             )}
           </li>
         ))}
       </ul>
-      {query !== "" && <p className="mt-1 text-xs text-muted-foreground">{searching ? "検索中…" : `${hits.length} 件`}</p>}
+      {query !== "" && <p className="mt-1 text-xs text-muted-foreground">{searching ? t("検索中…") : t("{{count}} 件", { count: (hits.length) })}</p>}
     </section>
   );
 }

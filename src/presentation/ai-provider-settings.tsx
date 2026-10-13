@@ -1,3 +1,10 @@
+import type { LocalizedText } from "../contracts/localization";
+import { localizedFailure, renderLocalizedText } from "../domain/localization";
+import type { LabelKey } from "../contracts/localization";
+import { localizedException } from "../domain/localized-error";
+import type { Translator } from "../contracts/localization";
+import { japaneseTranslator } from "../domain/localization";
+import { useI18n } from "./i18n/I18nProvider";
 import { createPortal } from "react-dom";
 import { trapDialogTab } from "./workspace/dialogFocus";
 import { useEffect, useRef, useState } from "react";
@@ -44,21 +51,21 @@ const KIND_ORDER: AiProviderKind[] = ["acp", "openai_compatible", "anthropic"];
  * Shows the preset or model/endpoint fragment only; liveness comes from an
  * explicit connection test and is never invented here.
  */
-export function describeProviderSummary(provider: AiProviderConfig): string {
+export function describeProviderSummary(provider: AiProviderConfig, t: Translator = japaneseTranslator): string {
   if (provider.kind === "acp") {
     if (provider.acp?.preset === "custom") {
       const command = provider.acp.argv?.command?.trim() ?? "";
-      return command === "" ? "カスタム" : `カスタム • ${command}`;
+      return command === "" ? t("カスタム") : t("カスタム • {{value0}}", { value0: (command) });
     }
-    return PRESET_LABELS[provider.acp?.preset ?? "codex"] ?? "ACP";
+    return t(PRESET_LABELS[provider.acp?.preset ?? "codex"] as LabelKey);
   }
   if (provider.kind === "openai_compatible") {
     const model = provider.openai?.model?.trim() ?? "";
-    return model === "" ? "OpenAI互換" : `OpenAI互換 • ${model}`;
+    return model === "" ? t("OpenAI互換") : t("OpenAI互換 • {{value0}}", { value0: (model) });
   }
   const model = provider.anthropic?.model?.trim() ?? "";
   const enabled = provider.anthropic?.enabled ?? false;
-  if (!enabled) return model === "" ? "Anthropic（無効）" : `Anthropic • ${model}（無効）`;
+  if (!enabled) return model === "" ? t("Anthropic（無効）") : t("Anthropic • {{value0}}（無効）", { value0: (model) });
   return model === "" ? "Anthropic" : `Anthropic • ${model}`;
 }
 
@@ -110,6 +117,7 @@ export function sanitizeProfileForTest(raw: unknown): AiProfile {
  * goes through `profileStore`. No direct Tauri or storage imports.
  */
 export default function AiProviderSettings({ provider, onProvider, openToken, gateway, profileStore, embedded = false, compact = false }: AiProviderSettingsProps) {
+  const { t, message } = useI18n();
   const [kind, setKind] = useState<AiProviderKind>(provider.kind);
   const [preset, setPreset] = useState<AcpPreset>(provider.acp?.preset ?? "codex");
   const [command, setCommand] = useState(provider.acp?.argv?.command ?? "");
@@ -122,8 +130,9 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
   const [acpSelections, setAcpSelections] = useState(provider.acp?.selections);
   const [credential, setCredentialState] = useState<CredentialRef | null>(null);
   const [secretInput, setSecretInput] = useState("");
-  const [credentialMessage, setCredentialMessage] = useState<string | null>(null);
+  const [credentialMessage, setCredentialMessage] = useState<LocalizedText | null>(null);
   const [testResult, setTestResult] = useState<AiTestResult | null>(null);
+  const [testFailure, setTestFailure] = useState<LocalizedText | null>(null);
   const [testBusy, setTestBusy] = useState(false);
   const [liveConfirm, setLiveConfirm] = useState(false);
   const [open, setOpen] = useState(false);
@@ -145,6 +154,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
     setAcpSelections(provider.acp?.selections);
     setCredentialState(null);
     setTestResult(null);
+    setTestFailure(null);
   }, [provider]);
 
   useEffect(() => {
@@ -218,14 +228,14 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
    */
   async function refreshCredential() {
     if (!gateway) {
-      setCredentialMessage("AI 機能はデスクトップアプリで利用します。");
+      setCredentialMessage(message("AI 機能はデスクトップアプリで利用します。"));
       return;
     }
     try {
       setCredentialState(await gateway.getCredentialState(kind));
       setCredentialMessage(null);
     } catch (cause) {
-      setCredentialMessage(describeInvokeError(cause));
+      setCredentialMessage(localizedFailure(cause, describeInvokeError));
     }
   }
 
@@ -236,16 +246,16 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
    */
   async function handleSaveCredential() {
     if (!gateway) {
-      setCredentialMessage("AI 機能はデスクトップアプリで利用します。");
+      setCredentialMessage(message("AI 機能はデスクトップアプリで利用します。"));
       return;
     }
     try {
       await gateway.setCredential(kind, secretInput);
       setSecretInput("");
       await refreshCredential();
-      setCredentialMessage("資格情報を OS ストアに保存しました。値は表示しません。");
+      setCredentialMessage(message("資格情報を OS ストアに保存しました。値は表示しません。"));
     } catch (cause) {
-      setCredentialMessage(describeInvokeError(cause));
+      setCredentialMessage(localizedFailure(cause, describeInvokeError));
     }
   }
 
@@ -256,15 +266,15 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
    */
   async function handleDeleteCredential() {
     if (!gateway) {
-      setCredentialMessage("AI 機能はデスクトップアプリで利用します。");
+      setCredentialMessage(message("AI 機能はデスクトップアプリで利用します。"));
       return;
     }
     try {
       await gateway.deleteCredential(kind);
       await refreshCredential();
-      setCredentialMessage("資格情報を削除しました。");
+      setCredentialMessage(message("資格情報を削除しました。"));
     } catch (cause) {
-      setCredentialMessage(describeInvokeError(cause));
+      setCredentialMessage(localizedFailure(cause, describeInvokeError));
     }
   }
 
@@ -276,22 +286,24 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
   async function handleTest(live: boolean) {
     setTestBusy(true);
     setTestResult(null);
+    setTestFailure(null);
     try {
-      if (!gateway) throw new Error("AI 機能はデスクトップアプリで利用します。");
+      if (!gateway) throw localizedException(t, "AI 機能はデスクトップアプリで利用します。");
       setTestResult(await gateway.testConnection(provider, live));
     } catch (cause) {
-      setTestResult({ ok: false, detail: describeInvokeError(cause) });
+      setTestFailure(localizedFailure(cause, describeInvokeError));
+      setTestResult({ ok: false, detail: describeInvokeError(cause, t) });
     } finally {
       setTestBusy(false);
     }
   }
 
   const claudeBlocked = kind === "acp" && preset === "custom" && isClaudeCommand(command);
-  const summary = describeProviderSummary(provider);
+  const summary = describeProviderSummary(provider, t);
 
   const fields = (
       <div className={embedded ? "space-y-4" : "space-y-2.5 px-2.5 py-2"}>
-        <div role="group" aria-label="接続先">
+        <div role="group" aria-label={t("接続先")}>
           {KIND_ORDER.map((candidate) => (
             <Button
               key={candidate}
@@ -303,35 +315,34 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
                 setKind(candidate);
                 setCredentialState(null);
                 setTestResult(null);
+                setTestFailure(null);
                 if (candidate === "anthropic") setEndpoint(DEFAULT_ENDPOINTS.anthropic);
                 else if (candidate === "openai_compatible") setEndpoint(DEFAULT_ENDPOINTS.openai_compatible);
               }}
             >
-              {candidate === "acp" ? "ACP" : candidate === "openai_compatible" ? "OpenAI 互換" : "Anthropic"}
+              {candidate === "acp" ? "ACP" : candidate === "openai_compatible" ? t("OpenAI 互換") : "Anthropic"}
             </Button>
           ))}
         </div>
         {kind === "acp" ? (
           <div className="space-y-2">
             <label className="block text-xs">
-              プリセット
-              <select
-                aria-label="ACP プリセット"
+              {t("プリセット")}<select
+                aria-label={t("ACP プリセット")}
                 className="mt-1 block w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
                 value={preset}
                 onChange={(event) => { setPreset(event.target.value as AcpPreset); setAcpSelections(undefined); }}
               >
                 {(Object.keys(PRESET_LABELS) as AcpPreset[]).map((candidate) => (
-                  <option key={candidate} value={candidate}>{PRESET_LABELS[candidate]}</option>
+                  <option key={candidate} value={candidate}>{t(PRESET_LABELS[candidate] as LabelKey)}</option>
                 ))}
               </select>
             </label>
             {preset === "custom" ? (
               <>
                 <label className="block text-xs">
-                  コマンド (シェルを介さず直接起動します)
-                  <input
-                    aria-label="カスタムコマンド"
+                  {t("コマンド (シェルを介さず直接起動します)")}<input
+                    aria-label={t("カスタムコマンド")}
                     className="mt-1 block w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
                     value={command}
                     onChange={(event) => setCommand(event.target.value)}
@@ -339,9 +350,8 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
                   />
                 </label>
                 <label className="block text-xs">
-                  引数 (1 行 1 引数)
-                  <textarea
-                    aria-label="カスタム引数"
+                  {t("引数 (1 行 1 引数)")}<textarea
+                    aria-label={t("カスタム引数")}
                     className="mt-1 block w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
                     rows={2}
                     value={argsText}
@@ -349,13 +359,13 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
                     placeholder="--stdio"
                   />
                 </label>
-                {claudeBlocked && <p className="text-xs text-red-600">Claude コマンドは起動しません。</p>}
+                {claudeBlocked && <p className="text-xs text-red-600">{t("Claude コマンドは起動しません。")}</p>}
               </>
             ) : (
               <p className="text-[11px] text-muted-foreground">
                 {preset === "codex"
-                  ? "codex-acp アダプターを利用者が事前にインストールします。自動取得はしません。"
-                  : "OpenCode を opencode acp として起動します。"}
+                  ? t("codex-acp アダプターを利用者が事前にインストールします。自動取得はしません。")
+                  : t("OpenCode を opencode acp として起動します。")}
               </p>
             )}
           </div>
@@ -364,12 +374,10 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
             {kind === "anthropic" && (
               <label className="flex items-center gap-2 text-xs">
                 <input type="checkbox" checked={anthropicEnabled} onChange={(event) => setAnthropicEnabled(event.target.checked)} />
-                Anthropic API を有効にする
-              </label>
+                {t("Anthropic API を有効にする")}</label>
             )}
             <label className="block text-xs">
-              API エンドポイント
-              <input
+              {t("API エンドポイント")}<input
                 aria-label="endpoint"
                 className="mt-1 block w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
                 value={endpoint}
@@ -378,8 +386,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
               />
             </label>
             <label className="block text-xs">
-              モデル
-              <input
+              {t("モデル")}<input
                 aria-label="model"
                 className="mt-1 block w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
                 value={model}
@@ -390,41 +397,40 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
           </div>
         )}
         {kind !== "acp" && <div className="border-t border-border pt-2">
-          <p className="text-xs font-medium">API キー</p>
+          <p className="text-xs font-medium">{t("API キー")}</p>
           <p className="mt-1 text-[11px] text-muted-foreground">
-            {credential === null ? "状態を確認してください。値は表示しません。" : credential.hasSecret ? "保存済み。値は表示しません。" : "未保存。"}
+            {credential === null ? t("状態を確認してください。値は表示しません。") : credential.hasSecret ? t("保存済み。値は表示しません。") : t("未保存。")}
           </p>
           <div className="mt-1 flex flex-wrap gap-1">
-            <Button variant="outline" size="sm" onClick={() => void refreshCredential()}>状態を確認</Button>
-            <Button variant="outline" size="sm" onClick={() => void handleDeleteCredential()}>削除</Button>
+            <Button variant="outline" size="sm" onClick={() => void refreshCredential()}>{t("状態を確認")}</Button>
+            <Button variant="outline" size="sm" onClick={() => void handleDeleteCredential()}>{t("削除")}</Button>
           </div>
           <div className="mt-1 flex gap-1">
             <input
-              aria-label="資格情報の入力"
+              aria-label={t("資格情報の入力")}
               type="password"
               autoComplete="off"
               className="min-w-0 flex-1 rounded-md border border-border bg-card px-2 py-1.5 text-xs"
               value={secretInput}
               onChange={(event) => setSecretInput(event.target.value)}
-              placeholder="API キーなど"
+              placeholder={t("API キーなど")}
             />
-            <Button size="sm" onClick={() => void handleSaveCredential()} disabled={secretInput.length === 0}>保存</Button>
+            <Button size="sm" onClick={() => void handleSaveCredential()} disabled={secretInput.length === 0}>{t("保存")}</Button>
           </div>
-          {credentialMessage && <p className="mt-1 text-[11px] text-muted-foreground">{credentialMessage}</p>}
-          <p className="mt-2 text-xs text-muted-foreground">OS の資格情報ストアに保存します。</p>
+          {credentialMessage && <p className="mt-1 text-[11px] text-muted-foreground">{renderLocalizedText(credentialMessage, t)}</p>}
+          <p className="mt-2 text-xs text-muted-foreground">{t("OS の資格情報ストアに保存します。")}</p>
         </div>}
         <div className="border-t border-border pt-2">
-          <p className="text-xs font-medium">接続テスト</p>
+          <p className="text-xs font-medium">{t("接続テスト")}</p>
           <div className="mt-1 flex flex-wrap items-center gap-1">
-            <Button variant="outline" size="sm" onClick={() => void handleTest(false)} disabled={testBusy}>設定を確認</Button>
+            <Button variant="outline" size="sm" onClick={() => void handleTest(false)} disabled={testBusy}>{t("設定を確認")}</Button>
             <label className="flex items-center gap-1 text-[11px]">
               <input type="checkbox" checked={liveConfirm} onChange={(event) => setLiveConfirm(event.target.checked)} />
-              実際に接続する
-            </label>
-            <Button variant="outline" size="sm" onClick={() => void handleTest(true)} disabled={testBusy || !liveConfirm}>接続テスト</Button>
+              {t("実際に接続する")}</label>
+            <Button variant="outline" size="sm" onClick={() => void handleTest(true)} disabled={testBusy || !liveConfirm}>{t("接続テスト")}</Button>
           </div>
           {testResult && (
-            <p role="status" className="mt-1 text-xs font-medium">{testResult.ok ? "成功" : "失敗"}: {testResult.detail}</p>
+            <p role="status" className="mt-1 text-xs font-medium">{testResult.ok ? t("成功") : t("失敗")}: {testFailure === null ? testResult.detail : renderLocalizedText(testFailure, t)}</p>
           )}
         </div>
       </div>
@@ -437,11 +443,11 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
         onClick={openSettings}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label="接続設定を開く"
-        title={`接続設定 · ${summary}`}
+        aria-label={t("接続設定を開く")}
+        title={t("接続設定 · {{value0}}", { value0: (summary) })}
         className={compact ? "rounded-sm p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" : "ai-provider-trigger flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs"}
       >
-        {compact ? <Settings size={15} aria-hidden="true" /> : <><span className="shrink-0 font-medium">接続設定</span>
+        {compact ? <Settings size={15} aria-hidden="true" /> : <><span className="shrink-0 font-medium">{t("接続設定")}</span>
         <span className="min-w-0 flex-1 truncate text-[11px] font-normal text-muted-foreground">• {summary}</span></>}
       </button>
       {open && createPortal(
@@ -455,15 +461,14 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
             ref={dialogRef}
             role="dialog"
             aria-modal="true"
-            aria-label="接続設定"
+            aria-label={t("接続設定")}
             tabIndex={-1}
             className="ai-provider-dialog"
           >
             <div className="ai-provider-dialog-header flex shrink-0 items-center gap-1.5">
-              <h2 className="min-w-0 flex-1 truncate text-[13px] font-semibold">接続設定</h2>
-              <Button variant="outline" size="sm" aria-label="接続設定を閉じる" title="閉じる" onClick={closeSettings} className="shrink-0">
-                閉じる
-              </Button>
+              <h2 className="min-w-0 flex-1 truncate text-[13px] font-semibold">{t("接続設定")}</h2>
+              <Button variant="outline" size="sm" aria-label={t("接続設定を閉じる")} title={t("閉じる")} onClick={closeSettings} className="shrink-0">
+                {t("閉じる")}</Button>
             </div>
             <div className="ai-provider-dialog-body min-h-0 overflow-y-auto">
               {fields}

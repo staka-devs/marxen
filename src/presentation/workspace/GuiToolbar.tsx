@@ -1,3 +1,5 @@
+import type { LabelKey } from "../../contracts/localization";
+import { useI18n } from "../i18n/I18nProvider";
 import { Button } from "../ui/button";
 import { Bold, Italic, Strikethrough, Code, ListTodo, Table2, Rows3, Columns3, Link, Image, Undo2, Redo2 } from "lucide-react";
 import type { FormatKind } from "../../domain/markdown-gui";
@@ -33,24 +35,25 @@ const formats = [
  ] satisfies { kind: FormatKind; label: string; icon: typeof Bold }[];
 
 /** Markdown formatting toolbar emitting range edits via callbacks. */ export function GuiToolbar(props: Props) {
+  const { t } = useI18n();
   const disabled = props.disabled ?? false;
   return (
-    <div data-testid="gui-toolbar" aria-label="GUI 編集ツールバー" role="toolbar" className="grid grid-cols-6 gap-0.5 px-1 py-1 [&_button]:h-8 [&_button]:w-full [&_button]:border-0 [&_button]:px-0 [&_button]:shadow-none">
+    <div data-testid="gui-toolbar" aria-label={t("GUI 編集ツールバー")} role="toolbar" className="grid grid-cols-6 gap-0.5 px-1 py-1 [&_button]:h-8 [&_button]:w-full [&_button]:border-0 [&_button]:px-0 [&_button]:shadow-none">
       {formats.map((item) => (
-        <Button key={item.kind} variant="outline" size="sm" disabled={disabled} onClick={() => props.onFormat(item.kind)} aria-label={`${item.label}にする`} title={item.label}>
+        <Button key={item.kind} variant="outline" size="sm" disabled={disabled} onClick={() => props.onFormat(item.kind)} aria-label={t("{{value0}}にする", { value0: (t(item.label as LabelKey)) })} title={t(item.label as LabelKey)}>
           <item.icon size={15} aria-hidden="true" />
         </Button>
       ))}
-      <Button variant="outline" size="sm" disabled={disabled} onClick={props.onCheckbox} aria-label="チェックリストを切り替える" title="チェック"><ListTodo size={15} aria-hidden="true" /></Button>
-      <Button variant="outline" size="sm" disabled={disabled} onClick={props.onTable} aria-label="表を挿入する" title="表"><Table2 size={15} aria-hidden="true" /></Button>
-      <Button variant="outline" size="sm" disabled={disabled} onClick={props.onTableRow} aria-label="表に行を追加する" title="行追加"><Rows3 size={15} aria-hidden="true" /></Button>
-      <Button variant="outline" size="sm" disabled={disabled} onClick={props.onTableColumn} aria-label="表に列を追加する" title="列追加"><Columns3 size={15} aria-hidden="true" /></Button>
-      <Button variant="outline" size="sm" disabled={disabled} onClick={props.onLink} aria-label="リンクを挿入する" title="リンク"><Link size={15} aria-hidden="true" /></Button>
-      <Button variant="outline" size="sm" disabled={disabled} onClick={props.onImage} aria-label="画像を挿入する" title="画像"><Image size={15} aria-hidden="true" /></Button>
-      <Button variant="outline" size="sm" onClick={props.onUndo} disabled={disabled} aria-label="元に戻す" title="元に戻す">
+      <Button variant="outline" size="sm" disabled={disabled} onClick={props.onCheckbox} aria-label={t("チェックリストを切り替える")} title={t("チェック")}><ListTodo size={15} aria-hidden="true" /></Button>
+      <Button variant="outline" size="sm" disabled={disabled} onClick={props.onTable} aria-label={t("表を挿入する")} title={t("表")}><Table2 size={15} aria-hidden="true" /></Button>
+      <Button variant="outline" size="sm" disabled={disabled} onClick={props.onTableRow} aria-label={t("表に行を追加する")} title={t("行追加")}><Rows3 size={15} aria-hidden="true" /></Button>
+      <Button variant="outline" size="sm" disabled={disabled} onClick={props.onTableColumn} aria-label={t("表に列を追加する")} title={t("列追加")}><Columns3 size={15} aria-hidden="true" /></Button>
+      <Button variant="outline" size="sm" disabled={disabled} onClick={props.onLink} aria-label={t("リンクを挿入する")} title={t("リンク")}><Link size={15} aria-hidden="true" /></Button>
+      <Button variant="outline" size="sm" disabled={disabled} onClick={props.onImage} aria-label={t("画像を挿入する")} title={t("画像")}><Image size={15} aria-hidden="true" /></Button>
+      <Button variant="outline" size="sm" onClick={props.onUndo} disabled={disabled} aria-label={t("元に戻す")} title={t("元に戻す")}>
         <Undo2 size={15} aria-hidden="true" />
       </Button>
-      <Button variant="outline" size="sm" onClick={props.onRedo} disabled={disabled} aria-label="やり直す" title="やり直す">
+      <Button variant="outline" size="sm" onClick={props.onRedo} disabled={disabled} aria-label={t("やり直す")} title={t("やり直す")}>
         <Redo2 size={15} aria-hidden="true" />
       </Button>
 

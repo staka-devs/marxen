@@ -1,3 +1,5 @@
+import type { LocalizedText } from "../../../contracts/localization";
+import { useI18n } from "../../i18n/I18nProvider";
 // Vim key routing for the shell editor (presentation).
 //
 // Event-time work stays synchronous so multi-key sequences and operator
@@ -9,7 +11,7 @@
 
 import { useCallback, useRef } from "react";
 import type { DocumentSnapshot, TextEdit, YankCopy } from "../../../contracts/contracts";
-import { READONLY_MESSAGE, StaleResync, workspaceErrorText } from "../../../domain/document-errors";
+import { StaleResync, workspaceErrorText } from "../../../domain/document-errors";
 import { serializeVimKey } from "../../../domain/vim-keys";
 import { correspondSource as correspondSnapshotSource, resolveEditRange } from "../../../domain/coordinates/selection-range";
 import type { EditorSelection } from "../../editor/CodeMirrorEditor";
@@ -23,7 +25,7 @@ export interface VimEditingArgs {
   /** Cursor motion basis for display-basis arrow handling. */
   navBasis: NavBasis;
   /** Surface a notice without importing shell state. */
-  notify: (message: string | null, kind?: import("../../workspace/Notifications").NoticeKind) => void;
+  notify: (message: LocalizedText | null, kind?: import("../../workspace/Notifications").NoticeKind) => void;
   /** Document session owning docs, selections, cursors, and mutations. */
   session: DocumentSession;
 }
@@ -76,6 +78,7 @@ export interface VimEditing {
  * image attachment hook; the document session keeps all React state.
  */
 export function useVimEditing(args: VimEditingArgs): VimEditing {
+  const { t, message } = useI18n();
   const { desktop, navBasis, notify, session } = args;
   const setNotice = notify;
   const {
@@ -143,7 +146,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
   const routeCharKey = useCallback(
     async (id: string, key: string, range: { start: number; end: number }, fullText: string, retried = false): Promise<void> => {
       if (!registry) {
-        setNotice(READONLY_MESSAGE);
+        setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
         return;
       }
       if (!docsRef.current[id]) return;
@@ -179,7 +182,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
             if (fresh) await routeCharKey(id, key, fresh, cause.snapshot.text, true);
           }
         } else {
-          setNotice(workspaceErrorText(cause), "error");
+          setNotice(workspaceErrorText(cause, t), "error");
         }
       }
     },
@@ -200,7 +203,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
       retried = false,
     ): Promise<void> => {
       if (!registry) {
-        setNotice(READONLY_MESSAGE);
+        setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
         return;
       }
       if (!docsRef.current[id]) return;
@@ -230,7 +233,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
             if (fresh) await routeCapturedPaste(id, keyNotation, text, fresh, cause.snapshot.text, true);
           }
         } else {
-          setNotice(workspaceErrorText(cause), "error");
+          setNotice(workspaceErrorText(cause, t), "error");
         }
       }
     },
@@ -259,7 +262,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
   const routeVimKeys = useCallback(
     async (id: string, keys: string) => {
       if (!registry) {
-        setNotice(READONLY_MESSAGE);
+        setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
         return;
       }
       if (!docsRef.current[id]) return;
@@ -275,7 +278,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
         await refreshModeCursor(id, gen);
       } catch (cause) {
         if (cause instanceof StaleResync) sayStale(cause.snapshot);
-        else setNotice(workspaceErrorText(cause), "error");
+        else setNotice(workspaceErrorText(cause, t), "error");
       } finally {
         pendingNativeInput.current[id] -= 1;
       }
@@ -363,7 +366,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
       const id = activeRef.current;
       if (!id) return;
       if (!registry) {
-        setNotice(READONLY_MESSAGE);
+        setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
         return;
       }
       const current = docsRef.current[id];

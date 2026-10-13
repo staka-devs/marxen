@@ -1,3 +1,6 @@
+import type { LabelKey } from "../../contracts/localization";
+import type { Translator } from "../../contracts/localization";
+import { japaneseTranslator } from "../localization";
 // Shared remark/rehype rendering pipeline (Issue #6).
 //
 // One pipeline serves live and read modes so both views share the same
@@ -178,15 +181,15 @@ function errorBox(message: string): Element {
  *
  * Keeps the author's exact source inspectable alongside hydrated output.
  */
-function rawDetails(source: string): Element {
+function rawDetails(source: string, t: Translator = japaneseTranslator): Element {
   return element("details", { className: ["marxen-source"] }, [
-    element("summary", {}, [textNode("コードを表示")]),
+    element("summary", {}, [textNode(t("コードを表示"))]),
     rawSourceBlock(source),
   ]);
 }
 
 /** Pre-MathJax pass: malformed TeX keeps raw text with a visible error. */
-function rehypeValidateMath() {
+function rehypeValidateMath(t: Translator = japaneseTranslator) {
   return (tree: Root, file: VFile) => {
     const replacements: Array<{ parent: Element | Root; index: number; node: Element; inline: boolean; source: string }> = [];
     visit(tree, "element", (node: Element, index: number | undefined, parent: Element | Root | undefined) => {
@@ -204,16 +207,16 @@ function rehypeValidateMath() {
     });
     // Reverse order keeps collected indices valid within shared parents.
     for (const item of replacements.reverse()) {
-      const validation = validateMathContent(item.source);
+      const validation = validateMathContent(item.source, t);
       if (validation.ok) continue;
       const lines = positionOf(item.node);
-      pushDiagnostic(file, { code: "math-invalid", message: validation.message ?? "数式が不正です。", startLine: lines.startLine, endLine: lines.endLine });
+      pushDiagnostic(file, { code: "math-invalid", message: validation.message ?? t("数式が不正です。"), startLine: lines.startLine, endLine: lines.endLine });
       const siblings = (item.parent as Element).children ?? (item.parent as Root).children;
       if (item.inline) {
         siblings.splice(
           item.index,
           1,
-          element("span", { className: ["marxen-error"], role: "alert" }, [textNode(validation.message ?? "数式が不正です。")]) as never,
+          element("span", { className: ["marxen-error"], role: "alert" }, [textNode(validation.message ?? t("数式が不正です。"))]) as never,
           element("code", { className: ["marxen-raw-text"] }, [textNode(item.source)]) as never,
         );
       } else {
@@ -221,7 +224,7 @@ function rehypeValidateMath() {
           item.index,
           1,
           wrapperDiv("math", lines, { dataInvalid: "true" }, [
-            errorBox(validation.message ?? "数式が不正です。"),
+            errorBox(validation.message ?? t("数式が不正です。")),
             rawSourceBlock(item.source),
           ]) as never,
         );
@@ -277,7 +280,7 @@ function rehypeScrubMathLinks() {
 }
 
 /** Post-MathJax pass: special fenced blocks and Shiki highlighting. */
-function rehypeMarxenBlocks() {
+function rehypeMarxenBlocks(t: Translator = japaneseTranslator) {
   return async (tree: Root, file: VFile) => {
     const targets: Array<{ parent: Element | Root; index: number; pre: Element; code: Element; lang: string }> = [];
     visit(tree, "element", (node: Element, index: number | undefined, parent: Element | Root | undefined) => {
@@ -305,25 +308,25 @@ function rehypeMarxenBlocks() {
         let topoObject: string | undefined;
         switch (target.lang) {
           case "mermaid":
-            validation = validateMermaidStructure(normalized);
+            validation = validateMermaidStructure(normalized, t);
             break;
           case "geojson":
-            validation = validateGeoJson(normalized);
+            validation = validateGeoJson(normalized, t);
             break;
           case "topojson": {
-            const topo = validateTopoJson(normalized);
+            const topo = validateTopoJson(normalized, t);
             validation = topo;
             topoObject = topo.ok ? topo.objectNames?.[0] : undefined;
             break;
           }
           default:
-            validation = validateAsciiStl(normalized);
+            validation = validateAsciiStl(normalized, t);
             break;
         }
         if (!validation.ok) {
           pushDiagnostic(file, {
             code: `${target.lang}-invalid` as RenderDiagnostic["code"],
-            message: validation.message ?? "ブロックが不正です。",
+            message: validation.message ?? t("ブロックが不正です。"),
             startLine: lines.startLine,
             endLine: lines.endLine,
           });
@@ -333,13 +336,13 @@ function rehypeMarxenBlocks() {
           extra.dataTopoObject = topoObject;
         }
         const children: Element["children"] = [
-          element("p", { className: ["marxen-special-title"] }, [textNode(KIND_LABEL[target.lang] ?? target.lang)]),
+          element("p", { className: ["marxen-special-title"] }, [textNode(KIND_LABEL[target.lang] ? t(KIND_LABEL[target.lang] as LabelKey) : target.lang)]),
         ];
         if (validation.ok) {
           children.push(element("div", { className: [SPECIAL_CONTAINER_CLASS[target.lang]] }, []));
-          children.push(rawDetails(normalized));
+          children.push(rawDetails(normalized, t));
         } else {
-          children.push(errorBox(validation.message ?? "ブロックが不正です。"));
+          children.push(errorBox(validation.message ?? t("ブロックが不正です。")));
           children.push(rawSourceBlock(normalized));
         }
         siblings.splice(target.index, 1, wrapperDiv(target.lang, lines, extra, children) as never);
@@ -361,7 +364,7 @@ function rehypeMarxenBlocks() {
         siblings.splice(target.index, 1, holder as never);
       } else {
         const holder = element("div", { className: ["marxen-codeblock"], ...startProp, ...endProp }, [
-          element("p", { className: ["marxen-codeblock-note"] }, [textNode(`「${target.lang}」の強調表示には対応していません。Markdownのまま表示します。`)]),
+          element("p", { className: ["marxen-codeblock-note"] }, [textNode(t("「{{value0}}」の強調表示には対応していません。Markdownのまま表示します。", { value0: (target.lang) }))]),
           element("pre", {}, [element("code", { className: [`language-${target.lang}`] }, [textNode(normalized)])]),
         ]);
         siblings.splice(target.index, 1, holder as never);
@@ -393,7 +396,7 @@ function rehypeSourceRanges() {
 
 export type { RenderDiagnostic, RenderResult, SourceBlock } from "./types";
 
-let processor: ReturnType<typeof buildProcessor> | null = null;
+const processors = new WeakMap<Translator, ReturnType<typeof buildProcessor>>();
 
 /** Load local MathJax only when sanitized content contains a mathematical expression. */
 function rehypeLazyMathjax() {
@@ -415,7 +418,7 @@ function rehypeLazyMathjax() {
  * math validation → MathJax → link scrub → special blocks/Shiki → ranges →
  * stringify. Local-only libraries, no CDN.
  */
-function buildProcessor() {
+function buildProcessor(t: Translator) {
   return unified()
     .use(remarkParse)
     .use(remarkGfm)
@@ -425,10 +428,10 @@ function buildProcessor() {
     .use(rehypeRaw)
     .use(rehypeSanitize, marxenSanitizeSchema() as never)
     .use(rehypeMatchFragmentLinks)
-    .use(rehypeValidateMath)
+    .use(rehypeValidateMath, t)
     .use(rehypeLazyMathjax)
     .use(rehypeScrubMathLinks)
-    .use(rehypeMarxenBlocks)
+    .use(rehypeMarxenBlocks, t)
     .use(rehypeSourceRanges)
     // Trusted `raw` nodes are generated after sanitization from escaped
     // source (Shiki); dangerous author HTML stays disabled upstream.
@@ -440,23 +443,24 @@ function buildProcessor() {
  *
  * Both views share the same syntax tree and source ranges through this.
  */
-function getProcessor(): ReturnType<typeof buildProcessor> {
-  if (!processor) {
-    processor = buildProcessor();
-  }
+function getProcessor(t: Translator): ReturnType<typeof buildProcessor> {
+  const existing = processors.get(t);
+  if (existing) return existing;
+  const processor = buildProcessor(t);
+  processors.set(t, processor);
   return processor;
 }
 
 /** Render Markdown to sanitized local-only HTML with diagnostics and blocks. Never throws. */
-export async function renderMarkdownDocument(source: string): Promise<RenderResult> {
+export async function renderMarkdownDocument(source: string, t: Translator = japaneseTranslator): Promise<RenderResult> {
   const blocks = parseMarkdownBlocks(source);
   try {
-    const file = await getProcessor().process(source);
+    const file = await getProcessor(t).process(source);
     return { html: String(file), diagnostics: readDiagnostics(file), blocks };
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
     return {
-      html: `<div class="marxen-error" role="alert">描画できませんでした。Markdownは保持されています。${escapeHtml(message)}</div><pre>${escapeHtml(source)}</pre>`,
+      html: t("<div class=\"marxen-error\" role=\"alert\">描画できませんでした。Markdownは保持されています。{{value0}}</div><pre>{{value1}}</pre>", { value0: (escapeHtml(message)), value1: (escapeHtml(source)) }),
       diagnostics: [],
       blocks,
     };

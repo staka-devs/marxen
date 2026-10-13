@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n/I18nProvider";
 import { FileText, Image, X } from "lucide-react";
 import { isImagePath } from "../../domain/workspace-files";
 
@@ -17,8 +18,9 @@ interface Props {
 }
 
 /** Open document tabs with dirty markers and close controls. */ export function Tabs({ tabs, activeId, onSelect, onClose }: Props) {
+  const { t } = useI18n();
   return (
-    <div data-testid="tabs" aria-label="タブ" role="tablist" className="flex h-10 min-w-0 overflow-x-auto">
+    <div data-testid="tabs" aria-label={t("タブ")} role="tablist" className="flex h-10 min-w-0 overflow-x-auto">
       {tabs.map((tab) => (
         <div
           key={tab.id}
@@ -31,7 +33,7 @@ interface Props {
             <span className="truncate">{tab.label}</span>
             {tab.dirty && <span className="sr-only"> ●</span>}
           </button>
-          <button type="button" onClick={() => onClose(tab.id)} aria-label={`${tab.label}を閉じる`} className="group/close relative flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted">
+          <button type="button" onClick={() => onClose(tab.id)} aria-label={t("{{value0}}を閉じる", { value0: (tab.label) })} className="group/close relative flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted">
             {tab.dirty && <span aria-hidden="true" className="absolute h-1.5 w-1.5 rounded-full bg-foreground group-hover:hidden" />}
             <X size={13} aria-hidden="true" className={tab.dirty ? "opacity-0 group-hover:opacity-100 group-focus-visible/close:opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"} />
           </button>

@@ -1,3 +1,7 @@
+import type { LabelKey } from "../contracts/localization";
+import type { Translator } from "../contracts/localization";
+import { japaneseTranslator } from "../domain/localization";
+import { useI18n } from "./i18n/I18nProvider";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { History, Plus, RotateCcw, Send, Square, X } from "lucide-react";
 import { Button } from "./ui/button";
@@ -118,8 +122,8 @@ export { buildProviderConfig };
  *
  * Never exposes internal IDs in product text.
  */
-function labelFor(labels: Record<string, string> | undefined, documentId: string): string {
-  return labels?.[documentId] ?? "現在の文書";
+function labelFor(labels: Record<string, string> | undefined, documentId: string, t: Translator = japaneseTranslator): string {
+  return labels?.[documentId] ?? t("現在の文書");
 }
 
 /**
@@ -159,6 +163,7 @@ export default function AiPanel({
   aiGateway,
   modelControls,
 }: AiPanelProps) {
+  const { t } = useI18n();
   /** Streaming transport: injected prop wins, otherwise the test fallback throws visibly. */
   const startPromptFn: AiGateway["startPrompt"] = startPromptProp
     ?? aiGateway?.startPrompt
@@ -274,7 +279,7 @@ export default function AiPanel({
   /** Resolve staging via prop or fallback, throwing when unresolved. */ async function resolveStaging(wanted: PromptContext[]): Promise<StagingTarget> {
     if (ensureStaging) return ensureStaging(wanted);
     if (staging) return staging;
-    throw { code: "staging_unresolved", copy_id: "(未解決)" } satisfies AiError;
+    throw { code: "staging_unresolved", copy_id: t("(未解決)") } satisfies AiError;
   }
 
   /** Handle one stream event gated by token, settlement, and cancel. */ function handleEvent(
@@ -286,6 +291,7 @@ export default function AiPanel({
   ) {
     if (!run.isCurrent(token)) return;
     if (run.isSettled(token)) return;
+    if (event.type === "usage") return;
     if (run.isCancelRequested()) {
       if (event.type === "chunk" || event.type === "started") return;
       run.markSettled(token);
@@ -348,7 +354,7 @@ export default function AiPanel({
   ) {
     const trimmed = truncatePrompt(promptText).trim();
     if (trimmed === "" || promptContexts.length === 0) {
-      setStreamError({ code: "staging_unresolved", copy_id: "(未解決)" });
+      setStreamError({ code: "staging_unresolved", copy_id: t("(未解決)") });
       return;
     }
     const blockedCommand = isClaudeBlockedProvider(provider);
@@ -371,7 +377,7 @@ export default function AiPanel({
       resolved = await resolveStaging(capturedContexts);
     } catch (cause) {
       if (!run.isCurrent(token)) { setBusy(false, token); return; }
-      const failure: AiError = normalizeAiError(cause);
+      const failure: AiError = normalizeAiError(cause, t);
       setStreamError(failure);
       setResolving(false);
       setBusy(false);
@@ -414,7 +420,7 @@ export default function AiPanel({
     } catch (cause) {
       if (!run.isCurrent(token)) { setBusy(false, token); return; }
       run.markSettled(token);
-      const failure = normalizeAiError(cause);
+      const failure = normalizeAiError(cause, t);
       applyToConversation(targetConversationId, (prev) => ({
         ...prev,
         messages: failAssistant(prev.messages, assistant.id, failure),
@@ -476,22 +482,22 @@ export default function AiPanel({
   }
 
   if (!conversation) return null;
-  const providerSummary = describeProviderSummary(provider);
+  const providerSummary = describeProviderSummary(provider, t);
 
   return (
-    <div aria-label="チャット" className="ai-chat-panel flex h-full min-h-0 flex-col">
+    <div aria-label={t("チャット")} className="ai-chat-panel flex h-full min-h-0 flex-col">
       <div className="ai-chat-header flex shrink-0 items-center gap-1">
-        <h2 id="ai-panel-title" className="min-w-0 flex-1 truncate text-[13px] font-medium">{historyOpen ? "チャットの履歴" : "チャット"}</h2>
+        <h2 id="ai-panel-title" className="min-w-0 flex-1 truncate text-[13px] font-medium">{historyOpen ? t("チャットの履歴") : t("チャット")}</h2>
         <AiProviderSettings compact provider={provider} onProvider={changeProvider} openToken={openSettingsToken} gateway={aiGateway} profileStore={profileStore} />
-        <button type="button" aria-label={historyOpen ? "チャットに戻る" : "履歴を開く"} aria-pressed={historyOpen} title={historyOpen ? "チャットに戻る" : "チャットの履歴"} className="rounded-sm p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setHistoryOpen((value) => !value)}><History size={15} aria-hidden="true" /></button>
-        <button type="button" aria-label="新しい会話" title="新しいチャット" onClick={handleNewConversation} className="shrink-0 rounded-sm p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground">
+        <button type="button" aria-label={historyOpen ? t("チャットに戻る") : t("履歴を開く")} aria-pressed={historyOpen} title={historyOpen ? t("チャットに戻る") : t("チャットの履歴")} className="rounded-sm p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setHistoryOpen((value) => !value)}><History size={15} aria-hidden="true" /></button>
+        <button type="button" aria-label={t("新しい会話")} title={t("新しいチャット")} onClick={handleNewConversation} className="shrink-0 rounded-sm p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground">
           <Plus size={14} aria-hidden="true" />
         </button>
         {onClose && (
           <button
             type="button"
-            aria-label="チャットを閉じる"
-            title="閉じる"
+            aria-label={t("チャットを閉じる")}
+            title={t("閉じる")}
             className="shrink-0 rounded p-1 hover:bg-muted"
             onClick={onClose}
           >
@@ -500,22 +506,22 @@ export default function AiPanel({
         )}
       </div>
       {historyOpen ? <ChatHistory conversations={conversations} activeId={conversationId} onSelect={(id) => { handleSelectConversation(id); setHistoryOpen(false); }} /> : <>
-      <div className="ai-chat-chips flex shrink-0 flex-wrap items-center gap-1" aria-label="送信対象">
+      <div className="ai-chat-chips flex shrink-0 flex-wrap items-center gap-1" aria-label={t("送信対象")}>
         {contexts.length === 0 ? (
-          <span className="text-[11px] text-muted-foreground">送信対象がありません。</span>
+          <span className="text-[11px] text-muted-foreground">{t("送信対象がありません。")}</span>
         ) : (
           contexts.map((context) => (
             <span key={context.documentId} title={`rev ${context.revision} • ${providerSummary}`} className="ai-chat-chip inline-flex max-w-full items-center gap-0.5 rounded border border-border px-1.5 py-px text-[11px] leading-5 text-muted-foreground">
               <span
                 className="truncate"
               >
-                {labelFor(contextLabels, context.documentId)}
+                {labelFor(contextLabels, context.documentId, t)}
               </span>
               {onRemoveContext && (
                 <button
                   type="button"
-                  aria-label={`${labelFor(contextLabels, context.documentId)}を外す`}
-                  title="外す"
+                  aria-label={t("{{value0}}を外す", { value0: (labelFor(contextLabels, context.documentId, t)) })}
+                  title={t("外す")}
                   className="rounded px-0.5 leading-none hover:bg-muted hover:text-foreground"
                   onClick={() => onRemoveContext(context.documentId)}
                 >
@@ -526,95 +532,92 @@ export default function AiPanel({
           ))
         )}
       </div>
-      <div ref={transcriptRef} aria-live="polite" aria-label="会話" className="ai-chat-transcript min-h-0 flex-1 overflow-y-auto py-1.5">
+      <div ref={transcriptRef} aria-live="polite" aria-label={t("会話")} className="ai-chat-transcript min-h-0 flex-1 overflow-y-auto py-1.5">
         {conversation.messages.length === 0 ? (
           <div className="ai-chat-empty px-1 py-2">
-            <p className="text-xs leading-6 text-muted-foreground">文書を添えて質問や書き換えを頼めます。結果は差分確認のうえで取り込みます。</p>
+            <p className="text-xs leading-6 text-muted-foreground">{t("文書を添えて質問や書き換えを頼めます。結果は差分確認のうえで取り込みます。")}</p>
             <div className="mt-2 flex flex-col gap-1.5">
-              {EMPTY_EXAMPLES.map((example) => (
+              {EMPTY_EXAMPLES.map((exampleKey) => { const example = t(exampleKey as LabelKey); return (
                 <button
                   key={example}
                   type="button"
-                  title="クリックで入力に入れる"
+                  title={t("クリックで入力に入れる")}
                   className="ai-chat-example rounded border border-border px-2 py-1.5 text-left text-xs leading-5 hover:bg-muted"
                   onClick={() => setPrompt(example)}
                 >
                   {example}
                 </button>
-              ))}
+              ); })}
             </div>
           </div>
         ) : (
           conversation.messages.map((message) =>
             message.role === "user" ? (
               <div key={message.id} className="ai-chat-message ai-chat-user border-l-2 border-primary/40 pl-2.5 text-[13px]">
-                <p className="ai-chat-role text-[11px] text-muted-foreground">あなた・{MODE_LABELS[message.mode ?? mode]}</p>
+                <p className="ai-chat-role text-[11px] text-muted-foreground">{t("あなた・")}{t(MODE_LABELS[message.mode ?? mode] as LabelKey)}</p>
                 <p className="ai-chat-text mt-0.5 max-h-40 overflow-y-auto whitespace-pre-wrap leading-6">{message.text}</p>
               </div>
             ) : (
               <div key={message.id} className="ai-chat-message text-[13px]">
                 <p className="ai-chat-role text-[11px] text-muted-foreground">
-                  AI{message.state === "streaming" ? "・生成中…" : message.state === "cancelled" ? "・取消済み" : message.state === "error" ? "・失敗" : ""}
+                  AI{message.state === "streaming" ? t("・生成中…") : message.state === "cancelled" ? t("・取消済み") : message.state === "error" ? t("・失敗") : ""}
                 </p>
                 {message.text && (message.state === "done"
-                  ? <div className="marxen-chat-body mt-1"><MarkdownPreview text={message.text} label="AI の回答" testId={`chat-response-${message.id}`} /></div>
+                  ? <div className="marxen-chat-body mt-1"><MarkdownPreview text={message.text} label={t("AI の回答")} testId={`chat-response-${message.id}`} /></div>
                   : <p className="ai-chat-text mt-0.5 whitespace-pre-wrap leading-6">{message.text}</p>)}
                 {message.proposal && message.mode !== "ask" && (
                   <p className="mt-1 text-[11px] text-muted-foreground">
-                    変更は差分を確認して適用できます。
-                  </p>
+                    {t("変更は差分を確認して適用できます。")}</p>
                 )}
                 {message.state === "error" && message.error && (
-                  <p role="alert" className="mt-1 text-xs font-medium text-red-600">{describeAiError(message.error)}</p>
+                  <p role="alert" className="mt-1 text-xs font-medium text-red-600">{describeAiError(message.error, t)}</p>
                 )}
-                {message.state === "cancelled" && <p className="mt-1 text-xs text-muted-foreground">取り消しました。</p>}
+                {message.state === "cancelled" && <p className="mt-1 text-xs text-muted-foreground">{t("取り消しました。")}</p>}
               </div>
             ),
           )
         )}
         {streamError && (
-          <p role="alert" className="ai-chat-message text-xs font-medium text-red-600">{describeAiError(streamError)}</p>
+          <p role="alert" className="ai-chat-message text-xs font-medium text-red-600">{describeAiError(streamError, t)}</p>
         )}
         {running && (
-          <p className="ai-chat-message text-[11px] text-muted-foreground">応答を生成しています…</p>
+          <p className="ai-chat-message text-[11px] text-muted-foreground">{t("応答を生成しています…")}</p>
         )}
       </div>
       <div className="ai-chat-composer shrink-0 border-t border-border pt-1.5">
         <div className="ai-chat-composer-box px-1.5 pb-1.5 pt-1">
           <textarea
-            aria-label="プロンプト"
+            aria-label={t("プロンプト")}
             className="ai-chat-composer-input block max-h-40 min-h-14 w-full overflow-y-auto px-1 py-1 text-[13px] leading-6"
             rows={3}
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
-            placeholder="AI への指示を書きます"
+            placeholder={t("AI への指示を書きます")}
           />
           <div className="mt-1 flex flex-wrap items-center gap-1">
-            <div role="group" aria-label="プロンプトの種類" className="min-w-0 shrink-0">
-              <ChoiceMenu label="モード" value={mode} onChange={(value) => setMode(value as PromptMode)} disabled={running || disabled} choices={MODE_ORDER.map((value) => ({ value, label: MODE_LABELS[value], description: value === "ask" ? "質問・要約・説明を依頼します。" : value === "generate" ? "指示から Markdown の草案を作ります。" : value === "rewrite" ? "選択した文章を整えます。" : "送信対象への変更を差分で確認します。" }))} />
+            <div role="group" aria-label={t("プロンプトの種類")} className="min-w-0 shrink-0">
+              <ChoiceMenu label={t("モード")} value={mode} onChange={(value) => setMode(value as PromptMode)} disabled={running || disabled} choices={MODE_ORDER.map((value) => ({ value, label: t(MODE_LABELS[value] as LabelKey), description: value === "ask" ? t("質問・要約・説明を依頼します。") : value === "generate" ? t("指示から Markdown の草案を作ります。") : value === "rewrite" ? t("選択した文章を整えます。") : t("送信対象への変更を差分で確認します。") }))} />
             </div>
             {modelControls && <div className="ai-chat-model-slot min-w-0 flex-1 empty:hidden">{modelControls}</div>}
-            <Button size="sm" aria-label="送信" title="送信" onClick={() => void handleSend()} disabled={!canSend} className="ai-chat-action shrink-0">
+            <Button size="sm" aria-label={t("送信")} title={t("送信")} onClick={() => void handleSend()} disabled={!canSend} className="ai-chat-action shrink-0">
               <Send size={13} aria-hidden="true" />
-              {running ? "送信中…" : "送信"}
+              {running ? t("送信中…") : t("送信")}
             </Button>
             {running && (
-              <Button variant="outline" size="sm" aria-label="取り消し" title="取り消し" onClick={() => void handleCancel()} className="ai-chat-action shrink-0">
+              <Button variant="outline" size="sm" aria-label={t("取り消し")} title={t("取り消し")} onClick={() => void handleCancel()} className="ai-chat-action shrink-0">
                 <Square size={12} aria-hidden="true" />
-                取消
-              </Button>
+                {t("取消")}</Button>
             )}
             {showRetry && (
-              <Button variant="outline" size="sm" aria-label="再試行" title="直前の入力を再送します" onClick={() => void handleRetry()} disabled={disabled || differentProvider || lastPrompt === null} className="ai-chat-action shrink-0">
+              <Button variant="outline" size="sm" aria-label={t("再試行")} title={t("直前の入力を再送します")} onClick={() => void handleRetry()} disabled={disabled || differentProvider || lastPrompt === null} className="ai-chat-action shrink-0">
                 <RotateCcw size={13} aria-hidden="true" />
-                再試行
-              </Button>
+                {t("再試行")}</Button>
             )}
           </div>
         </div>
-        {disabled && <p className="mt-1 text-[11px] text-muted-foreground">他の応答を生成しています。</p>}
-        {differentProvider && <p className="mt-1 text-[11px] text-muted-foreground">接続先が異なる会話です。続けるには新しい会話を作成してください。</p>}
-        {anthropicBlocked && <p className="mt-1 text-[11px] text-muted-foreground">Anthropic を有効化すると送信できます。</p>}
+        {disabled && <p className="mt-1 text-[11px] text-muted-foreground">{t("他の応答を生成しています。")}</p>}
+        {differentProvider && <p className="mt-1 text-[11px] text-muted-foreground">{t("接続先が異なる会話です。続けるには新しい会話を作成してください。")}</p>}
+        {anthropicBlocked && <p className="mt-1 text-[11px] text-muted-foreground">{t("Anthropic を有効化すると送信できます。")}</p>}
       </div>
       </>}
     </div>

@@ -1,3 +1,5 @@
+import type { LocalizedText } from "../../../contracts/localization";
+import { useI18n } from "../../i18n/I18nProvider";
 // Image attachments for the shell editor (presentation).
 //
 // Event-first clipboard and drop handling: paste events are read
@@ -23,7 +25,7 @@ export interface ImageAttachmentsArgs {
   /** True on desktop; the browser demo disables drops and pastes. */
   desktop: boolean;
   /** Surface a notice without importing shell state. */
-  notify: (message: string | null, kind?: NoticeKind) => void;
+  notify: (message: LocalizedText | null, kind?: NoticeKind) => void;
   /** Document session owning docs, selections, cursors, and snapshots. */
   session: DocumentSession;
   /** Vim routing for ranges and captured paste execution. */
@@ -63,6 +65,7 @@ export interface ImageAttachments {
  * keeps all React state and the Vim hook owns range capture.
  */
 export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachments {
+  const { t, message } = useI18n();
   const { desktop, notify, session, vim, workspaceGateway, imageLoader, loadEntries } = args;
   const setNotice = notify;
   const {
@@ -171,7 +174,7 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
       let previousLength = docsRef.current[id]?.text.length ?? 0;
       for (const file of files) {
         if (file.size > 20 * 1024 * 1024) {
-          setNotice("対応画像（PNG/JPEG/GIF/WebP、20 MiB 以下）のみ扱えます。");
+          setNotice(message("対応画像（PNG/JPEG/GIF/WebP、20 MiB 以下）のみ扱えます。"));
           continue;
         }
         try {
@@ -186,19 +189,19 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
           cursor = { start: next, end: next };
           if (!isSelectionGenCurrent(id, gen)) {
             mergeSnapshot(result.snapshot);
-            setNotice(`画像を挿入しました（${result.path}）。`);
+            setNotice(message("画像を挿入しました（{{value0}}）。", { value0: (result.path) }));
             continue;
           }
           caretRef.current[id] = next;
           setSelections((prev) => ({ ...prev, [id]: { anchor: next, head: next } }));
           echoCursor(id, next, next);
           mergeSnapshot(result.snapshot);
-          setNotice(`画像を挿入しました（${result.path}）。`);
+          setNotice(message("画像を挿入しました（{{value0}}）。", { value0: (result.path) }));
         } catch (cause) {
           // A stale range rejects without applying: surface it once and
           // never retry a file write that might already have landed.
           if (cause instanceof StaleResync) sayStale(cause.snapshot);
-          else setNotice(workspaceErrorText(cause), "error");
+          else setNotice(workspaceErrorText(cause, t), "error");
         }
       }
     },
@@ -289,10 +292,10 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
           }
         }
         await loadEntries();
-        setNotice("画像を挿入しました。");
+        setNotice(message("画像を挿入しました。"));
       } catch (cause) {
         if (cause instanceof StaleResync) sayStale(cause.snapshot);
-        else setNotice(workspaceErrorText(cause), "error");
+        else setNotice(workspaceErrorText(cause, t), "error");
       }
     })();
   }, [registry, pasteImageFiles, bumpSelectionGen, mergeSnapshot, isSelectionGenCurrent, echoCursor, loadEntries, sayStale, docsRef, activeRef, caretRef, setSelections, notify]);

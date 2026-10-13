@@ -254,9 +254,9 @@ export interface RuntimeGateway {
 /** Native dialog gateway for folder and config pickers. */
 export interface DialogGateway {
   /** Native folder picker; null when cancelled or unavailable. */
-  pickFolder(): Promise<string | null>;
+  pickFolder(title?: string): Promise<string | null>;
   /** Native config-file picker; name validated by the caller. */
-  pickConfigFile(): Promise<string | null>;
+  pickConfigFile(title?: string): Promise<string | null>;
 }
 
 /** Native file-drop subscription. */

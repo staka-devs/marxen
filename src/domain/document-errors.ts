@@ -1,3 +1,7 @@
+import type { Translator } from "../contracts/localization";
+import { japaneseTranslator } from "./localization";
+import { renderLocalizedText } from "./localization";
+import { LocalizableError } from "./localized-error";
 // Deterministic document error shapes (domain).
 //
 // Pure Japanese messages and stale-revision detection. No Tauri, DOM, React,
@@ -45,20 +49,26 @@ export function isStaleError(cause: unknown): boolean {
 }
 
 /**
- * Describe any workspace/document failure in Japanese for notices.
+ * Describe workspace failures using the supplied locale and preserve opaque backend details.
  *
  * `StaleResync` keeps its message; transport `Error`s keep theirs unless
  * empty; wire `WorkspaceError` objects map per code without leaking `undefined`.
  */
-export function workspaceErrorText(cause: unknown): string {
-  if (cause instanceof StaleResync) return cause.message;
+export function workspaceErrorText(cause: unknown, t: Translator = japaneseTranslator): string {
+  if (cause instanceof LocalizableError) return renderLocalizedText(cause.localized, t);
+  if (cause instanceof StaleResync) return t("改訂が古いため最新のMarkdownに再同期しました（リビジョン {{value0}}）。", { value0: cause.snapshot.revision });
   if (cause instanceof Error) {
     // Tauri serializes WorkspaceError as a plain object, but real Error
     // instances (transport failures) keep their message.
-    if (cause.message && cause.message !== "{}") return describeWorkspaceError(cause);
+    if (cause.message && cause.message !== "{}") return cause.message;
     return cause.message || String(cause);
   }
-  return describeWorkspaceError(cause);
+  const explanation = describeWorkspaceError(cause, t);
+  if (typeof cause !== "object" || cause === null) return explanation;
+  const record = cause as { code?: unknown; detail?: unknown; path?: unknown };
+  const detail = typeof record.detail === "string" && record.detail !== "" && record.code !== "io" && record.code !== "neovim" ? ` ${record.detail}` : "";
+  const path = typeof record.path === "string" && record.path !== "" && record.code !== "conflict" ? ` (${record.path})` : "";
+  return `${explanation}${detail}${path}`;
 }
 
 /**
@@ -67,44 +77,44 @@ export function workspaceErrorText(cause: unknown): string {
  * Covers contract/stale, unsaved/conflict, workspace, type, encoding, path,
  * Neovim, and IO codes; unknown codes fall back to the raw code or JSON.
  */
-function describeWorkspaceError(cause: unknown): string {
+function describeWorkspaceError(cause: unknown, t: Translator = japaneseTranslator): string {
   if (typeof cause !== "object" || cause === null) return String(cause);
   const record = cause as { code?: unknown; [key: string]: unknown };
   switch (record.code) {
     case "contract": {
       const inner = record.error as { code?: unknown; expected?: unknown; received?: unknown } | undefined;
       if (inner?.code === "stale_revision") {
-        return `改訂が古いため再同期してください（期待 ${String(inner.expected)}, 受信 ${String(inner.received)}）。`;
+        return t("改訂が古いため再同期してください（期待 {{value0}}, 受信 {{value1}}）。", { value0: (String(inner.expected)), value1: (String(inner.received)) });
       }
-      return `契約エラー: ${String(inner?.code ?? "不明")}`;
+      return t("契約エラー: {{value0}}", { value0: (String(inner?.code ?? t("不明"))) });
     }
     case "unsaved_changes":
-      return "未保存の変更があるため操作できません。";
+      return t("未保存の変更があるため操作できません。");
     case "conflict":
-      return `保存競合: ディスクが変更されています（${String(record.path ?? "")}）。本文は保持しています。`;
+      return t("保存競合: ディスクが変更されています（{{value0}}）。本文は保持しています。", { value0: (String(record.path ?? "")) });
     case "no_workspace":
-      return "フォルダーが開かれていません。フォルダーを開いてください。";
+      return t("フォルダーが開かれていません。フォルダーを開いてください。");
     case "not_found":
-      return "ファイルが見つかりません。";
+      return t("ファイルが見つかりません。");
     case "already_exists":
-      return "宛先に既存のファイルがあるため上書きしません。";
+      return t("宛先に既存のファイルがあるため上書きしません。");
     case "outside_workspace":
-      return "ワークスペースの外には操作できません。";
+      return t("ワークスペースの外には操作できません。");
     case "not_markdown":
-      return "Markdown ファイル（.md / .markdown）のみ開けます。";
+      return t("Markdown ファイル（.md / .markdown）のみ開けます。");
     case "not_text":
-      return "対応する UTF-8 テキストファイルのみ開けます。";
+      return t("対応する UTF-8 テキストファイルのみ開けます。");
     case "invalid_utf8":
-      return "UTF-8 ではないため開けません。";
+      return t("UTF-8 ではないため開けません。");
     case "invalid_path":
-      return "パスが正しくありません。";
+      return t("パスが正しくありません。");
     case "invalid_image":
-      return "対応画像（PNG/JPEG/GIF/WebP、20 MiB 以下）のみ扱えます。";
+      return t("対応画像（PNG/JPEG/GIF/WebP、20 MiB 以下）のみ扱えます。");
     case "neovim":
-      return `Neovim エラー: ${String(record.detail ?? "")}`;
+      return t("Neovim エラー: {{value0}}", { value0: (String(record.detail ?? "")) });
     case "io":
-      return `入出力エラー: ${String(record.detail ?? "")}`;
+      return t("入出力エラー: {{value0}}", { value0: (String(record.detail ?? "")) });
     default:
-      return typeof record.code === "string" ? record.code : JSON.stringify(cause);
+      return typeof record.code === "string" && Object.keys(record).length === 1 ? record.code : JSON.stringify(cause);
   }
 }

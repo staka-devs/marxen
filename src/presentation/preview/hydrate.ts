@@ -1,3 +1,5 @@
+import type { Translator } from "../../contracts/localization";
+import { japaneseTranslator } from "../../domain/localization";
 // Client-side hydration for special blocks (Issue #6, lifecycles ADR-0062).
 //
 // The pipeline emits trusted placeholders with the raw source preserved as
@@ -74,7 +76,7 @@ export function sanitizeSvg(svg: string): string {
   return new XMLSerializer().serializeToString(doc);
 }
 
-/** Hydrate Mermaid blocks with sanitized SVG, skipping invalid. */ async function hydrateMermaid(root: HTMLElement, signal?: AbortSignal): Promise<void> {
+/** Hydrate Mermaid blocks with sanitized SVG, skipping invalid. */ async function hydrateMermaid(root: HTMLElement, signal?: AbortSignal, t: Translator = japaneseTranslator): Promise<void> {
   // Already-aborted passes return synchronously: never pay lazy imports.
   if (signal?.aborted) return;
   const blocks = [...root.querySelectorAll<HTMLElement>('[data-marxen-kind="mermaid"]:not([data-hydrated])')];
@@ -86,7 +88,7 @@ export function sanitizeSvg(svg: string): string {
     if (signal?.aborted) return;
     if (block.dataset.invalid === "true") continue;
     const source = rawSourceOf(block);
-    if (!validateMermaidStructure(source).ok) continue;
+    if (!validateMermaidStructure(source, t).ok) continue;
     const output = block.querySelector<HTMLElement>(".marxen-mermaid-output");
     if (!checkAlive(output, signal)) continue;
     try {
@@ -94,17 +96,17 @@ export function sanitizeSvg(svg: string): string {
       const { svg } = await mermaid.render(`marxen-mermaid-${mermaidId}`, source);
       if (!checkAlive(output, signal)) continue;
       const clean = sanitizeSvg(svg);
-      if (clean === "") throw new Error("SVG として読めませんでした。");
+      if (clean === "") throw new Error(t("SVG として読めませんでした。"));
       output.innerHTML = clean;
       block.dataset.hydrated = "true";
     } catch (cause) {
       if (signal?.aborted) return;
-      markError(block, signal, `Mermaid を描画できません。${cause instanceof Error ? cause.message : "Markdownを確認してください。"}`);
+      markError(block, signal, t("Mermaid を描画できません。{{value0}}", { value0: (cause instanceof Error ? cause.message : t("Markdownを確認してください。")) }));
     }
   }
 }
 
-/** Hydrate GeoJSON/TopoJSON maps offline with Leaflet vectors. */ async function hydrateGeoMaps(root: HTMLElement, signal?: AbortSignal): Promise<void> {
+/** Hydrate GeoJSON/TopoJSON maps offline with Leaflet vectors. */ async function hydrateGeoMaps(root: HTMLElement, signal?: AbortSignal, t: Translator = japaneseTranslator): Promise<void> {
   // Already-aborted passes return synchronously: never pay lazy imports.
   if (signal?.aborted) return;
   const blocks = [...root.querySelectorAll<HTMLElement>('[data-marxen-kind="geojson"]:not([data-hydrated]), [data-marxen-kind="topojson"]:not([data-hydrated])')];
@@ -122,14 +124,14 @@ export function sanitizeSvg(svg: string): string {
       let geometry: unknown;
       if (kind === "topojson") {
         const parsed = JSON.parse(source) as { objects: Record<string, object> };
-        const validation = validateTopoJson(source);
+        const validation = validateTopoJson(source, t);
         if (!validation.ok) throw new Error(validation.message);
         const name = block.dataset.topoObject ?? validation.objectNames?.[0];
         const object = name ? parsed.objects[name] : undefined;
-        if (!object) throw new Error("TopoJSON の objects が見つかりません。");
+        if (!object) throw new Error(t("TopoJSON の objects が見つかりません。"));
         geometry = topojson.feature(parsed, object);
       } else {
-        const validation = validateGeoJson(source);
+        const validation = validateGeoJson(source, t);
         if (!validation.ok) throw new Error(validation.message);
         geometry = JSON.parse(source);
       }
@@ -160,12 +162,12 @@ export function sanitizeSvg(svg: string): string {
     } catch (cause) {
       if (signal?.aborted) return;
       disposeBlock(block);
-      markError(block, signal, `地図を描画できません。${cause instanceof Error ? cause.message : "Markdownを確認してください。"}`);
+      markError(block, signal, t("地図を描画できません。{{value0}}", { value0: (cause instanceof Error ? cause.message : t("Markdownを確認してください。")) }));
     }
   }
 }
 
-/** Hydrate ASCII STL views with Three.js and dispose on teardown. */ async function hydrateStlViews(root: HTMLElement, signal?: AbortSignal): Promise<void> {
+/** Hydrate ASCII STL views with Three.js and dispose on teardown. */ async function hydrateStlViews(root: HTMLElement, signal?: AbortSignal, t: Translator = japaneseTranslator): Promise<void> {
   // Already-aborted passes return synchronously: never pay lazy imports.
   if (signal?.aborted) return;
   const blocks = [...root.querySelectorAll<HTMLElement>('[data-marxen-kind="stl"]:not([data-hydrated])')];
@@ -178,7 +180,7 @@ export function sanitizeSvg(svg: string): string {
     const container = block.querySelector<HTMLElement>(".marxen-stl");
     if (!checkAlive(container, signal)) continue;
     try {
-      const parsed = parseAsciiStlTriangles(rawSourceOf(block));
+      const parsed = parseAsciiStlTriangles(rawSourceOf(block), t);
       if ("error" in parsed) throw new Error(parsed.error);
       const width = Math.max(240, container.clientWidth || 480);
       const height = 280;
@@ -199,7 +201,7 @@ export function sanitizeSvg(svg: string): string {
       renderer.setSize(width, height);
       renderer.setClearColor(0x000000, 0);
       renderer.domElement.setAttribute("role", "img");
-      renderer.domElement.setAttribute("aria-label", `STL 3D プレビュー（${parsed.facets} 面）`);
+      renderer.domElement.setAttribute("aria-label", t("STL 3D プレビュー（{{value0}} 面）", { value0: (parsed.facets) }));
       container.appendChild(renderer.domElement);
       geometry.setAttribute("position", new THREE.BufferAttribute(parsed.positions, 3));
       geometry.computeVertexNormals();
@@ -224,7 +226,7 @@ export function sanitizeSvg(svg: string): string {
     } catch (cause) {
       if (signal?.aborted) return;
       disposeBlock(block);
-      markError(block, signal, `3D を描画できません。${cause instanceof Error ? cause.message : "Markdownを確認してください。"}`);
+      markError(block, signal, t("3D を描画できません。{{value0}}", { value0: (cause instanceof Error ? cause.message : t("Markdownを確認してください。")) }));
     }
   }
 }
@@ -256,10 +258,10 @@ export function disposeMarkdownView(root: HTMLElement): void {
  * Enhance special blocks in place. Pass an AbortSignal to discard stale
  * passes: no DOM is written after abort. Resolves when all blocks settle.
  */
-export async function hydrateMarkdownView(root: HTMLElement, signal?: AbortSignal): Promise<void> {
+export async function hydrateMarkdownView(root: HTMLElement, signal?: AbortSignal, t: Translator = japaneseTranslator): Promise<void> {
   // Synchronous short-circuit: an already-aborted pass resolves without
   // touching lazy imports or the DOM.
   if (signal?.aborted) return;
-  await Promise.allSettled([hydrateMermaid(root, signal), hydrateGeoMaps(root, signal), hydrateStlViews(root, signal)]);
+  await Promise.allSettled([hydrateMermaid(root, signal, t), hydrateGeoMaps(root, signal, t), hydrateStlViews(root, signal, t)]);
 }
 

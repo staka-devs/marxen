@@ -7,7 +7,10 @@ vi.mock("@tauri-apps/api/core", () => ({
   /** Keep the UX fixture in read-only browser mode. */
   isTauri: () => false,
 }));
-beforeEach(() => window.localStorage.clear());
+beforeEach(() => {
+  window.localStorage.clear();
+  vi.spyOn(navigator, "language", "get").mockReturnValue("ja-JP");
+});
 
 it("finds settings across categories and preserves an immediately applied font size", async () => {
   render(<App />);

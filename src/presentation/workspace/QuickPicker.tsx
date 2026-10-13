@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n/I18nProvider";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Search, X } from "lucide-react";
 
@@ -26,6 +27,7 @@ interface Props {
 
 /** Search picker shared by file and command navigation, with arrow selection and focus restoration. */
 export function QuickPicker({ label, inputLabel, placeholder, testId, query, items, emptyText, onQuery, onSelect, onClose }: Props) {
+  const { t } = useI18n();
   const [index, setIndex] = useState(0);
   const resultsId = useId();
   const panel = useRef<HTMLDivElement>(null);
@@ -58,7 +60,7 @@ export function QuickPicker({ label, inputLabel, placeholder, testId, query, ite
             if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setIndex((active + (event.key === "ArrowDown" ? 1 : -1) + items.length) % Math.max(1, items.length)); }
             else if (event.key === "Enter" && items[active]) { event.preventDefault(); choose(items[active].id); }
           }} />
-        <button ref={closeButton} type="button" aria-label={`${label}を閉じる`} title="閉じる (Esc)" onClick={onClose} className="rounded p-1 text-muted-foreground hover:bg-muted"><X size={15} /></button>
+        <button ref={closeButton} type="button" aria-label={t("{{value0}}を閉じる", { value0: (label) })} title={t("閉じる (Esc)")} onClick={onClose} className="rounded p-1 text-muted-foreground hover:bg-muted"><X size={15} /></button>
       </div>
       <ul id={resultsId} role="listbox" aria-label={label} className="min-h-0 overflow-y-auto p-1">
         {items.map((item, position) => <li key={item.id} id={`${resultsId}-${position}`} role="option" aria-selected={position === active}>
@@ -68,7 +70,7 @@ export function QuickPicker({ label, inputLabel, placeholder, testId, query, ite
         </li>)}
         {items.length === 0 && <li className="px-4 py-5 text-xs text-muted-foreground">{emptyText}</li>}
       </ul>
-      <div className="flex h-7 shrink-0 items-center gap-4 border-t border-border px-4 text-[10px] text-muted-foreground"><span>↑ ↓ 選択</span><span>Enter 開く</span><span>Esc 閉じる</span></div>
+      <div className="flex h-7 shrink-0 items-center gap-4 border-t border-border px-4 text-[10px] text-muted-foreground"><span>{t("↑ ↓ 選択")}</span><span>{t("Enter 開く")}</span><span>{t("Esc 閉じる")}</span></div>
     </div>
   </div>;
 }

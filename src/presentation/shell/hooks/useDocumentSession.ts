@@ -1,3 +1,5 @@
+import type { LocalizedText } from "../../../contracts/localization";
+import { useI18n } from "../../i18n/I18nProvider";
 // Revision-aware document session for the shell (presentation).
 //
 // Owns open documents, tabs, selections, cursor echoes, and Vim mode display
@@ -10,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EditorSelection, ExternalCursor } from "../../editor/CodeMirrorEditor";
 import type { DocumentSnapshot, TextEdit, YankCopy } from "../../../contracts/contracts";
 import { SAMPLE_WORKSPACE } from "../../../domain/workspace-content";
-import { READONLY_MESSAGE, StaleResync, workspaceErrorText } from "../../../domain/document-errors";
+import { StaleResync, workspaceErrorText } from "../../../domain/document-errors";
 import { isImagePath, isMarkdownPath } from "../../../domain/workspace-files";
 import { applySnapshot, docFromOpen, type OpenDoc } from "../../../application/document/document-helpers";
 import { COPY_LABELS } from "../../../domain/clipboard-text";
@@ -28,7 +30,7 @@ export interface DocumentSessionArgs {
   /** Clipboard gateway for yank presentation through Rust. */
   clipboardGateway?: ClipboardGateway;
   /** Surface a notice without importing shell state. */
-  notify: (message: string | null, kind?: NoticeKind) => void;
+  notify: (message: LocalizedText | null, kind?: NoticeKind) => void;
 }
 
 /** Document session state and revision-aware operations. */
@@ -147,6 +149,7 @@ export interface DocumentSession {
  * returned refs and callbacks with explicit ports.
  */
 export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
+  const { t, message } = useI18n();
   const { desktop, documentGateway, workspaceGateway, clipboardGateway, notify } = args;
   const setNotice = notify;
   /** Serial registry when desktop with an injected gateway; null stays read-only. */
@@ -377,7 +380,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       try { if (registry) mergeSnapshot(await registry.fetchSnapshot(id)); } catch { /* The original error remains the useful notice. */ }
     }
     await refreshModeCursor(id, gen);
-    setNotice(workspaceErrorText(cause), "error");
+    setNotice(workspaceErrorText(cause, t), "error");
   }, [registry, mergeSnapshot, refreshModeCursor, notify]);
 
   /** Commit text at the native cursor when preceding keys have moved it. */
@@ -397,7 +400,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
   const writeYankToClipboard = useCallback(async (copy: YankCopy, id: string) => {
     try {
       await clipboardGateway!.copyYank(copy, id);
-      setNotice(`${COPY_LABELS[copy.format]}をコピーしました。`);
+      setNotice(message("{{value0}}をコピーしました。", { value0: (COPY_LABELS[copy.format]) }));
     } finally {
       setCopyReady((ready) => ready === id ? null : ready);
     }
@@ -407,7 +410,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
   const applyEdits = useCallback(
     async (id: string, edits: TextEdit[], beforeText?: string, selection?: EditorSelection, key?: string) => {
       if (!registry) {
-        setNotice(READONLY_MESSAGE);
+        setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
         return;
       }
       const current = docsRef.current[id];
@@ -444,7 +447,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
   /** Undo through the native stack for the active document. */
   const handleUndo = useCallback(async () => {
     if (!registry || !activeRef.current) {
-      setNotice(READONLY_MESSAGE);
+      setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
       return;
     }
     const id = activeRef.current;
@@ -453,14 +456,14 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       mergeSnapshot(await registry.undo(id));
       await refreshModeCursor(id, gen);
     } catch (cause) {
-      setNotice(workspaceErrorText(cause), "error");
+      setNotice(workspaceErrorText(cause, t), "error");
     }
   }, [registry, mergeSnapshot, refreshModeCursor, bumpSelectionGen, notify]);
 
   /** Redo through the native stack for the active document. */
   const handleRedo = useCallback(async () => {
     if (!registry || !activeRef.current) {
-      setNotice(READONLY_MESSAGE);
+      setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
       return;
     }
     const id = activeRef.current;
@@ -469,14 +472,14 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       mergeSnapshot(await registry.redo(id));
       await refreshModeCursor(id, gen);
     } catch (cause) {
-      setNotice(workspaceErrorText(cause), "error");
+      setNotice(workspaceErrorText(cause, t), "error");
     }
   }, [registry, mergeSnapshot, refreshModeCursor, bumpSelectionGen, notify]);
 
   /** Save at the live revision, flagging conflicts without losing text. */
   const handleSave = useCallback(async () => {
     if (!registry || !activeRef.current) {
-      setNotice(READONLY_MESSAGE);
+      setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
       return;
     }
     const id = activeRef.current;
@@ -486,7 +489,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       const result = await registry.save({ documentId: id, baseRevision: current.revision });
       setDocs((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], revision: result.revision, dirty: result.dirty } } : prev));
       setConflictDoc((prev) => (prev === id ? null : prev));
-      setNotice("保存しました。", "success");
+      setNotice(message("保存しました。"), "success");
     } catch (cause) {
       if (cause instanceof StaleResync) {
         sayStale(cause.snapshot);
@@ -496,14 +499,14 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       if (typeof record === "object" && record !== null && record.code === "conflict") {
         setConflictDoc(id);
       }
-      setNotice(workspaceErrorText(cause), "error");
+      setNotice(workspaceErrorText(cause, t), "error");
     }
   }, [registry, sayStale, notify]);
 
   /** Reload from disk clearing external markers. */
   const handleReload = useCallback(async () => {
     if (!registry || !activeRef.current) {
-      setNotice(READONLY_MESSAGE);
+      setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
       return;
     }
     const id = activeRef.current;
@@ -517,9 +520,9 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
         delete next[id];
         return next;
       });
-      setNotice("最新のMarkdownに再読込しました。");
+      setNotice(message("最新のMarkdownに再読込しました。"));
     } catch (cause) {
-      setNotice(workspaceErrorText(cause), "error");
+      setNotice(workspaceErrorText(cause, t), "error");
     }
   }, [registry, mergeSnapshot, notify]);
 
@@ -551,7 +554,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       try {
         await workspaceGateway!.closeDocument({ documentId: id, baseRevision: current?.revision ?? 0 }, "discard");
       } catch (cause) {
-        setNotice(workspaceErrorText(cause), "error");
+        setNotice(workspaceErrorText(cause, t), "error");
         return;
       }
       setTabs((prev) => {
@@ -579,11 +582,11 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       try {
         const closed = await workspaceGateway!.closeDocument({ documentId: id, baseRevision: current?.revision ?? 0 }, action);
         if (!closed) {
-          setNotice("閉じる操作を取り消しました。本文は保持しています。");
+          setNotice(message("閉じる操作を取り消しました。本文は保持しています。"));
           return;
         }
       } catch (cause) {
-        setNotice(workspaceErrorText(cause), "error");
+        setNotice(workspaceErrorText(cause, t), "error");
         return;
       }
       setTabs((prev) => {
@@ -631,7 +634,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
         });
         await refreshModeCursor(doc.documentId);
       } catch (cause) {
-        setNotice(workspaceErrorText(cause), "error");
+        setNotice(workspaceErrorText(cause, t), "error");
       }
     },
     [registry, workspaceGateway, refreshModeCursor, notify],

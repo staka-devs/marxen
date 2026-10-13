@@ -1,3 +1,6 @@
+import { localizedFailure, renderLocalizedText } from "../../../domain/localization";
+import type { LocalizedText } from "../../../contracts/localization";
+import { useI18n } from "../../i18n/I18nProvider";
 // Workspace lifecycle, search, events, and native views (presentation).
 //
 // Owns workspace entries and roots, file create/rename/restore flows,
@@ -15,7 +18,7 @@ import {
   replaceEdits,
   searchWorkspace as searchLocal,
 } from "../../../domain/workspace-content";
-import { READONLY_MESSAGE, StaleResync, workspaceErrorText } from "../../../domain/document-errors";
+import { StaleResync, workspaceErrorText } from "../../../domain/document-errors";
 import { applyGridUpdates, createGridState, type NvimGridState } from "../../../domain/coordinates/grid";
 import type {
   DialogGateway,
@@ -30,7 +33,7 @@ export interface WorkspaceArgs {
   /** True on desktop; the browser demo searches local samples only. */
   desktop: boolean;
   /** Surface a notice without importing shell state. */
-  notify: (message: string | null) => void;
+  notify: (message: LocalizedText | null) => void;
   /** Document session owning docs, tabs, selections, and snapshots. */
   session: DocumentSession;
   /** Workspace file gateway for entries, files, search, and recovery. */
@@ -148,6 +151,7 @@ export interface Workspace {
  * the document session keeps docs and tabs, composed through explicit ports.
  */
 export function useWorkspace(args: WorkspaceArgs): Workspace {
+  const { t, message } = useI18n();
   const { desktop, notify, session, workspaceGateway, eventSource, runtimeGateway, dialogGateway, showRaw, settingsOpen, routeVimKeys, onWorkspaceOpened } = args;
   const setNotice = notify;
   const {
@@ -178,7 +182,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   const [nvimGrid, setNvimGrid] = useState<NvimGridState | null>(null);
   const [gridRev, setGridRev] = useState<number | null>(null);
   const [configPath, setConfigPath] = useState("");
-  const [configError, setConfigError] = useState<string | null>(null);
+  const [configError, setConfigError] = useState<LocalizedText | null>(null);
   const [applyingConfig, setApplyingConfig] = useState(false);
   const [currentConfig, setCurrentConfig] = useState<string | null>(null);
   const [copyKeys, setCopyKeys] = useState<Record<string, string>>({
@@ -221,7 +225,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     try {
       setRecovery(await workspaceGateway!.listRecovery());
     } catch (cause) {
-      setNotice(workspaceErrorText(cause));
+      setNotice(localizedFailure(cause, workspaceErrorText));
     }
   }, [registry, workspaceGateway, notify]);
 
@@ -229,12 +233,12 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   const openWorkspaceFolder = useCallback(
     async (path: string) => {
       if (!registry) {
-        setNotice(READONLY_MESSAGE);
+        setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
         return;
       }
       const trimmed = path.trim();
       if (trimmed === "") {
-        setNotice("フォルダーの絶対パスを入力してください。");
+        setNotice(message("フォルダーの絶対パスを入力してください。"));
         return;
       }
       try {
@@ -255,7 +259,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         await refreshRecovery();
         setNotice(null);
       } catch (cause) {
-        setNotice(workspaceErrorText(cause));
+        setNotice(localizedFailure(cause, workspaceErrorText));
       }
     },
     [registry, workspaceGateway, loadEntries, refreshRecovery, setDocs, setTabs, setActiveId, setExternalByDoc, onWorkspaceOpened, notify],
@@ -266,22 +270,22 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   /** Pick a folder natively and open it, staying read-only in browser. */
   const pickFolderAndOpen = useCallback(async () => {
     if (!registry) {
-      setNotice(READONLY_MESSAGE);
+      setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
       return;
     }
-    const picked = await dialogGateway!.pickFolder();
+    const picked = await dialogGateway!.pickFolder(t("フォルダーを開く"));
     if (picked) await openWorkspaceFolder(picked);
   }, [registry, dialogGateway, openWorkspaceFolder, notify]);
 
   /** Create a Markdown file from the dialog path and open it. */
   const createFile = useCallback(async () => {
     if (!registry) {
-      setNotice(READONLY_MESSAGE);
+      setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
       return;
     }
     const path = newFilePath.trim();
     if (path === "") {
-      setNotice("ワークスペース相対のパス（例: メモ/新規.md）を入力してください。");
+      setNotice(message("ワークスペース相対のパス（例: メモ/新規.md）を入力してください。"));
       return;
     }
     try {
@@ -293,7 +297,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
       setNewFileOpen(false);
       await loadEntries();
     } catch (cause) {
-      setNotice(workspaceErrorText(cause));
+      setNotice(localizedFailure(cause, workspaceErrorText));
     }
   }, [registry, workspaceGateway, newFilePath, loadEntries, setDocs, setTabs, setActiveId, notify]);
 
@@ -304,7 +308,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     if (!current) return;
     const path = renamePath.trim();
     if (path === "") {
-      setNotice("新しいパスを入力してください。");
+      setNotice(message("新しいパスを入力してください。"));
       return;
     }
     try {
@@ -313,9 +317,9 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
       setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
       setRenameDoc(null);
       await loadEntries();
-      setNotice("名前を変更しました。");
+      setNotice(message("名前を変更しました。"));
     } catch (cause) {
-      setNotice(workspaceErrorText(cause));
+      setNotice(localizedFailure(cause, workspaceErrorText));
     }
   }, [registry, workspaceGateway, renameDoc, renamePath, loadEntries, docsRef, setDocs, notify]);
 
@@ -335,7 +339,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         }
         await refreshRecovery();
       } catch (cause) {
-        setNotice(workspaceErrorText(cause));
+        setNotice(localizedFailure(cause, workspaceErrorText));
       }
     },
     [registry, workspaceGateway, refreshRecovery, setDocs, setTabs, setActiveId, notify],
@@ -353,7 +357,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
       workspaceGateway!
         .searchWorkspace(searchQuery)
         .then((matches) => setRegistryHits(matches.map(matchToHit)))
-        .catch((cause: unknown) => setNotice(workspaceErrorText(cause)))
+        .catch((cause: unknown) => setNotice(localizedFailure(cause, workspaceErrorText)))
         .finally(() => setSearching(false));
     }, 300);
     return () => window.clearTimeout(timer);
@@ -393,7 +397,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
           setTabs((prev) => (prev.includes(doc.documentId) ? prev : [...prev, doc.documentId]));
           id = doc.documentId;
         } catch (cause) {
-          setNotice(workspaceErrorText(cause));
+          setNotice(localizedFailure(cause, workspaceErrorText));
           return;
         }
       } else {
@@ -410,7 +414,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   const replaceOne = useCallback(
     async (hit: SearchHitItem) => {
       if (!registry) {
-        setNotice(READONLY_MESSAGE);
+        setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
         return;
       }
       if (searchQuery === "") return;
@@ -430,7 +434,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         const single = edits.find((edit) => edit.range.start <= (hit.offset ?? 0) && (hit.offset ?? 0) < edit.range.end + searchQuery.length);
         const chosen = single ? [single] : [];
         if (chosen.length === 0 || count === 0) {
-          setNotice("置換対象が見つかりませんでした。検索し直してください。");
+          setNotice(message("置換対象が見つかりませんでした。検索し直してください。"));
           return;
         }
         const next = await registry.applyEdits({ documentId: id, baseRevision: snapshot.revision }, chosen);
@@ -439,7 +443,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         setRegistryHits(refreshed.map(matchToHit));
       } catch (cause) {
         if (cause instanceof StaleResync) sayStale(cause.snapshot);
-        else setNotice(workspaceErrorText(cause));
+        else setNotice(localizedFailure(cause, workspaceErrorText));
       }
     },
     [registry, workspaceGateway, searchQuery, replaceText, mergeSnapshot, sayStale, setDocs, setTabs, notify],
@@ -448,7 +452,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   /** Replace all registry hits per file with chained revisions. */
   const replaceAllMatches = useCallback(async () => {
     if (!registry) {
-      setNotice(READONLY_MESSAGE);
+      setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
       return;
     }
     if (searchQuery === "") return;
@@ -472,11 +476,11 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         total += count;
       } catch (cause) {
         if (cause instanceof StaleResync) sayStale(cause.snapshot);
-        else setNotice(workspaceErrorText(cause));
+        else setNotice(localizedFailure(cause, workspaceErrorText));
         return;
       }
     }
-    setNotice(`${total} 件を置換しました。`);
+    setNotice(message("{{count}} 件を置換しました。", { count: (total) }));
     try {
       setRegistryHits((await workspaceGateway!.searchWorkspace(searchQuery)).map(matchToHit));
     } catch {
@@ -493,7 +497,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   const refreshRuntime = useCallback(() => {
     runtimeGateway!.readStatus()
       .then(setRuntime)
-      .catch(() => setRuntime({ contractVersion: 1, connection: "error", detail: "接続状態を取得できません。" }));
+      .catch(() => setRuntime({ contractVersion: 1, connection: "error", detail: t("接続状態を取得できません。") }));
   }, [runtimeGateway]);
 
   /** Handle pushed workspace events for external, snapshot, and errors. */
@@ -514,7 +518,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
             return { ...prev, [result.documentId]: { ...doc, revision: result.revision, dirty: result.dirty } };
           });
         } else if (event.type === "error") {
-          setNotice(`文書エラー: ${workspaceErrorText(event.payload.error)}`);
+          setNotice(message("文書エラー: {{value0}}", { value0: (localizedFailure(event.payload.error, workspaceErrorText)) }));
         }
       }
     },
@@ -543,7 +547,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         if (active) setRuntime(status);
       })
       .catch(() => {
-        if (active) setRuntime({ contractVersion: 1, connection: "error", detail: "接続状態を取得できません。" });
+        if (active) setRuntime({ contractVersion: 1, connection: "error", detail: t("接続状態を取得できません。") });
       });
     return () => {
       active = false;
@@ -574,7 +578,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         setNvimGrid((prev) => applyGridUpdates(prev ?? createGridState(), grid.updates));
         setGridRev(grid.revision);
       })
-      .catch((cause: unknown) => setNotice(workspaceErrorText(cause)));
+      .catch((cause: unknown) => setNotice(localizedFailure(cause, workspaceErrorText)));
     return () => {
       cancelled = true;
     };
@@ -600,7 +604,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         setNvimGrid((prev) => applyGridUpdates(prev ?? createGridState(), grid.updates));
         setGridRev(grid.revision);
       })
-      .catch((cause: unknown) => setNotice(workspaceErrorText(cause)));
+      .catch((cause: unknown) => setNotice(localizedFailure(cause, workspaceErrorText)));
   }, [desktop, workspaceGateway, activeRef, notify]);
 
   // -- config -----------------------------------------------------------------
@@ -608,12 +612,12 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   /** Apply a Neovim config restarting the actor with Undo reset. */
   const applyConfig = useCallback(async () => {
     if (!registry || !activeRef.current) {
-      setNotice(READONLY_MESSAGE);
+      setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
       return;
     }
     const trimmed = configPath.trim();
     if (trimmed !== "" && !isSupportedConfigName(trimmed)) {
-      setConfigError("対応する名前は vimrc / _vimrc / .vimrc / init.vim / init.lua です。");
+      setConfigError(message("対応する名前は vimrc / _vimrc / .vimrc / init.vim / init.lua です。"));
       return;
     }
     const id = activeRef.current;
@@ -628,10 +632,10 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
       const snapshot = await registry.fetchSnapshot(id);
       mergeSnapshot(snapshot);
       await refreshModeCursor(id);
-      setNotice("設定を適用して再起動しました（Undo・モードは初期化）。");
+      setNotice(message("設定を適用して再起動しました（Undo・モードは初期化）。"));
     } catch (cause) {
       if (cause instanceof StaleResync) sayStale(cause.snapshot);
-      else setNotice(workspaceErrorText(cause));
+      else setNotice(localizedFailure(cause, workspaceErrorText));
     } finally {
       setApplyingConfig(false);
     }
@@ -667,7 +671,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     gridRev,
     configPath,
     setConfigPath,
-    configError,
+    configError: configError === null ? null : renderLocalizedText(configError, t),
     applyingConfig,
     currentConfig,
     copyKeys,

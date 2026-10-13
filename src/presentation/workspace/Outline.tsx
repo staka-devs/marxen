@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n/I18nProvider";
 import { outlineFromMarkdown } from "../../domain/workspace-content";
 
 interface Props {
@@ -7,12 +8,13 @@ interface Props {
 }
 
 /** Markdown outline skipping fenced code, jumping by offset. */ export function Outline({ text, onJump }: Props) {
+  const { t } = useI18n();
   const items = outlineFromMarkdown(text);
   return (
-    <section data-testid="outline" aria-label="アウトライン">
-      <p className="flex h-9 items-center px-3 text-[11px] font-medium text-muted-foreground">アウトライン</p>
+    <section data-testid="outline" aria-label={t("アウトライン")}>
+      <p className="flex h-9 items-center px-3 text-[11px] font-medium text-muted-foreground">{t("アウトライン")}</p>
       {items.length === 0 ? (
-        <p className="px-3 text-xs text-muted-foreground">見出しがありません</p>
+        <p className="px-3 text-xs text-muted-foreground">{t("見出しがありません")}</p>
       ) : (
         <ul>
           {items.map((item) => (

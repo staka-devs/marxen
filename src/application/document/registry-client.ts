@@ -1,3 +1,4 @@
+import { LocalizedError } from "../../domain/localized-error";
 // Revision-aware document use cases over an injected transport (application).
 //
 // Serial per-document queues against the real Neovim buffer, which stays the
@@ -585,7 +586,7 @@ export class RegistryClient {
 export class ReadonlyRegistry {
   /** Reject without tracking, preserving the read-only contract. */
   private reject(): Promise<never> {
-    return Promise.reject(new Error(READONLY_MESSAGE));
+    return Promise.reject(new LocalizedError(READONLY_MESSAGE));
   }
   /** No-op snapshot tracking outside Tauri. */
   noteSnapshot(): void {

@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n/I18nProvider";
 import { useEffect, useRef, type ReactNode } from "react";
 
 interface Props {
@@ -8,6 +9,7 @@ interface Props {
 
 /** Anchored editor operations with outside dismissal and keyboard navigation. */
 export function EditorActionsPopover({ children, onClose }: Props) {
+  const { t } = useI18n();
   const panel = useRef<HTMLDivElement>(null);
   const close = useRef(onClose);
   close.current = onClose;
@@ -17,12 +19,12 @@ export function EditorActionsPopover({ children, onClose }: Props) {
     /** Close only for pointer events outside this panel and its toggle button. */
     const dismiss = (event: PointerEvent) => {
       const target = event.target;
-      if (target instanceof Element && !panel.current?.contains(target) && !target.closest('[aria-label="その他の操作"]')) close.current();
+      if (target instanceof Element && !panel.current?.contains(target) && !target.closest('[data-editor-actions-trigger]')) close.current();
     };
     document.addEventListener("pointerdown", dismiss);
     return () => { document.removeEventListener("pointerdown", dismiss); previous?.focus(); };
   }, []);
-  return <div ref={panel} role="dialog" aria-label="エディター操作" className="absolute right-2 top-10 z-20 max-h-[calc(100dvh-96px)] w-64 overflow-y-auto rounded-sm border border-border bg-card p-1 shadow-xl"
+  return <div ref={panel} role="dialog" aria-label={t("エディター操作")} className="absolute right-2 top-10 z-20 max-h-[calc(100dvh-96px)] w-64 overflow-y-auto rounded-sm border border-border bg-card p-1 shadow-xl"
     onKeyDown={(event) => {
       if (event.key === "Escape" || event.key === "Tab") {
         if (event.key === "Escape") event.preventDefault();
