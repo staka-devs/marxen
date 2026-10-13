@@ -28,7 +28,7 @@ const CATEGORIES = [
   { id: "ai", label: "AI", icon: Bot },
 ] as const;
 type Category = typeof CATEGORIES[number]["id"];
-const inputClass = "rounded border border-border bg-background px-2 py-1.5 text-sm outline-none focus:border-primary";
+const inputClass = "h-7 rounded-sm border border-border bg-card px-2 text-xs outline-none focus:border-primary";
 
 export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PREFERENCES, onPreferences, configPath, configError, onConfigPath, onBrowseConfig, onApplyConfig, applyingConfig, currentConfig, copyKeys, onOpenAiSettings, onClose }: Props) {
   const [category, setCategory] = useState<Category>("appearance");
@@ -40,8 +40,8 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
   }, []);
   const change = <K extends keyof EditorPreferences>(key: K, value: EditorPreferences[K]) => onPreferences?.({ ...preferences, [key]: value });
   const nameInvalid = configPath !== "" && !isSupportedConfigName(configPath);
-  return <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/30 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <div ref={dialog} tabIndex={-1} data-testid="settings" role="dialog" aria-modal="true" aria-label="設定" className="flex h-[min(620px,85vh)] w-[min(800px,95vw)] flex-col overflow-hidden rounded-md border border-border bg-background shadow-2xl outline-none"
+  return <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div ref={dialog} tabIndex={-1} data-testid="settings" role="dialog" aria-modal="true" aria-label="設定" className="flex h-[min(600px,85vh)] w-[min(760px,95vw)] flex-col overflow-hidden rounded border border-border bg-background shadow-2xl outline-none"
       onKeyDown={(event) => {
         if (event.key === "Escape") { event.stopPropagation(); onClose(); }
         if (event.key === "Tab") {
@@ -51,15 +51,15 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
           else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialog.current)) { event.preventDefault(); first?.focus(); }
         }
       }}>
-      <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-4">
+      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-card px-4">
         <h2 className="text-sm font-semibold">設定</h2><button type="button" aria-label="設定を閉じる" onClick={onClose} className="rounded p-1 hover:bg-muted"><X size={17} /></button>
       </div>
       <div className="flex min-h-0 flex-1">
-        <nav aria-label="設定カテゴリ" className="w-40 shrink-0 border-r border-border bg-card px-2 py-3 max-sm:w-28">
-          {CATEGORIES.map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => setCategory(id)} aria-current={category === id ? "page" : undefined} className={`mb-1 flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm ${category === id ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/50"}`}><Icon size={16} className="shrink-0" />{label}</button>)}
+        <nav aria-label="設定カテゴリ" className="w-40 shrink-0 border-r border-border bg-card py-3 max-sm:w-28">
+          {CATEGORIES.map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => setCategory(id)} aria-current={category === id ? "page" : undefined} className={`flex h-8 w-full items-center gap-2 border-l-2 px-4 text-left text-xs ${category === id ? "border-primary bg-muted text-foreground" : "border-transparent text-muted-foreground hover:bg-muted/50"}`}><Icon size={15} className="shrink-0" />{label}</button>)}
         </nav>
         <div className="min-w-0 flex-1 overflow-y-auto px-6 py-5">
-          <h3 className="mb-6 text-lg font-semibold">{CATEGORIES.find((item) => item.id === category)?.label}</h3>
+          <h3 className="mb-5 border-b border-border pb-3 text-base font-medium">{CATEGORIES.find((item) => item.id === category)?.label}</h3>
           {category === "appearance" && <section aria-label="テーマ">
             <p className="mb-1 text-sm font-medium">カラーテーマ</p><p className="mb-3 text-xs text-muted-foreground">エディターとすべてのパネルに適用します。</p>
             <div className="grid grid-cols-3 gap-3">{THEMES.map((item) => <button key={item.id} type="button" onClick={() => onTheme(item.id)} aria-pressed={theme === item.id} className={`overflow-hidden rounded border text-left ${theme === item.id ? "border-primary ring-1 ring-primary" : "border-border"}`}>

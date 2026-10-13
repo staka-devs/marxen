@@ -336,6 +336,26 @@ describe("agent chat", () => {
     await vi.waitFor(() => expect(stop).toHaveBeenCalled());
   });
 
+  it("offers every prompt mode in the unified mode selector", () => {
+    render(<AiPanel contexts={contexts} staging={staging} contextLabels={labels} />);
+    expect(screen.getByRole("group", { name: "プロンプトの種類" })).toBeVisible();
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "質問",
+      "生成",
+      "選択書き換え",
+      "ワークスペース編集",
+    ]);
+  });
+
+  it("closes the pane through the optional header control", () => {
+    const onClose = vi.fn();
+    const { rerender } = render(<AiPanel contexts={contexts} staging={staging} contextLabels={labels} onClose={onClose} />);
+    fireEvent.click(screen.getByRole("button", { name: "Agent チャットを閉じる" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    rerender(<AiPanel contexts={contexts} staging={staging} contextLabels={labels} />);
+    expect(screen.queryByRole("button", { name: "Agent チャットを閉じる" })).not.toBeInTheDocument();
+  });
+
   it("reports the captured mode even when the mode changes mid-run", async () => {
     let handler: ((event: AiStreamEvent) => void) | null = null;
     const onProposal = vi.fn();
@@ -345,11 +365,11 @@ describe("agent chat", () => {
       return { runId: "run_m", stop: vi.fn() };
     });
     render(<AiPanel contexts={contexts} staging={staging} contextLabels={labels} onProposal={onProposal} />);
-    fireEvent.click(screen.getByLabelText("選択書き換え"));
+    fireEvent.change(screen.getByLabelText("モード"), { target: { value: "rewrite" } });
     fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "書いて" } });
     fireEvent.click(screen.getByRole("button", { name: "送信" }));
     await vi.waitFor(() => expect(handler).not.toBeNull());
-    fireEvent.click(screen.getByLabelText("質問"));
+    fireEvent.change(screen.getByLabelText("モード"), { target: { value: "ask" } });
     handler!({
       type: "done",
       payload: {

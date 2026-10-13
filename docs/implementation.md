@@ -17,6 +17,7 @@ Rust / Tauri v2、React / TypeScript / Vite / Tailwind / shadcn/ui、CodeMirror 
 | ヤンク後の形式別コピー・画像入りリッチテキスト (#11) | Codex | 編集・描画 |
 | ファイル一覧・画像操作・カーソル・設定 (#12) | Codex | 保存・UI |
 | インラインチャット・Agent 会話履歴 (#13) | OpenCode（Codex がレビュー・統合） | AI・隔離・UI |
+| 編集画面・チャットの UI 整理 (#17) | Codex / OpenCode | UI・チャット |
 
 Orca で Issue ごとの子ワークスペースとブランチを管理し、依存順に統合する。OpenCode は **MuseSpark1.3 Contributor / Xhigh** の実効設定を確認してから起動する。指定モデルが利用できなければ OpenCode の担当は停止して報告し、別モデルへ自動変更しない。Claude Code を起動・委任・接続検証しない。Anthropic Messages API は独立した接続先として利用者の認証設定後に有効化する。
 

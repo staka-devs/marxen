@@ -1,4 +1,5 @@
 import { Button } from "./ui/button";
+import { Check, ChevronDown } from "lucide-react";
 import type { ApproveDocOutcome, IsolationDiff } from "../shared/isolation-contracts";
 
 /** Props owned by Issue #8. UI (#5) mounts this next to AiPanel and wires
@@ -40,14 +41,28 @@ export default function ReviewPanel({
   if (!diffs.some((diff) => diff.changed) && outcomes.length === 0 && !message && !onStageProposal) {
     return null;
   }
+  const completed = !copyId && !onStageProposal && !message && outcomes.length > 0;
+  const allApplied = outcomes.every((outcome) => !outcome.error && !outcome.rollbackError && !outcome.rolledBack);
+  if (completed && allApplied) {
+    return <section aria-label="変更の確認" className="border-t border-border px-3 py-2 text-xs">
+      <details>
+        <summary className="flex cursor-pointer list-none items-center gap-2 text-muted-foreground">
+          <Check size={14} className="text-primary" aria-hidden="true" />
+          <span role="status" className="min-w-0 flex-1">{status ?? "変更を適用しました。"}</span>
+          <ChevronDown size={13} aria-hidden="true" />
+        </summary>
+        <ul className="mt-2 space-y-1" aria-label="承認結果">{outcomes.map((outcome) => <li key={outcome.documentId}>{label(outcome.documentId)} {outcome.applied ? "適用" : "変更なし"}</li>)}</ul>
+      </details>
+    </section>;
+  }
   return (
-    <section aria-labelledby="review-panel-title" className="border-t border-border pt-3">
+    <section aria-labelledby="review-panel-title" className="border-t border-border px-3 py-3">
       <h2 id="review-panel-title" className="text-xs font-semibold">変更の確認</h2>
       <p className="mt-1 text-xs text-muted-foreground">
         適用すると編集中の文書が更新されます。ファイルの保存は別操作です。
       </p>
       {proposalText !== null && onStageProposal !== null && (
-        <div className="mt-2 rounded-lg border border-border p-2">
+        <div className="mt-2 rounded-sm border border-border p-2">
           <p className="text-xs font-semibold text-muted-foreground">取り込み待ちの提案</p>
           <p className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap text-xs">{proposalText}</p>
           <Button variant="outline" size="sm" className="mt-2" onClick={onStageProposal} disabled={!copyId || busy}>
@@ -55,7 +70,7 @@ export default function ReviewPanel({
           </Button>
         </div>
       )}
-      <div className="mt-2 flex flex-wrap gap-2">
+      <div className="mt-2 flex flex-wrap gap-1.5">
         <Button variant="outline" size="sm" onClick={onFetchDiff} disabled={!copyId || busy}>
           差分を確認
         </Button>
@@ -99,7 +114,7 @@ export default function ReviewPanel({
       {diffs.length > 0 && (
         <ul className="mt-2 space-y-2">
           {diffs.map((diff, index) => (
-            <li key={`${diff.documentId}-${index}`} className="rounded-lg border border-border p-2">
+            <li key={`${diff.documentId}-${index}`} className="rounded-sm border border-border p-2">
               <p className="font-mono text-xs">
                 {label(diff.documentId)}
                 {diff.drifted ? " (外部変更あり・要再同期)" : ""} {diff.changed ? "変更あり" : "変更なし"}
