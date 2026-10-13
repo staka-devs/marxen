@@ -246,12 +246,21 @@ test("malformed blocks stay contained with raw source and errors", async ({ page
   const content = page.locator(".cm-content");
   await expect(content.locator(".marxen-live-widget table").first()).toBeVisible();
 
-  const mermaid = content.locator('.marxen-live-widget[data-live-key^="code"]');
-  await expect(mermaid.getByText("対応が崩れ")).toBeVisible();
-  await expect(mermaid.getByText("A --> [")).toBeVisible();
+  // Cache keys include locale and are an internal implementation detail.
+  const mermaid = content.locator('.marxen-live-widget [data-marxen-kind="mermaid"][data-invalid="true"]');
+  await expect(mermaid.getByRole("alert")).toHaveText("Mermaid の「[]」の対応が崩れています。Markdownを確認してください。");
+  await expect(mermaid.locator("pre code")).toHaveText("flowchart LR\n    A --> [");
+  await expect(mermaid.locator("svg")).toHaveCount(0);
   // The malformed block never breaks its neighbours.
   await expect(content.locator(".marxen-live-widget table")).toBeVisible();
   await expect(content.locator(".marxen-live-widget").getByText("末尾の段落。")).toBeVisible();
+  const before = await harnessValue(page);
+  await page.evaluate(() => window.__harness.setLanguage("en-US"));
+  await expect(mermaid.getByRole("alert")).toHaveText("Mismatched Mermaid “[]”. Check the Markdown.");
+  await expect(mermaid.locator("pre code")).toHaveText("flowchart LR\n    A --> [");
+  await expect(content.locator(".marxen-live-widget table")).toBeVisible();
+  await expect(content.locator(".marxen-live-widget").getByText("末尾の段落。")).toBeVisible();
+  expect(await harnessValue(page)).toBe(before);
 });
 
 test("insertion before identical tasks keeps toggle offsets exact", async ({ page }) => {

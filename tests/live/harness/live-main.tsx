@@ -6,6 +6,9 @@ import { CodeMirrorEditor, type EditorSelection, type ExternalCursor } from "../
 import type { TextEdit } from "../../../src/contracts/contracts";
 import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../../src/domain/editor-preferences";
 import "../../../src/styles.css";
+import type { Language } from "../../../src/contracts/language";
+import { I18nProvider } from "../../../src/presentation/i18n/I18nProvider";
+import { createTranslator } from "../../../src/infrastructure/localization/i18next-translator";
 
 export const SAMPLE = [
   "# ライブ見出し",
@@ -71,6 +74,8 @@ interface HarnessApi {
   setPreferences: (preferences: Partial<EditorPreferences>) => void;
   /** Switch the harness Vim mode. */
   setVimMode: (mode: string) => void;
+  /** Switch the explicit fixture locale without replacing document state. */
+  setLanguage: (language: Language) => void;
 }
 
 declare global {
@@ -92,6 +97,7 @@ function Harness() {
   const [cursor, setCursor] = useState<ExternalCursor | null>(null);
   const [preferences, setPreferences] = useState(DEFAULT_EDITOR_PREFERENCES);
   const [vimMode, setVimMode] = useState("insert");
+  const [language, setLanguage] = useState<Language>("ja-JP");
   const valueRef = useRef(value);
   valueRef.current = value;
   const editsRef = useRef(edits);
@@ -135,9 +141,11 @@ function Harness() {
     /** Merge partial preferences into the harness state. */
     setPreferences: (next) => setPreferences((previous) => ({ ...previous, ...next })),
     setVimMode,
+    setLanguage,
   };
 
   return (
+    <I18nProvider language={language} createTranslator={createTranslator}>
     <div style={{ padding: 16, maxWidth: 900 }}>
       <CodeMirrorEditor
         value={value}
@@ -157,6 +165,7 @@ function Harness() {
         onSelectionChange={setSelection}
       />
     </div>
+    </I18nProvider>
   );
 }
 
