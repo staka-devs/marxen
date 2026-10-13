@@ -63,6 +63,12 @@ describe("render pipeline", () => {
     expect(broken.diagnostics.some((item) => item.code === "math-invalid")).toBe(true);
   });
 
+  it.each(["rust", "typescript", "javascript", "tsx", "json", "jsonc", "markdown", "bash", "shell", "toml", "yaml", "html", "css", "python", "text", "plaintext"])("keeps offline highlighting for %s", async (lang) => {
+    const { html, diagnostics } = await renderMarkdownDocument(`\`\`\`${lang}\nconst example = 1;\n\`\`\`\n`);
+    expect(html).toContain('class="shiki');
+    expect(diagnostics).toEqual([]);
+  });
+
   it("sanitizes unsafe HTML while keeping safe details content", async () => {
     const source = fixture("unsafe-html.md");
     const { html } = await renderMarkdownDocument(source);

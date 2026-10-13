@@ -12,7 +12,7 @@ export default defineConfig({
   use: { baseURL, trace: "retain-on-failure" },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: `npm run build && npm run preview -- --port ${port} --strictPort`,
+    command: `${process.env.MARXEN_E2E_PREBUILT === "1" ? "" : "npm run build && "}npm run preview -- --port ${port} --strictPort`,
     url: baseURL,
     reuseExistingServer: false,
     timeout: 180_000,

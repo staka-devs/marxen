@@ -16,7 +16,6 @@ import remarkGithubAlert from "remark-github-blockquote-alert";
 import remarkRehype from "remark-rehype";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
-import rehypeMathjax from "rehype-mathjax";
 import rehypeStringify from "rehype-stringify";
 import { visit } from "unist-util-visit";
 import type { Element, Properties, Root } from "hast";
@@ -396,6 +395,19 @@ export type { RenderDiagnostic, RenderResult, SourceBlock } from "./types";
 
 let processor: ReturnType<typeof buildProcessor> | null = null;
 
+/** Load local MathJax only when sanitized content contains a mathematical expression. */
+function rehypeLazyMathjax() {
+  return async (tree: Root, file: VFile): Promise<void> => {
+    let containsMath = false;
+    visit(tree, "element", (node) => {
+      if (["language-math", "math-inline", "math-display"].some((name) => hasClass(node, name))) containsMath = true;
+    });
+    if (!containsMath) return;
+    const { default: rehypeMathjax } = await import("rehype-mathjax");
+    rehypeMathjax()(tree, file);
+  };
+}
+
 /**
  * Build the shared unified processor with all remark/rehype passes in order.
  *
@@ -414,7 +426,7 @@ function buildProcessor() {
     .use(rehypeSanitize, marxenSanitizeSchema() as never)
     .use(rehypeMatchFragmentLinks)
     .use(rehypeValidateMath)
-    .use(rehypeMathjax)
+    .use(rehypeLazyMathjax)
     .use(rehypeScrubMathLinks)
     .use(rehypeMarxenBlocks)
     .use(rehypeSourceRanges)
