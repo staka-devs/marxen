@@ -239,6 +239,18 @@ mod desktop {
         with_workspace(&state, |w| Ok(w.actor(&document_id)?.current_mode()?))
     }
     #[tauri::command(async)]
+    pub fn nvim_input_with_copy(
+        state: tauri::State<'_, ActorState>,
+        document_id: String,
+        base_revision: u32,
+        keys: String,
+    ) -> Result<VimInputResult, WorkspaceError> {
+        with_workspace(&state, |w| {
+            Ok(w.actor(&document_id)?
+                .input_with_copy(request(document_id, base_revision), &keys)?)
+        })
+    }
+    #[tauri::command(async)]
     pub fn has_nvim_mapping(
         state: tauri::State<'_, ActorState>,
         document_id: String,
@@ -333,7 +345,12 @@ mod desktop {
             let actor = w.actor(&document_id)?;
             Ok(NvimConfig {
                 path: Some(actor.config_source()),
-                errors: actor.config_errors(),
+                errors: actor
+                    .config_errors()
+                    .into_iter()
+                    .chain(actor.copy_key_errors()?)
+                    .collect(),
+                copy_keys: actor.copy_keys()?,
             })
         })
     }

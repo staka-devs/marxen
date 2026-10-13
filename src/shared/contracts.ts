@@ -28,5 +28,18 @@ export type RecoveryEntry = { documentId: DocumentId, path: string | null, revis
 export type WorkspaceEvent = { "type": "external_change", "payload": { documentId: DocumentId, path: string, dirty: boolean, deleted: boolean, } } | { "type": "snapshot", "payload": DocumentSnapshot } | { "type": "saved", "payload": SaveResult } | { "type": "error", "payload": { documentId: DocumentId, error: WorkspaceError, } };
 export type ImageData = { mime: string, bytes: Array<number>, };
 export type PasteResult = { path: string, snapshot: DocumentSnapshot, };
-export type NvimConfig = { path: string | null, errors: Array<string>, };
+export type NvimConfig = { path: string | null, errors: Array<string>, 
+/**
+ * Copy selectors read from the active vimrc. Values use Neovim key
+ * notation (for example `<F6>`), so the shell can compare them with its
+ * serialized DOM key events without inventing a second mapping language.
+ */
+copyKeys: { [key in string]: string }, };
+export type CopyFormat = "markdown" | "text" | "rich" | "html";
+export type YankCopy = { format: CopyFormat, 
+/**
+ * Exact native TextYankPost contents, including linewise newlines.
+ */
+text: string, };
+export type VimInputResult = { snapshot: DocumentSnapshot, copy: YankCopy | null, copyReady: boolean, };
 export type GridUpdate = { documentId: DocumentId, revision: Revision, updates: unknown[], };

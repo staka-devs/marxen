@@ -3,7 +3,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView, lineNumbers } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 
-const sample = "# Marxen へようこそ\n\nこれは読み取り専用の表示サンプルです。\n文書の編集・保存は、実 Neovim の接続後に利用できます。\n\n- 日本語と Unicode: 東京 😀\n- 原文を保持する Markdown 編集\n- Rust が文書と保存を管理\n";
+const sample = "# Marxen へようこそ\n\nこれは読み取り専用の表示サンプルです。\n文書の編集・保存は、実 Neovim の接続後に利用できます。\n\n- 日本語と Unicode: 東京 😀\n- Markdownを保持する Markdown 編集\n- Rust が文書と保存を管理\n";
 
 export function SourceSample() {
   const host = useRef<HTMLDivElement>(null);

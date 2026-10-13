@@ -28,4 +28,4 @@ solid incomplete
 <script>alert("これはコードとして表示する")</script>
 ```
 
-最後の段落を編集・保存でき、上の原文を失わないこと。
+最後の段落を編集・保存でき、上のMarkdownを失わないこと。

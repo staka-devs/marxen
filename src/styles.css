@@ -12,31 +12,34 @@
 }
 
 :root {
-  --background: #f6f4ef;
-  --foreground: #292e28;
-  --card: #fffefa;
-  --primary: #4d674b;
-  --primary-foreground: #fffefa;
-  --muted: #eeeee5;
-  --muted-foreground: #666b60;
-  --border: #dddcd2;
+  color-scheme: light;
+  --background: #ffffff;
+  --foreground: #242424;
+  --card: #f3f3f3;
+  --primary: #0078d4;
+  --primary-foreground: #ffffff;
+  --muted: #e8e8e8;
+  --muted-foreground: #616161;
+  --border: #dedede;
   font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
 
 [data-theme="dark"] {
-  --background: #14161a;
-  --foreground: #e8eaed;
-  --card: #1c1f26;
-  --primary: #8ab4f8;
-  --primary-foreground: #14161a;
-  --muted: #262a33;
-  --muted-foreground: #9aa0ab;
-  --border: #333945;
+  color-scheme: dark;
+  --background: #1f1f1f;
+  --foreground: #cccccc;
+  --card: #181818;
+  --primary: #4daafc;
+  --primary-foreground: #181818;
+  --muted: #2a2a2a;
+  --muted-foreground: #9d9d9d;
+  --border: #303030;
 }
 
 [data-theme="contrast"] {
+  color-scheme: light;
   --background: #ffffff;
   --foreground: #000000;
   --card: #ffffff;
@@ -49,13 +52,27 @@
 
 body { margin: 0; min-width: 320px; }
 button, a { -webkit-tap-highlight-color: transparent; }
+* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--foreground) 24%, transparent) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--foreground) 24%, transparent); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--foreground) 38%, transparent); }
+
+.marxen-editor .cm-activeLine { background: color-mix(in srgb, var(--primary) 7%, transparent); box-shadow: inset 2px 0 color-mix(in srgb, var(--primary) 55%, transparent); }
+.marxen-editor .cm-activeLineGutter { color: var(--foreground); background: color-mix(in srgb, var(--primary) 8%, transparent); }
+.marxen-editor .cm-cursor { border-left: none; width: 0.62em; background: color-mix(in srgb, var(--foreground) 55%, transparent); }
+.marxen-editor[data-vim-mode="insert"] .cm-cursor,
+.marxen-editor[data-vim-mode="command_line"] .cm-cursor { width: 2px; background: var(--primary); }
+.marxen-editor[data-vim-mode="replace"] .cm-cursor { height: 3px !important; margin-top: 1em; background: var(--primary); }
+.marxen-editor .cm-selectionBackground { background: color-mix(in srgb, var(--primary) 23%, transparent) !important; }
+.marxen-editor[data-readonly="true"] .cm-cursorLayer { display: none; }
 
 /* Shared Markdown view (Issue #6, local-only rendering). */
-.marxen-md { overflow-wrap: anywhere; }
+.marxen-md { overflow-wrap: anywhere; font-size: var(--editor-font-size, 15px); line-height: var(--editor-line-height, 1.7); }
 .marxen-md h1, .marxen-md h2, .marxen-md h3 { line-height: 1.6; margin: 0.8em 0 0.4em; }
-.marxen-md h1 { font-size: 1.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.25em; }
-.marxen-md h2 { font-size: 1.25rem; border-bottom: 1px solid var(--border); padding-bottom: 0.2em; }
-.marxen-md h3 { font-size: 1.1rem; }
+.marxen-md h1 { font-size: 1.6em; border-bottom: 1px solid var(--border); padding-bottom: 0.25em; }
+.marxen-md h2 { font-size: 1.35em; border-bottom: 1px solid var(--border); padding-bottom: 0.2em; }
+.marxen-md h3 { font-size: 1.15em; }
 .marxen-md p { margin: 0.5em 0; }
 .marxen-md table { border-collapse: collapse; margin: 0.75em 0; width: 100%; }
 .marxen-md th, .marxen-md td { border: 1px solid var(--border); padding: 0.35em 0.6em; text-align: left; }

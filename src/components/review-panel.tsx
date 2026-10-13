@@ -39,7 +39,7 @@ export default function ReviewPanel({
     <Card aria-labelledby="review-panel-title">
       <h2 id="review-panel-title" className="text-base font-semibold">差分レビュー (隔離コピー)</h2>
       <p className="mt-1 text-xs text-muted-foreground">
-        原文への反映は承認した範囲パッチのみを Neovim 経由で行います。却下・取消は原文とディスクを変更しません。隔離はコピーであり OS サンドボックスではありません。
+        Markdownへの反映は承認した範囲パッチのみを Neovim 経由で行います。却下・取消はMarkdownとディスクを変更しません。隔離はコピーであり OS サンドボックスではありません。
       </p>
       <p className="mt-2 text-xs text-muted-foreground">
         作業コピー: {copyId ? <span className="font-mono">{copyId}</span> : "未作成"}

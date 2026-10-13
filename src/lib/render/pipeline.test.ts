@@ -101,7 +101,7 @@ describe("render pipeline", () => {
     expect(html).toContain("vertex invalid");
     expect(html).toContain("&#x3C;script>alert(");
     // Editing can continue: the closing paragraph survives.
-    expect(html).toContain("原文を失わないこと");
+    expect(html).toContain("Markdownを失わないこと");
   });
 
   it("builds local placeholders for valid map, 3D, and diagram blocks", async () => {
@@ -114,7 +114,7 @@ describe("render pipeline", () => {
     expect(html).toContain("marxen-mermaid-output");
     expect(html).toContain("marxen-map");
     expect(html).toContain("marxen-stl");
-    expect(html).toContain("原文を表示");
+    expect(html).toContain("コードを表示");
     expect(blocks.some((block) => block.kind === "code:mermaid")).toBe(true);
     expect(blocks.some((block) => block.kind === "table")).toBe(true);
     expect(blocks.some((block) => block.kind === "alert:note")).toBe(true);
