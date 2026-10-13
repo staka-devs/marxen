@@ -2,7 +2,7 @@
 
 - 状態: 採用
 - 日付: 2026-10-07
-- 関連: Issue #2、coordinator 管理 ADR-0001 / ADR-0002
+- 関連: Issue #2、ADR-0001 / ADR-0002
 
 ## 背景と選択肢
 
@@ -14,7 +14,7 @@ serde / ts-rs の Rust 型から TypeScript を生成する。ID はパスと独
 
 ## 結果と制約
 
-型変更時の生成とコミットが必要。revision 最大値はエラーとし、後続 actor が新 ID を発行する。表示列 / grapheme は扱わず、CRLF / 結合文字を正規化しない。IME / 表示座標は後続の実 Neovim 検証で扱う。
+型変更時の生成とコミットが必要。revision 最大値はエラーとして扱う。原文の offset と表示列 / grapheme は分け、CRLF / 結合文字を正規化しない。IME / 表示座標は実 Neovim と各 OS の WebView で検証する。
 
 ## 確認方法
 

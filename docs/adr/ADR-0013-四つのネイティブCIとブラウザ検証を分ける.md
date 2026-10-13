@@ -2,7 +2,7 @@
 
 - 状態: 採用
 - 日付: 2026-10-07
-- 関連: Issue #2、coordinator 管理 ADR-0003
+- 関連: Issue #2、ADR-0003
 
 ## 背景と選択肢
 
@@ -18,4 +18,4 @@ Windows x64、macOS arm64・x64、Linux x64 の native runner で Rust test / ch
 
 ## 確認方法
 
-ローカルの結果 / 件数と未実施を報告に分ける。CI run / artifact の検査は push 承認後に coordinator が行い、WebView / IME は後続 Issue で実機確認する。[runner labels](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) の CPU 区分も確認する。
+ローカルの結果 / 件数と未実施を報告に分ける。CI run / artifact の結果と、各 OS の実 WebView / IME の操作確認を別々に記録する。[runner labels](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) の CPU 区分も確認する。

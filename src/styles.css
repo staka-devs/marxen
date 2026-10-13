@@ -25,5 +25,27 @@
   text-rendering: optimizeLegibility;
 }
 
+[data-theme="dark"] {
+  --background: #1c1e1c;
+  --foreground: #e8e6df;
+  --card: #242724;
+  --primary: #8fb08d;
+  --primary-foreground: #1c1e1c;
+  --muted: #2e322e;
+  --muted-foreground: #a8aca0;
+  --border: #3a3e3a;
+}
+
+[data-theme="contrast"] {
+  --background: #ffffff;
+  --foreground: #000000;
+  --card: #ffffff;
+  --primary: #000000;
+  --primary-foreground: #ffffff;
+  --muted: #f0f0f0;
+  --muted-foreground: #333333;
+  --border: #000000;
+}
+
 body { margin: 0; min-width: 320px; }
 button, a { -webkit-tap-highlight-color: transparent; }
