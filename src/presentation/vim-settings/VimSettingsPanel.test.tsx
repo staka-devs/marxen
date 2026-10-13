@@ -1,26 +1,30 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { VimConfigRead } from "../../contracts/vim-settings";
+import type { VimConfigRead, VimSettings } from "../../contracts/vim-settings";
 import type { VimSettingsGateway } from "../../application/vim-settings/ports";
-import { defaultVimSettings } from "../../domain/vim-settings";
+import { defaultVimSettings, rewriteManagedBlock } from "../../domain/vim-settings";
 import { VimSettingsPanel } from "./VimSettingsPanel";
 import { useVimSettings, type VimSettingsModel } from "./useVimSettings";
 
 /**
  * Build a controllable in-memory gateway for panel assertions.
  */
-function fakeGateway(read: VimConfigRead): VimSettingsGateway & { saved: string[] } {
+function fakeGateway(read: VimConfigRead): VimSettingsGateway & { saved: string[]; managedWrites: Array<{ expected: string | null; settings: VimSettings }> } {
   const saved: string[] = [];
+  const managedWrites: Array<{ expected: string | null; settings: VimSettings }> = [];
   let current = read;
   return {
     saved,
+    managedWrites,
     /** In-memory config read tracking the latest written fingerprint. */
     read: async (path) => ({ ...current, path: path ?? current.path }),
     /** Recording managed write advancing the stored fingerprint. */
     writeManaged: async (path, expected, settings) => {
       saved.push(`managed:${expected}:${settings.tabstop}`);
-      current = { ...current, fingerprint: "fp2" };
-      return { path: path ?? current.path, fingerprint: "fp2", raw: "next" };
+      managedWrites.push({ expected, settings });
+      const raw = rewriteManagedBlock(current.raw, settings, current.isLua);
+      current = { ...current, fingerprint: "fp2", raw, settings };
+      return { path: path ?? current.path, fingerprint: "fp2", raw };
     },
     /** Recording raw write storing the verbatim text. */
     writeRaw: async (path, expected, raw) => {
@@ -72,6 +76,47 @@ async function renderHost(gateway: VimSettingsGateway) {
 }
 
 describe("vim settings panel", () => {
+  // These tests verify the GUI-to-gateway contract with an in-memory adapter;
+  // they do not source a config in real Neovim or prove native fingerprint enforcement.
+  it.each([" ", "\\", ",", ";"])("saves the real common leader %j through the mocked fingerprint gateway", async (leader) => {
+    const gateway = fakeGateway({ ...defaultRead(), raw: '" unmanaged 日本語\r\nset number\r\n' });
+    await renderHost(gateway);
+    expect(screen.getByLabelText("リーダーキー")).toHaveValue("<Space>");
+    fireEvent.change(screen.getByLabelText("よく使うリーダーキー"), { target: { value: leader } });
+    expect(latest?.settings.leader).toBe(leader);
+    fireEvent.click(screen.getByRole("button", { name: "管理ブロックを保存する" }));
+    await waitFor(() => expect(gateway.managedWrites).toHaveLength(1));
+    expect(gateway.managedWrites[0]).toMatchObject({ expected: "fp1", settings: { leader } });
+    expect(latest?.loaded?.raw.startsWith('" unmanaged 日本語\r\nset number\r\n')).toBe(true);
+  });
+
+  it("accepts Space notation, custom Unicode and focuses custom input", async () => {
+    await renderHost(fakeGateway(defaultRead()));
+    const input = screen.getByLabelText("リーダーキー");
+    fireEvent.change(screen.getByLabelText("よく使うリーダーキー"), { target: { value: "custom" } });
+    expect(document.activeElement).toBe(input);
+    expect(screen.getByRole("button", { name: "管理ブロックを保存する" })).toBeDisabled();
+    fireEvent.change(input, { target: { value: "<space>" } });
+    expect(input).toHaveValue("<Space>"); expect(latest?.settings.leader).toBe(" ");
+    expect(screen.getByRole("button", { name: "管理ブロックを保存する" })).not.toBeDisabled();
+    fireEvent.change(input, { target: { value: "🚀" } });
+    expect(latest?.settings.leader).toBe("🚀");
+    expect(screen.getByLabelText("よく使うリーダーキー")).toHaveValue("custom");
+    fireEvent.change(input, { target: { value: "<Tab>" } });
+    expect(screen.getByRole("button", { name: "管理ブロックを保存する" })).toBeDisabled();
+  });
+
+  it("keeps full mapping mode names and individually labelled mapping controls", async () => {
+    await renderHost(fakeGateway(defaultRead()));
+    fireEvent.click(screen.getByRole("button", { name: "マッピングを追加する" }));
+    expect(screen.getByLabelText("マッピング1のモード")).toHaveTextContent("nnoremap");
+    fireEvent.change(screen.getByLabelText("マッピング1のキー"), { target: { value: "<Leader>w" } });
+    fireEvent.change(screen.getByLabelText("マッピング1の内容"), { target: { value: ":w<CR>" } });
+    expect(latest?.settings.mappings).toEqual([{ mode: "n", lhs: "<Leader>w", rhs: ":w<CR>" }]);
+    fireEvent.click(screen.getByRole("button", { name: "マッピング1を削除する" }));
+    expect(latest?.settings.mappings).toEqual([]);
+  });
+
   it("edits indent controls and saves the managed block", async () => {
     const gateway = fakeGateway(defaultRead());
     await renderHost(gateway);

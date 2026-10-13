@@ -3,6 +3,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import App from "../../App";
 import { readRuntimeStatus } from "../../infrastructure/tauri/runtime-client";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { EditorView } from "@codemirror/view";
 
 vi.mock("../../infrastructure/tauri/runtime-client", () => {
@@ -423,7 +424,8 @@ it("keeps text and shows the conflict UI when save loses", async () => {
   expect(screen.getByTestId("dirty")).toHaveTextContent("未保存");
 });
 
-it("shows save success outside the editor", async () => {
+it("uses the persisted anchor for save and external recovery toasts through App composition", async () => {
+  localStorage.setItem("marxen.editor-preferences.v1", JSON.stringify({ notificationPosition: "top-center" }));
   await openWorkspace(); fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
   await screen.findByTestId("editor-primary");
   fireEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -431,6 +433,20 @@ it("shows save success outside the editor", async () => {
   expect(toast).toHaveTextContent("保存しました。"); expect(toast).toHaveAttribute("role", "status");
   expect(toast.parentElement).toBe(document.body);
   expect(screen.getByTestId("workspace-shell")).not.toContainElement(toast);
+  expect(toast).toHaveClass("top-8", "left-1/2", "-translate-x-1/2");
+  const subscription = vi.mocked(listen).mock.calls.find(([event]) => event === "marxen:workspace");
+  expect(subscription).toBeDefined();
+  act(() => subscription![1]({ event: "marxen:workspace", id: 1, payload: [{ type: "external_change", payload: { documentId: "doc_a", path: "メモ/a.md", dirty: false, deleted: false } }] }));
+  const external = await screen.findByTestId("external-banner");
+  expect(external).toHaveTextContent("ファイルが外部で変更されました。");
+  expect(external).toHaveClass("top-32", "left-1/2", "-translate-x-1/2");
+  expect(external.parentElement).toBe(document.body);
+  fireEvent.click(within(toast).getByRole("button", { name: "通知を閉じる" }));
+  expect(external).toHaveClass("top-8");
+  fireEvent.click(within(external).getByRole("button", { name: "再読込する" }));
+  await waitFor(() => expect(screen.queryByTestId("external-banner")).not.toBeInTheDocument());
+  expect(mockedInvoke).toHaveBeenCalledWith("reload_document", { documentId: "doc_a", baseRevision: 0 });
+  localStorage.removeItem("marxen.editor-preferences.v1");
 });
 
 it("can postpone recovery without discarding documents and reopen the dialog", async () => {

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   defaultVimSettings,
+  displayVimLeader,
+  parseVimLeaderInput,
   isLuaConfigPath,
   parseManagedBlock,
   previewManagedChange,
+  renderManagedBlock,
   rewriteManagedBlock,
   validateCopyKey,
   validateVimMapping,
@@ -13,6 +16,51 @@ import {
 } from "./vim-settings";
 
 describe("vim-settings domain", () => {
+  it.each([
+    { prefix: "\n\n", suffix: "", newline: "\n", terminator: "" },
+    { prefix: "\r\n\r\n", suffix: '" 外側 日本語', newline: "\r\n", terminator: "\r\n" },
+    { prefix: '" 日本語 🎉\r\nset number\r\n', suffix: "nnoremap j gj\r\n", newline: "\r\n", terminator: "\r\n" },
+    { prefix: "", suffix: "", newline: "\n", terminator: "" },
+    { prefix: "\n", suffix: "\n\n", newline: "\n", terminator: "\n" },
+  ])("splices only the managed region, preserving exact unmanaged bytes: %j", ({ prefix, suffix, newline, terminator }) => {
+    const original = renderManagedBlock(defaultVimSettings()).join(newline);
+    const raw = `${prefix}${original}${terminator}${suffix}`;
+    const settings = { ...defaultVimSettings(), leader: "," };
+    const next = rewriteManagedBlock(raw, settings, false);
+    const expected = `${prefix}${renderManagedBlock(settings).join(newline)}${terminator}${suffix}`;
+    expect(new TextEncoder().encode(next)).toEqual(new TextEncoder().encode(expected));
+    expect(rewriteManagedBlock(next, settings, false)).toBe(next);
+  });
+
+  it.each([["set number", "\n"], ['" 日本語\r\nset number', "\r\n"]])("adds only a necessary separator when inserting a missing block into %j", (raw, newline) => {
+    const next = rewriteManagedBlock(raw, defaultVimSettings(), false);
+    expect(next).toBe(`${raw}${newline}${renderManagedBlock(defaultVimSettings()).join(newline)}${newline}`);
+    expect(rewriteManagedBlock(next, defaultVimSettings(), false)).toBe(next);
+  });
+
+  it.each([" ", "\\", ",", ";", "界", "🚀", "\"", "'"])("round-trips the real %j leader through presentation and safe Vimscript", (leader) => {
+    expect(parseVimLeaderInput(displayVimLeader(leader))).toBe(leader);
+    const settings = { ...defaultVimSettings(), leader, mappings: [{ mode: "n", lhs: "<Leader>w", rhs: ":w<CR>" }] };
+    expect(validateVimSettings(settings)).toEqual([]);
+    const raw = rewriteManagedBlock("", settings, false);
+    expect(parseManagedBlock(raw)).toEqual(settings);
+    if (leader === " ") {
+      expect(displayVimLeader(leader)).toBe("<Space>");
+      expect(raw).toContain('let mapleader=" "');
+      expect(raw).not.toContain('let mapleader="<Space>"');
+    }
+  });
+
+  it("normalizes only Space notation and rejects other notation or arbitrary code", () => {
+    for (const input of ["<Space>", "<space>", "<SPACE>", " "]) expect(parseVimLeaderInput(input)).toBe(" ");
+    for (const input of ["<Tab>", "ab", "", "\n", '" | quit', " <Space> "]) {
+      const leader = parseVimLeaderInput(input);
+      expect(leader).toBe(input);
+      expect(validateVimSettings({ ...defaultVimSettings(), leader })).not.toHaveLength(0);
+      expect(() => rewriteManagedBlock("", { ...defaultVimSettings(), leader }, false)).toThrow();
+    }
+  });
+
   it("appends one block to an empty file and stays idempotent", () => {
     const settings = defaultVimSettings();
     const once = rewriteManagedBlock("", settings, false);

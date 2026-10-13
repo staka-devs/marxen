@@ -6,6 +6,11 @@
 
 import type { ThemeId } from "./workspace-content";
 
+/** Supported viewport anchors for notifications outside the editor layout. */
+export const NOTIFICATION_POSITIONS = ["top-left", "top-center", "top-right", "bottom-left", "bottom-center", "bottom-right"] as const;
+/** Persisted notification anchor. */
+export type NotificationPosition = typeof NOTIFICATION_POSITIONS[number];
+
 /** View preferences for the CodeMirror editor chrome. */
 export interface EditorPreferences {
   theme: ThemeId;
@@ -15,12 +20,14 @@ export interface EditorPreferences {
   /** Show source line numbers in Markdown and split editors; live preview omits them. */
   lineNumbers: boolean;
   highlightActiveLine: boolean;
+  notificationPosition: NotificationPosition;
 }
 
 /** First-run defaults: dark theme with readable Japanese typography. */
 export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
   theme: "dark", fontSize: 15, lineHeight: 1.7,
   wordWrap: true, lineNumbers: true, highlightActiveLine: true,
+  notificationPosition: "bottom-right",
 };
 
 /**
@@ -44,5 +51,7 @@ export function normalizeEditorPreferences(value: unknown): EditorPreferences {
     wordWrap: bool("wordWrap", fallback.wordWrap),
     lineNumbers: bool("lineNumbers", fallback.lineNumbers),
     highlightActiveLine: bool("highlightActiveLine", fallback.highlightActiveLine),
+    notificationPosition: NOTIFICATION_POSITIONS.includes(raw.notificationPosition as NotificationPosition)
+      ? raw.notificationPosition as NotificationPosition : fallback.notificationPosition,
   };
 }

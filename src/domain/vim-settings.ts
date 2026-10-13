@@ -46,6 +46,16 @@ export function defaultVimSettings(): VimSettings {
   };
 }
 
+/** Display an actual Space leader visibly without changing the stored key. */
+export function displayVimLeader(leader: string): string {
+  return leader === " " ? "<Space>" : leader;
+}
+
+/** Convert only the supported Space notation to its real Neovim character. */
+export function parseVimLeaderInput(input: string): string {
+  return input.toLowerCase() === "<space>" ? " " : input;
+}
+
 /**
  * Report whether a config path selects Lua raw-only handling.
  *
@@ -382,22 +392,21 @@ export function rewriteManagedBlock(raw: string, settings: VimSettings, isLua: b
   if (failures.length > 0) throw new Error(failures[0]);
   // Reject an ambiguous existing block before discarding anything.
   parseManagedBlock(raw, t);
-  const block = renderManagedBlock(settings).join("\n");
-  if (raw === "") return `${block}\n`;
   const lines = raw.split("\n");
   const found = findManagedBlock(lines, t);
+  const newline = (found ? lines[found.start].endsWith("\r") : raw.includes("\r\n")) ? "\r\n" : "\n";
+  const block = renderManagedBlock(settings).join(newline);
+  if (raw === "") return `${block}${newline}`;
   if (!found) {
-    const separator = raw.endsWith("\n") ? "" : "\n";
-    return `${raw}${separator}${block}\n`;
+    // A missing block needs a separator after an unterminated last line.
+    const separator = raw.endsWith("\n") ? "" : newline;
+    return `${raw}${separator}${block}${newline}`;
   }
-  const before = lines.slice(0, found.start).join("\n");
-  const after = lines.slice(found.end + 1).join("\n");
-  let result = "";
-  if (before !== "") result += `${before}\n`;
-  result += `${block}\n`;
-  result += after;
-  if (after !== "" && !after.endsWith("\n")) result += "\n";
-  return result;
+  // Include the owned end marker's terminator; splice all surrounding text verbatim.
+  const start = lines.slice(0, found.start).reduce((offset, line) => offset + line.length + 1, 0);
+  const end = Math.min(raw.length, start + lines.slice(found.start, found.end + 1).reduce((offset, line) => offset + line.length + 1, 0));
+  const terminator = found.end + 1 < lines.length ? newline : "";
+  return `${raw.slice(0, start)}${block}${terminator}${raw.slice(end)}`;
 }
 
 /**

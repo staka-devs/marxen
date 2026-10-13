@@ -1,8 +1,42 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { NotificationToast, WorkspaceDialog } from "./Notifications";
+import { NOTIFICATION_POSITIONS } from "../../domain/editor-preferences";
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+it.each(NOTIFICATION_POSITIONS)("anchors normal, error and recovery notifications at %s without editor focus changes", (position) => {
+  const editor = document.createElement("textarea");
+  document.body.append(editor); editor.focus();
+  const before = editor.getBoundingClientRect();
+  const dismiss = vi.fn();
+  const view = render(<NotificationToast position={position} notice={{ id: 1, kind: "info", message: "保存しました。" }} onDismiss={dismiss} />);
+  const notice = screen.getByRole("status");
+  expect(notice).toHaveAttribute("data-position", position);
+  expect(notice).toHaveClass("fixed", position.startsWith("top") ? "top-8" : "bottom-8");
+  expect(notice).toHaveClass(position.endsWith("left") ? "left-4" : position.endsWith("center") ? "left-1/2" : "right-4");
+  expect(document.activeElement).toBe(editor);
+  view.rerender(<NotificationToast position={position} notice={{ id: 2, kind: "error", message: "保存できませんでした。" }} onDismiss={dismiss} />);
+  expect(screen.getByRole("alert")).toHaveAttribute("data-position", position);
+  view.rerender(<NotificationToast position={position} raised testId="recovery-toast" notice={{ id: 3, kind: "info", message: "未保存の文書を復元" }} actions={<button>復元</button>} onDismiss={dismiss} />);
+  expect(screen.getByTestId("recovery-toast")).toHaveClass(position.startsWith("top") ? "top-32" : "bottom-32");
+  expect(document.activeElement).toBe(editor);
+  // jsdom checks DOM/portal behavior; browser geometry is verified separately.
+  expect(editor.getBoundingClientRect()).toEqual(before);
+  screen.getByRole("button", { name: "通知を閉じる" }).focus();
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "通知を閉じる" }));
+  fireEvent.click(document.activeElement!); expect(dismiss).toHaveBeenCalledWith(3);
+  view.unmount(); editor.remove();
+});
+
+it("defaults to bottom-right and follows position changes for the current occurrence", () => {
+  const props = { notice: { id: 4, kind: "success" as const, message: "保存しました。" as const }, onDismiss: vi.fn() };
+  const view = render(<NotificationToast {...props} />);
+  expect(screen.getByRole("status")).toHaveClass("bottom-8", "right-4");
+  view.rerender(<NotificationToast {...props} position="top-center" />);
+  expect(screen.getByRole("status")).toHaveClass("top-8", "left-1/2", "-translate-x-1/2");
+  expect(screen.getByRole("status")).not.toHaveClass("bottom-8", "right-4");
+});
 
 it("does not move focus and dismisses only the current success occurrence", () => {
   vi.useFakeTimers();

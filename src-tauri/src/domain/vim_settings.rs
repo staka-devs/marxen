@@ -485,31 +485,38 @@ pub fn rewrite_managed(raw: &str, settings: &VimSettings, is_lua: bool) -> Resul
     }
     // Reject an ambiguous existing block before discarding anything.
     parse_managed(raw)?;
-    let block = render_managed(settings).join("\n");
-    if raw.is_empty() {
-        return Ok(format!("{block}\n"));
-    }
     let lines: Vec<&str> = raw.split('\n').collect();
-    match find_managed_block(&lines)? {
+    let found = find_managed_block(&lines)?;
+    let crlf = match found {
+        Some((start, _)) => lines[start].ends_with('\r'),
+        None => raw.contains("\r\n"),
+    };
+    let newline = if crlf { "\r\n" } else { "\n" };
+    let block = render_managed(settings).join(newline);
+    if raw.is_empty() {
+        return Ok(format!("{block}{newline}"));
+    }
+    match found {
         None => {
-            let separator = if raw.ends_with('\n') { "" } else { "\n" };
-            Ok(format!("{raw}{separator}{block}\n"))
+            // A missing block needs a separator after an unterminated last line.
+            let separator = if raw.ends_with('\n') { "" } else { newline };
+            Ok(format!("{raw}{separator}{block}{newline}"))
         }
         Some((start, end)) => {
-            let before = lines[..start].join("\n");
-            let after = lines[end + 1..].join("\n");
-            let mut result = String::new();
-            if !before.is_empty() {
-                result.push_str(&before);
-                result.push('\n');
-            }
-            result.push_str(&block);
-            result.push('\n');
-            result.push_str(&after);
-            if !after.is_empty() && !after.ends_with('\n') {
-                result.push('\n');
-            }
-            Ok(result)
+            // Include the owned end marker's terminator; retain surrounding bytes exactly.
+            let start_offset: usize = lines[..start].iter().map(|line| line.len() + 1).sum();
+            let end_offset = (start_offset
+                + lines[start..=end]
+                    .iter()
+                    .map(|line| line.len() + 1)
+                    .sum::<usize>())
+            .min(raw.len());
+            let terminator = if end + 1 < lines.len() { newline } else { "" };
+            Ok(format!(
+                "{}{block}{terminator}{}",
+                &raw[..start_offset],
+                &raw[end_offset..]
+            ))
         }
     }
 }
@@ -517,6 +524,54 @@ pub fn rewrite_managed(raw: &str, settings: &VimSettings, is_lua: bool) -> Resul
 #[cfg(test)]
 mod unit {
     use super::*;
+
+    /// Splice only the owned block while retaining blank prefixes, CRLF and suffix EOF bytes.
+    #[test]
+    fn managed_splice_preserves_unmanaged_bytes() {
+        for (prefix, suffix, newline, terminator) in [
+            ("\n\n", "", "\n", ""),
+            ("\r\n\r\n", "\" 外側 日本語", "\r\n", "\r\n"),
+            (
+                "\" 日本語 🎉\r\nset number\r\n",
+                "nnoremap j gj\r\n",
+                "\r\n",
+                "\r\n",
+            ),
+            ("", "", "\n", ""),
+            ("\n", "\n\n", "\n", "\n"),
+        ] {
+            let original = render_managed(&default_settings()).join(newline);
+            let raw = format!("{prefix}{original}{terminator}{suffix}");
+            let mut changed = default_settings();
+            changed.leader = ",".into();
+            let next = rewrite_managed(&raw, &changed, false).unwrap();
+            let expected = format!(
+                "{prefix}{}{terminator}{suffix}",
+                render_managed(&changed).join(newline)
+            );
+            assert_eq!(next.as_bytes(), expected.as_bytes());
+            assert_eq!(rewrite_managed(&next, &changed, false).unwrap(), next);
+        }
+    }
+
+    /// Preserve the existing bytes and add only a necessary separator for a missing block.
+    #[test]
+    fn missing_block_insertion_uses_existing_line_endings() {
+        for (raw, newline) in [("\" 日本語\r\nset number", "\r\n"), ("set number", "\n")] {
+            let next = rewrite_managed(raw, &default_settings(), false).unwrap();
+            assert_eq!(
+                next,
+                format!(
+                    "{raw}{newline}{}{newline}",
+                    render_managed(&default_settings()).join(newline)
+                )
+            );
+            assert_eq!(
+                rewrite_managed(&next, &default_settings(), false).unwrap(),
+                next
+            );
+        }
+    }
 
     /// Keep an empty file rewrite minimal and idempotent on second application.
     #[test]

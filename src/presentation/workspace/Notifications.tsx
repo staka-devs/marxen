@@ -6,6 +6,7 @@ import { trapDialogTab } from "./dialogFocus";
 import type { ThemeId } from "../../domain/workspace-content";
 import type { LocalizedText } from "../../contracts/localization";
 import { renderLocalizedText } from "../../domain/localization";
+import type { NotificationPosition } from "../../domain/editor-preferences";
 
 /** Display behavior for a transient success or a persistent notification. */
 export type NoticeKind = "info" | "success" | "error";
@@ -25,6 +26,7 @@ interface ToastProps {
   raised?: boolean;
   testId?: string;
   theme?: ThemeId;
+  position?: NotificationPosition;
 }
 
 interface DialogProps {
@@ -37,7 +39,7 @@ interface DialogProps {
 }
 
 /** Show notifications outside the editor layout without taking keyboard focus. */
-export function NotificationToast({ notice, onDismiss, actions, raised = false, testId = "notification-toast", theme }: ToastProps) {
+export function NotificationToast({ notice, onDismiss, actions, raised = false, testId = "notification-toast", theme, position = "bottom-right" }: ToastProps) {
   const { t } = useI18n();
   const dismiss = useRef(onDismiss);
   dismiss.current = onDismiss;
@@ -47,10 +49,12 @@ export function NotificationToast({ notice, onDismiss, actions, raised = false, 
     return () => window.clearTimeout(timer);
   }, [notice.id, notice.kind]);
   const Icon = notice.kind === "success" ? CheckCircle2 : Info;
+  const vertical = position.startsWith("top") ? (raised ? "top-32" : "top-8") : (raised ? "bottom-32" : "bottom-8");
+  const horizontal = position.endsWith("left") ? "left-4" : position.endsWith("center") ? "left-1/2 -translate-x-1/2" : "right-4";
   return createPortal(
-    <div data-theme={theme} data-testid={testId} role={notice.kind === "error" ? "alert" : "status"} className={`fixed ${raised ? "bottom-32" : "bottom-8"} right-4 z-50 flex w-[min(360px,calc(100vw-32px))] items-start gap-3 rounded-md border border-border bg-card p-3 text-[13px] text-foreground shadow-xl`}>
+    <div data-theme={theme} data-testid={testId} data-position={position} role={notice.kind === "error" ? "alert" : "status"} className={`fixed ${vertical} ${horizontal} z-50 flex w-[min(360px,calc(100vw-32px))] items-start gap-3 rounded-md border border-border bg-card p-3 text-[13px] text-foreground shadow-xl`}>
       <Icon size={17} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-      <div className="min-w-0 flex-1 break-words leading-5"><p>{renderLocalizedText(notice.message, t)}</p>{actions && <div className="mt-2 flex gap-2">{actions}</div>}</div>
+      <div className="min-w-0 flex-1 break-words leading-5"><p>{renderLocalizedText(notice.message, t)}</p>{actions && <div className="mt-2 flex flex-wrap gap-2">{actions}</div>}</div>
       <button type="button" aria-label={t("通知を閉じる")} onClick={() => onDismiss(notice.id)} className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted"><X size={15} aria-hidden="true" /></button>
     </div>, document.body,
   );

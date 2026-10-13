@@ -763,9 +763,9 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           </EditorActionsPopover>
         )}
 
-          {notice && <NotificationToast theme={theme} notice={notice} onDismiss={dismissNotice} />}
+          {notice && <NotificationToast theme={theme} position={preferences.notificationPosition} notice={notice} onDismiss={dismissNotice} />}
           {activeExternal && active && activeExternal !== dismissedExternal && (
-            <NotificationToast theme={theme} testId="external-banner" raised={notice !== null}
+            <NotificationToast theme={theme} position={preferences.notificationPosition} testId="external-banner" raised={notice !== null}
               notice={{ id: 0, kind: "info", message: t("{{value0}}{{value1}}", { value0: (activeExternal.deleted ? t("ファイルが外部で削除されました。") : t("ファイルが外部で変更されました。")), value1: (active.dirty ? t("未保存の変更を保持しています。") : "") }) }}
               onDismiss={() => setDismissedExternal(activeExternal)}
               actions={!active.dirty && !activeExternal.deleted ? (
