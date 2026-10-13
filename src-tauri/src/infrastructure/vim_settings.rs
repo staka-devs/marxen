@@ -46,7 +46,51 @@ mod unit {
     use crate::application::vim_settings::{
         read_settings, write_managed_settings, write_raw_settings,
     };
-    use crate::domain::vim_settings::default_settings;
+    use crate::domain::vim_settings::{default_settings, render_managed};
+
+    /// Persist real leader characters without altering unmanaged bytes or bypassing stale guards.
+    #[test]
+    fn temp_fixture_leaders_preserve_bytes_and_fingerprints() {
+        let files = NativeVimSettingsFiles;
+        let path = temp_config("leader-bytes");
+        for leader in [" ", "\\", ",", ";", "界"] {
+            let _ = std::fs::remove_file(&path);
+            let prefix = "\r\n\r\n";
+            let suffix = "\" 外側 🎉 改行なし";
+            let original = format!(
+                "{prefix}{}\r\n{suffix}",
+                render_managed(&default_settings()).join("\r\n")
+            );
+            let baseline = write_raw_settings(&files, &path, None, &original).unwrap();
+            let mut settings = default_settings();
+            settings.leader = leader.into();
+            let written =
+                write_managed_settings(&files, &path, Some(&baseline.fingerprint), &settings)
+                    .unwrap();
+            let expected = format!(
+                "{prefix}{}\r\n{suffix}",
+                render_managed(&settings).join("\r\n")
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+            assert_eq!(
+                read_settings(&files, &path).unwrap().settings.leader,
+                leader
+            );
+            let external = format!("{expected}\r\n\" external");
+            std::fs::write(&path, external.as_bytes()).unwrap();
+            assert!(matches!(
+                write_managed_settings(
+                    &files,
+                    &path,
+                    Some(&written.fingerprint),
+                    &default_settings()
+                ),
+                Err(WorkspaceError::Conflict { .. })
+            ));
+            assert_eq!(std::fs::read(&path).unwrap(), external.as_bytes());
+        }
+        let _ = std::fs::remove_file(&path);
+    }
 
     /// Build a unique temporary config path without touching user-global files.
     fn temp_config(name: &str) -> std::path::PathBuf {

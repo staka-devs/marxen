@@ -2,10 +2,11 @@ import type { LabelKey } from "../../contracts/localization";
 import { useI18n } from "../i18n/I18nProvider";
 import { trapDialogTab } from "./dialogFocus";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Bot, Clipboard, Code2, Paintbrush, Search, Settings2, SlidersHorizontal, X, RotateCcw } from "lucide-react";
+import { Bell, Bot, Clipboard, Code2, Paintbrush, Search, Settings2, SlidersHorizontal, X, RotateCcw } from "lucide-react";
 import { THEMES, isSupportedConfigName, type ThemeId } from "../../domain/workspace-content";
 import { COPY_LABELS } from "../../domain/clipboard-text";
-import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../domain/editor-preferences";
+import { DEFAULT_EDITOR_PREFERENCES, NOTIFICATION_POSITIONS, type EditorPreferences } from "../../domain/editor-preferences";
+import "../settings-controls.css";
 
 interface Props {
   languagePreference?: import("../../contracts/language").LanguagePreference;
@@ -29,6 +30,8 @@ interface Props {
   currentConfig: string | null;
   copyKeys?: Record<string, string>;
   aiSettings?: ReactNode;
+  /** AI visibility controls supplied by the composition root. */
+  aiVisibilitySettings?: ReactNode;
   /**
    * Optional Vim detail editor (issue-55) rendered below the config apply row.
    *
@@ -41,6 +44,7 @@ interface Props {
 const CATEGORIES = [
   { id: "appearance", label: "外観", icon: Paintbrush, search: "テーマ カラー 色 ライト ダーク ハイコントラスト theme appearance language locale region 言語 地域" },
   { id: "editor", label: "エディター", icon: SlidersHorizontal, search: "文字サイズ フォント 行の高さ 折り返す 行番号 編集中 強調 editor font wrap" },
+  { id: "notifications", label: "通知", icon: Bell, search: "通知 位置 上 下 左 右 中央 notification toast position top bottom left center right" },
   { id: "vim", label: "Vim", icon: Code2, search: "Neovim 設定ファイル vimrc _vimrc .vimrc init.vim init.lua パス 再起動" },
   { id: "copy", label: "コピー", icon: Clipboard, search: "ヤンク 形式 キー リッチテキスト 画像 Markdown HTML F6 F7 F8 F9 clipboard yank" },
   { id: "ai", label: "AI", icon: Bot, search: "Agent エージェント 接続 API Codex OpenCode ACP Anthropic OpenAI endpoint model 資格情報" },
@@ -49,21 +53,24 @@ type Category = typeof CATEGORIES[number]["id"];
 const CATEGORY_FIELDS = {
   appearance: ["言語", "カラーテーマ", "ライト", "ダーク", "ハイコントラスト"],
   editor: ["文字サイズ", "行の高さ", "長い行を折り返す", "Markdown の行番号を表示する", "編集中の行を強調する"],
-  vim: ["Neovim 設定ファイル", "タブ幅", "インデント幅", "リーダーキー", "コピー形式キー", "モード別マッピング"],
+  notifications: ["通知の表示位置", "左上", "上中央", "右上", "左下", "下中央", "右下"],
+  vim: ["Neovim 設定ファイル", "タブ幅", "インデント幅", "リーダーキー", "コピー形式キー", "モード別マッピング", "よく使うリーダーキー", "Space（スペース）"],
   copy: ["装飾なしテキスト", "リッチテキスト", "HTML ソース"],
   ai: ["接続先", "プリセット", "モデル", "API キー", "接続テスト", "資格情報の入力"],
 } as const satisfies Record<Category, readonly LabelKey[]>;
-const inputClass = "h-8 rounded-sm border border-border bg-card px-2 text-[13px] outline-none focus:border-primary";
+const inputClass = "h-9 max-w-full rounded-sm border border-border bg-card px-2 text-[13px] text-foreground outline-none focus:border-primary";
+/** Localized labels for the persisted notification anchors. */
+const POSITION_LABELS = { "top-left": "左上", "top-center": "上中央", "top-right": "右上", "bottom-left": "左下", "bottom-center": "下中央", "bottom-right": "右下" } as const;
 
 /** Label an immediately applied setting and align its control consistently. */
 function SettingRow({ label, children }: { label: string; children: ReactNode }) {
-  return <label className="flex min-h-10 items-center justify-between gap-4 text-[13px]">{label}<span className="flex shrink-0 items-center gap-2">{children}</span></label>;
+  return <label className="marxen-setting-row"><span className="marxen-setting-label">{label}</span><span className="marxen-setting-control">{children}</span></label>;
 }
 
 /** Searchable settings with shared AI fields, immediate preferences and a trapped dialog focus. */
-export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PREFERENCES, onPreferences, configPath, configError, onConfigPath, onBrowseConfig, onApplyConfig, applyingConfig, currentConfig, copyKeys, aiSettings, vimSettings, onClose, languagePreference = "system", onLanguagePreference }: Props) {
+export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PREFERENCES, onPreferences, configPath, configError, onConfigPath, onBrowseConfig, onApplyConfig, applyingConfig, currentConfig, copyKeys, aiSettings, aiVisibilitySettings, vimSettings, onClose, languagePreference = "system", onLanguagePreference }: Props) {
   const { t } = useI18n();
-  const [category, setCategory] = useState<Category | "all">("appearance");
+  const [category, setCategory] = useState<Category | "all">("all");
   const [query, setQuery] = useState("");
   const dialog = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
@@ -79,8 +86,8 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
   const matches = localizedCategories.filter((item) => terms.every((term) => `${item.label} ${item.search}`.toLocaleLowerCase().includes(term)));
   const visible = terms.length > 0 ? matches : localizedCategories.filter((item) => category === "all" || category === item.id);
   const nameInvalid = configPath !== "" && !isSupportedConfigName(configPath);
-  return <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <div ref={dialog} tabIndex={-1} data-testid="settings" role="dialog" aria-modal="true" aria-label={t("設定")} className="flex h-[min(720px,85dvh)] w-[min(860px,95vw)] flex-col overflow-hidden rounded-sm border border-border bg-background shadow-2xl outline-none"
+  return <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-2 sm:p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div ref={dialog} tabIndex={-1} data-theme={theme} data-testid="settings" role="dialog" aria-modal="true" aria-label={t("設定")} className="flex h-[min(780px,92dvh)] w-full max-w-[940px] flex-col overflow-hidden rounded-sm border border-border bg-background shadow-2xl outline-none"
       onKeyDown={(event) => {
         if (event.key === "Escape") { event.stopPropagation(); onClose(); }
         trapDialogTab(event, dialog.current);
@@ -90,17 +97,17 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
         <span className="text-[11px] text-muted-foreground max-sm:hidden">{t("表示設定は自動で保存されます")}</span>
         <button type="button" aria-label={t("設定を閉じる")} onClick={onClose} className="rounded-sm p-1 hover:bg-muted"><X size={17} /></button>
       </header>
-      <div className="flex min-h-0 flex-1">
-        <nav aria-label={t("設定カテゴリ")} className="w-40 shrink-0 border-r border-border bg-card py-3 max-sm:w-28">
-          {[{ id: "all", label: t("すべて"), icon: Settings2 }, ...localizedCategories].map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => { setCategory(id as Category | "all"); setQuery(""); }} aria-current={terms.length === 0 && category === id ? "page" : undefined} className={`flex h-9 w-full items-center gap-2 border-l-2 px-4 text-left text-[13px] ${terms.length === 0 && category === id ? "border-primary bg-muted text-foreground" : "border-transparent text-muted-foreground hover:bg-muted/50"}`}><Icon size={15} className="shrink-0" />{label}</button>)}
+      <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+        <nav aria-label={t("設定カテゴリ")} className="flex shrink-0 gap-1 overflow-x-auto border-b border-border bg-card p-2 sm:block sm:w-44 sm:overflow-y-auto sm:border-b-0 sm:border-r sm:py-3">
+          {[{ id: "all", label: t("すべて"), icon: Settings2 }, ...localizedCategories].map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => { setCategory(id as Category | "all"); setQuery(""); }} aria-current={terms.length === 0 && category === id ? "page" : undefined} className={`flex min-h-9 shrink-0 items-center gap-2 rounded-sm border-l-2 px-3 text-left text-[13px] leading-5 sm:w-full ${terms.length === 0 && category === id ? "border-primary bg-muted text-foreground" : "border-transparent text-muted-foreground hover:bg-muted/50"}`}><Icon size={15} className="shrink-0" aria-hidden="true" />{label}</button>)}
         </nav>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="shrink-0 border-b border-border px-6 py-4">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="shrink-0 border-b border-border bg-background px-4 py-3 sm:px-6">
             <div className="flex h-9 items-center gap-2 rounded-sm border border-border bg-card px-3 focus-within:border-primary"><Search size={15} className="shrink-0 text-muted-foreground" aria-hidden="true" /><input ref={search} type="search" aria-label={t("設定を検索")} placeholder={t("設定を検索")} value={query} onChange={(event) => setQuery(event.target.value)} className="marxen-settings-search min-w-0 flex-1 bg-transparent text-[13px] outline-none" />{query && <button type="button" aria-label={t("検索をクリア")} onClick={() => { setQuery(""); search.current?.focus(); }} className="rounded-sm p-1 hover:bg-muted"><X size={13} /></button>}</div>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+          <div data-testid="settings-content" className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 sm:px-6">
             {visible.length === 0 && <p role="status" className="py-8 text-sm text-muted-foreground">{t("一致する設定がありません。")}</p>}
-            {visible.map(({ id, label }) => <section key={id} aria-label={t("{{value0}}設定", { value0: (label) })} className="border-b border-border py-5 last:border-b-0">
+            {visible.map(({ id, label }) => <section key={id} aria-label={t("{{value0}}設定", { value0: (label) })} className="marxen-settings-section border-b border-border py-5 last:border-b-0">
               <h3 className="mb-3 text-sm font-semibold">{label}</h3>
               {id === "appearance" && <>
                 <SettingRow label={t("言語")}><select aria-label={t("言語")} value={languagePreference} onChange={(event) => onLanguagePreference?.(event.target.value as import("../../contracts/language").LanguagePreference)} className={`${inputClass} w-52`}>
@@ -117,7 +124,13 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
                 <SettingRow label={t("文字サイズ")}><input aria-label={t("文字サイズ")} type="number" min={11} max={28} value={preferences.fontSize} onChange={(event) => { const n = event.currentTarget.valueAsNumber; if (Number.isFinite(n)) change("fontSize", Math.min(28, Math.max(11, n))); }} className={`${inputClass} w-20`} /><span className="text-xs text-muted-foreground">px</span></SettingRow>
                 <SettingRow label={t("行の高さ")}><select aria-label={t("行の高さ")} value={preferences.lineHeight} onChange={(event) => change("lineHeight", Number(event.target.value))} className={`${inputClass} w-24`}>{[1.2, 1.4, 1.5, 1.6, 1.7, 1.8, 2, 2.2, 2.4].map((height) => <option key={height} value={height}>{height}</option>)}</select></SettingRow>
                 {([["wordWrap", t("長い行を折り返す")], ["lineNumbers", t("Markdown の行番号を表示する")], ["highlightActiveLine", t("編集中の行を強調する")]] as const).map(([key, text]) => <SettingRow key={key} label={text}><input aria-label={text} type="checkbox" checked={preferences[key]} onChange={(event) => change(key, event.target.checked)} className="h-4 w-4" /></SettingRow>)}
-                <button type="button" onClick={() => onPreferences?.({ ...DEFAULT_EDITOR_PREFERENCES, theme })} className="mt-3 flex items-center gap-2 rounded-sm border border-border px-3 py-1.5 text-xs hover:bg-muted"><RotateCcw size={13} />{t("エディター設定をリセット")}</button>
+                <button type="button" onClick={() => onPreferences?.({ ...DEFAULT_EDITOR_PREFERENCES, theme, notificationPosition: preferences.notificationPosition })} className="mt-3 flex items-center gap-2 rounded-sm border border-border px-3 py-1.5 text-xs hover:bg-muted"><RotateCcw size={13} />{t("エディター設定をリセット")}</button>
+              </>}
+              {id === "notifications" && <>
+                <SettingRow label={t("通知の表示位置")}><select aria-label={t("通知の表示位置")} value={preferences.notificationPosition} onChange={(event) => change("notificationPosition", event.target.value as EditorPreferences["notificationPosition"])} className={`${inputClass} w-52`}>
+                  {NOTIFICATION_POSITIONS.map((position) => <option key={position} value={position}>{t(POSITION_LABELS[position])}</option>)}
+                </select></SettingRow>
+                <p className="text-xs leading-5 text-muted-foreground">{t("保存結果やエラーの通知位置を選びます。本文の配置や入力フォーカスは変わりません。")}</p>
               </>}
               {id === "vim" && <div className="space-y-3">
                 <p className="text-[13px]">{t("Neovim 設定ファイル")}</p><p className="text-xs leading-5 text-muted-foreground">{t(".vimrc、init.vim、init.lua など、普段の設定を読み込めます。")}</p>
@@ -134,7 +147,7 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
                 <details><summary className="text-xs text-muted-foreground">{t("vimrc でキーを変更する")}</summary><pre className="mt-2 overflow-x-auto rounded-sm bg-card p-3 text-xs leading-6">{"let g:marxen_copy_markdown_key = '<F6>'\nlet g:marxen_copy_text_key = '<F7>'\nlet g:marxen_copy_rich_key = '<F8>'\nlet g:marxen_copy_html_key = '<F9>'"}</pre></details>
                 <p className="text-xs leading-5 text-muted-foreground">{t("既存の Vim マッピングを優先します。リッチテキストには文書内の相対画像を埋め込みます。")}</p>
               </div>}
-              {id === "ai" && <div className="space-y-4"><p className="text-xs leading-5 text-muted-foreground">{t("Agent チャットとインラインチャットで共通の接続先を使います。")}</p>{aiSettings ?? <p className="text-xs text-muted-foreground">{t("AI 接続はデスクトップアプリで設定できます。")}</p>}</div>}
+              {id === "ai" && <div className="space-y-4">{aiVisibilitySettings}<p className="text-xs leading-5 text-muted-foreground">{t("Agent チャットとインラインチャットで共通の接続先を使います。")}</p>{aiSettings ?? <p className="text-xs text-muted-foreground">{t("AI 接続はデスクトップアプリで設定できます。")}</p>}</div>}
             </section>)}
           </div>
         </div>

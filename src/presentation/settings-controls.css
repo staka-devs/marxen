@@ -1,0 +1,76 @@
+.marxen-settings-section {
+  container-type: inline-size;
+  min-width: 0;
+}
+
+.marxen-setting-row {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-block: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.marxen-setting-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.marxen-setting-control {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+}
+
+.marxen-settings-section select {
+  max-width: 100%;
+  color: var(--foreground);
+  color-scheme: dark;
+}
+
+[data-theme="light"] .marxen-settings-section select,
+[data-theme="contrast"] .marxen-settings-section select {
+  color-scheme: light;
+}
+
+.marxen-settings-section select option {
+  color: var(--foreground);
+  background: var(--card);
+}
+
+.marxen-settings-section input:focus-visible,
+.marxen-settings-section select:focus-visible,
+.marxen-settings-section button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.marxen-vim-mapping {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: end;
+  gap: 8px;
+}
+
+@container (min-width: 500px) {
+  .marxen-vim-mapping {
+    grid-template-columns: 120px minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+}
+
+@container (max-width: 380px) {
+  .marxen-setting-row:has(select, input:not([type="checkbox"])) {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .marxen-setting-control select {
+    width: 100%;
+  }
+}
