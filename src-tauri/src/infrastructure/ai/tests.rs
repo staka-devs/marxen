@@ -763,10 +763,12 @@ mod regression {
     #[test]
     fn agentic_staging_paths_reject_outside_access() {
         use std::path::Path;
-        let staging = std::env::temp_dir().join("marxen-staging-test");
+        let scratch = tempfile::tempdir().expect("scratch dir");
+        let staging = scratch.path().join("staging");
         std::fs::create_dir_all(&staging).expect("staging dir");
         let inside = staging.join("a.md").to_string_lossy().replace('\\', "/");
-        let outside = std::env::temp_dir()
+        let outside = scratch
+            .path()
             .join("other-a.md")
             .to_string_lossy()
             .replace('\\', "/");
