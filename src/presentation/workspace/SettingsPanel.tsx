@@ -1,3 +1,4 @@
+import { trapDialogTab } from "./dialogFocus";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Bot, Clipboard, Code2, Paintbrush, Search, Settings2, SlidersHorizontal, X, RotateCcw } from "lucide-react";
 import { THEMES, isSupportedConfigName, type ThemeId } from "../../domain/workspace-content";
@@ -62,12 +63,7 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
     <div ref={dialog} tabIndex={-1} data-testid="settings" role="dialog" aria-modal="true" aria-label="設定" className="flex h-[min(720px,85dvh)] w-[min(860px,95vw)] flex-col overflow-hidden rounded-sm border border-border bg-background shadow-2xl outline-none"
       onKeyDown={(event) => {
         if (event.key === "Escape") { event.stopPropagation(); onClose(); }
-        if (event.key === "Tab") {
-          const items = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, a[href]') ?? []).filter((item) => item.getClientRects().length > 0);
-          const first = items[0], last = items.at(-1);
-          if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) { event.preventDefault(); last?.focus(); }
-          else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialog.current)) { event.preventDefault(); first?.focus(); }
-        }
+        trapDialogTab(event, dialog.current);
       }}>
       <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-card px-4">
         <Settings2 size={16} className="text-muted-foreground" aria-hidden="true" /><h2 className="flex-1 text-sm font-medium">設定</h2>

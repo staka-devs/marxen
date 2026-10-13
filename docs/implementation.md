@@ -21,6 +21,8 @@ Rust / Tauri v2、React / TypeScript / Vite / Tailwind / shadcn/ui、CodeMirror 
 | 文字組み・ファイル検索・チャット・設定の再設計 (#20) | Codex / OpenCode | UI・チャット |
 | Rust の五層分離・port・メソッド文書 (#18) | Codex | 文書・保存・AI・隔離 |
 | TypeScript の五層分離・Shell 責務・メソッド文書 (#19) | OpenCode（Codex がレビュー・統合） | 編集・チャット・UI |
+| GUI 入力後の改行・ライブ表示のカーソル (#21) | Codex（独立レビュー付き） | 編集・Neovim |
+| AI 接続先・モデル・推論強度と設定ダイアログ (#22) | Codex / OpenCode | AI・チャット |
 
 Orca で Issue ごとの子ワークスペースとブランチを管理し、依存順に統合する。OpenCode は **MuseSpark1.3 Contributor / Xhigh** の実効設定を確認してから起動する。指定モデルが利用できなければ OpenCode の担当は停止して報告し、別モデルへ自動変更しない。Claude Code を起動・委任・接続検証しない。Anthropic Messages API は独立した接続先として利用者の認証設定後に有効化する。
 
@@ -40,7 +42,8 @@ Rust が Neovim RPC、保存、AI プロセス、HTTP を所有する。文書 I
 - フォルダー・Markdown・テキスト・対応画像を種類別アイコンで表示する。テキスト編集、画像タブのフィット・実サイズ・拡大縮小、内部画像と外部画像の本文へのドラッグを扱う。
 - tabs、quick open、全文検索置換、outline、command palette、相対画像、画像貼付、外部変更、保存競合、クラッシュ復元。設定は外観・エディター・Vim・コピー・AI に分け、文字サイズ・行間・折り返し・行番号・行強調を保持する。
 - 共通 remark / rehype 基盤で GFM、highlight、5 Alerts、脚注、MathJax、Mermaid、HTML sanitize、GeoJSON / TopoJSON / ASCII STL。Shiki、MathJax、Mermaid、Leaflet / TopoJSON、Three.js はローカル配布。
-- ACP (Codex / OpenCode / 任意コマンド)、OpenAI 互換 Chat Completions、Anthropic Messages、stream / cancel / test / error、OS 資格情報ストア。
+- ACP (Codex / OpenCode / GitHub Copilot / 任意コマンド)、OpenAI 互換 Chat Completions、Anthropic Messages、stream / cancel / test / error、OS 資格情報ストア。
+- Agent / インラインの入力欄で接続先・モデル・推論強度を選び、ACP の公開候補と送信前の設定応答を検証する。Windows の接続でコンソール窓を表示しない。
 - AI 送信対象の表示、質問 / 生成 / 選択 rewrite / workspace 修正、隔離コピーと diff 承認、revision 競合・却下・取消。
 - Agent チャットは複数ターン、会話の切替、新規、再試行、取消、非表示中の保持に対応する。履歴は完了した会話だけを送り、接続先の変更で分離する。インラインチャットは選択または段落を対象に Ctrl+Shift+I / Cmd+Shift+I で開き、Vim の Ctrl+I と共存する。回答は共通 Markdown 描画を使う。
 - Rust / TypeScript / Vitest / Playwright CI。AI モック、認証済みのみ実接続。Windows x64、macOS arm64 / x64、Linux x64 package と操作説明。

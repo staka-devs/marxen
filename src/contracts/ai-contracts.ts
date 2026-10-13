@@ -1,14 +1,21 @@
 // Generated from src-tauri/src/contracts/ai.rs. Run npm run ai-contracts:generate.
-// Do not edit by hand. AI IPC schema version 2.
+// Do not edit by hand. AI IPC schema version 3.
 import type { DocumentId, Revision, Utf16Range } from "./contracts";
 export type AiProviderKind = "acp" | "openai_compatible" | "anthropic";
-export type AcpPreset = "codex" | "opencode" | "custom";
+export type AcpPreset = "codex" | "opencode" | "copilot" | "custom";
 export type AcpArgv = { command: string, args: Array<string>, };
 export type AcpConfig = { preset: AcpPreset, 
 /**
  * Required exactly when preset is custom.
  */
-argv: AcpArgv | null, };
+argv: AcpArgv | null, 
+/**
+ * Explicit choices advertised by this agent; applied before each prompt.
+ */
+selections?: Array<AcpSelection>, };
+export type AcpSelection = { id: string, value: string, };
+export type AcpChoice = { value: string, name: string, };
+export type AcpConfigOption = { id: string, name: string, category: string, currentValue: string, options: Array<AcpChoice>, };
 export type OpenAiConfig = { endpoint: string, model: string, };
 export type AnthropicConfig = { enabled: boolean, endpoint: string, model: string, };
 export type AiProviderConfig = { kind: AiProviderKind, acp: AcpConfig | null, openai: OpenAiConfig | null, anthropic: AnthropicConfig | null, };
@@ -41,4 +48,8 @@ export type StreamCancelled = { runId: AiRunId, };
 export type AiStreamEvent = { "type": "started", "payload": StreamStarted } | { "type": "chunk", "payload": StreamChunk } | { "type": "done", "payload": StreamDone } | { "type": "error", "payload": StreamError } | { "type": "cancelled", "payload": StreamCancelled };
 export type AiError = { "code": "invalid_config", detail: string, } | { "code": "missing_credentials", provider: AiProviderKind, } | { "code": "missing_binary", command: string, } | { "code": "spawn_failed", detail: string, } | { "code": "connection_failed", detail: string, } | { "code": "auth_failed", detail: string, } | { "code": "stream_failed", detail: string, } | { "code": "request_cancelled" } | { "code": "session_required" } | { "code": "session_busy" } | { "code": "unknown_session" } | { "code": "staging_unresolved", copy_id: IsolatedCopyId, } | { "code": "live_target_rejected", detail: string, } | { "code": "unsupported_protocol", version: number, } | { "code": "claude_code_refused", command: string, } | { "code": "credential_store_failed", detail: string, };
 export type CredentialRef = { provider: AiProviderKind, hasSecret: boolean, };
-export type AiTestResult = { ok: boolean, detail: string, };
+export type AiTestResult = { 
+/**
+ * Choices returned by an explicit ACP handshake; absent on local/API checks.
+ */
+configOptions?: Array<AcpConfigOption>, ok: boolean, detail: string, };

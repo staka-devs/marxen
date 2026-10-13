@@ -192,12 +192,14 @@ pub async fn test_openai_live(
     let status = response.status().as_u16();
     if (200..300).contains(&status) {
         return Ok(AiTestResult {
+            config_options: None,
             ok: true,
             detail: "接続テストに成功しました".into(),
         });
     }
     let body = response.text().await.unwrap_or_default();
     Ok(AiTestResult {
+        config_options: None,
         ok: false,
         detail: match map_http_status(status, &body) {
             Some(AiError::AuthFailed { detail }) => format!("認証に失敗しました: {detail}"),
@@ -233,12 +235,14 @@ pub async fn test_anthropic_live(
     let status = response.status().as_u16();
     if (200..300).contains(&status) {
         return Ok(AiTestResult {
+            config_options: None,
             ok: true,
             detail: "接続テストに成功しました".into(),
         });
     }
     let body = response.text().await.unwrap_or_default();
     Ok(AiTestResult {
+        config_options: None,
         ok: false,
         detail: match map_http_status(status, &body) {
             Some(AiError::AuthFailed { detail }) => format!("認証に失敗しました: {detail}"),

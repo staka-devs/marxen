@@ -134,3 +134,107 @@
 .ai-chat-inline-result:empty {
   display: none;
 }
+
+/* Optional model controls slot: quiet strip above the prompt box. */
+.ai-chat-model-slot {
+  min-width: 0;
+}
+
+.ai-chat-model-slot:empty {
+  display: none;
+}
+
+/* Provider settings trigger stays quiet until opened. */
+.ai-provider-trigger {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background-color: transparent;
+  color: var(--muted-foreground);
+}
+
+.ai-provider-trigger:hover {
+  background-color: var(--muted);
+  color: var(--foreground);
+}
+
+.ai-provider-trigger:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+/* Accessible settings dialog: centered card over a quiet backdrop. */
+.ai-provider-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background-color: rgb(0 0 0 / 0.45);
+}
+
+.ai-provider-dialog {
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(80dvh, 640px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background-color: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.28);
+}
+
+.ai-provider-dialog:focus {
+  outline: none;
+}
+
+.ai-provider-dialog:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.ai-provider-dialog-header {
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ai-provider-dialog-body {
+  padding: 4px 0 8px;
+}
+
+/* Readable native menus in dark and light themes. */
+.ai-chat-panel select option,
+.ai-chat-inline select option,
+.ai-provider-settings select option,
+.ai-provider-dialog select option {
+  background-color: var(--card);
+  color: var(--foreground);
+}
+
+.ai-chat-panel select,
+.ai-chat-inline select,
+.ai-provider-dialog select {
+  color-scheme: inherit;
+}
+
+.ai-provider-dialog input,
+.ai-provider-dialog textarea {
+  color-scheme: inherit;
+}
+
+.ai-model-controls { display:flex; align-items:center; gap:4px; flex-wrap:wrap; padding:4px 0; font-size:11px; color:var(--muted-foreground); }
+.ai-model-controls label { min-width:0; max-width:100%; }
+.ai-model-controls select, .ai-model-controls input { max-width:100%; min-height:26px; border:1px solid transparent; border-radius:4px; background:var(--card); color:var(--foreground); padding:3px 6px; font:inherit; }
+.ai-model-controls select { max-width:190px; cursor:pointer; }
+.ai-model-controls option { background:var(--card); color:var(--foreground); }
+.ai-model-controls select:hover, .ai-model-controls input:hover { border-color:var(--border); }
+.ai-model-controls select:focus-visible, .ai-model-controls input:focus-visible, .ai-model-refresh:focus-visible { outline:2px solid var(--primary); outline-offset:1px; }
+.ai-model-controls small { flex-basis:100%; padding:2px 6px; line-height:1.5; }
+.ai-model-controls small[role=alert] { color:#e15b64; }
+.ai-model-api { flex:1; }
+.ai-model-api input { width:100%; }
+.ai-model-refresh { border:0; background:transparent; color:var(--muted-foreground); padding:4px 6px; font:inherit; border-radius:4px; }
+.ai-model-refresh:hover { background:var(--muted); color:var(--foreground); }
+.ai-model-controls :disabled { opacity:.55; cursor:default; }

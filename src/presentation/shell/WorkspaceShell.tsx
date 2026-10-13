@@ -3,6 +3,8 @@ import { Bot, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIco
 import { CodeMirrorEditor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
 import AiPanel from "../ai-panel";
+import { AiModelControls } from "../ai-model-controls";
+import { useAiModels } from "./hooks/useAiModels";
 import AiProviderSettings from "../ai-provider-settings";
 import { EditorActionsPopover } from "../workspace/EditorActionsPopover";
 import { WorkspaceSidebar } from "../workspace/WorkspaceSidebar";
@@ -160,6 +162,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     }
   });
 
+  const aiModels = useAiModels(aiProvider, aiGateway);
+
   const [preferences, setPreferences] = useState(() => {
     try {
       return editorPreferencesStore?.load() ?? { ...DEFAULT_EDITOR_PREFERENCES };
@@ -231,6 +235,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   });
   /** AI review and inline flow with shared staging exclusion. */
   const staging = useAiStaging({ desktop, notify: setNotice, session, isolationGateway });
+  const modelControls = <AiModelControls provider={aiProvider} onProvider={setAiProvider} {...aiModels} onRefresh={() => void aiModels.refresh()} disabled={staging.agentBusy || staging.inlineBusy} />;
   // Read-through aliases for narrowing-heavy JSX; ownership stays in hooks.
   /** Active document for pane rendering. */
   const active = session.active;
@@ -1027,6 +1032,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               context={staging.inlineSnapshot}
               staging={staging.staging}
               ensureStaging={(contexts) => staging.ensureStagingFor(contexts, "inline")}
+              modelControls={modelControls}
               provider={aiProvider}
               disabled={staging.agentBusy}
               onBusyChange={staging.setInlineChatBusy}
@@ -1079,6 +1085,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         >
           <div className="flex min-h-0 flex-1 flex-col">
           <AiPanel
+            modelControls={modelControls}
             contexts={staging.aiContexts}
             staging={staging.staging}
             ensureStaging={(contexts) => staging.ensureStagingFor(contexts, "agent")}

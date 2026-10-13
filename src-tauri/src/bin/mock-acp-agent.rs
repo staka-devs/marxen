@@ -231,6 +231,16 @@ fn permission_denied(answer: &serde_json::Value) -> bool {
             == Some("mock_reject")
 }
 
+/// Publish independent fixture model and reasoning controls; production parsers are never reused.
+fn model_options(model: &str, effort: &str) -> serde_json::Value {
+    serde_json::json!([
+        {"id":"model","name":"Model","category":"model","type":"select","currentValue":model,
+         "options":[{"value":"fixture-a","name":"Fixture A"},{"value":"fixture-b","name":"Fixture B"}]},
+        {"id":"reasoning","name":"Reasoning","category":"thought_level","type":"select","currentValue":effort,
+         "options":[{"value":"high","name":"High"},{"value":"xhigh","name":"Xhigh"}]}
+    ])
+}
+
 /// Serve independent ACP initialize/session/prompt fixtures over stdio until EOF.
 /// Flags inject interleaving, fragmentation/coalescing, delays, huge lines,
 /// permission denial, graceful cancellation, and staging writes before/after completion.
@@ -248,6 +258,20 @@ fn main() {
     let huge_line = has_flag("--huge-line");
     let cancel_graceful = has_flag("--cancel-graceful");
 
+    let mut selected_model = String::from("fixture-a");
+    let mut selected_effort = String::from("high");
+    #[cfg(windows)]
+    if let Some(dir) = flag_dir() {
+        #[link(name = "kernel32")]
+        extern "system" {
+            /// Return the native console attached to this fixture process, if any.
+            fn GetConsoleWindow() -> *mut std::ffi::c_void;
+        }
+        let _ = std::fs::write(
+            dir.join("console.txt"),
+            (unsafe { GetConsoleWindow() } as usize).to_string(),
+        );
+    }
     let stdin = std::io::stdin();
     let mut reader = BufReader::new(stdin.lock());
     let mut agent = Agent {
@@ -296,9 +320,41 @@ fn main() {
                         }
                     }));
                 }
-                agent.respond(&id, serde_json::json!({ "sessionId": "mock-sess-1" }));
+                let mut result = serde_json::json!({ "sessionId": "mock-sess-1" });
+                if has_flag("--models") {
+                    result["configOptions"] = model_options(&selected_model, &selected_effort);
+                }
+                agent.respond(&id, result);
+            }
+            "session/set_config_option" => {
+                let key = message
+                    .pointer("/params/configId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let value = message
+                    .pointer("/params/value")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !has_flag("--ignore-model") {
+                    if key == "model" {
+                        selected_model = value.to_owned();
+                    }
+                    if key == "reasoning" {
+                        selected_effort = value.to_owned();
+                    }
+                }
+                agent.respond(&id, serde_json::json!({ "configOptions": model_options(&selected_model, &selected_effort) }));
             }
             "session/prompt" => {
+                if has_flag("--models") {
+                    if let Some(dir) = flag_dir() {
+                        let _ = std::fs::write(
+                            dir.join("prompt-model.json"),
+                            serde_json::json!({"model":selected_model,"effort":selected_effort})
+                                .to_string(),
+                        );
+                    }
+                }
                 let session_id = message
                     .pointer("/params/sessionId")
                     .and_then(|id| id.as_str())

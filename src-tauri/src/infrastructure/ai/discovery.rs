@@ -15,10 +15,12 @@ pub fn dry_run_report(
             let argv = resolve_acp_argv(acp)?;
             match find_on_path(&argv.command) {
                 Some(path) => Ok(AiTestResult {
+                    config_options: None,
                     ok: true,
                     detail: format!("{} が見つかりました ({})", argv.command, path.display()),
                 }),
                 None => Ok(AiTestResult {
+                    config_options: None,
                     ok: false,
                     detail: format!(
                         "{} が見つかりません。CLI をインストールして PATH を通してください",
@@ -30,11 +32,13 @@ pub fn dry_run_report(
         kind => {
             if keyring.has(kind)? {
                 Ok(AiTestResult {
+                    config_options: None,
                     ok: true,
                     detail: "設定と資格情報の存在を確認しました（通信なし）".into(),
                 })
             } else {
                 Ok(AiTestResult {
+                    config_options: None,
                     ok: false,
                     detail: "資格情報が OS ストアにありません".into(),
                 })

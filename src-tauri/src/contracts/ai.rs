@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// Independent version of the AI IPC schema.
-pub const AI_CONTRACT_VERSION: u32 = 2;
+pub const AI_CONTRACT_VERSION: u32 = 3;
 
 /// OS credential store layout. Secrets are addressed, never transferred.
 pub const SECRET_SERVICE: &str = "dev.staka.marxen";
@@ -36,6 +36,7 @@ pub enum AiProviderKind {
 pub enum AcpPreset {
     Codex,
     Opencode,
+    Copilot,
     Custom,
 }
 
@@ -53,6 +54,37 @@ pub struct AcpConfig {
     pub preset: AcpPreset,
     /// Required exactly when preset is custom.
     pub argv: Option<AcpArgv>,
+    /// Explicit choices advertised by this agent; applied before each prompt.
+    #[serde(default)]
+    #[ts(optional)]
+    pub selections: Option<Vec<AcpSelection>>,
+}
+
+/// One explicit agent configuration choice; never an unvalidated command argument.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AcpSelection {
+    pub id: String,
+    pub value: String,
+}
+
+/// A model or reasoning choice published by the connected ACP agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AcpChoice {
+    pub value: String,
+    pub name: String,
+}
+
+/// Select-only agent controls supported by this client.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AcpConfigOption {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub current_value: String,
+    pub options: Vec<AcpChoice>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -259,6 +291,10 @@ pub struct CredentialRef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AiTestResult {
+    /// Choices returned by an explicit ACP handshake; absent on local/API checks.
+    #[serde(default)]
+    #[ts(optional)]
+    pub config_options: Option<Vec<AcpConfigOption>>,
     pub ok: bool,
     pub detail: String,
 }
@@ -272,6 +308,9 @@ pub fn typescript() -> String {
         AcpPreset::decl(&cfg),
         AcpArgv::decl(&cfg),
         AcpConfig::decl(&cfg),
+        AcpSelection::decl(&cfg),
+        AcpChoice::decl(&cfg),
+        AcpConfigOption::decl(&cfg),
         OpenAiConfig::decl(&cfg),
         AnthropicConfig::decl(&cfg),
         AiProviderConfig::decl(&cfg),

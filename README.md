@@ -36,7 +36,9 @@ GFM の表・task list・Alerts・脚注、highlight、数式、Mermaid、saniti
 
 ## AI 接続と変更の承認
 
-Agent チャットの接続設定で、Codex ACP (`codex-acp`)、OpenCode ACP (`opencode acp`)、任意コマンド、OpenAI 互換 Chat Completions、Anthropic Messages を登録します。ACP adapter は利用者が導入します。Anthropic は利用者の明示設定で有効にします。API 資格情報は OS ストアに保存します。
+Agent チャットの接続設定で、Codex ACP (`codex-acp`)、OpenCode ACP (`opencode acp`)、GitHub Copilot ACP (`copilot --acp --stdio`)、任意コマンド、OpenAI 互換 Chat Completions、Anthropic Messages を登録します。ACP adapter は利用者が導入します。Anthropic は利用者の明示設定で有効にします。API 資格情報は OS ストアに保存します。
+
+Agent・インライン両チャットの入力欄で接続先とモデルを選びます。「モデルを選ぶ」は ACP エージェントに接続して公開されたモデル・推論強度の候補を取得します。送信前に選択値を設定し、エージェントの応答が一致することを確認します。候補を公開しないエージェントは CLI の設定を使います。直接 API のモデル名は入力欄で指定できます。接続設定はテーマを継承するダイアログで開き、Escape で閉じて元の操作へ戻れます。Windows の ACP プロセスは別のコンソール窓を表示せず、回答をチャットへ表示します。
 
 Agent チャットでは質問・生成・選択書き換え・ワークスペース編集を選び、会話を続けられます。選択があればその範囲、選択がなければ現在のファイルを参照します。会話一覧から以前の会話へ戻れ、パネルを閉じても履歴を保持します。履歴はアプリを終了すると消えます。接続先やモデルの変更では会話を分離し、以前の履歴を別の接続先へ送りません。
 

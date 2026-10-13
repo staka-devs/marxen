@@ -1,3 +1,5 @@
+import { createPortal } from "react-dom";
+import { trapDialogTab } from "./workspace/dialogFocus";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./ui/button";
 import {
@@ -114,13 +116,17 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
   );
   const [model, setModel] = useState(provider.openai?.model ?? provider.anthropic?.model ?? "");
   const [anthropicEnabled, setAnthropicEnabled] = useState(provider.anthropic?.enabled ?? false);
+  const [acpSelections, setAcpSelections] = useState(provider.acp?.selections);
   const [credential, setCredentialState] = useState<CredentialRef | null>(null);
   const [secretInput, setSecretInput] = useState("");
   const [credentialMessage, setCredentialMessage] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<AiTestResult | null>(null);
   const [testBusy, setTestBusy] = useState(false);
   const [liveConfirm, setLiveConfirm] = useState(false);
-  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const openerRef = useRef<Element | null>(null);
   const publishedProvider = useRef(provider);
 
   useEffect(() => {
@@ -133,27 +139,74 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
     setEndpoint(provider.openai?.endpoint ?? provider.anthropic?.endpoint ?? DEFAULT_ENDPOINTS.openai_compatible);
     setModel(provider.openai?.model ?? provider.anthropic?.model ?? "");
     setAnthropicEnabled(provider.anthropic?.enabled ?? false);
+    setAcpSelections(provider.acp?.selections);
     setCredentialState(null);
     setTestResult(null);
   }, [provider]);
 
   useEffect(() => {
-    if (openToken !== undefined && openToken > 0) detailsRef.current?.setAttribute("open", "");
+    if (openToken !== undefined && openToken > 0) setOpen(true);
   }, [openToken]);
 
   useEffect(() => {
+    if (!open || embedded) return;
+    openerRef.current = document.activeElement;
+    dialogRef.current?.focus();
+    /**
+     * Close the settings dialog on Escape without touching the draft.
+     *
+     * Registered in the capture phase so the shell's global shortcuts never
+     * fire first; focus restoration runs in the effect cleanup below.
+     */
+    const onKey = (event: KeyboardEvent) => {
+      trapDialogTab(event, dialogRef.current);
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        setOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      const opener = openerRef.current as HTMLElement | null;
+      if (opener && typeof opener.focus === "function") opener.focus();
+      else triggerRef.current?.focus();
+    };
+  }, [open, embedded]);
+
+  useEffect(() => {
     try {
-      profileStore?.save({ kind, preset, command, argsText, endpoint, model, anthropicEnabled });
+      profileStore?.save({ kind, preset, command, argsText, endpoint, model, anthropicEnabled, acpSelections });
     } catch {
       // Private mode/quota: profiles simply do not persist.
     }
-    const next = buildProviderConfig({ kind, preset, command, argsText, endpoint, model, anthropicEnabled });
+    const next = buildProviderConfig({ kind, preset, command, argsText, endpoint, model, anthropicEnabled, acpSelections });
     if (JSON.stringify(next) !== JSON.stringify(publishedProvider.current)) {
       publishedProvider.current = next;
       onProvider(next);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, preset, command, argsText, endpoint, model, anthropicEnabled]);
+  }, [kind, preset, command, argsText, endpoint, model, anthropicEnabled, acpSelections]);
+
+  /**
+   * Open the settings dialog, keeping the collapsed trigger quiet.
+   *
+   * Focus moves into the dialog via the open effect; the previously focused
+   * element is stored there so closing restores it.
+   */
+  function openSettings() {
+    setOpen(true);
+  }
+
+  /**
+   * Close the settings dialog and restore focus to the trigger.
+   *
+   * Draft field state is preserved; only visibility changes so an
+   * accidental close never discards edits.
+   */
+  function closeSettings() {
+    setOpen(false);
+  }
 
   /**
    * Refresh credential presence through the injected gateway.
@@ -234,7 +287,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
   const summary = describeProviderSummary(provider);
 
   const fields = (
-      <div className={embedded ? "space-y-4" : "space-y-2.5 border-t border-border px-2.5 py-2"}>
+      <div className={embedded ? "space-y-4" : "space-y-2.5 px-2.5 py-2"}>
         <div role="group" aria-label="接続先">
           {KIND_ORDER.map((candidate) => (
             <Button
@@ -263,7 +316,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
                 aria-label="ACP プリセット"
                 className="mt-1 block w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
                 value={preset}
-                onChange={(event) => setPreset(event.target.value as AcpPreset)}
+                onChange={(event) => { setPreset(event.target.value as AcpPreset); setAcpSelections(undefined); }}
               >
                 {(Object.keys(PRESET_LABELS) as AcpPreset[]).map((candidate) => (
                   <option key={candidate} value={candidate}>{PRESET_LABELS[candidate]}</option>
@@ -374,12 +427,46 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
       </div>
   );
   return embedded ? <div data-testid="ai-provider-settings">{fields}</div> : (
-    <details ref={detailsRef} data-testid="ai-provider-settings" className="max-h-[45dvh] overflow-y-auto rounded-sm border border-border">
-      <summary className="flex cursor-pointer items-center gap-1.5 px-2 py-1.5 text-xs" title={summary}>
+    <div data-testid="ai-provider-settings" className="ai-provider-settings">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={openSettings}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title={summary}
+        className="ai-provider-trigger flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs"
+      >
         <span className="shrink-0 font-medium">接続設定</span>
         <span className="min-w-0 flex-1 truncate text-[11px] font-normal text-muted-foreground">• {summary}</span>
-      </summary>
-      {fields}
-    </details>
+      </button>
+      {open && createPortal(
+        <div
+          className="ai-provider-overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeSettings();
+          }}
+        >
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="接続設定"
+            tabIndex={-1}
+            className="ai-provider-dialog"
+          >
+            <div className="ai-provider-dialog-header flex shrink-0 items-center gap-1.5">
+              <h2 className="min-w-0 flex-1 truncate text-[13px] font-semibold">接続設定</h2>
+              <Button variant="outline" size="sm" aria-label="接続設定を閉じる" title="閉じる" onClick={closeSettings} className="shrink-0">
+                閉じる
+              </Button>
+            </div>
+            <div className="ai-provider-dialog-body min-h-0 overflow-y-auto">
+              {fields}
+            </div>
+          </div>
+        </div>, triggerRef.current?.closest("[data-theme]") ?? document.body
+      )}
+    </div>
   );
 }
