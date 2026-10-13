@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AdvertisedAiProvider, AiViewPreferences } from "../../contracts/ai-view-preferences";
 import { defaultAiViewPreferences } from "../../domain/ai-view-preferences";
@@ -18,6 +18,11 @@ function Harness({ save = () => true }: {
 }
 
 describe("AI visibility management", () => {
+  it("keeps the section heading and labels saved width as a preference", () => {
+    render(<AiVisibilitySettings preferences={{ ...defaultAiViewPreferences(), chatPaneWidth: 480 }} onPreferences={vi.fn()} advertisedProviders={[]} />);
+    expect(screen.getByRole("heading", { name: "AI の表示設定" })).toBeVisible();
+    expect(screen.getByText("希望するチャット幅: 480px")).toBeVisible();
+  });
   it("searches actual IDs and independently persists model, provider and selector switches", () => {
     const save = vi.fn().mockReturnValue(true);
     render(<Harness save={save} />);
@@ -45,6 +50,7 @@ describe("AI visibility management", () => {
     const opener = screen.getByRole("button"); opener.focus();
     rerender(<div data-theme="contrast"><button>Manage</button><AiVisibilityDialog preferences={defaultAiViewPreferences()} onPreferences={vi.fn()} advertisedProviders={[]} onClose={onClose} /></div>);
     expect(screen.getByRole("dialog").closest("[data-theme]")).toHaveAttribute("data-theme", "contrast");
+    expect(within(screen.getByRole("dialog")).getAllByText("AI の表示設定")).toHaveLength(1);
     expect(screen.getByRole("searchbox")).toHaveFocus();
     fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Escape" });
     expect(onClose).toHaveBeenCalledOnce();

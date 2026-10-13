@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { aiViewPreferencesStore } from "./ai-view-preferences-store";
+import { createAiViewPreferencesStore } from "./ai-view-preferences-store";
 import { defaultAiViewPreferences } from "../../domain/ai-view-preferences";
+
+const aiViewPreferencesStore = createAiViewPreferencesStore();
 
 beforeEach(() => localStorage.clear());
 afterEach(() => vi.restoreAllMocks());

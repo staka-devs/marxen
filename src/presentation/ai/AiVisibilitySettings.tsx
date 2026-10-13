@@ -14,6 +14,7 @@ export interface AiVisibilitySettingsProps {
   onPreferences: (next: AiViewPreferences) => void;
   advertisedProviders: readonly AdvertisedAiProvider[];
   saveFailed?: boolean;
+  showHeading?: boolean;
 }
 
 interface DialogProps extends AiVisibilitySettingsProps {
@@ -22,7 +23,7 @@ interface DialogProps extends AiVisibilitySettingsProps {
 }
 
 /** Searchable provider groups expose only actual advertised model IDs and independent visibility switches. */
-export function AiVisibilitySettings({ preferences, onPreferences, advertisedProviders, saveFailed }: AiVisibilitySettingsProps) {
+export function AiVisibilitySettings({ preferences, onPreferences, advertisedProviders, saveFailed, showHeading = true }: AiVisibilitySettingsProps) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
   const search = query.trim().toLocaleLowerCase();
@@ -34,7 +35,7 @@ export function AiVisibilitySettings({ preferences, onPreferences, advertisedPro
     return { id, label, discovery, models, matches: matchProvider || models.length > 0 };
   }).filter((group) => group.matches);
   return <section aria-label={t("AI の表示設定")} className="space-y-3 text-xs">
-    <h3 className="text-[13px] font-semibold">{t("AI の表示設定")}</h3>
+    {showHeading && <h3 className="text-[13px] font-semibold">{t("AI の表示設定")}</h3>}
     <p className="text-muted-foreground">{t("候補を非表示にしても、選択中の接続先とモデルは保持します。")}</p>
     <div className="flex flex-wrap gap-x-4 gap-y-2">
       <label className="flex items-center gap-2"><input type="checkbox" checked={preferences.showProviderSelector} onChange={(event) => onPreferences({ ...preferences, showProviderSelector: event.target.checked })} />{t("チャットに接続先の選択欄を表示")}</label>
@@ -54,7 +55,7 @@ export function AiVisibilitySettings({ preferences, onPreferences, advertisedPro
       })}
       {groups.length === 0 && <p role="status" className="text-muted-foreground">{t("一致する接続先やモデルがありません。")}</p>}
     </div>
-    <div className="flex items-center justify-between gap-2"><span>{t("チャットの幅")}: {preferences.chatPaneWidth}px</span><button type="button" className="rounded-sm border border-border px-2 py-1 hover:bg-muted" onClick={() => onPreferences({ ...preferences, chatPaneWidth: AI_CHAT_WIDTH.default })}>{t("チャット幅をリセット")}</button></div>
+    <div className="flex items-center justify-between gap-2"><span>{t("希望するチャット幅")}: {preferences.chatPaneWidth}px</span><button type="button" className="rounded-sm border border-border px-2 py-1 hover:bg-muted" onClick={() => onPreferences({ ...preferences, chatPaneWidth: AI_CHAT_WIDTH.default })}>{t("チャット幅をリセット")}</button></div>
     {saveFailed && <p role="alert">{t("設定を保存できませんでした。この起動中は変更を保持します。")}</p>}
   </section>;
 }
@@ -77,6 +78,6 @@ export function AiVisibilityDialog({ onClose, ...props }: DialogProps) {
   }, [onClose]);
   return createPortal(<div className="ai-provider-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialog} role="dialog" aria-modal="true" aria-label={t("AI の表示設定")} className="ai-provider-dialog" tabIndex={-1}>
     <div className="flex items-center justify-between border-b border-border px-3 py-2 text-[13px]"><strong>{t("AI の表示設定")}</strong><button type="button" aria-label={t("AI の表示設定を閉じる")} className="rounded-sm px-2 py-1 hover:bg-muted" onClick={onClose}>{t("閉じる")}</button></div>
-    <div className="min-h-0 overflow-y-auto p-3"><AiVisibilitySettings {...props} /></div>
+    <div className="min-h-0 overflow-y-auto p-3"><AiVisibilitySettings {...props} showHeading={false} /></div>
   </div></div>, host);
 }

@@ -12,7 +12,7 @@ import type { AiUsageGateway, CodexAccountUsageGateway } from "../../application
 import { AiModelControls } from "../ai-model-controls";
 import { useAiModels } from "./hooks/useAiModels";
 import { useAiViewPreferences } from "../ai/useAiViewPreferences";
-import { AiVisibilityDialog } from "../ai/AiVisibilitySettings";
+import { AiVisibilityDialog, AiVisibilitySettings } from "../ai/AiVisibilitySettings";
 import { ResizableAiPane } from "../ai/ResizableAiPane";
 import type { AiViewPreferencesStore } from "../../application/ai/view-preferences-port";
 import AiProviderSettings from "../ai-provider-settings";
@@ -1076,6 +1076,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             preferences={preferences}
             onPreferences={updatePreferences}
             aiSettings={<AiProviderSettings embedded provider={aiProvider} onProvider={setAiProvider} gateway={aiGateway} profileStore={aiProfileStore} />}
+            aiVisibilitySettings={<AiVisibilitySettings preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} saveFailed={aiView.saveFailed} />}
             vimSettings={desktop && vimSettingsGateway ? <VimSettingsHost gateway={vimSettingsGateway} initialPath={workspace.configPath} onSaved={workspace.setConfigPath} dialogGateway={dialogGateway} /> : undefined}
             configPath={workspace.configPath}
             configError={workspace.configError}

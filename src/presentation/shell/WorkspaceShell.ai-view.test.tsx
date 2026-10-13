@@ -1,9 +1,11 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AiGateway, RuntimeGateway } from "../../application/ports";
-import { aiViewPreferencesStore } from "../../infrastructure/storage/ai-view-preferences-store";
+import { createAiViewPreferencesStore } from "../../infrastructure/storage/ai-view-preferences-store";
 import { defaultAiViewPreferences } from "../../domain/ai-view-preferences";
 import { WorkspaceShell } from "./WorkspaceShell";
+
+const aiViewPreferencesStore = createAiViewPreferencesStore();
 
 beforeEach(() => localStorage.clear());
 afterEach(cleanup);

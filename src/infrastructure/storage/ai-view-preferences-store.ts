@@ -16,5 +16,7 @@ export function saveAiViewPreferences(preferences: AiViewPreferences): boolean {
   catch { return false; }
 }
 
-/** Adapter injected at the composition root. */
-export const aiViewPreferencesStore: AiViewPreferencesStore = { load: loadAiViewPreferences, save: saveAiViewPreferences };
+/** Create the view-only adapter once in composition for shared chat, pane and settings state. */
+export function createAiViewPreferencesStore(): AiViewPreferencesStore {
+  return { load: loadAiViewPreferences, save: saveAiViewPreferences };
+}
