@@ -61,6 +61,7 @@ jobs:
       - run: npm run contracts:check
       - run: npm run ai-contracts:check
       - run: npm run isolation-contracts:check
+      - run: npm run vim-settings-contracts:check
       - run: npm run typecheck
       - run: npm run architecture:check
       - run: npm test -- --maxWorkers=2

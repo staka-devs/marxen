@@ -8,3 +8,5 @@ pub mod document;
 pub mod isolation;
 #[cfg(feature = "desktop")]
 pub mod runtime;
+#[cfg(feature = "desktop")]
+pub mod vim_settings;

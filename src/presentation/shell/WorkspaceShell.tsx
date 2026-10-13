@@ -21,6 +21,8 @@ import { SearchPanel } from "../workspace/SearchPanel";
 import { Outline } from "../workspace/Outline";
 import { CommandPalette, type PaletteCommand } from "../workspace/CommandPalette";
 import { SettingsPanel } from "../workspace/SettingsPanel";
+import { VimSettingsHost } from "../vim-settings/VimSettingsHost";
+import type { VimSettingsGateway } from "../../application/vim-settings/ports";
 import { RawGridView } from "../workspace/RawGridView";
 import { GuiToolbar } from "../workspace/GuiToolbar";
 import { NotificationToast, WorkspaceDialog, type Notice, type NoticeKind } from "../workspace/Notifications";
@@ -98,6 +100,8 @@ export interface WorkspaceShellProps {
   editorPreferencesStore?: EditorPreferencesStore;
   /** Document-scoped image byte loader. */
   imageLoader?: ImageLoader;
+  /** Fingerprint-guarded Vim configuration editor supplied by composition. */
+  vimSettingsGateway?: VimSettingsGateway;
   /** True on desktop; browser demo stays read-only. */
   desktop?: boolean;
 }
@@ -141,6 +145,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     aiProfileStore,
     editorPreferencesStore,
     imageLoader,
+    vimSettingsGateway,
     desktop: desktopProp,
   } = props;
   const desktop = desktopProp ?? false;
@@ -1057,6 +1062,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             preferences={preferences}
             onPreferences={updatePreferences}
             aiSettings={<AiProviderSettings embedded provider={aiProvider} onProvider={setAiProvider} gateway={aiGateway} profileStore={aiProfileStore} />}
+            vimSettings={desktop && vimSettingsGateway ? <VimSettingsHost gateway={vimSettingsGateway} initialPath={workspace.configPath} onSaved={workspace.setConfigPath} dialogGateway={dialogGateway} /> : undefined}
             configPath={workspace.configPath}
             configError={workspace.configError}
             onConfigPath={workspace.setConfigPath}

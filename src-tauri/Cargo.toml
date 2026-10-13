@@ -39,6 +39,11 @@ name = "mock-isolation-agent"
 path = "src/bin/mock-isolation-agent.rs"
 required-features = ["dev-tools"]
 
+[[bin]]
+name = "export-vim-settings-contracts"
+path = "src/bin/export-vim-settings-contracts.rs"
+required-features = ["dev-tools"]
+
 [features]
 default = ["desktop"]
 # Contract generators and independent protocol fixtures never ship in the app.
