@@ -3,7 +3,11 @@ import { useI18n } from "./i18n/I18nProvider";
 import type { AcpConfigOption, AiProviderConfig } from "../contracts/ai-contracts";
 import { defaultProviderConfig, PRESET_LABELS } from "../domain/ai-config";
 import { RefreshCw } from "lucide-react";
+import { Settings2 } from "lucide-react";
 import { ChoiceMenu } from "./ui/choice-menu";
+import type { AiViewPreferences } from "../contracts/ai-view-preferences";
+import { aiProviderId, defaultAiViewPreferences, isAiModelVisible } from "../domain/ai-view-preferences";
+import { ProviderIcon } from "./ai/provider-icon";
 
 interface AiModelControlsProps {
   provider: AiProviderConfig;
@@ -16,14 +20,24 @@ interface AiModelControlsProps {
   /** Explicitly inspect the connected agent for actual model choices. */
   onRefresh: () => void;
   disabled?: boolean;
+  preferences?: AiViewPreferences;
+  /** Open visibility management while preserving the active connection and selections. */
+  onManageVisibility?: () => void;
 }
 
 /** Keep provider, actual model and reasoning controls beside both chat composers. */
-export function AiModelControls({ provider, onProvider, options, loading, discovered, error, onRefresh, disabled = false }: AiModelControlsProps) {
+export function AiModelControls({ provider, onProvider, options, loading, discovered, error, onRefresh, disabled = false, preferences = defaultAiViewPreferences(), onManageVisibility }: AiModelControlsProps) {
   const { t } = useI18n();
-  const selectedProvider = provider.kind === "acp" ? provider.acp?.preset ?? "codex" : provider.kind;
+  const selectedProvider = aiProviderId(provider);
+  const providerChoices = [
+    ...Object.entries(PRESET_LABELS).map(([value, label]) => ({ value, label: t(label as LabelKey), group: t("ACP エージェント"), icon: <ProviderIcon provider={value as typeof selectedProvider} /> })),
+    { value: "openai_compatible", label: t("OpenAI 互換 API"), group: t("直接 API"), icon: <ProviderIcon provider="openai_compatible" /> },
+    { value: "anthropic", label: "Anthropic API", group: t("直接 API"), icon: <ProviderIcon provider="anthropic" /> },
+  ];
+  const hiddenCurrent = preferences.hiddenProviders.includes(selectedProvider) || options.some((option) => option.category === "model" && !isAiModelVisible(preferences, selectedProvider, option.id, provider.acp?.selections?.find((item) => item.id === option.id)?.value ?? option.currentValue));
   /** Switch to a configured adapter or an API profile without starting or authenticating it. */
   function changeProvider(value: string) {
+    if (value === selectedProvider) return;
     if (value === "openai_compatible" || value === "anthropic") {
       onProvider(provider.kind === value ? provider : defaultProviderConfig(value));
     } else {
@@ -35,6 +49,7 @@ export function AiModelControls({ provider, onProvider, options, loading, discov
     if (!provider.acp) return;
     const option = options.find((item) => item.id === id);
     const current = provider.acp.selections ?? [];
+    if ((current.find((item) => item.id === id)?.value ?? option?.currentValue) === value) return;
     // A model change invalidates its dependent reasoning override.
     const preserved = current.filter((item) => item.id !== id && (option?.category !== "model" || options.find((entry) => entry.id === item.id)?.category !== "thought_level"));
     onProvider({ ...provider, acp: { ...provider.acp, selections: [...preserved, { id, value }] } });
@@ -45,15 +60,17 @@ export function AiModelControls({ provider, onProvider, options, loading, discov
     else if (provider.anthropic) onProvider({ ...provider, anthropic: { ...provider.anthropic, model } });
   }
   return <div className="ai-model-controls">
-    <ChoiceMenu label={t("チャットの接続先")} value={selectedProvider} disabled={disabled} onChange={changeProvider} choices={[
-      ...Object.entries(PRESET_LABELS).map(([value, label]) => ({ value, label: t(label as LabelKey) })),
-      { value: "openai_compatible", label: t("OpenAI 互換 API") }, { value: "anthropic", label: "Anthropic API" },
-    ]} />
+    {preferences.showProviderSelector && <ChoiceMenu label={t("チャットの接続先")} value={selectedProvider} valueLabel={providerChoices.find((choice) => choice.value === selectedProvider)?.label} valueIcon={<ProviderIcon provider={selectedProvider} />} disabled={disabled} onChange={changeProvider} searchLabel={t("接続先を検索")} emptyLabel={t("表示する候補がありません。表示設定で変更できます。")} choices={providerChoices.filter((choice) => !preferences.hiddenProviders.includes(choice.value as typeof selectedProvider))} />}
     {provider.kind === "acp" ? <>
-      {options.map((option) => <ChoiceMenu key={option.id} label={option.category === "model" ? t("チャットのモデル") : t("チャットの推論強度")} value={provider.acp?.selections?.find((item) => item.id === option.id)?.value ?? option.currentValue} disabled={disabled || loading} onChange={(value) => changeChoice(option.id, value)} choices={option.options.map((choice) => ({ value: choice.value, label: choice.name }))} />)}
-      <button type="button" className="ai-model-refresh inline-flex items-center gap-1" disabled={disabled || loading} onClick={onRefresh} aria-label={t("モデル候補を取得")} title={t("接続先が公開するモデル候補を取得")}><RefreshCw size={12} aria-hidden="true" className={loading ? "animate-spin" : undefined} />{loading ? t("接続中…") : discovered ? null : t("モデルを選ぶ")}</button>
-      {discovered && !loading && !error && options.length === 0 && <small>{t("この接続先はモデル候補を公開していません。CLI の設定を使用します。")}</small>}
-    </> : <label className="ai-model-api"><span className="sr-only">{t("チャットのモデル")}</span><input aria-label={t("チャットのモデル")} placeholder={t("モデル名を入力")} value={provider.openai?.model ?? provider.anthropic?.model ?? ""} disabled={disabled} onChange={(event) => changeApiModel(event.target.value)} /></label>}
+      {preferences.showModelSelector && options.filter((option) => option.category === "model" || option.category === "thought_level").map((option) => {
+        const value = provider.acp?.selections?.find((item) => item.id === option.id)?.value ?? option.currentValue;
+        return <ChoiceMenu key={option.id} label={option.category === "model" ? t("チャットのモデル") : t("チャットの推論強度")} value={value} valueLabel={option.options.find((choice) => choice.value === value)?.name ?? value} disabled={disabled || loading} onChange={(next) => changeChoice(option.id, next)} searchLabel={option.category === "model" ? t("モデルを検索") : undefined} emptyLabel={t("表示する候補がありません。表示設定で変更できます。")} choices={option.options.filter((choice) => option.category !== "model" || isAiModelVisible(preferences, selectedProvider, option.id, choice.value)).map((choice) => ({ value: choice.value, label: choice.name, description: choice.value, group: option.name }))} />;
+      })}
+      <button type="button" className="ai-model-refresh inline-flex items-center gap-1" disabled={disabled || loading} onClick={onRefresh} aria-label={t("接続して候補を確認")} title={t("接続先が公開するモデル候補を取得")}><RefreshCw size={12} aria-hidden="true" className={loading ? "animate-spin" : undefined} />{loading ? t("接続中…") : t("接続を確認")}</button>
+      {preferences.showModelSelector && discovered && !loading && !error && !options.some((option) => option.category === "model" && option.options.length > 0) && <small>{t("この接続先はモデル候補を公開していません。CLI の設定を使用します。")}</small>}
+      {preferences.showModelSelector && !discovered && !loading && <small>{t("接続を確認すると公開モデルを表示します。")}</small>}
+    </> : preferences.showModelSelector && <label className="ai-model-api"><span className="sr-only">{t("チャットのモデル")}</span><input aria-label={t("チャットのモデル")} placeholder={t("モデル名を入力")} value={provider.openai?.model ?? provider.anthropic?.model ?? ""} disabled={disabled} onChange={(event) => changeApiModel(event.target.value)} /></label>}
+    {onManageVisibility && <button type="button" className="inline-flex items-center gap-1 rounded-sm px-1.5 py-1 text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-primary" onClick={onManageVisibility} aria-label={t("AI の表示設定")} title={t("AI の表示設定")}><Settings2 size={13} aria-hidden="true" />{hiddenCurrent ? t("選択中の候補は非表示です") : null}</button>}
     {error && <small role="alert">{error}</small>}
   </div>;
 }

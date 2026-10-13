@@ -36,6 +36,7 @@ export default function App() {
         dropGateway={composition.dropGateway}
         clipboardGateway={composition.clipboardGateway}
         aiProfileStore={composition.aiProfileStore}
+        aiViewPreferencesStore={composition.aiViewPreferencesStore}
         editorPreferencesStore={composition.editorPreferencesStore}
         imageLoader={composition.imageLoader}
         vimSettingsGateway={composition.vimSettingsGateway}

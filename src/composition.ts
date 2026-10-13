@@ -15,6 +15,7 @@ import { dialogGateway } from "./infrastructure/native/dialog";
 import { dropGateway } from "./infrastructure/native/drop";
 import { clipboardGateway } from "./infrastructure/clipboard/clipboard-writer";
 import { aiProfileStore } from "./infrastructure/storage/ai-profile-store";
+import { createAiViewPreferencesStore } from "./infrastructure/storage/ai-view-preferences-store";
 import { editorPreferencesStore } from "./infrastructure/storage/editor-preferences-store";
 import { imageLoader } from "./infrastructure/images/image-loader";
 import { vimSettingsGateway } from "./infrastructure/vim-settings/tauri-vim-settings";
@@ -36,6 +37,7 @@ import type {
  */
 export function createComposition() {
   const desktop = isDesktop();
+  const aiViewPreferencesStore = createAiViewPreferencesStore();
   /** Raw document transport: the Tauri workspace API satisfies the port. */
   const documentTransport: DocumentTransport = workspaceApi;
   /** Serial registry on desktop, rejecting read-only registry in the browser. */
@@ -56,6 +58,7 @@ export function createComposition() {
     dropGateway,
     clipboardGateway,
     aiProfileStore,
+    aiViewPreferencesStore,
     editorPreferencesStore,
     imageLoader,
     vimSettingsGateway: desktop ? vimSettingsGateway : undefined,

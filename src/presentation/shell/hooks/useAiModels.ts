@@ -5,16 +5,27 @@ import type { AiGateway } from "../../../application/ports";
 import { describeInvokeError } from "../../../domain/ai-config";
 import type { LocalizedText } from "../../../contracts/localization";
 import { localizedFailure, renderLocalizedText } from "../../../domain/localization";
+import { aiProviderId } from "../../../domain/ai-view-preferences";
+import type { AiProviderId, AdvertisedAiProvider } from "../../../contracts/ai-view-preferences";
 
 /** Share explicit agent discovery across both chat surfaces, fencing stale connection results. */
 export function useAiModels(provider: AiProviderConfig, gateway?: AiGateway) {
   const { t } = useI18n();
+  const providerId = aiProviderId(provider);
   const connection = JSON.stringify({ kind: provider.kind, preset: provider.acp?.preset, argv: provider.acp?.argv });
   const current = useRef(connection);
   current.current = connection;
   const attempt = useRef(0);
-  const [result, setResult] = useState<{ connection: string; options: AcpConfigOption[]; error: LocalizedText | null } | null>(null);
+  const [results, setResults] = useState<Record<string, { provider: AiProviderId; options: AcpConfigOption[]; error: LocalizedText | null }>>({});
+  const result = results[connection];
   const [pending, setPending] = useState<string | null>(null);
+  /** Retain the actual discovery for this configuration and replace older metadata for the same adapter. */
+  function noteDiscovery(options: AcpConfigOption[], error: LocalizedText | null) {
+    setResults((previous) => ({
+      ...Object.fromEntries(Object.entries(previous).filter(([, entry]) => entry.provider !== providerId)),
+      [connection]: { provider: providerId, options, error },
+    }));
+  }
   /** Start a user-requested, isolated handshake without sending document contents or a prompt. */
   async function refresh() {
     if (!gateway || provider.kind !== "acp" || pending === connection) return;
@@ -24,19 +35,20 @@ export function useAiModels(provider: AiProviderConfig, gateway?: AiGateway) {
     try {
       const reply = await gateway.testConnection(provider, true);
       if (current.current !== requested || attempt.current !== token) return;
-      setResult({ connection: requested, options: reply.ok ? reply.configOptions ?? [] : [], error: reply.ok ? null : reply.detail });
+      noteDiscovery(reply.ok ? reply.configOptions ?? [] : [], reply.ok ? null : reply.detail);
     } catch (cause) {
       if (current.current === requested && attempt.current === token) {
-        setResult({ connection: requested, options: [], error: localizedFailure(cause, describeInvokeError) });
+        noteDiscovery([], localizedFailure(cause, describeInvokeError));
       }
     } finally {
       if (attempt.current === token) setPending(null);
     }
   }
   return {
-    options: result?.connection === connection ? result.options : [],
-    error: result?.connection === connection && result.error !== null ? renderLocalizedText(result.error, t) : null,
-    discovered: result?.connection === connection,
+    options: result?.options ?? [],
+    error: result && result.error !== null ? renderLocalizedText(result.error, t) : null,
+    discovered: result !== undefined,
+    advertisedProviders: Object.entries(results).filter(([key, entry]) => entry.provider !== providerId || key === connection).map(([, entry]): AdvertisedAiProvider => ({ provider: entry.provider, options: entry.options, discovered: entry.error === null })),
     loading: pending === connection,
     refresh,
   };

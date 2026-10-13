@@ -11,6 +11,10 @@ import { AiUsagePopover } from "../ai/AiUsagePopover";
 import type { AiUsageGateway, CodexAccountUsageGateway } from "../../application/ai/usage-ports";
 import { AiModelControls } from "../ai-model-controls";
 import { useAiModels } from "./hooks/useAiModels";
+import { useAiViewPreferences } from "../ai/useAiViewPreferences";
+import { AiVisibilityDialog, AiVisibilitySettings } from "../ai/AiVisibilitySettings";
+import { ResizableAiPane } from "../ai/ResizableAiPane";
+import type { AiViewPreferencesStore } from "../../application/ai/view-preferences-port";
 import AiProviderSettings from "../ai-provider-settings";
 import { EditorActionsPopover } from "../workspace/EditorActionsPopover";
 import { WorkspaceSidebar } from "../workspace/WorkspaceSidebar";
@@ -108,6 +112,8 @@ export interface WorkspaceShellProps {
   clipboardGateway?: ClipboardGateway;
   /** Non-secret AI profile persistence. */
   aiProfileStore?: AiProfileStore;
+  /** Persist AI control visibility and right-chat width independently of editor settings. */
+  aiViewPreferencesStore?: AiViewPreferencesStore;
   /** View-only editor preferences persistence. */
   editorPreferencesStore?: EditorPreferencesStore;
   /** Document-scoped image byte loader. */
@@ -184,6 +190,10 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   });
 
   const aiModels = useAiModels(aiProvider, aiGateway);
+  const aiView = useAiViewPreferences(props.aiViewPreferencesStore);
+  const [aiVisibilityOpen, setAiVisibilityOpen] = useState(false);
+  /** Restore the composer after managing its view-only preferences. */
+  const closeAiVisibility = useCallback(() => setAiVisibilityOpen(false), []);
 
   const [preferences, setPreferences] = useState(() => {
     try {
@@ -267,7 +277,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   });
   /** AI review and inline flow with shared staging exclusion. */
   const staging = useAiStaging({ desktop, notify: setNotice, session, isolationGateway });
-  const modelControls = <AiModelControls provider={aiProvider} onProvider={setAiProvider} {...aiModels} onRefresh={() => void aiModels.refresh()} disabled={staging.agentBusy || staging.inlineBusy} />;
+  const modelControls = <AiModelControls provider={aiProvider} onProvider={setAiProvider} {...aiModels} preferences={aiView.preferences} onManageVisibility={() => setAiVisibilityOpen(true)} onRefresh={() => void aiModels.refresh()} disabled={staging.agentBusy || staging.inlineBusy} />;
   // Read-through aliases for narrowing-heavy JSX; ownership stays in hooks.
   /** Active document for pane rendering. */
   const active = session.active;
@@ -1066,6 +1076,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             preferences={preferences}
             onPreferences={updatePreferences}
             aiSettings={<AiProviderSettings embedded provider={aiProvider} onProvider={setAiProvider} gateway={aiGateway} profileStore={aiProfileStore} />}
+            aiVisibilitySettings={<AiVisibilitySettings preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} saveFailed={aiView.saveFailed} />}
             vimSettings={desktop && vimSettingsGateway ? <VimSettingsHost gateway={vimSettingsGateway} initialPath={workspace.configPath} onSaved={workspace.setConfigPath} dialogGateway={dialogGateway} /> : undefined}
             configPath={workspace.configPath}
             configError={workspace.configError}
@@ -1089,16 +1100,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       </div>
 
       {desktop && (
-        <aside
-          data-testid="ai-sidebar"
-          aria-label={t("AI サイドバー")}
-          aria-hidden={!showAi}
-          className={
-            showAi
-              ? "marxen-ai-sidebar flex w-[340px] max-w-[85vw] shrink-0 flex-col border-l border-border bg-card"
-              : "hidden"
-          }
-        >
+        <ResizableAiPane visible={showAi} width={aiView.preferences.chatPaneWidth} onWidth={(chatPaneWidth) => aiView.updatePreferences({ ...aiView.preferences, chatPaneWidth })}>
           <div className="flex min-h-0 flex-1 flex-col">
           <AiPanel
             headerActions={aiUsageGateway ? <AiUsagePopover gateway={aiUsageGateway} accountGateway={codexAccountUsageGateway} theme={theme} /> : undefined}
@@ -1156,8 +1158,9 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                 {t("却下する")}</button>
             </details>
           )}
-        </aside>
+        </ResizableAiPane>
       )}
+      {aiVisibilityOpen && <AiVisibilityDialog preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} saveFailed={aiView.saveFailed} onClose={closeAiVisibility} />}
     </div>
   );
 }
