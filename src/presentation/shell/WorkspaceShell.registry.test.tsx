@@ -1020,3 +1020,15 @@ it("routes display-basis arrows natively in Visual so x-mode mappings fire", asy
 
 
 
+
+it("keeps text typed immediately after Enter on the native queue until cursor refresh completes", async () => {
+  await openInsertDoc();
+  const editor = screen.getByTestId("editor-primary");
+  fireEvent.keyDown(editor, { key: "Enter" });
+  fireEvent.keyDown(editor, { key: "x" });
+  await waitFor(() => {
+    const inputs = mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input_with_copy");
+    expect(inputs.map(([, args]) => (args as { keys: string }).keys)).toEqual(["<CR>", "x"]);
+  });
+  expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
+});

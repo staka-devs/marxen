@@ -187,6 +187,7 @@ describe("execution-mode character routing", () => {
   /** Install mode-aware invoke mocks for character routing tests. */ function installModeAware(handlers: (command: string, args?: unknown) => Promise<unknown>, getRevision?: () => number) {
     mockedInvoke.mockImplementation((command: string, args?: unknown) => {
       if (command === "fetch_mode") return Promise.resolve({ documentId: "doc_1", revision: getRevision?.() ?? 0, mode: nativeMode });
+      if (command === "report_cursor") return Promise.resolve(args);
       return handlers(command, args);
     });
   }
@@ -406,6 +407,7 @@ describe("clipboard paste respects explicit mappings", () => {
   /** Install paste invoke mocks for captured-paste tests. */ function installPaste(handlers: (command: string, args?: unknown) => Promise<unknown>) {
     mockedInvoke.mockImplementation((command: string, args?: unknown) => {
       if (command === "fetch_mode") return Promise.resolve({ documentId: "doc_1", revision: 0, mode: nativeMode });
+      if (command === "report_cursor") return Promise.resolve(args);
       return handlers(command, args);
     });
   }
@@ -543,3 +545,72 @@ describe("composition gate commits once", () => {
 });
 
 
+
+
+describe("GUI text and native Enter share one cursor", () => {
+  /** Model a native buffer whose range edits do not implicitly move its cursor. */
+  function installNativeBuffer(before: string) {
+    let text = before;
+    let revision = 0;
+    let cursor = 0;
+    mockedInvoke.mockImplementation(async (command, args) => {
+      const values = args as Record<string, unknown>;
+      if (command === "fetch_mode") return { mode: "insert", revision };
+      if (command === "has_nvim_mapping") return false;
+      if (command === "apply_gui_edits") {
+        expect(values.baseRevision).toBe(revision);
+        const edit = (values.edits as Array<{ range: { start: number; end: number }; text: string }>)[0];
+        text = text.slice(0, edit.range.start) + edit.text + text.slice(edit.range.end);
+        return snapshot("enter", ++revision, text);
+      }
+      if (command === "report_cursor") {
+        expect(values.revision).toBe(revision);
+        cursor = Number(values.head);
+        return { documentId: "enter", revision, anchor: cursor, head: cursor };
+      }
+      if (command === "nvim_input_with_copy") {
+        expect(values.keys).toBe("<CR>");
+        expect(values.baseRevision).toBe(revision);
+        text = text.slice(0, cursor) + "\n" + text.slice(cursor);
+        cursor += 1;
+        return { snapshot: snapshot("enter", ++revision, text), copy: null, copyReady: false };
+      }
+      throw new Error("Unexpected command " + command);
+    });
+    return new RegistryClient(workspaceApi);
+  }
+
+  it.each([
+    { before: "本文\n", key: "a", range: { start: 0, end: 0 }, expected: "a\n本文\n" },
+    { before: "日本語\n", key: "😀", range: { start: 3, end: 3 }, expected: "日本語😀\n\n" },
+    { before: "前選択後\n", key: "字", range: { start: 1, end: 3 }, expected: "前字\n後\n" },
+  ])("moves the native caret after GUI insertion before queued Enter: $key", async ({ before, key, range, expected }) => {
+    const client = installNativeBuffer(before);
+    const edit = client.routeCharKey("enter", key, range);
+    const newline = client.vimInputWithCopy("enter", "<CR>", vi.fn());
+    await edit;
+    expect((await newline).snapshot.text).toBe(expected);
+    const commands = mockedInvoke.mock.calls.map(([command]) => command);
+    expect(commands.indexOf("report_cursor")).toBeLessThan(commands.indexOf("nvim_input_with_copy"));
+  });
+
+  it("keeps a rapid character burst and Enter in edit/cursor order", async () => {
+    const client = installNativeBuffer("\n");
+    const tasks = [
+      client.routeCharKey("enter", "a", { start: 0, end: 0 }),
+      client.routeCharKey("enter", "b", { start: 1, end: 1 }),
+      client.routeCharKey("enter", "c", { start: 2, end: 2 }),
+      client.vimInputWithCopy("enter", "<CR>", vi.fn()),
+    ];
+    const result = await Promise.all(tasks);
+    expect(result.at(-1)).toMatchObject({ snapshot: { text: "abc\n\n" } });
+  });
+
+  it("synchronizes multiline paste before the following native Enter", async () => {
+    const client = installNativeBuffer("前後\n");
+    const paste = client.routeCapturedPaste("enter", null, "日本語😀\n次", { start: 1, end: 1 });
+    const newline = client.vimInputWithCopy("enter", "<CR>", vi.fn());
+    await paste;
+    expect((await newline).snapshot.text).toBe("前日本語😀\n次\n後\n");
+  });
+});
