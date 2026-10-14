@@ -97,15 +97,22 @@ pub struct MatchPositions {
     line_start: usize,
 }
 
-impl MatchPositions {
-    /// Start one file's positions without building or retaining a general text index.
-    pub fn new() -> Self {
+impl Default for MatchPositions {
+    /// Initialize the first line and zero offsets for the forward-only scan.
+    fn default() -> Self {
         Self {
             byte: 0,
             utf16: 0,
             line: 1,
             line_start: 0,
         }
+    }
+}
+
+impl MatchPositions {
+    /// Start one file's positions without building or retaining a general text index.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Advance once through unvisited scalars, preserving Unicode and LF line coordinates.
@@ -180,6 +187,11 @@ pub fn preview(
 mod tests {
     use super::*;
 
+    /// Build one expected range without confusing it with a vector of its member offsets.
+    fn one_range(range: std::ops::Range<usize>) -> Vec<std::ops::Range<usize>> {
+        std::iter::once(range).collect()
+    }
+
     #[test]
     /// Match greedy continuations, alternations, line anchors, escapes and Unicode natively.
     fn maintained_matching_fixtures() {
@@ -188,15 +200,15 @@ mod tests {
             ..SearchOptions::default()
         };
         for (pattern, text, expected) in [
-            ("a+a", "aaa", vec![0..3]),
-            ("(a|ab)c", "abc", vec![0..3]),
-            ("a.c", "ac abc", vec![3..6]),
-            ("^foo$", "x\nfoo\n", vec![2..5]),
-            (r"\x61", "a", vec![0..1]),
-            (r"\w+", "😀𐐀_日本", vec![4..15]),
-            (r"\d", "𝟚", vec![0..4]),
+            ("a+a", "aaa", one_range(0..3)),
+            ("(a|ab)c", "abc", one_range(0..3)),
+            ("a.c", "ac abc", one_range(3..6)),
+            ("^foo$", "x\nfoo\n", one_range(2..5)),
+            (r"\x61", "a", one_range(0..1)),
+            (r"\w+", "😀𐐀_日本", one_range(4..15)),
+            (r"\d", "𝟚", one_range(0..4)),
             ("σ", "ς Σ σ", vec![0..2, 3..5, 6..8]),
-            ("a.b", "a\rb", vec![0..3]),
+            ("a.b", "a\rb", one_range(0..3)),
         ] {
             let found = Matcher::compile(pattern, &options)
                 .unwrap()
