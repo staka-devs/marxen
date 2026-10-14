@@ -54,6 +54,8 @@ import type { ImageResolver } from "../domain/image-sources";
 
 /** Revision-aware document gateway owned by the registry transport. */
 export interface DocumentGateway {
+  /** Select the authoritative whole buffer only while captured native context remains current. */
+  selectAll(context: EditorContext): Promise<CursorUpdate>;
   /** Format only a captured native selection at its exact source and revision. */
   formatEditorSelection(cursor: CursorUpdate, beforeText: string, kind: import("../domain/markdown-gui").FormatKind): Promise<DocumentSnapshot>;
   /** Capture authoritative menu data at queue execution. */
@@ -199,6 +201,8 @@ export interface WorkspaceGateway {
   openTextFile(path: string): Promise<OpenDocument>;
   /** Create a Markdown document. */
   createMarkdown(path: string, text?: string): Promise<OpenDocument>;
+  /** Create one contained folder under an existing parent without opening a document. */
+  createFolder(path: string): Promise<WorkspaceEntry>;
   /** Rename a Markdown document. */
   renameMarkdown(request: SaveRequest, path: string): Promise<OpenDocument>;
   /** Close a document with an explicit decision. */

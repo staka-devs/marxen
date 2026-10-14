@@ -8,6 +8,7 @@ export interface PickerItem {
   detail?: string;
   icon?: ReactNode;
   accessibleLabel?: string;
+  disabled?: boolean;
 }
 interface Props {
   label: string;
@@ -44,7 +45,7 @@ export function QuickPicker({ label, inputLabel, placeholder, testId, query, ite
     panel.current?.querySelectorAll('[role="option"]')[active]?.scrollIntoView?.({ block: "nearest" });
   }, [active, items]);
   /** Dismiss before executing so an action may safely focus its next dialog. */
-  const choose = (id: string) => { onClose(); onSelect(id); };
+  const choose = (id: string) => { if (items.find((item) => item.id === id)?.disabled) return; onClose(); onSelect(id); };
   return <div className="fixed inset-0 z-30 flex items-start justify-center bg-black/20 px-4 pt-[min(12dvh,90px)]" onPointerDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div ref={panel} role="dialog" aria-modal="true" aria-label={label} data-testid={testId} className="flex max-h-[75dvh] w-full max-w-xl flex-col overflow-hidden rounded-md border border-border bg-card shadow-2xl"
       onKeyDown={(event) => {
@@ -63,8 +64,8 @@ export function QuickPicker({ label, inputLabel, placeholder, testId, query, ite
         <button ref={closeButton} type="button" aria-label={t("{{value0}}を閉じる", { value0: (label) })} title={t("閉じる (Esc)")} onClick={onClose} className="rounded p-1 text-muted-foreground hover:bg-muted"><X size={15} /></button>
       </div>
       <ul id={resultsId} role="listbox" aria-label={label} className="min-h-0 overflow-y-auto p-1">
-        {items.map((item, position) => <li key={item.id} id={`${resultsId}-${position}`} role="option" aria-selected={position === active}>
-          <button type="button" tabIndex={-1} aria-label={item.accessibleLabel} title={item.accessibleLabel} onPointerMove={() => setIndex(position)} onClick={() => choose(item.id)} className={`flex h-9 w-full min-w-0 items-center gap-2.5 rounded px-3 text-left text-[13px] ${position === active ? "bg-primary/10 text-foreground" : "hover:bg-muted/50"}`}>
+        {items.map((item, position) => <li key={item.id} id={`${resultsId}-${position}`} role="option" aria-disabled={item.disabled} aria-selected={position === active}>
+          <button type="button" disabled={item.disabled} tabIndex={-1} aria-label={item.accessibleLabel} title={item.accessibleLabel} onPointerMove={() => setIndex(position)} onClick={() => choose(item.id)} className={`flex h-9 w-full min-w-0 items-center gap-2.5 rounded px-3 text-left text-[13px] disabled:opacity-40 ${position === active ? "bg-primary/10 text-foreground" : "hover:bg-muted/50"}`}>
             {item.icon}<span className="shrink-0 max-w-[65%] truncate">{item.label}</span><span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{item.detail}</span>
           </button>
         </li>)}

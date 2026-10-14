@@ -32,6 +32,7 @@ import { isStaleError, READONLY_MESSAGE, StaleResync } from "../../domain/docume
 import { applyTextEdits } from "../../domain/coordinates/utf16";
 import { adjacentTableCell, formatRange, hardBreakSpaces, type FormatKind } from "../../domain/markdown-gui";
 import type { DocumentTransport, EditorAction } from "../ports";
+import { supportsEditorSelection } from "../../domain/editor-menu";
 
 /** Paste-image arguments pairing a save request with bytes and a range. */
 export interface PasteImageArgs {
@@ -64,6 +65,21 @@ export class RegistryClient {
    * serialization, execution-time revision binding, and stale resync.
    */
   constructor(private transport: DocumentTransport) {}
+
+  /** Select the complete native source in queue order without replaying a stale gesture. */
+  selectAll(expected: EditorContext): Promise<CursorUpdate> {
+    const cursor = expected.cursor;
+    return this.enqueue(cursor.documentId, async () => {
+      if (this.rev.get(cursor.documentId) !== cursor.revision) return this.resync(cursor.documentId);
+      try {
+        const context = await this.transport.fetchEditorContext({ documentId: cursor.documentId, baseRevision: cursor.revision });
+        if (context.cursor.revision !== cursor.revision || context.cursor.anchor !== cursor.anchor || context.cursor.head !== cursor.head || context.mode !== expected.mode || !supportsEditorSelection(context.mode)) throw new LocalizedError("選択またはVimモードが変わりました。操作し直してください。");
+        const text = this.source.get(cursor.documentId);
+        if (text === undefined) return this.resync(cursor.documentId);
+        return await this.transport.reportCursor({ documentId: cursor.documentId, revision: cursor.revision, anchor: 0, head: text.length });
+      } catch (cause) { if (isStaleError(cause)) return this.resync(cursor.documentId); throw cause; }
+    });
+  }
 
   /** Format a captured native selection with actor-side selection guards and an ordered caret report. */
   formatEditorSelection(cursor: CursorUpdate, beforeText: string, kind: FormatKind): Promise<DocumentSnapshot> {
@@ -689,6 +705,8 @@ export class RegistryClient {
  * tracked and no save is ever simulated.
  */
 export class ReadonlyRegistry {
+  /** Reject native whole-buffer selection in the read-only browser demo. */
+  selectAll(): Promise<never> { return this.reject(); }
   /** Reject native-selection formatting in the read-only browser demo. */
   formatEditorSelection(): Promise<never> { return this.reject(); }
   /** Reject table navigation without native document ownership. */
