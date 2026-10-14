@@ -59,6 +59,8 @@ export const workspaceApi = {
     invoke<PasteResult>("import_external_image", { ...request, path, range }),
   /** Create a new Markdown document with optional initial text. */
   createMarkdown: (path: string, text = "") => invoke<OpenDocument>("create_markdown", { path, text }),
+  /** Create a contained directory using the existing Rust workspace owner. */
+  createFolder: (path: string) => invoke<WorkspaceEntry>("create_folder", { path }),
   /** Rename a Markdown document, keeping its document ID. */
   renameMarkdown: (request: SaveRequest, path: string) => invoke<OpenDocument>("rename_markdown", { ...request, path }),
   /** Fetch the authoritative snapshot for a document ID. */

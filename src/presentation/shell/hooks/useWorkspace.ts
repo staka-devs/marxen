@@ -9,8 +9,9 @@ import { useI18n } from "../../i18n/I18nProvider";
 // application. All native access arrives via injected ports and the document
 // session, so this hook never imports infrastructure directly.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RecoveryEntry, RuntimeStatus, WorkspaceEntry, WorkspaceEvent } from "../../../contracts/contracts";
+import type { ExplorerTarget } from "../../../contracts/workbench";
 import type { SearchHitItem } from "../../../domain/search-hit";
 import { docFromOpen, matchToHit, type OpenDoc } from "../../../application/document/document-helpers";
 import {
@@ -56,6 +57,23 @@ export interface WorkspaceArgs {
 
 /** Workspace lifecycle state and operations. */
 export interface Workspace {
+  busy: boolean;
+  generation: number;
+  refreshing: boolean;
+  entryKind: "file" | "folder";
+  createdTarget: ExplorerTarget | null;
+  /** Capture a relative tree location in the current root generation. */
+  targetFor: (path?: string, directory?: boolean, kind?: WorkspaceEntry["kind"]) => ExplorerTarget;
+  /** Check that a captured target still belongs to this root session. */
+  isTargetCurrent: (target: ExplorerTarget) => boolean;
+  /** Recheck lifecycle availability synchronously before executing an operation. */
+  canOperate: () => boolean;
+  /** Open a contextual creation dialog under its captured parent. */
+  beginCreate: (target: ExplorerTarget, folder?: boolean) => void;
+  /** Open a captured Markdown document's rename dialog. */
+  beginRename: (target: ExplorerTarget) => Promise<void>;
+  /** Refresh the tree while preserving authoritative dirty buffers. */
+  refreshEntries: () => Promise<void>;
   /** Open workspace root, or null when no folder is open. */
   wsRoot: string | null;
   /** Replace the workspace root. */
@@ -172,6 +190,16 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   } = session;
 
   const [wsRoot, setWsRoot] = useState<string | null>(null);
+  const rootRef = useRef<string | null>(null);
+  const generation = useRef(0);
+  const listing = useRef(0);
+  const busyRef = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [entryKind, setEntryKind] = useState<"file" | "folder">("file");
+  const creationTarget = useRef<ExplorerTarget | null>(null);
+  const [createdTarget, setCreatedTarget] = useState<ExplorerTarget | null>(null);
+  const renameRequest = useRef<{ documentId: string; baseRevision: number; generation: number } | null>(null);
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
   const [recovery, setRecovery] = useState<RecoveryEntry[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -195,7 +223,10 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
 
   /** Load all workspace entries recursively up to 2000 items. */
   const loadEntries = useCallback(async (): Promise<WorkspaceEntry[]> => {
+    const epoch = generation.current;
+    const ticket = ++listing.current;
     const root = await workspaceGateway!.listWorkspace("");
+    if (epoch !== generation.current) return [];
     const all = [...root];
     const queue = root.filter((entry) => entry.directory).map((entry) => entry.path);
     const seen = new Set<string>(queue);
@@ -203,6 +234,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
       const dir = queue.shift()!;
       try {
         const children = await workspaceGateway!.listWorkspace(dir);
+        if (epoch !== generation.current) return [];
         all.push(...children);
         for (const child of children) {
           if (child.directory && !seen.has(child.path)) {
@@ -215,9 +247,56 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
       }
       if (all.length > 2000) break;
     }
-    setEntries(all);
+    if (epoch === generation.current && ticket === listing.current) setEntries(all);
     return all;
   }, [workspaceGateway]);
+
+  /** Capture a location in this single-root session before focus or active tabs change. */
+  const targetFor = useCallback((path = "", directory = true, kind?: WorkspaceEntry["kind"]): ExplorerTarget => ({ rootId: rootRef.current ?? "", generation: generation.current, path, directory, kind }), []);
+  /** Reject targets captured in a replaced workspace, including pending dialogs. */
+  const isTargetCurrent = useCallback((target: ExplorerTarget) => target.rootId !== "" && target.rootId === rootRef.current && target.generation === generation.current, []);
+  /** Recheck native lifecycle availability synchronously before every invocation. */
+  const canOperate = useCallback(() => desktop && !!registry && !!workspaceGateway && !busyRef.current, [desktop, registry, workspaceGateway]);
+  /** Refresh only the tree, preserving buffers and discarding results from replaced roots. */
+  const refreshEntries = useCallback(async () => {
+    if (!canOperate() || !rootRef.current) return;
+    const epoch = generation.current;
+    setRefreshing(true);
+    try { await loadEntries(); }
+    catch (cause) { if (epoch === generation.current) setNotice(localizedFailure(cause, workspaceErrorText)); }
+    finally { if (epoch === generation.current) setRefreshing(false); }
+  }, [canOperate, loadEntries, notify]);
+
+  /** Start a file or folder dialog beneath the captured folder or file's parent. */
+  const beginCreate = useCallback((target: ExplorerTarget, folder = false) => {
+    if (!canOperate() || !isTargetCurrent(target)) return;
+    const parent = target.directory ? target.path : target.path.slice(0, Math.max(0, target.path.lastIndexOf("/")));
+    creationTarget.current = target;
+    setEntryKind(folder ? "folder" : "file");
+    setNewFilePath(parent ? `${parent}/` : "");
+    setNewFileOpen(true);
+  }, [canOperate, isTargetCurrent]);
+
+  /** Capture a supported Markdown actor and revision for the rename dialog. */
+  const beginRename = useCallback(async (target: ExplorerTarget) => {
+    if (!canOperate() || !isTargetCurrent(target) || target.directory || target.kind !== "markdown") return;
+    const epoch = generation.current;
+    busyRef.current = true; setBusy(true);
+    try {
+      let doc = Object.values(docsRef.current).find((item) => item.path === target.path);
+      if (!doc) {
+        const open = await workspaceGateway!.openMarkdown(target.path);
+        if (epoch !== generation.current) return;
+        registry!.noteSnapshot(open.snapshot);
+        doc = docFromOpen(open);
+        setDocs((previous) => ({ ...previous, [doc!.documentId]: doc! }));
+        setTabs((previous) => previous.includes(doc!.documentId) ? previous : [...previous, doc!.documentId]);
+      }
+      renameRequest.current = { documentId: doc.documentId, baseRevision: doc.revision, generation: epoch };
+      setRenamePath(doc.path ?? target.path); setRenameDoc(doc.documentId);
+    } catch (cause) { if (epoch === generation.current) setNotice(localizedFailure(cause, workspaceErrorText)); }
+    finally { busyRef.current = false; setBusy(false); }
+  }, [canOperate, isTargetCurrent, registry, workspaceGateway, docsRef, setDocs, setTabs, notify]);
 
   /** Refresh crash-recovery entries or notice on failure. */
   const refreshRecovery = useCallback(async () => {
@@ -232,6 +311,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   /** Open a workspace root and load entries, docs, and recovery. */
   const openWorkspaceFolder = useCallback(
     async (path: string) => {
+      if (busyRef.current) return;
       if (!registry) {
         setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
         return;
@@ -241,12 +321,18 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         setNotice(message("フォルダーの絶対パスを入力してください。"));
         return;
       }
+      const epoch = ++generation.current;
+      busyRef.current = true; setBusy(true); setRefreshing(false);
+      setNewFileOpen(false); setRenameDoc(null); setCreatedTarget(null);
       try {
         const info = await workspaceGateway!.openWorkspace(trimmed);
+        if (epoch !== generation.current) return;
+        rootRef.current = info.root;
         setWsRoot(info.root);
         onWorkspaceOpened?.();
         await loadEntries();
         const open = await workspaceGateway!.listDocuments();
+        if (epoch !== generation.current) return;
         const next: Record<string, OpenDoc> = {};
         for (const doc of open) {
           if (registry) registry.noteSnapshot(doc.snapshot);
@@ -260,49 +346,65 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         setNotice(null);
       } catch (cause) {
         setNotice(localizedFailure(cause, workspaceErrorText));
-      }
+      } finally { busyRef.current = false; setBusy(false); }
     },
     [registry, workspaceGateway, loadEntries, refreshRecovery, setDocs, setTabs, setActiveId, setExternalByDoc, onWorkspaceOpened, notify],
   );
 
-  // Note: the manual-folder toggle and folder input stay in the shell layout;
-  // this hook exposes the opener for both the picker button and the input.
   /** Pick a folder natively and open it, staying read-only in browser. */
   const pickFolderAndOpen = useCallback(async () => {
+    if (!canOperate()) return;
     if (!registry) {
       setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
       return;
     }
     const picked = await dialogGateway!.pickFolder(t("フォルダーを開く"));
     if (picked) await openWorkspaceFolder(picked);
-  }, [registry, dialogGateway, openWorkspaceFolder, notify]);
+  }, [registry, dialogGateway, openWorkspaceFolder, notify, canOperate]);
 
   /** Create a Markdown file from the dialog path and open it. */
   const createFile = useCallback(async () => {
+    const target = creationTarget.current;
+    if (!canOperate() || !target || !isTargetCurrent(target)) return;
     if (!registry) {
       setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
       return;
     }
     const path = newFilePath.trim();
     if (path === "") {
-      setNotice(message("ワークスペース相対のパス（例: メモ/新規.md）を入力してください。"));
+      setNotice(message(entryKind === "folder" ? "フォルダーの相対パスを入力してください。" : "ワークスペース相対のパス（例: メモ/新規.md）を入力してください。"));
       return;
     }
+    const epoch = generation.current;
+    busyRef.current = true; setBusy(true);
     try {
+      if (entryKind === "folder") {
+        await workspaceGateway!.createFolder(path);
+        if (epoch !== generation.current) return;
+        setNewFileOpen(false);
+        await loadEntries();
+        setCreatedTarget(targetFor(path, true));
+        return;
+      }
       const open = await workspaceGateway!.createMarkdown(path, "");
+      if (epoch !== generation.current) return;
+      registry.noteSnapshot(open.snapshot);
       const doc = docFromOpen(open);
       setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
       setTabs((prev) => (prev.includes(doc.documentId) ? prev : [...prev, doc.documentId]));
       setActiveId(doc.documentId);
       setNewFileOpen(false);
       await loadEntries();
+      setCreatedTarget(targetFor(path, false, "markdown"));
     } catch (cause) {
       setNotice(localizedFailure(cause, workspaceErrorText));
-    }
-  }, [registry, workspaceGateway, newFilePath, loadEntries, setDocs, setTabs, setActiveId, notify]);
+    } finally { busyRef.current = false; setBusy(false); }
+  }, [registry, workspaceGateway, newFilePath, loadEntries, setDocs, setTabs, setActiveId, notify, canOperate, isTargetCurrent, entryKind, targetFor]);
 
   /** Rename the dialog document keeping its ID. */
   const renameFile = useCallback(async () => {
+    const expected = renameRequest.current;
+    if (!canOperate() || !expected || expected.generation !== generation.current || expected.documentId !== renameDoc) return;
     if (!registry || !renameDoc) return;
     const current = docsRef.current[renameDoc];
     if (!current) return;
@@ -311,17 +413,20 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
       setNotice(message("新しいパスを入力してください。"));
       return;
     }
+    busyRef.current = true; setBusy(true);
     try {
-      const open = await workspaceGateway!.renameMarkdown({ documentId: renameDoc, baseRevision: current.revision }, path);
+      const open = await registry.rename({ documentId: expected.documentId, baseRevision: expected.baseRevision }, path);
+      registry.noteSnapshot(open.snapshot);
       const doc = docFromOpen(open);
       setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
       setRenameDoc(null);
       await loadEntries();
       setNotice(message("名前を変更しました。"));
+      setCreatedTarget(targetFor(path, false, "markdown"));
     } catch (cause) {
       setNotice(localizedFailure(cause, workspaceErrorText));
-    }
-  }, [registry, workspaceGateway, renameDoc, renamePath, loadEntries, docsRef, setDocs, notify]);
+    } finally { busyRef.current = false; setBusy(false); }
+  }, [registry, renameDoc, renamePath, loadEntries, docsRef, setDocs, notify, canOperate, targetFor]);
 
   /** Restore or discard a crash-recovery entry by ID. */
   const restoreEntry = useCallback(
@@ -654,6 +759,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   }, [settingsOpen, registry, activeId, docsRef]);
 
   return {
+    busy, generation: generation.current, refreshing, entryKind, createdTarget, targetFor, isTargetCurrent, canOperate, beginCreate, beginRename, refreshEntries,
     wsRoot,
     setWsRoot,
     entries: entries as WorkspaceEntry[],

@@ -3,7 +3,7 @@ import type { LocalizedText } from "../../contracts/localization";
 import type { LabelKey } from "../../contracts/localization";
 import { useI18n } from "../i18n/I18nProvider";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { MessageSquare, Files, FolderOpen, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronDown, ChevronRight, FileText, FilePlus2 } from "lucide-react";
+import { MessageSquare, Files, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronRight, FileText, FilePlus2, FolderPlus, RefreshCw } from "lucide-react";
 import { CodeMirrorEditor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
 import AiPanel from "../ai-panel";
@@ -29,7 +29,7 @@ import { Tabs, type TabItem } from "../workspace/Tabs";
 import { QuickOpen } from "../workspace/QuickOpen";
 import { SearchPanel } from "../workspace/SearchPanel";
 import { Outline } from "../workspace/Outline";
-import { CommandPalette, type PaletteCommand } from "../workspace/CommandPalette";
+import { CommandPalette } from "../workspace/CommandPalette";
 import { SettingsPanel } from "../workspace/SettingsPanel";
 import { VimSettingsHost } from "../vim-settings/VimSettingsHost";
 import type { VimSettingsGateway } from "../../application/vim-settings/ports";
@@ -37,6 +37,10 @@ import { RawGridView } from "../workspace/RawGridView";
 import { GuiToolbar } from "../workspace/GuiToolbar";
 import { EditorMenu } from "../editor/EditorMenu";
 import { useEditorMenu } from "./hooks/useEditorMenu";
+import { useWorkbenchCommands } from "./hooks/useWorkbenchCommands";
+import { WorkbenchMenuBar } from "../workspace/WorkbenchMenuBar";
+import type { ExplorerTarget } from "../../contracts/workbench";
+import type { TreeNode } from "../workspace/FileTree";
 import { NotificationToast, WorkspaceDialog, type Notice, type NoticeKind } from "../workspace/Notifications";
 import {
   formatRange,
@@ -152,7 +156,7 @@ const MODE_LABEL: Record<ViewMode, string> = {
  * authoritative with stale resync, generation fencing, and scoped approval.
  */
 export function WorkspaceShell(props: WorkspaceShellProps = {}) {
-  const { t, message, language } = useI18n();
+  const { t, message } = useI18n();
   const {
     documentGateway,
     workspaceGateway,
@@ -180,7 +184,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   const [showAi, setShowAi] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [manualFolder, setManualFolder] = useState(false);
-  const [rootCollapsed, setRootCollapsed] = useState(false);
+  const [explorerTarget, setExplorerTarget] = useState<ExplorerTarget | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [aiProvider, setAiProvider] = useState<AiProviderConfig>(() => {
     try {
       const saved = aiProfileStore?.load();
@@ -264,7 +269,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     settingsOpen: settings,
     routeVimKeys: vim.routeVimKeys,
     /** Reset folder UI after a workspace opens. */
-    onWorkspaceOpened: () => { setManualFolder(false); setRootCollapsed(false); },
+    onWorkspaceOpened: () => { setManualFolder(false); setExplorerTarget(null); },
   });
   const recoveryKey = workspace.recovery.map((entry) => entry.documentId).join("\0");
   useEffect(() => { setRecoveryPromptOpen(recoveryKey.length > 0); }, [recoveryKey]);
@@ -341,96 +346,73 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   // Local-image resolvers live in useImageAttachments bound to the active
   // document; Neovim config application lives in useWorkspace.
 
-  const commands: PaletteCommand[] = useMemo(
-    () => [
-      { id: "view-live", label: t("表示: ライブにする") },
-      { id: "view-source", label: t("表示: Markdownにする") },
-      { id: "view-read", label: t("表示: 閲覧にする") },
-      { id: "view-split", label: t("表示: 分割にする") },
-      { id: "nav-display", label: t("移動: 表示基準にする") },
-      { id: "nav-source", label: t("移動: Vim の移動にする") },
-      { id: "file-new", label: t("ファイル: 新規作成する") },
-      { id: "file-rename", label: t("ファイル: 名前を変更する") },
-      { id: "file-save", label: t("ファイル: 保存する") },
-      { id: "file-reload", label: t("ファイル: 再読込する") },
-      { id: "file-close", label: t("ファイル: 閉じる") },
-      { id: "edit-undo", label: t("編集: 元に戻す") },
-      { id: "edit-redo", label: t("編集: やり直す") },
-      { id: "palette-quickopen", label: t("移動: ファイルをすばやく開く") },
-      { id: "palette-raw", label: t("表示: Neovim 画面を切り替える") },
-      { id: "palette-raw-refresh", label: t("表示: Neovim 画面を更新する") },
-      { id: "palette-recovery", label: t("復旧: 復旧一覧を更新する") },
-      { id: "palette-ai", label: t("AI: AI 支援を開く") },
-      { id: "inline-chat", label: t("インライン: チャットを開く") },
-      { id: "palette-settings", label: t("設定: 設定を開く") },
-    ],
-    [language],
-  );
-
-  /** Run a palette command by ID for views, files, and AI. */ const runCommand = useCallback(
-    (id: string) => {      if (id === "view-live") setViewMode("live");
-      else if (id === "view-source") setViewMode("source");
-      else if (id === "view-read") setViewMode("read");
-      else if (id === "view-split") setViewMode("split");
-      else if (id === "nav-display") setNavBasis("display");
-      else if (id === "nav-source") setNavBasis("source");
-      else if (id === "file-save") void session.handleSave();
-      else if (id === "file-reload") void session.handleReload();
-      else if (id === "file-close" && session.activeRef.current) void session.closeTab(session.activeRef.current);
-      else if (id === "file-new") {
-        workspace.setNewFilePath("");
-        workspace.setNewFileOpen(true);
-      } else if (id === "file-rename" && session.activeRef.current) {
-        const current = session.docsRef.current[session.activeRef.current];
-        workspace.setRenamePath(current?.path ?? "");
-        workspace.setRenameDoc(session.activeRef.current);
-      } else if (id === "edit-undo") void session.handleUndo();
-      else if (id === "edit-redo") void session.handleRedo();
-      else if (id === "palette-quickopen") setQuickOpen(true);
-      else if (id === "palette-raw") setShowRaw((value) => !value);
-      else if (id === "palette-raw-refresh") workspace.handleRawGridRefresh();
-      else if (id === "palette-recovery") { setRecoveryPromptOpen(true); void workspace.refreshRecovery(); }
-      else if (id === "palette-ai") {
-        if (!desktop) setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
-        else setShowAi(true);
-      } else if (id === "inline-chat") {
-        if (!desktop) setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
-        else staging.openInlineChat();
-      } else if (id === "palette-settings") setSettings(true);
+  /** Shared guarded workbench command owner; state-only views stay in the shell. */
+  const workbench = useWorkbenchCommands({ desktop, session, workspace, target: explorerTarget, notify: setNotice, openFile: openFileForEditing,
+    uiActions: {
+      /** Open the existing manual root-path dialog. */
+      "folder-path": () => setManualFolder(true),
+      /** Display live Markdown. */
+      "view-live": () => setViewMode("live"),
+      /** Display raw source. */
+      "view-source": () => setViewMode("source"),
+      /** Display the read-only preview. */
+      "view-read": () => setViewMode("read"),
+      /** Display the existing split panes. */
+      "view-split": () => setViewMode("split"),
+      /** Use display-row navigation. */
+      "nav-display": () => setNavBasis("display"),
+      /** Use native Vim navigation. */
+      "nav-source": () => setNavBasis("source"),
+      /** Toggle the explorer sidebar. */
+      "view-explorer": () => setSideView(value => value === "explorer" ? null : "explorer"),
+      /** Toggle the search sidebar. */
+      "view-search": () => setSideView(value => value === "search" ? null : "search"),
+      /** Toggle the outline sidebar. */
+      "view-outline": () => setSideView(value => value === "outline" ? null : "outline"),
+      /** Open the existing search and replacement controls. */
+      "edit-find": () => setSideView("search"),
+      /** Open the supported-file picker. */
+      "palette-quickopen": () => setQuickOpen(true),
+      /** Open the shared command picker. */
+      "palette-open": () => setPalette(true),
+      /** Open settings without changing document ownership. */
+      "palette-settings": () => setSettings(true),
+      /** Toggle the existing native-grid view. */
+      "palette-raw": () => setShowRaw(value => !value),
+      "palette-raw-refresh": workspace.handleRawGridRefresh,
+      /** Open and refresh crash recovery. */
+      "palette-recovery": () => { setRecoveryPromptOpen(true); void workspace.refreshRecovery(); },
+      /** Toggle the existing AI pane. */
+      "palette-ai": () => setShowAi(value => !value),
+      "inline-chat": staging.openInlineChat,
+      /** Show implemented workbench shortcuts. */
+      "help-keys": () => setHelpOpen(true),
     },
-    [desktop, session.handleSave, session.handleReload, session.handleUndo, session.handleRedo, session.closeTab, workspace.refreshRecovery, workspace.handleRawGridRefresh, workspace.setNewFilePath, workspace.setNewFileOpen, workspace.setRenamePath, workspace.setRenameDoc, staging.openInlineChat],
-  );
-
+    /** Reflect existing state owners in checked menu choices. */
+    checked: (id) => id.startsWith("view-") && ["live", "source", "read", "split"].includes(id.slice(5)) ? effectiveViewMode === id.slice(5)
+      : id.startsWith("nav-") ? navBasis === id.slice(4) : id === "palette-ai" ? showAi : id === "palette-raw" ? showRaw : undefined,
+  });
+  /** Capture a tree row in the current native workspace session. */
+  function treeTarget(node: TreeNode) { return workspace.targetFor(node.path, node.directory, node.kind); }
+  /** Use the same invocation guards for captured tree contexts and the top menus. */
+  function runTreeCommand(id: string, node: TreeNode) { void workbench.run(id, treeTarget(node)); }
+  useEffect(() => { setExplorerTarget(null); }, [workspace.generation]);
+  useEffect(() => { if (workspace.createdTarget) setExplorerTarget(workspace.createdTarget); }, [workspace.createdTarget]);
   useEffect(() => {
-    /**
-     * Handle global shortcuts for quick-open, palette, and save.
-     *
-     * Ctrl/Cmd+P toggles quick-open (Shift adds palette); Ctrl/Cmd+S saves.
-     * Registered once per save handler identity.
-     */
+    /** Route only implemented workbench shortcuts, respecting IME, dialogs and form inputs. */
     const onKey = (event: KeyboardEvent) => {
       const mod = event.ctrlKey || event.metaKey;
-      if (event.defaultPrevented || (event.target instanceof Element && event.target.closest('[aria-modal="true"]'))) return;
-      if (desktop && mod && event.altKey && event.key.toLowerCase() === "i") {
-        event.preventDefault();
-        setShowAi((value) => !value);
-      } else if (mod && event.key.toLowerCase() === "p" && !event.shiftKey) {
-        event.preventDefault();
-        setQuickOpen((value) => !value);
-      } else if (mod && event.key.toLowerCase() === "p" && event.shiftKey) {
-        event.preventDefault();
-        setPalette((value) => !value);
-      } else if (mod && event.key === ",") {
-        event.preventDefault();
-        setSettings(true);
-      } else if (mod && event.key.toLowerCase() === "s") {
-        event.preventDefault();
-        void session.handleSave();
-      }
+      if (!mod || event.isComposing || event.defaultPrevented || (event.target instanceof Element && event.target.closest('[role="dialog"],input,textarea,select'))) return;
+      const key = event.key.toLowerCase();
+      const id = key === "p" ? (event.shiftKey ? "palette-open" : "palette-quickopen") : key === "s" ? "file-save" : key === "," ? "palette-settings" : key === "i" && event.shiftKey ? "inline-chat" : key === "i" && event.altKey ? "palette-ai" : null;
+      if (id && workbench.command(id)?.enabled) { event.preventDefault(); if (id === "inline-chat") event.stopPropagation(); void workbench.run(id); }
     };
+    /** Capture only the workbench inline gesture before it can become a native Vim key. */
+    const onInlineKey = (event: KeyboardEvent) => { if (event.shiftKey && event.key.toLowerCase() === "i") onKey(event); };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [desktop, session.handleSave]);
+    window.addEventListener("keydown", onInlineKey, true);
+    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("keydown", onInlineKey, true); };
+  }, [workbench]);
 
   // -- derived view data --------------------------------------------------------
 
@@ -487,7 +469,9 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
 
 
   return (
-    <div data-theme={theme} data-testid="workspace-shell" style={{ "--editor-font-size": `${preferences.fontSize}px`, "--editor-line-height": preferences.lineHeight } as CSSProperties} className="marxen-workspace relative flex h-dvh overflow-hidden bg-background text-foreground">
+    <div data-theme={theme} data-testid="workspace-shell" style={{ "--editor-font-size": `${preferences.fontSize}px`, "--editor-line-height": preferences.lineHeight } as CSSProperties} className="marxen-workspace relative flex h-dvh flex-col overflow-hidden bg-background text-foreground">
+      <WorkbenchMenuBar theme={theme} commands={workbench.commands} onRun={(id) => void workbench.run(id)} onPrepare={(origin) => void workbench.prepareEditor(origin)} />
+      <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
       <nav aria-label={t("アクティビティ")} className="marxen-activity flex w-12 shrink-0 flex-col items-center border-r border-border bg-card py-1">
         {(
           [
@@ -524,46 +508,18 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             <div className="flex flex-col">
               <div className="flex h-10 shrink-0 items-center gap-1 px-4">
                 <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground">{t("エクスプローラー")}</span>
-                {desktop && (
-                  <>
-                    <button type="button" aria-label={t("新しいファイル")} title={t("新しいファイル")} disabled={!workspace.wsRoot} onClick={() => { workspace.setNewFilePath(""); workspace.setNewFileOpen(true); }} className="rounded-sm p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"><FilePlus2 size={15} aria-hidden="true" /></button>
-                    <button
-                      type="button"
-                      onClick={() => void workspace.pickFolderAndOpen()}
-                      aria-label={t("フォルダーを開く")}
-                      title={t("フォルダーを開く")}
-                      className="rounded-sm p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                    >
-                      <FolderOpen size={15} aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setManualFolder((value) => !value)}
-                      aria-expanded={manualFolder}
-                      aria-label={t("パスを入力する")}
-                      title={t("パスを入力する")}
-                      className="rounded-sm p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                    >
-                      <Ellipsis size={15} aria-hidden="true" />
-                    </button>
-                  </>
-                )}
+                {[
+                  ["file-new", "新しいファイル", FilePlus2], ["folder-new", "新規フォルダー", FolderPlus], ["tree-refresh", "エクスプローラーを更新", RefreshCw],
+                ].map(([id, label, Icon]) => {
+                  const item = workbench.command(id as string)!;
+                  const ActionIcon = Icon as typeof FilePlus2;
+                  return <button key={id as string} type="button" aria-label={t(label as LabelKey)} title={item.reason ?? t(label as LabelKey)} disabled={!item.enabled || workspace.refreshing} onClick={() => void workbench.run(id as string)} className="rounded-sm p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"><ActionIcon size={15} aria-hidden="true" /></button>;
+                })}
               </div>
-              {desktop && manualFolder && (
-                <div className="mb-2 flex gap-1 px-3">
-                  <input
-                    value={folderInput}
-                    onChange={(event) => setFolderInput(event.target.value)}
-                    placeholder={t("フォルダーの絶対パス…")}
-                    aria-label={t("開くフォルダーの絶対パス")}
-                    className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs"
-                  />
-                  <button type="button" onClick={() => void workspace.openWorkspaceFolder(folderInput)} className="rounded-md border border-border px-2 py-1.5 text-xs">
-                    {t("開く")}</button>
-                </div>
-              )}
-              {desktop && workspace.wsRoot && <button type="button" onClick={() => setRootCollapsed((value) => !value)} aria-expanded={!rootCollapsed} aria-label={t("ワークスペースのフォルダー")} className="flex h-8 w-full items-center gap-1.5 px-3 text-left text-xs font-semibold hover:bg-muted/50" title={workspace.wsRoot}>{rootCollapsed ? <ChevronRight size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" /> : <ChevronDown size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />}<FolderOpen size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" /><span className="truncate">{workspace.wsRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace.wsRoot}</span></button>}
-              {(!desktop || !rootCollapsed) && <FileTree desktop={desktop} nodes={treeNodes} activePath={activeImage ?? active?.path ?? null} onOpenFile={(path) => { void openFileForEditing(path); if (window.innerWidth < 768) setSideView(null); }} />}
+              <FileTree key={`${workspace.wsRoot ?? "demo"}:${workspace.generation}`} theme={theme} desktop={desktop} nodes={treeNodes} rootPath={workspace.wsRoot ?? undefined} rootName={workspace.wsRoot?.split(/[\\/]/).filter(Boolean).at(-1)} activePath={activeImage ?? active?.path ?? null} selectedPath={explorerTarget?.path ?? null}
+                onSelect={(node) => setExplorerTarget(treeTarget(node))} onCommand={runTreeCommand}
+                contextCommands={(node) => ["tree-open", "file-new", "folder-new", "file-rename", "tree-refresh"].map((id) => workbench.command(id, treeTarget(node))!)}
+                onOpenFile={(path) => { void openFileForEditing(path); if (window.innerWidth < 768) setSideView(null); }} />
               {desktop && !workspace.wsRoot && <p className="px-4 py-3 text-xs leading-5 text-muted-foreground">{t("フォルダーが選択されていません。")}</p>}
             </div>
           )}
@@ -600,7 +556,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           {desktop && <button type="button" aria-label={t("チャットを切り替える")} aria-pressed={showAi} title={t("チャット (Ctrl+Alt+I)")} onClick={() => setShowAi((value) => !value)} className={`rounded-sm p-1.5 hover:bg-muted ${showAi ? "text-foreground" : "text-muted-foreground"}`}><MessageSquare size={16} aria-hidden="true" /></button>}
           <button
             type="button"
-            onClick={() => void session.handleSave()}
+            onClick={() => void workbench.run("file-save")}
             disabled={!desktop || !active}
             title={desktop ? t("保存") : t("ブラウザ表示では編集できません。デスクトップで開いてください。")}
             aria-label={t("保存")}
@@ -697,16 +653,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             <div role="menu" data-editor-actions-trigger aria-label={t("その他の操作")} className="py-1">
               {(
                 [
-                  ["raw", t("Neovim 画面")],
-                  ["quick", t("クイックオープン")],
-                  ["palette", t("コマンドパレット")],
-                  ["inline", t("インラインチャット")],
-                  ["new", t("新規ファイル")],
-                  ["rename", t("名前を変更")],
-                  ["reload", t("再読込")],
-                  ["close", t("閉じる")],
-                  ["recovery", t("復旧一覧")],
-                  ["settings", t("設定")],
+                  ...["palette-raw", "palette-quickopen", "palette-open", "inline-chat", "file-new", "file-rename", "file-reload", "file-close", "palette-recovery", "palette-settings"].map((id) => [id, workbench.command(id)!.label]),
                 ] as Array<[string, string]>
               ).map(([id, label]) => (
                 <button
@@ -714,28 +661,16 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   type="button"
                   role="menuitem"
                   aria-label={label}
+                  disabled={!workbench.command(id)?.enabled}
+                  title={workbench.command(id)?.reason}
                   onClick={() => {
                     setMoreOpen(false);
-                    if (id === "raw") setShowRaw((value) => !value);
-                    else if (id === "quick") setQuickOpen(true);
-                    else if (id === "palette") setPalette(true);
-                    else if (id === "inline") staging.openInlineChat();
-                    else if (id === "new") {
-                      workspace.setNewFilePath("");
-                      workspace.setNewFileOpen(true);
-                    } else if (id === "rename" && session.activeRef.current) {
-                      const current = session.docsRef.current[session.activeRef.current];
-                      workspace.setRenamePath(current?.path ?? "");
-                      workspace.setRenameDoc(session.activeRef.current);
-                    } else if (id === "reload") void session.handleReload();
-                    else if (id === "close" && session.activeRef.current) void session.closeTab(session.activeRef.current);
-                    else if (id === "recovery") { setRecoveryPromptOpen(true); void workspace.refreshRecovery(); }
-                    else if (id === "settings") setSettings(true);
+                    void workbench.run(id);
                   }}
                   className="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-[13px] hover:bg-muted focus:bg-muted focus:outline-none"
                 >
                   <span>{label}</span>
-                  <kbd className="text-[11px] text-muted-foreground">{id === "quick" ? "Ctrl+P" : id === "palette" ? "Ctrl+Shift+P" : id === "inline" ? "Ctrl+Shift+I" : id === "settings" ? "Ctrl+," : ""}</kbd>
+                  <kbd className="text-[11px] text-muted-foreground">{workbench.command(id)?.shortcut ?? ""}</kbd>
                 </button>
               ))}
             </div>
@@ -819,25 +754,25 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             </WorkspaceDialog>
           )}
           {workspace.newFileOpen && (
-            <WorkspaceDialog theme={theme} label={t("新規ファイル")} onDismiss={() => workspace.setNewFileOpen(false)}>
-              <div className="flex flex-wrap items-center gap-2">
+            <WorkspaceDialog theme={theme} label={t(workspace.entryKind === "folder" ? "新規フォルダー" : "新規Markdownファイル")} onDismiss={() => workspace.setNewFileOpen(false)}>
+              <form onSubmit={(event) => { event.preventDefault(); void workspace.createFile(); }} className="flex flex-wrap items-center gap-2">
               <input
                 value={workspace.newFilePath}
                 onChange={(event) => workspace.setNewFilePath(event.target.value)}
-                placeholder="メモ/新規.md"
-                aria-label={t("新規ファイルのパス")}
+                placeholder={workspace.entryKind === "folder" ? t("メモ/新しいフォルダー") : "notes/new.md"}
+                aria-label={t(workspace.entryKind === "folder" ? "新規フォルダーのパス" : "新規ファイルのパス")}
                 className="min-w-40 flex-1 rounded-md border border-border bg-background px-3 py-1.5"
               />
-              <button type="button" onClick={() => void workspace.createFile()} className="rounded-md border border-border px-3 py-1">
+              <button type="submit" disabled={workspace.busy} className="rounded-md border border-border px-3 py-1">
                 {t("作成する")}</button>
               <button type="button" onClick={() => workspace.setNewFileOpen(false)} className="rounded-md border border-border px-3 py-1">
                 {t("閉じる")}</button>
-              </div>
+              </form>
             </WorkspaceDialog>
           )}
           {workspace.renameDoc && (
             <WorkspaceDialog theme={theme} label={t("名前の変更")} onDismiss={() => workspace.setRenameDoc(null)}>
-              <div className="flex flex-wrap items-center gap-2">
+              <form onSubmit={(event) => { event.preventDefault(); void workspace.renameFile(); }} className="flex flex-wrap items-center gap-2">
               <input
                 value={workspace.renamePath}
                 onChange={(event) => workspace.setRenamePath(event.target.value)}
@@ -845,11 +780,11 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                 aria-label={t("新しいパス")}
                 className="min-w-40 flex-1 rounded-md border border-border bg-background px-3 py-1.5"
               />
-              <button type="button" onClick={() => void workspace.renameFile()} className="rounded-md border border-border px-3 py-1">
+              <button type="submit" disabled={workspace.busy} className="rounded-md border border-border px-3 py-1">
                 {t("変更する")}</button>
               <button type="button" onClick={() => workspace.setRenameDoc(null)} className="rounded-md border border-border px-3 py-1">
                 {t("閉じる")}</button>
-              </div>
+              </form>
             </WorkspaceDialog>
           )}
 
@@ -924,7 +859,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                 <h1 className="text-2xl font-semibold tracking-tight">Marxen</h1>
                 <p className="mt-2 text-sm text-muted-foreground">{t("Markdown を書くためのワークスペース")}</p>
                 <div className="mt-8 flex flex-col gap-1">
-                  {desktop && <button type="button" onClick={() => void workspace.pickFolderAndOpen()} className="flex h-10 items-center gap-3 rounded px-2 text-left text-sm text-primary hover:bg-muted"><FolderOpen size={16} />{t("フォルダーを開く")}</button>}
+                  {desktop && <p className="text-xs text-muted-foreground">{t("ファイルメニューからフォルダーを開いてください。")}</p>}
                   <button type="button" onClick={() => setQuickOpen(true)} className="flex h-10 items-center justify-between rounded px-2 text-left text-sm hover:bg-muted"><span className="flex items-center gap-3"><Search size={16} className="text-muted-foreground" />{t("ファイルを探す")}</span><kbd className="text-xs text-muted-foreground">Ctrl+P</kbd></button>
                   <button type="button" onClick={() => setPalette(true)} className="flex h-10 items-center justify-between rounded px-2 text-left text-sm hover:bg-muted"><span className="flex items-center gap-3"><Ellipsis size={16} className="text-muted-foreground" />{t("コマンドを実行")}</span><kbd className="text-xs text-muted-foreground">Ctrl+Shift+P</kbd></button>
                 </div>
@@ -976,7 +911,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             <RawGridView
               text={active.text}
               revision={workspace.gridRev ?? active.revision}
-              onRefresh={workspace.handleRawGridRefresh}
+              onRefresh={desktop ? workspace.handleRawGridRefresh : undefined}
               grid={workspace.nvimGrid}
               onVimKeys={desktop ? workspace.handleRawGridKeys : undefined}
             />
@@ -1038,7 +973,17 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             />
           </div>
         )}
-        <CommandPalette open={palette} commands={commands} onRun={runCommand} onClose={() => setPalette(false)} />
+        <CommandPalette open={palette} commands={workbench.commands} onRun={(id) => void workbench.run(id)} onClose={() => setPalette(false)} />
+        {manualFolder && <WorkspaceDialog theme={theme} label={t("フォルダーを開く")} onDismiss={() => setManualFolder(false)}>
+          <form onSubmit={(event) => { event.preventDefault(); void workspace.openWorkspaceFolder(folderInput); }} className="flex flex-wrap gap-2">
+            <input value={folderInput} onChange={(event) => setFolderInput(event.target.value)} placeholder={t("フォルダーの絶対パス…")} aria-label={t("開くフォルダーの絶対パス")} className="min-w-0 flex-1 rounded-sm border border-border bg-background px-2 py-1" />
+            <button type="submit" disabled={workspace.busy} className="rounded-sm border border-border px-3 py-1">{t("開く")}</button>
+          </form>
+        </WorkspaceDialog>}
+        {helpOpen && <WorkspaceDialog theme={theme} label={t("キーボードショートカット")} onDismiss={() => setHelpOpen(false)}>
+          <dl className="space-y-2">{workbench.commands.filter((item) => item.shortcut).map((item) => <div key={item.id} className="flex justify-between gap-3"><dt>{item.label}</dt><dd><kbd>{item.shortcut}</kbd></dd></div>)}</dl>
+          <p className="mt-3 text-xs text-muted-foreground">{t("Vimのキー操作は現在の設定に従います。編集メニューで実際のマッピングを確認できます。")}</p>
+        </WorkspaceDialog>}
         {settings && (
           <SettingsPanel
             languagePreference={props.languagePreference}
@@ -1137,6 +1082,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         </ResizableAiPane>
       )}
       {aiVisibilityOpen && <AiVisibilityDialog preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} saveFailed={aiView.saveFailed} onClose={closeAiVisibility} />}
+      </div>
     </div>
   );
 }

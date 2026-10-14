@@ -391,27 +391,6 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
   useEffect(() => { setInlineOpen(false); }, [activeId]);
 
   useEffect(() => {
-    // Inline chat keeps native Vim Ctrl+I (jump forward / Tab) untouched:
-    // only Ctrl+Shift+I / Cmd+Shift+I opens the composer.
-    /**
-     * Open the inline composer on Ctrl/Cmd+Shift+I outside editable roles.
-     *
-     * Captured so the editor never sees the gesture as input.
-     */
-    const onInlineKey = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || !event.shiftKey) return;
-      if (event.key.toLowerCase() !== "i") return;
-      const target = event.target as HTMLElement | null;
-      if (target && typeof target.closest === "function" && target.closest('input,textarea,select,[role="dialog"]')) return;
-      event.preventDefault();
-      event.stopPropagation();
-      openInlineChat();
-    };
-    window.addEventListener("keydown", onInlineKey, true);
-    return () => window.removeEventListener("keydown", onInlineKey, true);
-  }, [openInlineChat]);
-
-  useEffect(() => {
     setAiDismissed(false);
   }, [activeId]);
 
