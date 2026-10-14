@@ -370,7 +370,9 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
               <p className="text-[11px] text-muted-foreground">
                 {preset === "codex"
                   ? t("codex-acp アダプターを利用者が事前にインストールします。自動取得はしません。")
-                  : t("OpenCode を opencode acp として起動します。")}
+                  : preset === "opencode"
+                    ? t("OpenCode を opencode acp として起動します。")
+                    : t("GitHub Copilot を copilot --acp --stdio として起動します。")}
               </p>
             )}
           </div>
