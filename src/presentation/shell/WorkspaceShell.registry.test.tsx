@@ -192,6 +192,17 @@ const scenario = {
         }
         return Promise.resolve(snapshotOf(doc));
       }
+      case "fetch_editor_context": {
+        const doc = docById(a.documentId as string);
+        if (a.baseRevision !== doc.revision) throw { code: "contract", error: { code: "stale_revision", expected: doc.revision, received: a.baseRevision } };
+        return Promise.resolve({ cursor: { documentId: doc.id, revision: doc.revision, anchor: 0, head: 0 }, mode: scenario.mode, presentation: { editable: true, selectionToolbar: false, mappings: [] } });
+      }
+      case "editor_history": {
+        const doc = docById(a.documentId as string);
+        if (a.baseRevision !== doc.revision) throw { code: "contract", error: { code: "stale_revision", expected: doc.revision, received: a.baseRevision } };
+        if (!a.redo && doc.history.length > 1) { doc.history.pop(); doc.text = doc.history[doc.history.length - 1]; doc.revision += 1; doc.dirty = true; }
+        return Promise.resolve(snapshotOf(doc));
+      }
       case "redo_document": {
         const doc = docById(a.documentId as string);
         return Promise.resolve(snapshotOf(doc));
@@ -305,7 +316,8 @@ beforeEach(() => {
 /** Open the fake workspace through the manual folder input. */
 async function openWorkspace() {
   render(<App />);
-  fireEvent.click(screen.getByRole("button", { name: "パスを入力する" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "ファイル" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "パスを入力する" }));
   fireEvent.change(screen.getByLabelText("開くフォルダーの絶対パス"), { target: { value: "/ws" } });
   fireEvent.click(screen.getByRole("button", { name: "開く" }));
   await screen.findByRole("button", { name: "メモ/a.md" });
@@ -477,10 +489,11 @@ it("opens the natively picked folder instead of a typed prompt", async () => {
   const { open } = await import("@tauri-apps/plugin-dialog");
   vi.mocked(open).mockResolvedValueOnce("/picked/ws");
   render(<App />);
-  fireEvent.click(screen.getAllByRole("button", { name: "フォルダーを開く" })[0]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "ファイル" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "フォルダーを開く" }));
   await screen.findByRole("button", { name: "メモ/a.md" });
   expect(mockedInvoke).toHaveBeenCalledWith("open_workspace", { path: "/picked/ws" });
-  expect(screen.getByRole("button", { name: "ワークスペースのフォルダー" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "ws" })).toBeVisible();
   expect(screen.getByTitle("/picked/ws")).toHaveTextContent("ws");
 });
 
@@ -515,7 +528,8 @@ it("refreshes the runtime status when documents open", async () => {
   render(<App />);
   releaseFirst({ contractVersion: 1, connection: "disconnected", detail: "empty" });
   expect(await screen.findByText("Neovim 未接続")).toBeVisible();
-  fireEvent.click(screen.getByRole("button", { name: "パスを入力する" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "ファイル" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "パスを入力する" }));
   fireEvent.change(screen.getByLabelText("開くフォルダーの絶対パス"), { target: { value: "/ws" } });
   fireEvent.click(screen.getByRole("button", { name: "開く" }));
   await screen.findByRole("button", { name: "メモ/a.md" });

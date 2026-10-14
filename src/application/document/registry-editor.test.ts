@@ -3,7 +3,7 @@ import { RegistryClient } from "./registry-client";
 import { workspaceApi } from "../../infrastructure/tauri/workspace-api";
 import { applyTextEdits } from "../../domain/coordinates/utf16";
 import { StaleResync } from "../../domain/document-errors";
-import type { CursorUpdate, DocumentSnapshot, VimInputResult, VimMode } from "../../contracts/contracts";
+import type { CursorUpdate, DocumentSnapshot, EditorContext, VimInputResult, VimMode } from "../../contracts/contracts";
 
 /** Create a mutable native transport fixture that records edit/cursor/key execution order. */
 function fixture(text = "prose", mode: VimMode = "insert", mapped = false) {
@@ -36,6 +36,30 @@ function fixture(text = "prose", mode: VimMode = "insert", mapped = false) {
 }
 
 describe("serialized editor Enter and table navigation", () => {
+  it("selects authoritative Unicode source through the native cursor operation", async () => {
+    const { client, transport } = fixture("日😀");
+    const context: EditorContext = { cursor: { documentId: "doc", revision: 4, anchor: 3, head: 3 }, mode: "insert", presentation: { editable: true, selectionToolbar: false, mappings: [] } };
+    transport.fetchEditorContext = vi.fn(async () => context);
+    expect(await client.selectAll(context)).toEqual({ documentId: "doc", revision: 4, anchor: 0, head: 3 });
+    expect(transport.reportCursor).toHaveBeenCalledExactlyOnceWith({ documentId: "doc", revision: 4, anchor: 0, head: 3 });
+    expect(transport.inputWithCopy).not.toHaveBeenCalled(); expect(transport.applyEdits).not.toHaveBeenCalled();
+  });
+  it.each(["visual_block", "command_line", "terminal"] as const)("rejects native Select All in %s mode and after selection drift", async (mode) => {
+    const { client, transport } = fixture();
+    const expected: EditorContext = { cursor: { documentId: "doc", revision: 4, anchor: 0, head: 2 }, mode: "insert", presentation: { editable: true, selectionToolbar: false, mappings: [] } };
+    transport.fetchEditorContext = vi.fn(async () => ({ ...expected, mode }));
+    await expect(client.selectAll(expected)).rejects.toThrow();
+    transport.fetchEditorContext = vi.fn(async () => ({ ...expected, cursor: { ...expected.cursor, head: 3 } }));
+    await expect(client.selectAll(expected)).rejects.toThrow();
+    expect(transport.reportCursor).not.toHaveBeenCalled();
+  });
+  it("rejects Select All after an earlier queued edit changes its captured revision", async () => {
+    const { client, transport } = fixture("日😀");
+    const context: EditorContext = { cursor: { documentId: "doc", revision: 4, anchor: 0, head: 3 }, mode: "insert", presentation: { editable: true, selectionToolbar: false, mappings: [] } };
+    await client.applyGuiEdits({ documentId: "doc", baseRevision: 4 }, "日😀", [{ range: { start: 3, end: 3 }, text: "new" }]);
+    await expect(client.selectAll(context)).rejects.toBeInstanceOf(StaleResync);
+    expect(transport.reportCursor).not.toHaveBeenCalled();
+  });
   it("installs GUI and hard-break cursors before native Enter at their actual revisions", async () => {
     const { client, events, text } = fixture("日😀");
     const gui = client.applyGuiEdits({ documentId: "doc", baseRevision: 4 }, "日😀", [{ range: { start: 3, end: 3 }, text: "本文" }], { anchor: 5, head: 5 });

@@ -5,7 +5,8 @@ async function openFixture(page: Page, options: Parameters<Window["__editorFixtu
   await page.goto("/tests/live/harness/editor.html");
   await page.waitForFunction(() => Boolean(window.__editorFixture));
   await page.evaluate((next) => window.__editorFixture.load(next), options);
-  await page.getByRole("button", { name: "フォルダーを開く", exact: true }).first().click();
+  await page.getByRole("menuitem", { name: "ファイル", exact: true }).click();
+  await page.getByRole("menuitem", { name: "フォルダーを開く", exact: true }).click();
   await expect(page.getByTestId("editor-primary")).toBeVisible();
   await expect(page.locator(".cm-content")).toBeVisible();
 }
@@ -32,11 +33,13 @@ test("persistent toolbar, saved Enter preference and narrow-width controls", asy
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.screenshot({ path: ".local/issue58-toolbar-narrow.png", fullPage: true });
   await page.reload();
-  await page.getByRole("button", { name: "フォルダーを開く", exact: true }).first().click();
+  await page.getByRole("menuitem", { name: "ファイル", exact: true }).click();
+  await page.getByRole("menuitem", { name: "フォルダーを開く", exact: true }).click();
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.evaluate(() => window.__editorFixture.load({ text: "", mode: "insert" }));
-  await page.getByRole("button", { name: "フォルダーを開く", exact: true }).first().click();
+  await page.getByRole("menuitem", { name: "ファイル", exact: true }).click();
+  await page.getByRole("menuitem", { name: "フォルダーを開く", exact: true }).click();
   await page.locator(".cm-content").focus();
   await page.getByRole("button", { name: "太字にする" }).click();
   await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toBe("****");
@@ -91,7 +94,8 @@ test("right click and keyboard menus use native ports, restore focus and keep po
   await expect(menu).toHaveCount(0);
   await expect(content).toBeFocused();
   await page.evaluate(() => window.__editorFixture.load({ text: "日本😀 abc", mode: "normal", popup: true }));
-  await page.getByRole("button", { name: "フォルダーを開く", exact: true }).first().click();
+  await page.getByRole("menuitem", { name: "ファイル", exact: true }).click();
+  await page.getByRole("menuitem", { name: "フォルダーを開く", exact: true }).click();
   await page.evaluate(() => window.__editorFixture.select(0, 4, "normal"));
   await expect(page.getByRole("toolbar", { name: "選択時の書式ポップアップ" })).toBeVisible();
   await expect(content).toBeFocused();
@@ -104,13 +108,15 @@ test("plain-text and Normal Enter plus browser IME/read-only menu guards remain 
   await page.keyboard.press("Enter");
   expect(await page.evaluate(() => window.__editorFixture.getText())).toBe("plain");
   await page.evaluate(() => window.__editorFixture.load({ text: "plain", path: "note.txt", mode: "insert" }));
-  await page.getByRole("button", { name: "フォルダーを開く", exact: true }).first().click();
+  await page.getByRole("menuitem", { name: "ファイル", exact: true }).click();
+  await page.getByRole("menuitem", { name: "フォルダーを開く", exact: true }).click();
   await expect(page.getByTestId("editor-primary")).toBeVisible();
   await page.evaluate(() => window.__editorFixture.select(5, 5));
   await page.keyboard.press("Enter");
   await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toBe("plain\n");
   await page.evaluate(() => window.__editorFixture.load({ text: "前😀後", mode: "insert" }));
-  await page.getByRole("button", { name: "フォルダーを開く", exact: true }).first().click();
+  await page.getByRole("menuitem", { name: "ファイル", exact: true }).click();
+  await page.getByRole("menuitem", { name: "フォルダーを開く", exact: true }).click();
   await page.evaluate(() => window.__editorFixture.select(3, 3));
   const input = await context.newCDPSession(page);
   await input.send("Input.imeSetComposition", { text: "に", selectionStart: 1, selectionEnd: 1 });
@@ -120,7 +126,8 @@ test("plain-text and Normal Enter plus browser IME/read-only menu guards remain 
   await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toBe("前😀日本後");
   await input.detach();
   await page.evaluate(() => window.__editorFixture.load({ text: "readonly", readonly: true, mode: "normal" }));
-  await page.getByRole("button", { name: "フォルダーを開く", exact: true }).first().click();
+  await page.getByRole("menuitem", { name: "ファイル", exact: true }).click();
+  await page.getByRole("menuitem", { name: "フォルダーを開く", exact: true }).click();
   await page.locator(".cm-content").click({ button: "right" });
   await expect(page.getByRole("menuitem", { name: "クリップボードから貼り付け" })).toBeDisabled();
   await page.keyboard.press("Escape");

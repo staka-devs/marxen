@@ -220,7 +220,8 @@ let handler: ((event: AiStreamEvent) => void) | null = null;
 
 /** Open the sample document and reveal the AI sidebar. */ async function openDocAndAi() {
   render(<App />);
-  fireEvent.click(screen.getByRole("button", { name: "パスを入力する" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "ファイル" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "パスを入力する" }));
   fireEvent.change(screen.getByLabelText("開くフォルダーの絶対パス"), { target: { value: "/ws" } });
   fireEvent.click(screen.getByRole("button", { name: "開く" }));
   await screen.findByRole("button", { name: "メモ/a.md" });

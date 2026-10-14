@@ -8,10 +8,11 @@ import { RegistryClient } from "../../../src/application/document/registry-clien
 import { workspaceApi } from "../../../src/infrastructure/tauri/workspace-api";
 import { loadEditorPreferences, saveEditorPreferences } from "../../../src/infrastructure/storage/editor-preferences-store";
 import { applyTextEdits, lineRangeAt } from "../../../src/domain/coordinates/utf16";
-import type { CursorUpdate, DocumentSnapshot, EditorContext, SaveRequest, TextEdit, VimMode } from "../../../src/contracts/contracts";
+import type { CursorUpdate, DocumentSnapshot, EditorContext, SaveRequest, TextEdit, VimMode, WorkspaceEntry } from "../../../src/contracts/contracts";
 import "../../../src/styles.css";
 
-interface Options { text?: string; path?: string; mode?: VimMode; popup?: boolean; readonly?: boolean }
+interface Options { text?: string; path?: string; mode?: VimMode; popup?: boolean; readonly?: boolean; workbench?: boolean }
+let treeEntries: WorkspaceEntry[] = [];
 let options: Options = {};
 let text = "日本😀の文章";
 let path = "note.md";
@@ -30,6 +31,14 @@ function reset(next: Options) {
   options = next; text = next.text ?? "日本😀の文章"; path = next.path ?? "note.md"; mode = next.mode ?? "insert"; revision = 0;
   cursor = { documentId: "fixture", revision, anchor: text.length, head: text.length };
   history = [text]; undoIndex = 0; calls.length = 0; clipboard = "貼付😀";
+  treeEntries = [{ path, name: path, directory: false, markdown: path.endsWith(".md"), kind: path.endsWith(".md") ? "markdown" : "text" }];
+  if (next.workbench) treeEntries.push(
+    { path: "notes", name: "notes", directory: true, markdown: false },
+    { path: "notes/guide.md", name: "guide.md", directory: false, markdown: true, kind: "markdown" },
+    { path: "assets", name: "assets", directory: true, markdown: false },
+    { path: "assets/photo.png", name: "photo.png", directory: false, markdown: false, kind: "image" },
+    { path: "settings.json", name: "settings.json", directory: false, markdown: false, kind: "text" },
+  );
 }
 /** Refuse stale simulated transport requests rather than overwriting captured input. */
 function check(request: SaveRequest) { if (request.baseRevision !== revision) throw { code: "contract", error: { code: "stale_revision", expected: revision, received: request.baseRevision } }; }
@@ -59,7 +68,13 @@ function input(request: SaveRequest, keys: string) {
 const backend = {
   ...workspaceApi,
   /** Supply fixture workspace entries. */
-  listWorkspace: async () => [{ path, name: path, directory: false, markdown: path.endsWith(".md") }],
+  listWorkspace: async (parent = "") => treeEntries.filter((entry) => entry.path.includes("/") ? entry.path.slice(0, entry.path.lastIndexOf("/")) === parent : parent === ""),
+  /** Simulate the already-existing native folder command without opening or changing a document. */
+  createFolder: async (relative: string) => {
+    if (treeEntries.some((entry) => entry.path === relative)) throw { code: "already_exists" };
+    const entry: WorkspaceEntry = { path: relative, name: relative.split("/").at(-1)!, directory: true, markdown: false };
+    treeEntries.push(entry); calls.push(`create_folder:${relative}`); return entry;
+  },
   /** Open only this fixture workspace. */
   openWorkspace: async () => ({ root: "fixture" }),
   /** Return the current fixture document descriptor. */
