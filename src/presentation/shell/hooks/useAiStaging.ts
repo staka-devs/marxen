@@ -25,11 +25,17 @@ import { describeIsolationError } from "../../../domain/isolation-errors";
 import { READONLY_MESSAGE } from "../../../domain/document-errors";
 import {
   askOnlyStatus,
+  approveAndSaveStagedCopy,
   ensureStagingCopy,
+  importStagedFiles,
+  reviewPorts,
   stageNonAskProposal,
   summarizeApproveResult,
+  summarizeSavedResult,
   toAiProposal,
+  type ImportOutcome,
 } from "../../../application/isolation/staging-service";
+import { docFromOpen } from "../../../application/document/document-helpers";
 import type { IsolationGateway } from "../../../application/ports";
 import type { DocumentSession } from "./useDocumentSession";
 
@@ -43,6 +49,8 @@ export interface AiStagingArgs {
   session: DocumentSession;
   /** Isolation staging lifecycle pinned by Rust. */
   isolationGateway?: IsolationGateway;
+  /** Refresh file listings after imports register new documents. */
+  onWorkspaceChanged?: () => void;
 }
 
 /** AI staging state and review operations. */
@@ -75,6 +83,12 @@ export interface AiStaging {
   inlineKind: "selection" | "paragraph";
   /** Current isolation diffs for review. */
   diffs: IsolationDiff[];
+  /** New agent-created Markdown files for import. */
+  newFiles: import("../../../contracts/isolation-contracts").StagedNewFile[];
+  /** Per-file import outcomes with retained content for retry. */
+  importOutcomes: ImportOutcome[];
+  /** Whether the last apply-and-save retired approval actions. */
+  applied: boolean;
   /** Latest approve outcomes for review. */
   outcomes: ApproveDocOutcome[];
   /** Whether a review operation is in flight. */
@@ -99,9 +113,11 @@ export interface AiStaging {
   closeInlineChat: () => void;
   /** Fetch review diffs for the staged copy with drift detection. */
   fetchReviewDiff: () => Promise<void>;
+  /** Retry failed new-file imports without reapplying document edits. */
+  retryImports: () => Promise<void>;
   /** Clear the shared staging slot and its review state. */
   clearStaging: () => void;
-  /** Approve the staged copy, then resync views. */
+  /** Apply and save the staged copy in one natural action, then resync views. */
   approveStaging: () => Promise<void>;
   /** Reject the staged copy without touching disk. */
   rejectStaging: () => Promise<void>;
@@ -117,7 +133,7 @@ export interface AiStaging {
  */
 export function useAiStaging(args: AiStagingArgs): AiStaging {
   const { t, message } = useI18n();
-  const { desktop, notify, session, isolationGateway } = args;
+  const { desktop, notify, session, isolationGateway, onWorkspaceChanged } = args;
   const setNotice = notify;
   const {
     registry,
@@ -128,6 +144,8 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     selections,
     mergeSnapshot,
     refreshModeCursor,
+    setDocs,
+    setTabs,
   } = session;
 
   const [aiDismissed, setAiDismissed] = useState(false);
@@ -163,6 +181,9 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
   const [inlineSnapshot, setInlineSnapshot] = useState<PromptContext | null>(null);
   const [inlineKind, setInlineKind] = useState<"selection" | "paragraph">("selection");
   const [diffs, setDiffs] = useState<IsolationDiff[]>([]);
+  const [newFiles, setNewFiles] = useState<import("../../../contracts/isolation-contracts").StagedNewFile[]>([]);
+  const [importOutcomes, setImportOutcomes] = useState<ImportOutcome[]>([]);
+  const [applied, setApplied] = useState(false);
   const [outcomes, setOutcomes] = useState<ApproveDocOutcome[]>([]);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewMessage, setReviewMessage] = useState<LocalizedText | null>(null);
@@ -183,6 +204,8 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
 
   const stagingRef = useRef<string | null>(null);
   stagingRef.current = staging?.copyId ?? null;
+  /** Approved copy ID retained for import retry after the slot retires. */
+  const appliedCopyRef = useRef<string | null>(null);
 
   // Shared non-ask intake owned by the application staging service: stage the
   // proposal, report counts, and refresh diffs with drift detection. Callers
@@ -200,6 +223,13 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     setReviewMessage(null);
     setReviewStatus(result.drifted ? message("文書が更新されています。選択範囲を指定し直してください。") : result.statusMessage);
     setDiffs(result.diffs);
+    try {
+      setNewFiles(await isolationGateway.fetchNewFiles(copyId));
+    } catch {
+      setNewFiles([]);
+    }
+    setImportOutcomes([]);
+    setApplied(false);
   }
 
   /**
@@ -225,6 +255,8 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
           if (!isolationGateway) throw new LocalizedError(READONLY_MESSAGE);
           const fetched = await isolationGateway.fetchDiff(copyId);
           setDiffs(fetched);
+          setNewFiles([]);
+          setApplied(false);
           setReviewMessage(null);
         } catch (cause: unknown) {
           setReviewMessage(localizedFailure(cause, describeIsolationError));
@@ -305,6 +337,9 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
       registeredContextsRef.current = result.registration.contexts;
       if (result.isNew) {
         setDiffs([]);
+        setNewFiles([]);
+        setImportOutcomes([]);
+        setApplied(false);
         setOutcomes([]);
         setReviewMessage(null);
         setReviewStatus(message("送信範囲を自動登録しました。"));
@@ -384,6 +419,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
    * Fetch review diffs for the staged copy with drift detection.
    *
    * Drifted entries mean the live buffer moved; approve refuses until resync.
+   * New agent files refresh alongside diffs for changed-file cards.
    */
   const fetchReviewDiff = useCallback(async () => {
     const copyId = stagingRef.current;
@@ -393,6 +429,11 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
       if (!isolationGateway) throw new LocalizedError(READONLY_MESSAGE);
       const fetched = await isolationGateway.fetchDiff(copyId);
       setDiffs(fetched);
+      try {
+        setNewFiles(await isolationGateway.fetchNewFiles(copyId));
+      } catch {
+        setNewFiles([]);
+      }
       setReviewMessage(null);
       setReviewStatus(fetched.some((diff) => diff.drifted) ? message("文書が更新されています。選択範囲を指定し直してください。") : null);
     } catch (cause) {
@@ -411,18 +452,43 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
   const clearStaging = useCallback(() => {
     setStaging(null);
     setDiffs([]);
+    setNewFiles([]);
+    setImportOutcomes([]);
+    setApplied(false);
+    appliedCopyRef.current = null;
     setOutcomes([]);
     setReviewMessage(null);
     setReviewStatus(null);
   }, []);
 
   /**
-   * Approve the staged copy via the application service, then resync views.
+   * Register successfully imported documents into the live session.
    *
-   * Refuses drifted diffs before calling; applied buffers pull fresh
-   * snapshots so the shell shows the same text, then refreshes mode/cursor.
-   * Summaries come from `summarizeApproveResult` so partial application is
-   * never presented as all-or-nothing.
+   * Merges each returned snapshot into the docs map, adds background tabs,
+   * and refreshes file listings so Explorer and tabs reflect the new files.
+   * Failures stay in `importOutcomes` with their staged content for retry.
+   */
+  const registerImports = useCallback((imports: ImportOutcome[]) => {
+    let registered = 0;
+    for (const item of imports) {
+      if (!item.ok || !item.snapshot) continue;
+      if (registry) registry.noteSnapshot(item.snapshot);
+      const doc = docFromOpen({ path: item.rel, snapshot: item.snapshot });
+      setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
+      setTabs((prev) => (prev.includes(doc.documentId) ? prev : [...prev, doc.documentId]));
+      registered += 1;
+    }
+    if (registered > 0) onWorkspaceChanged?.();
+  }, [registry, setDocs, setTabs, onWorkspaceChanged]);
+
+  /**
+   * Apply and save the staged copy in one natural action, then resync views.
+   *
+   * Delegates approval and exact-revision saves to the application use case
+   * and imports staged files through the native workspace-bound command; this
+   * hook only merges snapshots, registers imported documents, and reports.
+   * Applied changes retire approval actions; partial and new-only import
+   * failures report as failures with a retry that never reapplies edits.
    */
   const approveStaging = useCallback(async () => {
     const copyId = stagingRef.current;
@@ -433,37 +499,99 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     }
     setReviewBusy(true);
     try {
-      if (!isolationGateway) throw new LocalizedError(READONLY_MESSAGE);
-      const result = await isolationGateway.approveCopy(copyId);
-      // Applied buffers moved in Neovim; pull fresh snapshots so the shell
-      // shows the same text, then refresh mode/cursor.
-      if (registry) {
-        for (const outcome of result.outcomes) {
-          if (!outcome.applied) continue;
-          try {
-            mergeSnapshot(await registry.fetchSnapshot(outcome.documentId));
-          } catch {
-            // Snapshot fetch failure leaves text as-is; outcome already
-            // records the applied revision.
-          }
-        }
-        if (activeRef.current) await refreshModeCursor(activeRef.current);
-      }
-      const summary = summarizeApproveResult(result, t);
+      if (!isolationGateway || !registry) throw new LocalizedError(READONLY_MESSAGE);
+      const applied = await approveAndSaveStagedCopy(
+        reviewPorts(
+          (id) => isolationGateway.approveCopy(id),
+          (documentId) => registry.fetchSnapshot(documentId),
+          (request) => registry.save(request),
+        ),
+        copyId,
+      );
+      for (const snapshot of applied.snapshots) mergeSnapshot(snapshot);
+      if (activeRef.current) await refreshModeCursor(activeRef.current);
+      const imports = newFiles.length > 0
+        ? await importStagedFiles(isolationGateway, copyId, newFiles)
+        : [];
+      registerImports(imports);
+      const summary = summarizeApproveResult(applied.approve, t);
+      const saved = summarizeSavedResult(applied.saved);
+      const failedImports = imports.filter((item) => !item.ok);
       setOutcomes(summary.outcomes);
+      setImportOutcomes(imports);
       setStaging(null);
-      setDiffs([]);
+      appliedCopyRef.current = copyId;
+      setApplied(true);
       setAiProposal(null);
-      setReviewMessage(summary.messages.reviewMessage);
-      setReviewStatus(summary.messages.status);
-      setNotice(summary.messages.notice);
+      if (summary.failedCount > 0) {
+        setReviewMessage(summary.messages.reviewMessage);
+        setReviewStatus(summary.messages.status);
+        setNotice(summary.messages.notice);
+      } else if (saved.failedCount > 0 || failedImports.length > 0) {
+        const failed = message("保存に失敗しました（{{value0}}件）。", { value0: saved.failedCount + failedImports.length });
+        setReviewMessage(failed);
+        setReviewStatus(failed);
+        setNotice(failed);
+      } else {
+        const total = applied.saved.filter((entry) => entry.saved).length
+          + imports.filter((item) => item.ok).length;
+        const doneMessage = total > 0
+          ? message("保存しました（{{value0}}件）。", { value0: total })
+          : summary.messages.status;
+        setReviewMessage(null);
+        setReviewStatus(doneMessage);
+        setNotice(doneMessage);
+      }
+      try {
+        if (activeRef.current) await refreshModeCursor(activeRef.current);
+      } catch {
+        // Best-effort cursor refresh after save.
+      }
     } catch (cause) {
       setReviewMessage(localizedFailure(cause, describeIsolationError));
       setReviewStatus(message("再同期して範囲を再登録してください。"));
     } finally {
       setReviewBusy(false);
     }
-  }, [diffs, registry, mergeSnapshot, refreshModeCursor, isolationGateway, activeRef, notify]);
+  }, [diffs, newFiles, registry, mergeSnapshot, refreshModeCursor, registerImports, isolationGateway, activeRef, notify]);
+
+  /**
+   * Retry failed new-file imports without reapplying document edits.
+   *
+   * Reruns only creation for entries still failing with their retained
+   * staged content; approval and document saves never rerun, so already
+   * applied edits stay exactly as saved.
+   */
+  const retryImports = useCallback(async () => {
+    const copyId = appliedCopyRef.current;
+    const failed = importOutcomes.filter((item) => !item.ok);
+    if (!copyId || failed.length === 0 || !isolationGateway) return;
+    setReviewBusy(true);
+    try {
+      // Retry binds the same approved copy workspace; only failed creations
+      // rerun with their retained content.
+      const retried = await importStagedFiles(isolationGateway, copyId, failed);
+      const merged = importOutcomes.map((item) => retried.find((next) => next.rel === item.rel) ?? item);
+      setImportOutcomes(merged);
+      registerImports(retried);
+      const remaining = merged.filter((item) => !item.ok).length;
+      if (remaining > 0) {
+        const failedMessage = message("保存に失敗しました（{{value0}}件）。", { value0: remaining });
+        setReviewMessage(failedMessage);
+        setReviewStatus(failedMessage);
+        setNotice(failedMessage);
+      } else {
+        const doneMessage = message("保存しました（{{value0}}件）。", { value0: merged.length });
+        setReviewMessage(null);
+        setReviewStatus(doneMessage);
+        setNotice(doneMessage);
+      }
+    } catch (cause) {
+      setReviewMessage(localizedFailure(cause, describeIsolationError));
+    } finally {
+      setReviewBusy(false);
+    }
+  }, [importOutcomes, isolationGateway, registerImports, notify]);
 
   /** Reject the staged copy without touching disk. */
   const rejectStaging = useCallback(async () => {
@@ -514,6 +642,9 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     inlineSnapshot,
     inlineKind,
     diffs,
+    newFiles,
+    importOutcomes,
+    applied,
     outcomes,
     reviewBusy,
     reviewMessage: reviewMessage === null ? null : renderLocalizedText(reviewMessage, t),
@@ -526,6 +657,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     inlineAnchor,
     closeInlineChat,
     fetchReviewDiff,
+    retryImports,
     clearStaging,
     approveStaging,
     rejectStaging,

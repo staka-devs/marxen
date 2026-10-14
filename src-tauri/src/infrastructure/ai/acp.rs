@@ -72,6 +72,357 @@ fn emit_prompt_response_usage(
     }
 }
 
+/// Emit validated tool-call, update, and plan notifications as nonterminal chat events.
+///
+/// Foreign sessions and malformed payloads yield no event; text and terminal
+/// handling stay unchanged. Tool content never fabricates a timeline: only
+/// wire-reported calls surface, and terminal executions never open a window.
+fn emit_agentic_notification(
+    note: &serde_json::Value,
+    session_id: &str,
+    staging_dir: &Path,
+    run_id: &AiRunId,
+    emit: &mut (dyn FnMut(AiStreamEvent) + Send),
+) {
+    if let Some(tool_call) = parse_tool_call_notification(note, session_id, staging_dir) {
+        emit(AiStreamEvent::ToolCall(StreamToolCall {
+            run_id: run_id.clone(),
+            tool_call,
+        }));
+        return;
+    }
+    if let Some(update) = parse_tool_call_update_notification(note, session_id, staging_dir) {
+        emit(AiStreamEvent::ToolCallUpdate(StreamToolCallUpdate {
+            run_id: run_id.clone(),
+            update,
+        }));
+        return;
+    }
+    if let Some(entries) = parse_plan_notification(note, session_id) {
+        emit(AiStreamEvent::Plan(StreamPlan {
+            run_id: run_id.clone(),
+            entries,
+        }));
+    }
+}
+
+/// Check whether an absolute wire path stays inside the authorized staging directory.
+///
+/// Traversal (`..`) is never authorized even when it resolves inside: it is
+/// rejected before any other check, matching the method docs and the domain
+/// containment contract. Every other absolute path resolves through one
+/// common gate: the entry itself counts when present (`symlink_metadata`
+/// detects dangling links as entries so they fail closed instead of being
+/// skipped toward a benign parent), otherwise the nearest existing ancestor
+/// does, authorizing absent destinations reached through valid canonical
+/// aliases (macOS `/var` versus `/private/var`, Windows UNC `\\?\` versus
+/// the drive-letter form, owned-root symlinks). The ancestor must resolve
+/// inside the canonical staging root, and the destination itself must sit
+/// strictly below it (a proper lexical prefix guarantees a non-empty
+/// `..`-free remainder); outside paths, the root itself, relative paths,
+/// and any canonicalization failure yield false.
+pub(crate) fn staging_path_allowed(staging_dir: &Path, abs_path: &str) -> bool {
+    use std::path::Component;
+    let candidate = Path::new(abs_path);
+    if !candidate.is_absolute() {
+        return false;
+    }
+    if candidate
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return false;
+    }
+    let anchor: PathBuf = if std::fs::symlink_metadata(candidate).is_ok() {
+        candidate.to_path_buf()
+    } else {
+        match nearest_existing_ancestor(candidate) {
+            Some(ancestor) => ancestor,
+            None => return false,
+        }
+    };
+    let (root, base) = match (staging_dir.canonicalize(), anchor.canonicalize()) {
+        (Ok(root), Ok(base)) => (root, base),
+        _ => return false,
+    };
+    if !base.starts_with(&root) {
+        return false;
+    }
+    if anchor == candidate {
+        // An existing entry must sit strictly below the root itself.
+        return base != root;
+    }
+    // A proper lexical prefix leaves a non-empty remainder without `..`, so
+    // the absent destination always lands strictly below its resolved ancestor.
+    true
+}
+
+/// Find the nearest existing ancestor of a not-yet-created path.
+///
+/// Walks up from the candidate until an entry is found. Uses
+/// `symlink_metadata` so dangling links count as entries instead of being
+/// skipped toward a benign parent; callers canonicalize the result, which
+/// fails closed for dangling links. Yields `None` only when no ancestor
+/// exists. Callers use the result to detect symlinked parents resolving
+/// outside the owned staging root before creating any directory or file.
+fn nearest_existing_ancestor(candidate: &Path) -> Option<PathBuf> {
+    let mut current = candidate;
+    loop {
+        if std::fs::symlink_metadata(current).is_ok() {
+            return Some(current.to_path_buf());
+        }
+        current = current.parent()?;
+    }
+}
+
+/// Build a JSON-RPC error envelope for rejected agent file/permission requests.
+/// Wrong sessions and outside paths are rejected without touching the filesystem.
+fn agent_request_error(id: &Value, code: i64, message: &str) -> Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": code, "message": message }
+    })
+}
+
+/// Bound one permission wait to the remaining overall prompt budget.
+///
+/// Returns the earlier of the run deadline (`run_started + timeout`) and a
+/// 120-second interactive cap from `now`, so a permission choice never
+/// restarts the full run deadline while still bounding a dead UI.
+pub fn permission_wait_until(run_started: Instant, timeout: Duration, now: Instant) -> Instant {
+    std::cmp::min(
+        run_started.checked_add(timeout).unwrap_or(now),
+        now.checked_add(Duration::from_secs(120)).unwrap_or(now),
+    )
+}
+
+/// Answer one `session/request_permission` with the chat user's explicit choice.
+///
+/// Registers the pending request, surfaces it as a chat event, then waits
+/// with bounded polling for `ai_permission_reply`, local cancellation, or the
+/// run deadline. Delivers the chosen option ID exactly once, the spec
+/// `cancelled` outcome after cancellation, or a bounded denial with actual
+/// reject IDs on deadline expiry. Read-only `ask` turns never wait: they
+/// surface and deny immediately. Always drops the pending slot afterwards.
+#[allow(clippy::too_many_arguments)]
+fn answer_permission_interactive(
+    conn: &mut AgentConn,
+    run_id: &AiRunId,
+    registry: &RunRegistry,
+    cancel: &AtomicBool,
+    cancel_sent: bool,
+    run_started: Instant,
+    timeout: Duration,
+    session_id: &str,
+    req_id: &Value,
+    req_params: &Value,
+    is_ask: bool,
+    emit: &mut (dyn FnMut(AiStreamEvent) + Send),
+) -> Result<(), AiError> {
+    let cancelled = cancel_sent || cancel.load(Ordering::SeqCst);
+    let parsed = match parse_permission_request(req_id, req_params) {
+        None => {
+            let reply = agent_request_error(req_id, -32602, "invalid permission request");
+            return conn.write(&reply);
+        }
+        Some(parsed) if parsed.session_id != session_id => {
+            let reply = agent_request_error(req_id, -32602, "unknown session for permission");
+            return conn.write(&reply);
+        }
+        Some(parsed) => parsed,
+    };
+    let request_id = stringify_request_id(req_id).unwrap_or_else(|| parsed.request_id.clone());
+    let options: Vec<PermissionOption> = parsed
+        .options
+        .iter()
+        .map(|option| PermissionOption {
+            option_id: option.option_id.clone(),
+            name: option.name.clone(),
+            kind: option.kind,
+        })
+        .collect();
+    // Read-only turns surface the request but never wait for a choice.
+    if is_ask || cancelled {
+        emit(AiStreamEvent::Permission(StreamPermission {
+            run_id: run_id.clone(),
+            request_id: request_id.clone(),
+            session_id: AcpSessionId(parsed.session_id.clone()),
+            tool_call_id: parsed.tool_call_id.clone(),
+            title: parsed.title.clone(),
+            options: options.clone(),
+        }));
+        let mode = if cancelled {
+            PermissionAnswer::Cancelled
+        } else {
+            PermissionAnswer::Deny
+        };
+        return conn.answer_agent_request(req_id, "session/request_permission", req_params, mode);
+    }
+    if registry
+        .register_permission(run_id, &request_id, &parsed.session_id, options.clone())
+        .is_err()
+    {
+        let reply = agent_request_error(req_id, -32602, "unknown session for permission");
+        return conn.write(&reply);
+    }
+    emit(AiStreamEvent::Permission(StreamPermission {
+        run_id: run_id.clone(),
+        request_id: request_id.clone(),
+        session_id: AcpSessionId(parsed.session_id.clone()),
+        tool_call_id: parsed.tool_call_id.clone(),
+        title: parsed.title.clone(),
+        options,
+    }));
+    let wait_until = permission_wait_until(run_started, timeout, Instant::now());
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            // Settle cancellation through the EOF path exactly once: the
+            // killed child closes stdout and `cancelled_or_timed_out` emits
+            // the single terminal. Writing an answer here could race the
+            // child's death and turn a clean cancel into a stream error.
+            registry.drop_permission(run_id, &request_id);
+            return Ok(());
+        }
+        if let Some(option_id) = registry.take_permission_reply(run_id, &request_id) {
+            registry.drop_permission(run_id, &request_id);
+            let reply = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": answer_permission_by_id(&option_id, false),
+            });
+            return conn.write(&reply);
+        }
+        if Instant::now() >= wait_until {
+            registry.drop_permission(run_id, &request_id);
+            return conn.answer_agent_request(
+                req_id,
+                "session/request_permission",
+                req_params,
+                PermissionAnswer::Deny,
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Serve `fs/read_text_file` from the authorized staging directory.
+///
+/// Validates the claimed session, requires an absolute contained path, and
+/// rejects symlinks escaping the root. Wrong sessions and outside paths yield
+/// a JSON-RPC error; successes return `{ content }`.
+pub(crate) fn serve_fs_read(
+    staging_dir: &Path,
+    expected_session: &str,
+    params: &Value,
+) -> Result<Value, Value> {
+    let session = params
+        .get("sessionId")
+        .and_then(|id| id.as_str())
+        .unwrap_or("");
+    if session != expected_session {
+        return Err(agent_request_error(
+            &Value::Null,
+            -32602,
+            "unknown session for fs/read_text_file",
+        ));
+    }
+    let path = params
+        .get("path")
+        .and_then(|path| path.as_str())
+        .unwrap_or("");
+    if !staging_path_allowed(staging_dir, path) {
+        return Err(agent_request_error(
+            &Value::Null,
+            -32602,
+            "path is outside the authorized staging copy",
+        ));
+    }
+    let bytes = std::fs::read(Path::new(path))
+        .map_err(|_| agent_request_error(&Value::Null, -32602, "staging file cannot be read"))?;
+    let content = String::from_utf8(bytes)
+        .map_err(|_| agent_request_error(&Value::Null, -32602, "staging file is not UTF-8"))?;
+    if content.len() > MAX_EXCERPT_BYTES {
+        return Err(agent_request_error(
+            &Value::Null,
+            -32602,
+            "staging file is too large",
+        ));
+    }
+    Ok(serde_json::json!({ "content": content }))
+}
+
+/// Serve `fs/write_text_file` into the authorized staging directory.
+///
+/// Validates the claimed session and containment through the single staging
+/// gate (which resolves the nearest existing ancestor, so absent destinations
+/// below outside-pointing symlinked parents fail before anything is created),
+/// then creates parent directories and writes UTF-8 text. `Ask` mode is
+/// read-only and rejects writes. Markdown-only enforcement happens at review
+/// time; the transport contains the write but never applies it to live
+/// buffers. Wrong sessions, outside paths, symlinked parents resolving
+/// outside the owned root, and unresolvable ancestors yield a JSON-RPC error
+/// before any directory or file is created.
+pub(crate) fn serve_fs_write(
+    staging_dir: &Path,
+    expected_session: &str,
+    params: &Value,
+    mode: PromptMode,
+) -> Result<Value, Value> {
+    use crate::contracts::ai::PromptMode as Mode;
+    if mode == Mode::Ask {
+        return Err(agent_request_error(
+            &Value::Null,
+            -32602,
+            "ask mode is read-only",
+        ));
+    }
+    let session = params
+        .get("sessionId")
+        .and_then(|id| id.as_str())
+        .unwrap_or("");
+    if session != expected_session {
+        return Err(agent_request_error(
+            &Value::Null,
+            -32602,
+            "unknown session for fs/write_text_file",
+        ));
+    }
+    let path = params
+        .get("path")
+        .and_then(|path| path.as_str())
+        .unwrap_or("");
+    if !staging_path_allowed(staging_dir, path) {
+        return Err(agent_request_error(
+            &Value::Null,
+            -32602,
+            "path is outside the authorized staging copy",
+        ));
+    }
+    let content = params
+        .get("content")
+        .and_then(|content| content.as_str())
+        .ok_or_else(|| {
+            agent_request_error(&Value::Null, -32602, "fs/write_text_file requires content")
+        })?;
+    if content.len() > MAX_EXCERPT_BYTES {
+        return Err(agent_request_error(
+            &Value::Null,
+            -32602,
+            "staging content is too large",
+        ));
+    }
+    let target = Path::new(path);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|_| {
+            agent_request_error(&Value::Null, -32602, "staging parent cannot be created")
+        })?;
+    }
+    std::fs::write(target, content.as_bytes())
+        .map_err(|_| agent_request_error(&Value::Null, -32602, "staging file cannot be written"))?;
+    Ok(serde_json::json!({}))
+}
+
 /// Read `PATHEXT` order for executable probing, falling back to the bundled
 /// Windows default when the variable is absent or unparsable.
 /// Appends `ps1` after `PATHEXT` when missing so official npm shims resolve
@@ -544,7 +895,10 @@ impl AgentConn {
         }
     }
 
-    /// Answer permission requests by default denial and reject unsupported agent requests.
+    /// Answer handshake agent requests by default denial and reject unsupported methods.
+    ///
+    /// Handshake phases never surface permission UI; prompt turns use the
+    /// conversation handler with visible permission events instead.
     fn answer_agent_request(
         &mut self,
         id: &serde_json::Value,
@@ -809,6 +1163,35 @@ fn cancelled_or_timed_out(
     }
 }
 
+/// Write one agent-request reply, settling explicit cancellation when the agent is already gone.
+///
+/// Killing a cancelled child closes its stdio pipes, so the next reply write
+/// fails on strict platforms while lenient ones still accept it. An
+/// explicitly cancelled run must settle as cancelled either way, never as a
+/// stream error. Non-cancel write failures keep their error. Returns true
+/// when the run settled as cancelled and the caller must stop the loop.
+#[allow(clippy::too_many_arguments)]
+fn write_agent_reply_or_settle_cancelled(
+    conn: &mut AgentConn,
+    reply: &Value,
+    run_id: &AiRunId,
+    registry: &RunRegistry,
+    cancel: &AtomicBool,
+    cancel_sent: bool,
+    tracker: &mut AcpSessionTracker,
+    emit: &mut (dyn FnMut(AiStreamEvent) + Send),
+) -> Result<bool, AiError> {
+    match conn.write(reply) {
+        Ok(()) => Ok(false),
+        Err(_error) if cancel.load(Ordering::SeqCst) || cancel_sent => {
+            cancelled_or_timed_out(run_id, registry, emit);
+            tracker.prompt_finished();
+            Ok(true)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Run an authorized scoped ACP prompt with cancellation, child ownership and streamed events.
 pub fn run_acp_prompt(
     params: &AcpRunParams,
@@ -818,6 +1201,9 @@ pub fn run_acp_prompt(
     cancel: &AtomicBool,
     emit: &mut (dyn FnMut(AiStreamEvent) + Send),
 ) -> Result<(), AiError> {
+    // The overall prompt budget starts here: permission waits below use the
+    // remainder of this same deadline instead of restarting it per request.
+    let run_started = Instant::now();
     emit(AiStreamEvent::Started(StreamStarted {
         run_id: run_id.clone(),
     }));
@@ -854,7 +1240,16 @@ pub fn run_acp_prompt(
         watchdog_registry.timeout_cancel(&watchdog_id);
     });
 
-    let outcome = run_acp_conversation(params, request, run_id, registry, cancel, emit, &mut conn);
+    let outcome = run_acp_conversation(
+        params,
+        request,
+        run_id,
+        registry,
+        cancel,
+        run_started,
+        emit,
+        &mut conn,
+    );
     let outcome = outcome.map_err(|error| with_stderr(error, &stderr_captured));
     // Reap exactly once on every path. Graceful turns (Done or a cooperating
     // cancel) shut the agent down by closing stdin; kill paths already reaped
@@ -876,13 +1271,18 @@ pub fn run_acp_prompt(
 }
 
 #[allow(clippy::too_many_arguments)]
-/// Drive one ACP conversation, deny permissions and enforce deadline and session identity.
+/// Drive one ACP conversation with visible tool/plan/permission events and
+/// authorized staging file access. Permissions are surfaced as chat events and
+/// answered by actual option IDs (deny by default, cancelled after cancel);
+/// fs reads/writes are contained to the staging directory with session and
+/// path rejection; terminals are never created in an external window.
 fn run_acp_conversation(
     params: &AcpRunParams,
     request: &AiPromptRequest,
     run_id: &AiRunId,
     registry: &RunRegistry,
     cancel: &AtomicBool,
+    run_started: Instant,
     emit: &mut (dyn FnMut(AiStreamEvent) + Send),
     conn: &mut AgentConn,
 ) -> Result<(), AiError> {
@@ -1030,23 +1430,105 @@ fn run_acp_conversation(
                     }));
                 }
                 emit_usage_notification(&note, session_id, request, run_id, emit);
-                // Other updates (tool calls, file edits inside the staging
-                // copy) stay in the isolated copy for #8 to diff; only text
-                // is proposed.
+                emit_agentic_notification(&note, session_id, &params.staging_dir, run_id, emit);
             }
             AgentIncoming::AgentRequest {
                 id: req_id,
                 method: req_method,
                 params: req_params,
             } => {
-                // No approval UI exists: deny by default. After our own
-                // cancel, answer with the spec's `cancelled` outcome.
-                let mode = if cancel_sent || cancel.load(Ordering::SeqCst) {
-                    PermissionAnswer::Cancelled
+                if req_method == "fs/read_text_file" {
+                    let reply = match serve_fs_read(&params.staging_dir, session_id, &req_params) {
+                        Ok(result) => serde_json::json!({
+                            "jsonrpc": "2.0", "id": req_id, "result": result
+                        }),
+                        Err(error) => {
+                            let mut envelope = error;
+                            envelope["id"] = req_id.clone();
+                            envelope
+                        }
+                    };
+                    if write_agent_reply_or_settle_cancelled(
+                        conn,
+                        &reply,
+                        run_id,
+                        registry,
+                        cancel,
+                        cancel_sent,
+                        &mut tracker,
+                        emit,
+                    )? {
+                        return Ok(());
+                    }
+                } else if req_method == "fs/write_text_file" {
+                    let reply = match serve_fs_write(
+                        &params.staging_dir,
+                        session_id,
+                        &req_params,
+                        request.mode,
+                    ) {
+                        Ok(result) => serde_json::json!({
+                            "jsonrpc": "2.0", "id": req_id, "result": result
+                        }),
+                        Err(error) => {
+                            let mut envelope = error;
+                            envelope["id"] = req_id.clone();
+                            envelope
+                        }
+                    };
+                    if write_agent_reply_or_settle_cancelled(
+                        conn,
+                        &reply,
+                        run_id,
+                        registry,
+                        cancel,
+                        cancel_sent,
+                        &mut tracker,
+                        emit,
+                    )? {
+                        return Ok(());
+                    }
+                } else if req_method == "session/request_permission" {
+                    match answer_permission_interactive(
+                        conn,
+                        run_id,
+                        registry,
+                        cancel,
+                        cancel_sent,
+                        run_started,
+                        params.timeout,
+                        session_id,
+                        &req_id,
+                        &req_params,
+                        request.mode == PromptMode::Ask,
+                        emit,
+                    ) {
+                        Ok(()) => {}
+                        Err(_error) if cancel.load(Ordering::SeqCst) || cancel_sent => {
+                            cancelled_or_timed_out(run_id, registry, emit);
+                            tracker.prompt_finished();
+                            return Ok(());
+                        }
+                        Err(error) => return Err(error),
+                    }
                 } else {
-                    PermissionAnswer::Deny
-                };
-                conn.answer_agent_request(&req_id, &req_method, &req_params, mode)?;
+                    // Terminals, elicitation, and unknown methods stay
+                    // unimplemented: no external window is ever created.
+                    let mode = if cancel_sent || cancel.load(Ordering::SeqCst) {
+                        PermissionAnswer::Cancelled
+                    } else {
+                        PermissionAnswer::Deny
+                    };
+                    match conn.answer_agent_request(&req_id, &req_method, &req_params, mode) {
+                        Ok(()) => {}
+                        Err(_error) if cancel.load(Ordering::SeqCst) || cancel_sent => {
+                            cancelled_or_timed_out(run_id, registry, emit);
+                            tracker.prompt_finished();
+                            return Ok(());
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
             }
         }
     }

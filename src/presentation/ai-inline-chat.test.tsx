@@ -176,6 +176,54 @@ describe("inline chat", () => {
     expect(mockStartPrompt).not.toHaveBeenCalled();
   });
 
+  it("disables permission buttons during pending IPC and retries after failure", async () => {
+    let handler: ((event: AiStreamEvent) => void) | null = null;
+    mockStartPrompt.mockImplementation(async (_request, onEvent) => {
+      handler = onEvent;
+      return { runId: "run_inline_perm", stop: vi.fn() };
+    });
+    let attempt = 0;
+    let release!: () => void;
+    /** Deferred reply gate failing the first choice, then succeeding. */
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    /** Deferred permission gateway rejecting once, then resolving. */
+    const replyPermission = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        await gate;
+        throw new Error("stale");
+      }
+    });
+    renderInline({ aiGateway: { replyPermission } as unknown as AiGateway });
+    fireEvent.change(screen.getByLabelText("インライン指示"), { target: { value: "直して" } });
+    fireEvent.click(screen.getByRole("button", { name: "インライン送信" }));
+    await vi.waitFor(() => expect(handler).not.toBeNull());
+    handler!({ type: "started", payload: { runId: "run_inline_perm" } });
+    handler!({
+      type: "permission",
+      payload: {
+        runId: "run_inline_perm",
+        requestId: "910",
+        sessionId: "sess_1",
+        toolCallId: "call_2",
+        title: "mock tool",
+        options: [
+          { optionId: "mock_allow", name: "許可", kind: "allow_once" },
+          { optionId: "mock_reject", name: "拒否", kind: "reject_once" },
+        ],
+      },
+    });
+    expect(await screen.findByTestId("permission-card-910")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "拒否" }));
+    await vi.waitFor(() => expect(replyPermission).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "拒否" })).toBeDisabled();
+    release();
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: "拒否" })).toBeEnabled());
+    expect(replyPermission).toHaveBeenCalledWith("run_inline_perm", "910", "mock_reject");
+    fireEvent.click(screen.getByRole("button", { name: "拒否" }));
+    await vi.waitFor(() => expect(replyPermission).toHaveBeenCalledTimes(2));
+  });
+
   it("renders injected model controls without inventing model lists", () => {
     renderInline({ modelControls: <div>モデル切替</div> });
     expect(screen.getByText("モデル切替")).toBeVisible();

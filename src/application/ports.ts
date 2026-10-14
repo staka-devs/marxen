@@ -42,6 +42,7 @@ import type {
   ApproveResult,
   IsolationDiff,
   IsolatedCopyInfo,
+  StagedImportOutcome,
   StagedProposal,
 } from "../contracts/isolation-contracts";
 import type { PromptContext, PromptMode, ProposalText, IsolatedCopyId } from "../contracts/ai-contracts";
@@ -219,6 +220,8 @@ export interface AiGateway {
   startPrompt(request: AiPromptRequest, onEvent: (event: AiStreamEvent) => void): Promise<AiPromptSession>;
   /** Best-effort cancel without surfacing cancel errors. */
   cancelPromptSafe(stop: () => Promise<void>): Promise<void>;
+  /** Answer a pending permission request with the exact chosen option ID. */
+  replyPermission(runId: AiRunId, requestId: string, optionId: string): Promise<void>;
   /** Read credential presence for a provider. */
   getCredentialState(kind: AiProviderKind): Promise<CredentialRef>;
   /** Store a secret in the OS store. */
@@ -235,6 +238,10 @@ export interface IsolationGateway {
   createCopy(contexts: PromptContext[]): Promise<IsolatedCopyInfo>;
   /** Fetch diffs with drift detection for a copy. */
   fetchDiff(copyId: IsolatedCopyId): Promise<IsolationDiff[]>;
+  /** List new agent-created Markdown files for import. */
+  fetchNewFiles(copyId: IsolatedCopyId): Promise<import("../contracts/isolation-contracts").StagedNewFile[]>;
+  /** Import staged files into the approved copy's original workspace. */
+  importNewFiles(copyId: IsolatedCopyId, files: Array<{ rel: string; content: string }>): Promise<StagedImportOutcome[]>;
   /** Stage a validated proposal into the copy. */
   stageProposal(copyId: IsolatedCopyId, proposal: ProposalText, mode: PromptMode): Promise<StagedProposal>;
   /** Approve and apply the staged copy with scoped rollback. */

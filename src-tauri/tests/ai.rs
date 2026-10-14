@@ -639,6 +639,7 @@ fn acp_full_run_streams_chunks_inside_staging_copy() {
         Duration::from_secs(30),
     );
     let mut events = Vec::new();
+    let replies = registry.clone();
     run_acp_prompt(
         &params,
         &request,
@@ -646,6 +647,14 @@ fn acp_full_run_streams_chunks_inside_staging_copy() {
         &registry,
         &cancel,
         &mut |event| {
+            // Answer the surfaced permission request exactly as the chat UI
+            // does, so the run settles on a real user choice without waiting
+            // for the run deadline.
+            if let AiStreamEvent::Permission(permission) = &event {
+                replies
+                    .reply_permission(&permission.run_id, &permission.request_id, "mock_reject")
+                    .expect("pending permission reply");
+            }
             events.push(event);
         },
     )
@@ -653,6 +662,27 @@ fn acp_full_run_streams_chunks_inside_staging_copy() {
     let (text, done, cancelled) = events_of(&events);
     assert_eq!(text, "こんにちは世界");
     assert!(done && !cancelled);
+    // The permission request surfaces as a chat event before the terminal,
+    // carrying the agent's own request id for the reply envelope.
+    let permission_index = events
+        .iter()
+        .position(|event| matches!(event, AiStreamEvent::Permission(_)))
+        .expect("permission surfaces before settlement");
+    let done_index = events
+        .iter()
+        .position(|event| matches!(event, AiStreamEvent::Done(_)))
+        .expect("terminal done");
+    assert!(permission_index < done_index);
+    if let AiStreamEvent::Permission(permission) = &events[permission_index] {
+        assert_eq!(permission.request_id, "900");
+        assert_eq!(permission.run_id, run_id);
+        assert!(permission
+            .options
+            .iter()
+            .any(|option| option.option_id == "mock_reject"));
+    } else {
+        unreachable!("permission event");
+    }
     // The mock's permission request must have been answered by selecting
     // the reject option, bearing the agent's own request id (900).
     let logged = std::fs::read(flags.join("permission.json")).expect("permission log");
@@ -669,6 +699,234 @@ fn acp_full_run_streams_chunks_inside_staging_copy() {
             .pointer("/result/outcome/optionId")
             .and_then(|id| id.as_str()),
         Some("mock_reject")
+    );
+}
+
+/// Seed one Markdown file inside a fresh staging copy for the agentic demo.
+///
+/// Returns the staging root and the agent working directory holding the seed.
+/// The mock discovers, reads, edits, and extends exactly these bytes.
+fn seed_agentic_staging(name: &str, seed: &str) -> (PathBuf, PathBuf) {
+    let staging = fresh_dir(&format!("marxen-ai-test-staging-{name}"));
+    let staging_dir = staging.join("copy_07");
+    std::fs::create_dir_all(&staging_dir).expect("copy dir");
+    std::fs::write(staging_dir.join("seed.md"), seed).expect("seed file");
+    (staging, staging_dir)
+}
+
+/// Run the reproducible agentic demo, answering its permission request.
+///
+/// Replies with `choice` as the chat UI does and collects every event.
+/// Returns the events, the flag directory with `permission.json`, and the
+/// agent working directory holding edited and created files.
+fn run_agentic_demo(
+    name: &str,
+    extra: &[&str],
+    choice: &str,
+    timeout: Duration,
+) -> (Vec<AiStreamEvent>, PathBuf, PathBuf) {
+    let flags = fresh_dir(&format!("marxen-ai-test-flags-{name}"));
+    let mut args: Vec<String> = extra.iter().map(|arg| (*arg).to_owned()).collect();
+    args.push("--agentic-demo".into());
+    let argv =
+        mock_agent_argv_with_flag_dir(&args.iter().map(String::as_str).collect::<Vec<_>>(), &flags);
+    let request = acp_request(argv.clone());
+    let (_, staging_dir) = seed_agentic_staging(name, "# Seed\n");
+    let params = acp_params(argv, &staging_dir, timeout);
+    let registry = Arc::new(RunRegistry::new());
+    let (run_id, cancel) = registry.register();
+    let mut events = Vec::new();
+    let replies = registry.clone();
+    run_acp_prompt(
+        &params,
+        &request,
+        &run_id,
+        &registry,
+        &cancel,
+        &mut |event| {
+            if let AiStreamEvent::Permission(permission) = &event {
+                replies
+                    .reply_permission(&permission.run_id, &permission.request_id, choice)
+                    .expect("pending permission reply");
+            }
+            events.push(event);
+        },
+    )
+    .unwrap();
+    (events, flags, staging_dir)
+}
+
+/// Order one event variant before another inside a collected run.
+fn event_index(events: &[AiStreamEvent], what: &str) -> usize {
+    events
+        .iter()
+        .position(|event| {
+            matches!(
+                (what, event),
+                ("plan", AiStreamEvent::Plan(_))
+                    | ("tool_call", AiStreamEvent::ToolCall(_))
+                    | ("tool_call_update", AiStreamEvent::ToolCallUpdate(_))
+                    | ("permission", AiStreamEvent::Permission(_))
+                    | ("done", AiStreamEvent::Done(_))
+                    | ("cancelled", AiStreamEvent::Cancelled(_))
+            )
+        })
+        .unwrap_or_else(|| panic!("missing {what} in {events:?}"))
+}
+
+#[test]
+/// Prove multi-step read/edit/create with a denied permission choice.
+///
+/// The mock reads the seed, edits it through `fs/write_text_file`, creates a
+/// new note, then honors the deny answer by skipping its privileged write.
+/// Plan, tool, permission, and done events arrive once and in lifecycle
+/// order with a single terminal and no foreign run IDs.
+fn agentic_demo_multistep_deny_records_order_and_contents() {
+    let (events, flags, staging_dir) =
+        run_agentic_demo("deny", &[], "mock_reject", Duration::from_secs(30));
+    let plan = event_index(&events, "plan");
+    let call = event_index(&events, "tool_call");
+    let permission = event_index(&events, "permission");
+    let done = event_index(&events, "done");
+    assert!(plan < call && call < permission && permission < done);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                AiStreamEvent::Done(_) | AiStreamEvent::Cancelled(_) | AiStreamEvent::Error(_)
+            ))
+            .count(),
+        1,
+        "settles exactly once, got {events:?}"
+    );
+    let calls: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            AiStreamEvent::ToolCall(call) => Some(call.tool_call.tool_call_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(calls.contains(&"call_read_1"), "read step, got {calls:?}");
+    assert!(calls.contains(&"call_edit_1"), "edit step, got {calls:?}");
+    assert!(
+        calls.contains(&"call_create_1"),
+        "create step, got {calls:?}"
+    );
+    for event in &events {
+        let event_run = match event {
+            AiStreamEvent::Started(started) => &started.run_id,
+            AiStreamEvent::Chunk(chunk) => &chunk.run_id,
+            AiStreamEvent::Usage(usage) => &usage.run_id,
+            AiStreamEvent::ToolCall(call) => &call.run_id,
+            AiStreamEvent::ToolCallUpdate(update) => &update.run_id,
+            AiStreamEvent::Plan(plan) => &plan.run_id,
+            AiStreamEvent::Permission(permission) => &permission.run_id,
+            AiStreamEvent::Done(done) => &done.run_id,
+            AiStreamEvent::Error(error) => error.run_id.as_ref().expect("error run"),
+            AiStreamEvent::Cancelled(cancelled) => &cancelled.run_id,
+        };
+        assert!(event_run.0.starts_with("run_"));
+    }
+    // Every event belongs to the single owning run: no foreign session leaks.
+    let mut owners: Vec<&str> = events
+        .iter()
+        .map(|event| match event {
+            AiStreamEvent::Started(started) => started.run_id.0.as_str(),
+            AiStreamEvent::Chunk(chunk) => chunk.run_id.0.as_str(),
+            AiStreamEvent::Usage(usage) => usage.run_id.0.as_str(),
+            AiStreamEvent::ToolCall(call) => call.run_id.0.as_str(),
+            AiStreamEvent::ToolCallUpdate(update) => update.run_id.0.as_str(),
+            AiStreamEvent::Plan(plan) => plan.run_id.0.as_str(),
+            AiStreamEvent::Permission(permission) => permission.run_id.0.as_str(),
+            AiStreamEvent::Done(done) => done.run_id.0.as_str(),
+            AiStreamEvent::Error(error) => error.run_id.as_ref().expect("error run").0.as_str(),
+            AiStreamEvent::Cancelled(cancelled) => cancelled.run_id.0.as_str(),
+        })
+        .collect();
+    owners.sort_unstable();
+    owners.dedup();
+    assert_eq!(owners.len(), 1, "single owning run, got {owners:?}");
+    // Real filesystem effects: the seed carries the agent edit and the new
+    // note exists verbatim, while the denied privileged write never lands.
+    let edited = std::fs::read_to_string(staging_dir.join("seed.md")).expect("edited seed");
+    assert!(edited.contains("Agentic edit."), "{edited}");
+    let created = std::fs::read_to_string(staging_dir.join("agentic-note.md")).expect("new note");
+    assert!(
+        created.contains("Created by the reproducible mock agent."),
+        "{created}"
+    );
+    assert!(!staging_dir.join("agentic-privileged.md").exists());
+    let answer: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(flags.join("permission.json")).expect("permission log"),
+    )
+    .expect("permission json");
+    assert_eq!(
+        answer
+            .pointer("/result/outcome/optionId")
+            .and_then(|id| id.as_str()),
+        Some("mock_reject")
+    );
+}
+
+#[test]
+/// Prove an allowed permission choice enables the privileged write.
+///
+/// Answering with the allow option completes the same multi-step run and the
+/// mock writes its privileged file, so the choice provably changes the
+/// filesystem instead of merely relabeling the denial.
+fn agentic_demo_allow_enables_privileged_write() {
+    let (events, flags, staging_dir) = run_agentic_demo(
+        "allow",
+        &["--agentic-allow"],
+        "mock_allow",
+        Duration::from_secs(30),
+    );
+    assert!(event_index(&events, "permission") < event_index(&events, "done"));
+    let privileged = std::fs::read_to_string(staging_dir.join("agentic-privileged.md"))
+        .expect("privileged file");
+    assert!(privileged.contains("Written after allow."), "{privileged}");
+    let answer: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(flags.join("permission.json")).expect("permission log"),
+    )
+    .expect("permission json");
+    assert_eq!(
+        answer
+            .pointer("/result/outcome/optionId")
+            .and_then(|id| id.as_str()),
+        Some("mock_allow")
+    );
+}
+
+#[test]
+/// Settle an agentic run exactly once when cancellation wins the permission wait.
+///
+/// Cancelling on the first visible plan settles the run as cancelled with no
+/// late done or error terminal following it.
+fn agentic_demo_cancel_during_permission_wait_settles_once() {
+    let flags = fresh_dir("marxen-ai-test-flags-agentic-cancel");
+    let argv = mock_agent_argv_with_flag_dir(&["--agentic-demo"], &flags);
+    let request = acp_request(argv.clone());
+    let (_, staging_dir) = seed_agentic_staging("cancel", "# Seed\n");
+    let params = acp_params(argv, &staging_dir, Duration::from_secs(30));
+    let registry = Arc::new(RunRegistry::new());
+    let (run_id, cancel) = registry.register();
+    let mut events = Vec::new();
+    let mut cancelled_on_plan = false;
+    let mut emit = |event: AiStreamEvent| {
+        // Cancel synchronously at the first visible plan: no observer thread
+        // may race a completed demo after a scheduler delay.
+        if !cancelled_on_plan && matches!(&event, AiStreamEvent::Plan(_)) {
+            cancelled_on_plan = registry.cancel(&run_id);
+        }
+        events.push(event);
+    };
+    run_acp_prompt(&params, &request, &run_id, &registry, &cancel, &mut emit).unwrap();
+    assert!(cancelled_on_plan, "the demo must reach its first plan");
+    let (_, done, cancelled) = events_of(&events);
+    assert!(
+        cancelled && !done,
+        "cancellation settles once, got {events:?}"
     );
 }
 
@@ -904,6 +1162,7 @@ fn run_mock_prompt(
     let (run_id, cancel) = registry.register();
     let params = acp_params(argv, &staging_dir, timeout);
     let mut events = Vec::new();
+    let replies = registry.clone();
     run_acp_prompt(
         &params,
         &request,
@@ -911,6 +1170,15 @@ fn run_mock_prompt(
         &registry,
         &cancel,
         &mut |event| {
+            // Act as the chat user: answer surfaced permission requests with
+            // the mock's deny option so runs settle without deadline waits.
+            if let AiStreamEvent::Permission(permission) = &event {
+                let _ = replies.reply_permission(
+                    &permission.run_id,
+                    &permission.request_id,
+                    "mock_reject",
+                );
+            }
             events.push(event);
         },
     )

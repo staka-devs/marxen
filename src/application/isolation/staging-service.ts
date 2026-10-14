@@ -16,8 +16,164 @@ import type {
   ProposalText,
   IsolatedCopyId,
 } from "../../contracts/ai-contracts";
-import type { ApproveResult, IsolationDiff } from "../../contracts/isolation-contracts";
+import type { ApproveResult, IsolationDiff, StagedImportOutcome } from "../../contracts/isolation-contracts";
+import type {
+  DocumentSnapshot,
+  SaveRequest,
+  SaveResult,
+} from "../../contracts/contracts";
 import type { IsolationGateway } from "../ports";
+
+/** Narrow ports for review apply/save orchestration, bound by the caller. */
+export interface ReviewApplyPorts {
+  /** Approve and apply the staged copy with scoped rollback. */
+  approveCopy(copyId: IsolatedCopyId): Promise<ApproveResult>;
+  /** Fetch the authoritative snapshot for an applied document. */
+  fetchSnapshot(documentId: string): Promise<DocumentSnapshot>;
+  /** Save one document at an exact base revision. */
+  saveDocument(request: SaveRequest): Promise<SaveResult>;
+}
+
+/** Narrow port for staged new-file import bound to the copy workspace. */
+export interface ImportPorts {
+  /** Import staged files into the approved copy's original workspace. */
+  importNewFiles(
+    copyId: IsolatedCopyId,
+    files: Array<{ rel: string; content: string }>,
+  ): Promise<StagedImportOutcome[]>;
+}
+
+/**
+ * Bind review ports from their three operations for hook injection.
+ *
+ * Keeps call sites to anonymous closures so orchestration stays in the
+ * shared use case instead of growing presentation hooks.
+ */
+export function reviewPorts(
+  approveCopy: ReviewApplyPorts["approveCopy"],
+  fetchSnapshot: ReviewApplyPorts["fetchSnapshot"],
+  saveDocument: ReviewApplyPorts["saveDocument"],
+): ReviewApplyPorts {
+  return { approveCopy, fetchSnapshot, saveDocument };
+}
+
+/** Per-document save outcome keyed by the approved revision. */
+export interface AppliedSaveOutcome {
+  documentId: string;
+  saved: boolean;
+  error?: string;
+}
+
+/** Per-file import outcome with staged content retained for retry. */
+export interface ImportOutcome {
+  rel: string;
+  content: string;
+  ok: boolean;
+  documentId?: string;
+  snapshot?: DocumentSnapshot;
+  error?: string;
+}
+
+/** Structured result of one apply-and-save orchestration. */
+export interface ApplyAndSaveResult {
+  approve: ApproveResult;
+  /** Authoritative snapshots to merge: post-save on success, pre-save on failure. */
+  snapshots: DocumentSnapshot[];
+  /** Save outcomes bound to exact approved revisions. */
+  saved: AppliedSaveOutcome[];
+}
+
+/**
+ * Describe an unknown failure without losing backend details or paths.
+ *
+ * Preserves `Error` messages and backend detail strings verbatim so review
+ * surfaces stay actionable.
+ */
+export function describeSaveFailure(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/**
+ * Approve a staged copy, then save applied documents at exact revisions.
+ *
+ * Saves bind the exact approved outcome revision, so a user edit interleaved
+ * after application fails stale with the user text left dirty instead of
+ * saving over it. Snapshot-fetch failures record per-document save failures
+ * without attempting a save. Successful saves return the authoritative
+ * post-save snapshot for merging, so saved documents show clean; when the
+ * post-save fetch itself fails the save is reported as a synchronization
+ * failure (keeping the applied text visible) instead of claiming a clean
+ * save, and newer user revisions still win the later merge. Throws only when
+ * approval itself fails.
+ */
+export async function approveAndSaveStagedCopy(
+  ports: ReviewApplyPorts,
+  copyId: IsolatedCopyId,
+): Promise<ApplyAndSaveResult> {
+  const approve = await ports.approveCopy(copyId);
+  const snapshots: DocumentSnapshot[] = [];
+  const saved: AppliedSaveOutcome[] = [];
+  for (const outcome of approve.outcomes) {
+    if (!outcome.applied) continue;
+    let preSave: DocumentSnapshot;
+    try {
+      preSave = await ports.fetchSnapshot(outcome.documentId);
+    } catch (cause: unknown) {
+      saved.push({ documentId: outcome.documentId, saved: false, error: describeSaveFailure(cause) });
+      continue;
+    }
+    try {
+      await ports.saveDocument({ documentId: outcome.documentId, baseRevision: outcome.revision });
+    } catch (cause: unknown) {
+      snapshots.push(preSave);
+      saved.push({ documentId: outcome.documentId, saved: false, error: describeSaveFailure(cause) });
+      continue;
+    }
+    try {
+      snapshots.push(await ports.fetchSnapshot(outcome.documentId));
+    } catch (cause: unknown) {
+      snapshots.push(preSave);
+      saved.push({ documentId: outcome.documentId, saved: false, error: describeSaveFailure(cause) });
+      continue;
+    }
+    saved.push({ documentId: outcome.documentId, saved: true });
+  }
+  return { approve, snapshots, saved };
+}
+
+/**
+ * Import staged new files into the approved copy's original workspace.
+ *
+ * Each outcome retains its staged content for retry; existing files stay
+ * untouched because creation refuses duplicates. Use the same call for
+ * initial import and for retrying only failed entries: approval and document
+ * saves never rerun.
+ */
+export async function importStagedFiles(
+  ports: ImportPorts,
+  copyId: IsolatedCopyId,
+  files: Array<{ rel: string; content: string }>,
+): Promise<ImportOutcome[]> {
+  const outcomes = await ports.importNewFiles(copyId, files);
+  return files.map((file) => {
+    const native = outcomes.find((entry) => entry.rel === file.rel);
+    if (!native || native.error !== null || native.snapshot === null) {
+      return {
+        rel: file.rel,
+        content: file.content,
+        ok: false,
+        error: native?.error ?? "import did not return this file",
+      };
+    }
+    return {
+      rel: file.rel,
+      content: file.content,
+      ok: true,
+      documentId: native.snapshot.documentId,
+      snapshot: native.snapshot,
+    };
+  });
+}
 
 /** Registered staging state pinned by Rust until stream settlement. */
 export interface StagingRegistration {
@@ -152,7 +308,7 @@ export function summarizeApproveResult(result: ApproveResult, t: Translator = ja
       : appliedCount > 0 && unchangedCount > 0
         ? localizedMessage("{{value0}} 文書に適用し、{{value1}} 文書は変更なしでした。", { value0: appliedCount, value1: unchangedCount })
         : localizedMessage("承認して適用しました。");
-    const notice = localizedMessage("承認して適用しました。保存は保存ボタンで行います。");
+    const notice = localizedMessage("承認して適用しました。");
     return {
       outcomes: result.outcomes,
       appliedCount,
@@ -189,6 +345,46 @@ export function summarizeApproveResult(result: ApproveResult, t: Translator = ja
  */
 export function askOnlyStatus(): MessageDescriptor {
   return localizedMessage("質問モードは表示のみです。取り込みは行いません。");
+}
+
+/** Per-file save outcome for applied documents in a single apply-and-save action. */
+export interface SavedFileOutcome {
+  documentId: string;
+  saved: boolean;
+  error?: string;
+}
+
+/** Final status for an apply-and-save run reflecting actual saved/failed files. */
+export interface SavedSummary {
+  savedCount: number;
+  failedCount: number;
+  status: LocalizedText;
+  notice: LocalizedText;
+}
+
+/**
+ * Summarize actual saved/failed files after an apply-and-save action.
+ *
+ * Applied changes retire approval actions; the final status reflects saved
+ * versus failed files, never a generic approval message alone.
+ */
+export function summarizeSavedResult(outcomes: SavedFileOutcome[]): SavedSummary {
+  const savedCount = outcomes.filter((outcome) => outcome.saved).length;
+  const failedCount = outcomes.filter((outcome) => !outcome.saved).length;
+  if (failedCount === 0) {
+    return {
+      savedCount,
+      failedCount: 0,
+      status: localizedMessage("保存しました（{{value0}}件）。", { value0: savedCount }),
+      notice: localizedMessage("保存しました（{{value0}}件）。", { value0: savedCount }),
+    };
+  }
+  return {
+    savedCount,
+    failedCount,
+    status: localizedMessage("保存に失敗しました（{{value0}}件）。", { value0: failedCount }),
+    notice: localizedMessage("保存に失敗しました（{{value0}}件）。", { value0: failedCount }),
+  };
 }
 
 /**

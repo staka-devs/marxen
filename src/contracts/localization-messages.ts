@@ -674,7 +674,26 @@ export const japaneseMessages = {
   "Codex の利用枠を取得できませんでした。": "Codex の利用枠を取得できませんでした。",
   "まだセッションの使用量報告がありません。": "まだセッションの使用量報告がありません。",
   "セッションの報告": "セッションの報告",
-  "料金やクレジットの消費量は推計しません。": "料金やクレジットの消費量は推計しません。"
+  "料金やクレジットの消費量は推計しません。": "料金やクレジットの消費量は推計しません。",
+  "待機中": "待機中",
+  "実行中…": "実行中…",
+  "完了": "完了",
+  "作業計画": "作業計画",
+  "対象ファイル": "対象ファイル",
+  "拒否しました。": "拒否しました。",
+  "新規": "新規",
+  "適用して保存": "適用して保存",
+  "保存しました（{{value0}}件）。": "保存しました（{{value0}}件）。",
+  "保存に失敗しました（{{value0}}件）。": "保存に失敗しました（{{value0}}件）。",
+  "直接APIは文章のみです。ファイル変更はACPで行います。": "直接APIは文章のみです。ファイル変更はACPで行います。",
+  "質問は読み取りのみです。": "質問は読み取りのみです。",
+  "許可の選択": "許可の選択",
+  "選択しました: {{value0}}": "選択しました: {{value0}}",
+  "許可を待っています…": "許可を待っています…",
+  "取込結果": "取込結果",
+  "承認済みのため再適用しません。": "承認済みのため再適用しません。",
+  "承認済みのため再取得しません。": "承認済みのため再取得しません。",
+  "承認済みのため再保存しません。": "承認済みのため再保存しません。"
 } as const;
 
 /** Complete English catalog checked against every Japanese key. */
@@ -1353,7 +1372,26 @@ export const englishMessages = {
   "Codex の利用枠を取得できませんでした。": "Could not read Codex account limits.",
   "まだセッションの使用量報告がありません。": "No session usage has been reported yet.",
   "セッションの報告": "Session reports",
-  "料金やクレジットの消費量は推計しません。": "Costs and credit consumption are not estimated."
+  "料金やクレジットの消費量は推計しません。": "Costs and credit consumption are not estimated.",
+  "待機中": "Pending",
+  "実行中…": "Running…",
+  "完了": "Done",
+  "作業計画": "Plan",
+  "対象ファイル": "Files",
+  "拒否しました。": "Denied.",
+  "新規": "New",
+  "適用して保存": "Apply and save",
+  "保存しました（{{value0}}件）。": "Saved ({{value0}}).",
+  "保存に失敗しました（{{value0}}件）。": "Failed to save ({{value0}}).",
+  "直接APIは文章のみです。ファイル変更はACPで行います。": "Direct APIs return text only. Use ACP for file changes.",
+  "質問は読み取りのみです。": "Questions are read-only.",
+  "許可の選択": "Permission choice",
+  "選択しました: {{value0}}": "Selected: {{value0}}.",
+  "許可を待っています…": "Waiting for permission…",
+  "取込結果": "Import results",
+  "承認済みのため再適用しません。": "Already applied; will not reapply.",
+  "承認済みのため再取得しません。": "Already applied; will not refetch.",
+  "承認済みのため再保存しません。": "Already applied; will not save again."
 } satisfies Record<keyof typeof japaneseMessages, string>;
 
 /** Regional overlays reviewed per message; all other keys use standard Japanese. */

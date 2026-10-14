@@ -228,4 +228,9 @@ pub trait StagingStorage: FileReader + DirectoryStorage {
     fn guard_staging_path(&self, root: &Path, candidate: &Path) -> Result<PathBuf, WorkspaceError>;
     /// Reject links in a path between the candidate and its staging root.
     fn check_no_symlink(&self, path: &Path, root: &Path) -> Result<(), WorkspaceError>;
+    /// List all regular files under a staging directory for new-file import.
+    ///
+    /// Returns absolute paths; symlinks and directories are omitted by the
+    /// adapter so use cases never follow escapes.
+    fn list_staging_files(&self, dir: &Path) -> Result<Vec<PathBuf>, WorkspaceError>;
 }

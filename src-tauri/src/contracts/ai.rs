@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// Independent version of the AI IPC schema.
-pub const AI_CONTRACT_VERSION: u32 = 5;
+pub const AI_CONTRACT_VERSION: u32 = 6;
 
 /// OS credential store layout. Secrets are addressed, never transferred.
 pub const SECRET_SERVICE: &str = "dev.staka.marxen";
@@ -248,6 +248,154 @@ pub struct StreamCancelled {
     pub run_id: AiRunId,
 }
 
+/// Tool category reported by the agent for one `tool_call`.
+///
+/// Mirrors the official ACP `ToolKind` values; unknown wire values are
+/// normalized to `Other` by the parser so display never fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum AcpToolKind {
+    Read,
+    Edit,
+    Delete,
+    Move,
+    Search,
+    Execute,
+    Think,
+    Fetch,
+    SwitchMode,
+    Other,
+}
+
+/// Lifecycle status of one tool call as shown in chat.
+///
+/// The wire defines `pending`, `in_progress`, `completed`, and `failed`.
+/// `Cancelled` is a client-side settlement applied when the owning run is
+/// cancelled before the tool reports a terminal status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum AcpToolStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/// File location affected by a tool call for follow-along display.
+///
+/// Paths are staging-relative display names derived by Rust from absolute
+/// wire paths; absolute live paths never cross this boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolCallLocation {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub line: Option<u32>,
+}
+
+/// Content carried by a tool call for chat display.
+///
+/// Only text and file diffs are surfaced. Terminal executions never open an
+/// external window; their text output appears here when the agent provides it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolCallContent {
+    Content {
+        text: String,
+    },
+    Diff {
+        path: String,
+        old_text: Option<String>,
+        new_text: String,
+    },
+}
+
+/// One tool call announced by the agent via `session/update`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AcpToolCall {
+    pub tool_call_id: String,
+    pub title: String,
+    pub kind: AcpToolKind,
+    pub status: AcpToolStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub content: Option<Vec<ToolCallContent>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub locations: Option<Vec<ToolCallLocation>>,
+}
+
+/// Incremental update to a previously announced tool call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AcpToolCallUpdate {
+    pub tool_call_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub kind: Option<AcpToolKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub status: Option<AcpToolStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub content: Option<Vec<ToolCallContent>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub locations: Option<Vec<ToolCallLocation>>,
+}
+
+/// Priority of one plan entry as reported by the agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanEntryPriority {
+    High,
+    Medium,
+    Low,
+}
+
+/// Execution status of one plan entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanEntryStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+/// One step of the agent's multi-step execution plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlanEntry {
+    pub content: String,
+    pub priority: PlanEntryPriority,
+    pub status: PlanEntryStatus,
+}
+
+/// Hint for permission option presentation in chat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionOptionKind {
+    AllowOnce,
+    AllowAlways,
+    RejectOnce,
+    RejectAlways,
+}
+
+/// One user-choosable permission option for a tool call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PermissionOption {
+    pub option_id: String,
+    pub name: String,
+    pub kind: PermissionOptionKind,
+}
+
 /// Where a usage report was observed on the ACP wire. Only official fields
 /// are recorded; arbitrary `_meta` names are never scraped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -400,12 +548,69 @@ pub struct StreamUsage {
     pub usage: ReportedUsage,
 }
 
+/// Nonterminal tool-call announcement for visible progress in chat.
+///
+/// Emitted from official `session/update` with `sessionUpdate == "tool_call"`.
+/// Delivery never settles a run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StreamToolCall {
+    pub run_id: AiRunId,
+    pub tool_call: AcpToolCall,
+}
+
+/// Nonterminal tool-call progress update for visible progress in chat.
+///
+/// Emitted from official `session/update` with
+/// `sessionUpdate == "tool_call_update"`. Delivery never settles a run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StreamToolCallUpdate {
+    pub run_id: AiRunId,
+    pub update: AcpToolCallUpdate,
+}
+
+/// Nonterminal execution-plan snapshot for visible progress in chat.
+///
+/// Emitted from official `session/update` with `sessionUpdate == "plan"`.
+/// Each payload carries the complete entry list; clients replace the plan.
+/// Delivery never settles a run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StreamPlan {
+    pub run_id: AiRunId,
+    pub entries: Vec<PlanEntry>,
+}
+
+/// Nonterminal permission request surfaced in chat for an explicit user choice.
+///
+/// Emitted when the agent calls `session/request_permission`. The chat shows
+/// the tool title and every option; the reply uses the actual selected
+/// `optionId` (never an unconditional approval). Cancellation replies with
+/// the `cancelled` outcome. Delivery never settles a run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StreamPermission {
+    pub run_id: AiRunId,
+    pub request_id: String,
+    pub session_id: AcpSessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tool_call_id: Option<String>,
+    pub title: String,
+    pub options: Vec<PermissionOption>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum AiStreamEvent {
     Started(StreamStarted),
     Chunk(StreamChunk),
     Usage(StreamUsage),
+    ToolCall(StreamToolCall),
+    ToolCallUpdate(StreamToolCallUpdate),
+    Plan(StreamPlan),
+    Permission(StreamPermission),
     Done(StreamDone),
     Error(StreamError),
     Cancelled(StreamCancelled),
@@ -482,6 +687,21 @@ pub fn typescript() -> String {
         StreamStarted::decl(&cfg),
         StreamChunk::decl(&cfg),
         StreamUsage::decl(&cfg),
+        AcpToolKind::decl(&cfg),
+        AcpToolStatus::decl(&cfg),
+        ToolCallLocation::decl(&cfg),
+        ToolCallContent::decl(&cfg),
+        AcpToolCall::decl(&cfg),
+        AcpToolCallUpdate::decl(&cfg),
+        PlanEntryPriority::decl(&cfg),
+        PlanEntryStatus::decl(&cfg),
+        PlanEntry::decl(&cfg),
+        PermissionOptionKind::decl(&cfg),
+        PermissionOption::decl(&cfg),
+        StreamToolCall::decl(&cfg),
+        StreamToolCallUpdate::decl(&cfg),
+        StreamPlan::decl(&cfg),
+        StreamPermission::decl(&cfg),
         StreamDone::decl(&cfg),
         StreamError::decl(&cfg),
         StreamCancelled::decl(&cfg),
