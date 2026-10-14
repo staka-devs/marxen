@@ -107,7 +107,8 @@ export function useWorkbenchCommands(args: Args) {
       if (id === "tree-open") enabled = enabled && !location.directory;
       if (id === "file-rename") { enabled = enabled && !location.directory && location.kind === "markdown"; reason = "名前変更はMarkdownファイルのみ対応しています。"; }
     }
-    if (["file-save", "file-reload", "palette-raw", "palette-raw-refresh", "inline-chat"].includes(id)) enabled = native && !!doc;
+    if (["file-save", "file-reload", "palette-raw-refresh", "inline-chat"].includes(id)) enabled = native && !!doc;
+    if (id === "palette-raw") enabled = !!doc && (!desktop || native);
     if (["view-live", "view-source", "view-read", "view-split", "nav-display", "nav-source"].includes(id)) enabled = !!doc && (id === "view-source" || id.startsWith("nav-") || doc.path === null || /\.(md|markdown)$/i.test(doc.path));
     if (id === "file-close") enabled = native && !!session.activeRef.current;
     if (id === "palette-ai" || id === "palette-recovery") enabled = native;

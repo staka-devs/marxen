@@ -911,7 +911,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             <RawGridView
               text={active.text}
               revision={workspace.gridRev ?? active.revision}
-              onRefresh={workspace.handleRawGridRefresh}
+              onRefresh={desktop ? workspace.handleRawGridRefresh : undefined}
               grid={workspace.nvimGrid}
               onVimKeys={desktop ? workspace.handleRawGridKeys : undefined}
             />

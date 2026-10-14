@@ -120,13 +120,23 @@ test("tree/tabs/quick-open/search/outline/palette/themes work in Japanese", asyn
   await page.screenshot({ path: "test-results/screenshots/issue-5-ui/settings-dark.png" });
 });
 
-test("Neovim screen exposes the read-only document grid", async ({ page }) => {
+test("browser document screen preview is read-only without a native grid or refresh", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "その他の操作" }).click();
+  await expect(page.getByRole("menuitem", { name: "Neovim 画面" })).toBeEnabled();
   await page.getByRole("menuitem", { name: "Neovim 画面" }).click();
   const raw = page.getByTestId("raw-grid");
   await expect(raw).toBeVisible();
   await expect(raw).toHaveAttribute("role", "textbox");
+  await expect(raw).toHaveAttribute("aria-readonly", "true");
+  await expect(raw).toContainText("日本語で書く");
+  await expect(raw.getByTestId("nvim-screen")).toHaveCount(0);
+  await expect(raw.getByRole("button", { name: "Neovim 画面を更新する" })).toHaveCount(0);
+  const before = await raw.textContent();
+  await raw.press("x");
+  await expect.poll(() => raw.textContent()).toBe(before);
+  await expect(page.getByTestId("revision")).toHaveText("リビジョン 0");
+  await expect(page.getByTestId("dirty")).toHaveText("保存済み");
 });
 
 test("read-only demo never simulates save success", async ({ page }) => {
@@ -134,10 +144,14 @@ test("read-only demo never simulates save success", async ({ page }) => {
   await page.getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name: "コマンドパレット" }).click();
   await page.getByTestId("command-palette").getByLabel("コマンドで絞り込む").fill("保存");
-  await page.getByRole("button", { name: "ファイル: 保存する" }).click();
-  const notice = page.getByTestId("notification-toast");
-  await expect(notice).toHaveAttribute("role", "status");
-  await expect(notice).toContainText("ブラウザ表示では編集できません");
+  const save = page.getByRole("button", { name: "ファイル: 保存する" });
+  await expect(save).toBeVisible();
+  await expect(save).toBeDisabled();
+  await expect(page.getByTestId("command-palette")).toContainText("デスクトップで利用できます。");
+  await page.getByTestId("command-palette").getByLabel("コマンドで絞り込む").press("Enter");
+  await expect(save).toBeDisabled();
+  await expect(page.getByTestId("command-palette")).toBeVisible();
+  await expect(page.getByTestId("notification-toast")).toHaveCount(0);
   await expect(page.getByTestId("revision")).toHaveText("リビジョン 0");
   await expect(page.getByTestId("dirty")).toHaveText("保存済み");
 });

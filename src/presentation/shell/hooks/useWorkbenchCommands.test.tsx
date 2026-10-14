@@ -7,7 +7,7 @@ import type { WorkspaceHandle } from "./useWorkspace";
 import { useWorkbenchCommands } from "./useWorkbenchCommands";
 
 /** Mount the consumed dispatcher with explicit native context and lifecycle owners. */
-function fixture() {
+function fixture(desktop = true) {
   const context: EditorContext = { cursor: { documentId: "doc", revision: 4, anchor: 0, head: 3 }, mode: "insert", presentation: { editable: true, selectionToolbar: false, mappings: [] } };
   const doc = { documentId: "doc", path: "a.md", revision: 4, text: "日😀", dirty: false };
   const registry = {
@@ -45,8 +45,8 @@ function fixture() {
   } as unknown as WorkspaceHandle;
   const ui = vi.fn();
   const origin = document.createElement("div"); origin.className = "cm-editor"; origin.tabIndex = 0; document.body.append(origin);
-  const hook = renderHook(() => useWorkbenchCommands({ desktop: true, session, workspace, target, notify: vi.fn(), openFile: vi.fn(),
-    uiActions: { "folder-add": ui, "palette-settings": ui }, checked: vi.fn(),
+  const hook = renderHook(() => useWorkbenchCommands({ desktop, session, workspace, target, notify: vi.fn(), openFile: vi.fn(),
+    uiActions: { "folder-add": ui, "palette-settings": ui, "palette-raw": ui }, checked: vi.fn(),
   }));
   return { ...hook, context, doc, registry, session, workspace, target, origin, ui,
     /** Replace the session generation without changing a previously captured tree target. */
@@ -64,6 +64,19 @@ it("shows unsupported actions disabled and rechecks stale targets on invocation"
   f.replaceRoot();
   await act(async () => f.result.current.run("folder-new", f.target));
   expect(f.workspace.beginCreate).not.toHaveBeenCalled();
+  f.origin.remove();
+});
+
+it("allows a browser document screen preview while rejecting native refresh and save", async () => {
+  const f = fixture(false);
+  expect(f.result.current.command("palette-raw")?.enabled).toBe(true);
+  expect(f.result.current.command("palette-raw-refresh")?.enabled).toBe(false);
+  expect(f.result.current.command("file-save")?.enabled).toBe(false);
+  await act(async () => f.result.current.run("palette-raw"));
+  expect(f.ui).toHaveBeenCalledOnce();
+  await act(async () => f.result.current.run("file-save"));
+  expect(f.session.handleSave).not.toHaveBeenCalled();
+  expect(f.registry.fetchEditorContext).not.toHaveBeenCalled();
   f.origin.remove();
 });
 
