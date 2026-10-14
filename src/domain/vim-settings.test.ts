@@ -16,6 +16,15 @@ import {
 } from "./vim-settings";
 
 describe("vim-settings domain", () => {
+  it("defaults the selection popup off and changes only its managed config flag", () => {
+    const settings = { ...defaultVimSettings(), selectionToolbar: true };
+    const raw = '" outside 日本😀\r\n' + renderManagedBlock(defaultVimSettings()).join("\r\n") + '\r\n" tail';
+    const next = rewriteManagedBlock(raw, settings, false);
+    expect(next).toBe(raw.replace("marxen_selection_toolbar=0", "marxen_selection_toolbar=1"));
+    expect(parseManagedBlock(next)?.selectionToolbar).toBe(true);
+    expect(() => parseManagedBlock(next.replace("marxen_selection_toolbar=1", "marxen_selection_toolbar=2"))).toThrow();
+    expect(defaultVimSettings().selectionToolbar).toBe(false);
+  });
   it.each([
     { prefix: "\n\n", suffix: "", newline: "\n", terminator: "" },
     { prefix: "\r\n\r\n", suffix: '" 外側 日本語', newline: "\r\n", terminator: "\r\n" },

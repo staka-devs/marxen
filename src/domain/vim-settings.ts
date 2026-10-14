@@ -40,6 +40,7 @@ export function defaultVimSettings(): VimSettings {
     expandtab: true,
     ignorecase: true,
     smartcase: true,
+    selectionToolbar: false,
     leader: " ",
     mappings: [],
     copyKeys: { markdown: "<F6>", text: "<F7>", rich: "<F8>", html: "<F9>" },
@@ -232,6 +233,7 @@ export function renderManagedBlock(settings: VimSettings): string[] {
     settings.ignorecase ? "set ignorecase" : "set noignorecase",
     settings.smartcase ? "set smartcase" : "set nosmartcase",
     `let mapleader="${escapeLeader(settings.leader)}"`,
+    `let g:marxen_selection_toolbar=${settings.selectionToolbar ? 1 : 0}`,
   ];
   const copies: Array<[string, string]> = [
     ["markdown", settings.copyKeys.markdown],
@@ -312,6 +314,12 @@ function parseBlockLine(line: string, settings: VimSettings, lineNo: number, t: 
   }
   if (trimmed.startsWith("let ")) {
     const body = trimmed.slice("let ".length).trim();
+    if (body.startsWith("g:marxen_selection_toolbar=")) {
+      const value = body.slice("g:marxen_selection_toolbar=".length).trim();
+      if (value !== "0" && value !== "1") throw localizedException(t, "管理ブロック{{value0}}行目: marxen_selection_toolbar は0または1で指定してください。", { value0: lineNo });
+      settings.selectionToolbar = value === "1";
+      return;
+    }
     for (const prefix of ["mapleader=", "g:mapleader="]) {
       if (body.startsWith(prefix)) {
         const leader = unescapeLeader(body.slice(prefix.length).trim());

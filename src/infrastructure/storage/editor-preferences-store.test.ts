@@ -4,6 +4,15 @@ import { loadEditorPreferences, saveEditorPreferences } from "./editor-preferenc
 
 afterEach(() => { vi.restoreAllMocks(); localStorage.clear(); });
 
+it("persists the hard-break toggle while preserving notification preferences and old defaults", () => {
+  const changed = { ...DEFAULT_EDITOR_PREFERENCES, hardBreakOnEnter: true, notificationPosition: "top-left" as const };
+  expect(saveEditorPreferences(changed)).toBe(true);
+  expect(loadEditorPreferences()).toEqual(changed);
+  const { hardBreakOnEnter: _flag, ...old } = changed;
+  localStorage.setItem("marxen.editor-preferences.v1", JSON.stringify(old));
+  expect(loadEditorPreferences()).toEqual({ ...changed, hardBreakOnEnter: false });
+});
+
 it("restores view preferences without losing disabled values", () => {
   const changed = { ...DEFAULT_EDITOR_PREFERENCES, theme: "light" as const, fontSize: 20, lineHeight: 2, wordWrap: false, lineNumbers: false };
   expect(saveEditorPreferences(changed)).toBe(true);

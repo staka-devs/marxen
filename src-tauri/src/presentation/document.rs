@@ -217,14 +217,20 @@ mod desktop {
         document_id: String,
         base_revision: u32,
         edits: Vec<TextEdit>,
+        expected_cursor: Option<CursorUpdate>,
     ) -> Result<DocumentSnapshot, WorkspaceError> {
         with_workspace(&state, |w| {
-            Ok(w.actor(&document_id)?.apply_edits(EditRequest {
+            let actor = w.actor(&document_id)?;
+            let request = EditRequest {
                 document_id: DocumentId(document_id),
                 base_revision: Revision(base_revision),
                 source: EditSource::Gui,
                 edits,
-            })?)
+            };
+            Ok(match expected_cursor {
+                Some(cursor) => actor.apply_editor_edits(request, cursor)?,
+                None => actor.apply_edits(request)?,
+            })
         })
     }
     #[tauri::command(async)]
@@ -400,6 +406,47 @@ mod desktop {
         document_id: String,
     ) -> Result<CursorUpdate, WorkspaceError> {
         with_workspace(&state, |w| Ok(w.actor(&document_id)?.cursor()?))
+    }
+    #[tauri::command(async)]
+    /// Capture revision-bound native selection and effective editor configuration.
+    pub fn fetch_editor_context(
+        state: tauri::State<'_, ActorState>,
+        document_id: String,
+        base_revision: u32,
+    ) -> Result<EditorContext, WorkspaceError> {
+        with_workspace(&state, |w| {
+            Ok(w.actor(&document_id)?
+                .editor_context(request(document_id, base_revision))?)
+        })
+    }
+    #[tauri::command(async)]
+    /// Traverse native history only after the actor validates the menu's captured revision.
+    pub fn editor_history(
+        state: tauri::State<'_, ActorState>,
+        document_id: String,
+        base_revision: u32,
+        redo: bool,
+    ) -> Result<DocumentSnapshot, WorkspaceError> {
+        with_workspace(&state, |w| {
+            Ok(w.actor(&document_id)?
+                .editor_history(request(document_id, base_revision), redo)?)
+        })
+    }
+    #[tauri::command(async)]
+    /// Perform explicit clipboard actions through actor-owned selection and the injected clipboard.
+    pub fn editor_clipboard(
+        state: tauri::State<'_, ActorState>,
+        clipboard: tauri::State<'_, crate::presentation::clipboard::ClipboardState>,
+        expected: CursorUpdate,
+        action: String,
+    ) -> Result<DocumentSnapshot, WorkspaceError> {
+        with_workspace(&state, |w| {
+            Ok(w.actor(&expected.document_id.0)?.editor_clipboard(
+                expected.clone(),
+                &action,
+                clipboard.0.as_ref(),
+            )?)
+        })
     }
     #[tauri::command(async)]
     /// Validate and install a GUI selection through the actor's native cursor operation.

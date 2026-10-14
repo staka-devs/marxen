@@ -35,14 +35,16 @@ import { VimSettingsHost } from "../vim-settings/VimSettingsHost";
 import type { VimSettingsGateway } from "../../application/vim-settings/ports";
 import { RawGridView } from "../workspace/RawGridView";
 import { GuiToolbar } from "../workspace/GuiToolbar";
+import { EditorMenu } from "../editor/EditorMenu";
+import { useEditorMenu } from "./hooks/useEditorMenu";
 import { NotificationToast, WorkspaceDialog, type Notice, type NoticeKind } from "../workspace/Notifications";
 import {
   formatRange,
   insertImage,
   insertLink,
   insertTable,
-  tableAddColumn,
-  tableAddRow,
+  tableActionEdits,
+  tableCellAt,
   toggleCheckbox,
   type FormatKind,
 } from "../../domain/markdown-gui";
@@ -240,6 +242,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   const [dismissedExternal, setDismissedExternal] = useState<{ path: string; deleted: boolean } | null>(null);
   /** Revision-aware document session: docs, tabs, selections, and mutations. */
   const session = useDocumentSession({ desktop, documentGateway, workspaceGateway, clipboardGateway, notify: setNotice });
+  const editorMenu = useEditorMenu({ session, desktop, notify: setNotice });
   const [editorFocus, setEditorFocus] = useState<{ path: string; sequence: number } | null>(null);
   /** Open a file and request editor focus after React commits the active pane. */
   async function openFileForEditing(path: string) {
@@ -247,7 +250,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     setEditorFocus((previous) => ({ path, sequence: (previous?.sequence ?? 0) + 1 }));
   }
   /** Vim key routing with optimistic ranges and mapping-first execution. */
-  const vim = useVimEditing({ desktop, navBasis, notify: setNotice, session });
+  const vim = useVimEditing({ desktop, navBasis, hardBreakOnEnter: preferences.hardBreakOnEnter, notify: setNotice, session });
   /** Workspace lifecycle: entries, search, events, runtime, grid, config. */
   const workspace = useWorkspace({
     desktop,
@@ -652,70 +655,28 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           </button>
 
         </div>}
+        {activeIsMarkdown && effectiveViewMode !== "read" && <GuiToolbar
+          onFormat={(kind: FormatKind) => vim.guiAtSelection((text, start, end) => formatRange(text, start, end, kind), kind === "bold" || kind === "strike" ? 2 : 1)}
+          onCheckbox={() => vim.guiAtSelection((text, _start, end) => toggleCheckbox(text, end))}
+          onTable={(rows, columns) => vim.guiAtSelection((text, start, end) => {
+            const inserted = insertTable(start, rows, columns, t("表の見出し"))[0];
+            const prefix = start > 0 && text[start - 1] !== "\n" ? "\n\n" : "";
+            const suffix = end < text.length && text[end] !== "\n" ? "\n" : "";
+            return [{ range: { start, end }, text: prefix + inserted.text + suffix }];
+          })}
+          onTableAction={(action) => vim.guiAtSelection((text, _start, end) => tableActionEdits(text, end, action))}
+          tableCell={active ? tableCellAt(active.text, selections[active.documentId]?.head ?? 0) : null}
+          onLink={() => vim.guiAtSelection((text, start, end) => insertLink(text, start, end, "https://example.com"))}
+          onImage={() => vim.guiAtSelection((text, start, end) => insertImage(text, start, end, "images/paste.png"))}
+          onUndo={() => void session.handleUndo()}
+          onRedo={() => void session.handleRedo()}
+          hardBreakOnEnter={preferences.hardBreakOnEnter}
+          onHardBreakOnEnter={(enabled) => updatePreferences({ ...preferences, hardBreakOnEnter: enabled })}
+          disabled={!desktop}
+        />}
+        {editorMenu.state && <EditorMenu {...editorMenu.state} markdown={activeIsMarkdown} disabled={!desktop} onDismiss={editorMenu.dismiss} onAction={(action) => void editorMenu.act(action)} onFormat={(kind) => void editorMenu.format(kind)} />}
         {moreOpen && (
           <EditorActionsPopover onClose={() => setMoreOpen(false)}>
-            <p className="px-2 pb-1 pt-2 text-[11px] text-muted-foreground">{t("書式")}</p>
-            <GuiToolbar
-                onFormat={(kind: FormatKind) => vim.guiAtSelection((text, start, end) => formatRange(text, start, end, kind))}
-                onCheckbox={() => {
-                  const id = session.activeRef.current;
-                  if (!id || !session.registry) {
-                    setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
-                    return;
-                  }
-                  const current = session.docsRef.current[id];
-                  if (!current) return;
-                  const sel = session.selections[id] ?? { anchor: 0, head: 0 };
-                  void session.applyEdits(id, toggleCheckbox(current.text, Math.min(sel.head, current.text.length)));
-                }}
-                onTable={() => {
-                  const id = session.activeRef.current;
-                  if (!id || !session.registry) {
-                    setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
-                    return;
-                  }
-                  const current = session.docsRef.current[id];
-                  if (!current) return;
-                  const sel = session.selections[id] ?? { anchor: 0, head: 0 };
-                  void session.applyEdits(id, insertTable(Math.min(sel.head, current.text.length), 2, 2));
-                }}
-                onTableRow={() => {
-                  const id = session.activeRef.current;
-                  if (!id || !session.registry) {
-                    setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
-                    return;
-                  }
-                  const current = session.docsRef.current[id];
-                  if (!current) return;
-                  const sel = session.selections[id] ?? { anchor: 0, head: 0 };
-                  try {
-                    void session.applyEdits(id, tableAddRow(current.text, Math.min(sel.head, current.text.length)));
-                  } catch (cause) {
-                    setNotice(localizedFailure(cause, workspaceErrorText));
-                  }
-                }}
-                onTableColumn={() => {
-                  const id = session.activeRef.current;
-                  if (!id || !session.registry) {
-                    setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
-                    return;
-                  }
-                  const current = session.docsRef.current[id];
-                  if (!current) return;
-                  const sel = session.selections[id] ?? { anchor: 0, head: 0 };
-                  try {
-                    void session.applyEdits(id, tableAddColumn(current.text, Math.min(sel.head, current.text.length)));
-                  } catch (cause) {
-                    setNotice(localizedFailure(cause, workspaceErrorText));
-                  }
-                }}
-                onLink={() => vim.guiAtSelection((text, start, end) => insertLink(text, start, end, "https://example.com"))}
-                onImage={() => vim.guiAtSelection((text, start, end) => insertImage(text, start, end, "images/paste.png"))}
-                onUndo={() => void session.handleUndo()}
-                onRedo={() => void session.handleRedo()}
-                vimMode={MODE_JA[session.vimMode] ? t(MODE_JA[session.vimMode] as LabelKey) : session.vimMode}
-                disabled={!desktop || !activeIsMarkdown}
-              />
             <div role="group" aria-label={t("移動基準")} className="my-1 flex items-center gap-1 border-y border-border px-2 py-2">
               {(["display", "source"] as NavBasis[]).map((basis) => (
                 <button
@@ -910,6 +871,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   editable={desktop}
                   ariaLabel={t("{{value0}}の{{value1}}エディタ", { value0: (active.path ?? active.documentId), value1: (activeIsMarkdown ? "Markdown" : t("テキスト")) })}
                   testId="editor-primary"
+                  onEditorMenu={(point) => void editorMenu.open(point)}
                   focusRequest={editorFocus?.path === active.path ? editorFocus.sequence : 0}
                   initialSelection={selections[active.documentId] ?? null}
                   externalCursor={cursorEcho[active.documentId] ?? null}
@@ -940,6 +902,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   editable={desktop}
                   ariaLabel={t("{{value0}}の{{value1}}エディタ", { value0: (active.path ?? active.documentId), value1: (activeIsMarkdown ? "Markdown" : t("テキスト")) })}
                   testId="editor-primary"
+                  onEditorMenu={(point) => void editorMenu.open(point)}
                   focusRequest={editorFocus?.path === active.path ? editorFocus.sequence : 0}
                   preferences={preferences}
                   vimMode={vimMode}

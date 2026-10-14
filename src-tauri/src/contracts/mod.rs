@@ -82,6 +82,33 @@ pub struct CursorUpdate {
     pub head: Utf16Offset,
 }
 
+/// An effective native mapping shown as an explicit lhs-to-rhs pair in editor menus.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EditorMapping {
+    pub lhs: String,
+    pub rhs: String,
+}
+
+/// Runtime opt-in and effective mappings read from the active Neovim configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EditorPresentation {
+    /// True only when Neovim permits modification and the buffer is not marked read-only.
+    pub editable: bool,
+    pub selection_toolbar: bool,
+    pub mappings: Vec<EditorMapping>,
+}
+
+/// Revision-bound native selection and mode captured for one editor-menu invocation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EditorContext {
+    pub cursor: CursorUpdate,
+    pub mode: VimMode,
+    pub presentation: EditorPresentation,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum VimMode {
@@ -334,6 +361,9 @@ pub fn typescript() -> String {
         SaveRequest::decl(&cfg),
         SaveResult::decl(&cfg),
         CursorUpdate::decl(&cfg),
+        EditorMapping::decl(&cfg),
+        EditorPresentation::decl(&cfg),
+        EditorContext::decl(&cfg),
         VimMode::decl(&cfg),
         ModeUpdate::decl(&cfg),
         DocumentEvent::decl(&cfg),
