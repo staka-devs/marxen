@@ -151,6 +151,7 @@ pub fn run() {
             presentation::document::reload_document,
             presentation::document::close_document,
             presentation::document::search_workspace,
+            presentation::document::plan_search_replacement,
             presentation::document::poll_workspace_events,
             presentation::document::list_recovery,
             presentation::document::restore_recovery,

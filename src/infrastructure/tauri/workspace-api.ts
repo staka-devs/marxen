@@ -22,7 +22,10 @@ import type {
   RecoveryEntry,
   SaveRequest,
   SaveResult,
-  SearchMatch,
+  SearchOptions,
+  SearchResults,
+  SearchReplaceRequest,
+  SearchReplacePlan,
   TextEdit,
   Utf16Range,
   VimInputResult,
@@ -72,7 +75,9 @@ export const workspaceApi = {
   /** Close a document with an explicit save/discard/cancel decision. */
   closeDocument: (request: SaveRequest, action: CloseAction) => invoke<boolean>("close_document", { ...request, action }),
   /** Full-text workspace search through the native index. */
-  searchWorkspace: (query: string) => invoke<SearchMatch[]>("search_workspace", { query }),
+  searchWorkspace: (query: string, options: SearchOptions, root: string) => invoke<SearchResults>("search_workspace", { query, options, root }),
+  /** Request native revision-bound literal edits over authoritative search ranges. */
+  planSearchReplacement: (request: SearchReplaceRequest) => invoke<SearchReplacePlan>("plan_search_replacement", { request }),
   /** Poll queued workspace events for reconnecting consumers. */
   pollEvents: () => invoke<WorkspaceEvent[]>("poll_workspace_events"),
   /** List crash-recovery entries. */

@@ -81,6 +81,12 @@ function describeWorkspaceError(cause: unknown, t: Translator = japaneseTranslat
   if (typeof cause !== "object" || cause === null) return String(cause);
   const record = cause as { code?: unknown; [key: string]: unknown };
   switch (record.code) {
+    case "search_pattern":
+      return t("検索パターンが不正、未対応、または上限を超えています。一致規則と上限を確認してください。");
+    case "stale_search":
+      return t("検索条件または本文が変わりました。検索し直してください。");
+    case "search_incomplete":
+      return t("検索結果が不完全なため置換できません。検索範囲を絞ってください。");
     case "contract": {
       const inner = record.error as { code?: unknown; expected?: unknown; received?: unknown } | undefined;
       if (inner?.code === "stale_revision") {

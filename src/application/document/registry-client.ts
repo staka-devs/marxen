@@ -215,9 +215,10 @@ export class RegistryClient {
    * Rejects with `StaleResync` carrying the fresh snapshot when the base
    * revision moved out of band.
    */
-  applyEdits(request: SaveRequest, edits: TextEdit[]): Promise<DocumentSnapshot> {
+  applyEdits(request: SaveRequest, edits: TextEdit[], current?: () => boolean): Promise<DocumentSnapshot> {
     if (!this.isSaveRequest(request)) return Promise.reject(new Error("invalid request"));
     return this.enqueue(request.documentId, async () => {
+      if (current && !current()) throw new Error("search context cancelled");
       try {
         return this.bump(await this.transport.applyEdits(request, edits));
       } catch (cause) {

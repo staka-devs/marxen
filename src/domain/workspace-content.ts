@@ -87,6 +87,9 @@ export interface SearchHit {
   line: number;
   col: number;
   preview: string;
+  offset: number;
+  end: number;
+  previewRange: { start: number; end: number };
 }
 
 /**
@@ -100,15 +103,20 @@ export function searchWorkspace(files: WorkspaceFile[], query: string, maxHits =
   const hits: SearchHit[] = [];
   for (const file of files) {
     const lines = file.text.split("\n");
+    let offset = 0;
     for (let line = 0; line < lines.length && hits.length < maxHits; line += 1) {
       let from = 0;
       for (;;) {
         const col = lines[line].indexOf(query, from);
         if (col < 0) break;
-        hits.push({ path: file.path, line, col, preview: lines[line].trim().slice(0, 120) });
+        const start = col - Array.from(lines[line].slice(0, col)).slice(-80).join("").length;
+        const preview = Array.from(lines[line].slice(start)).slice(0, 240).join("");
+        hits.push({ path: file.path, line, col, preview, offset: offset + col, end: offset + col + query.length,
+          previewRange: { start: col - start, end: Math.min(preview.length, col - start + query.length) } });
         from = col + Math.max(1, query.length);
         if (hits.length >= maxHits) break;
       }
+      offset += lines[line].length + 1;
     }
   }
   return hits;

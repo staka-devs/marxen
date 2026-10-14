@@ -13,7 +13,7 @@ export type SaveRequest = { documentId: DocumentId, baseRevision: Revision, };
 export type SaveResult = { documentId: DocumentId, revision: Revision, dirty: boolean, };
 export type CursorUpdate = { documentId: DocumentId, revision: Revision, anchor: Utf16Offset, head: Utf16Offset, };
 export type EditorMapping = { lhs: string, rhs: string, };
-export type EditorPresentation = { 
+export type EditorPresentation = {
 /**
  * True only when Neovim permits modification and the buffer is not marked read-only.
  */
@@ -25,18 +25,35 @@ export type DocumentEvent = { "type": "snapshot", "payload": DocumentSnapshot } 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 export type RuntimeStatus = { contractVersion: number, connection: ConnectionState, detail: string, };
 export type ContractError = { "code": "invalid_document_id" } | { "code": "wrong_document" } | { "code": "stale_revision", expected: Revision, received: Revision, } | { "code": "revision_exhausted" } | { "code": "offset_out_of_bounds" } | { "code": "split_surrogate_pair" } | { "code": "not_utf8_boundary" } | { "code": "reversed_range" } | { "code": "overlapping_edits" } | { "code": "empty_edits" };
-export type WorkspaceError = { "code": "invalid_path" } | { "code": "outside_workspace" } | { "code": "not_markdown" } | { "code": "not_text" } | { "code": "invalid_utf8" } | { "code": "already_exists" } | { "code": "not_found" } | { "code": "no_workspace" } | { "code": "unknown_document" } | { "code": "unsaved_changes", snapshot: DocumentSnapshot, } | { "code": "conflict", path: string, } | { "code": "io", detail: string, } | { "code": "neovim", detail: string, } | { "code": "contract", error: ContractError, } | { "code": "invalid_image" };
+export type WorkspaceError = { "code": "invalid_path" } | { "code": "outside_workspace" } | { "code": "not_markdown" } | { "code": "not_text" } | { "code": "invalid_utf8" } | { "code": "already_exists" } | { "code": "not_found" } | { "code": "no_workspace" } | { "code": "unknown_document" } | { "code": "unsaved_changes", snapshot: DocumentSnapshot, } | { "code": "conflict", path: string, } | { "code": "io", detail: string, } | { "code": "neovim", detail: string, } | { "code": "contract", error: ContractError, } | { "code": "invalid_image" } | { "code": "search_pattern" } | { "code": "stale_search" } | { "code": "search_incomplete" };
 export type WorkspaceInfo = { root: string, };
 export type WorkspaceFileKind = "markdown" | "text" | "image";
 export type WorkspaceEntry = { path: string, name: string, directory: boolean, markdown: boolean, kind?: WorkspaceFileKind, };
 export type OpenDocument = { path: string | null, snapshot: DocumentSnapshot, };
-export type SearchMatch = { path: string, documentId: DocumentId | null, revision: Revision | null, range: Utf16Range, line: number, preview: string, };
+export type SearchMatch = { path: string, documentId: DocumentId | null, revision: Revision | null, range: Utf16Range, line: number, preview: string,
+/**
+ * Visible portion of this match, relative to the bounded preview in UTF-16.
+ */
+previewRange: Utf16Range,
+/**
+ * Fingerprint of the complete searched text, including closed files.
+ */
+contentToken: string, };
+export type SearchOptions = { caseSensitive: boolean, wholeWord: boolean, regex: boolean, };
+export type SearchLimit = "matches" | "candidates" | "file_bytes" | "workspace_bytes" | "files" | "time";
+export type SearchResults = { matches: Array<SearchMatch>, limit: SearchLimit | null, };
+export type SearchReplaceRequest = { root: string, path: string, query: string, options: SearchOptions, replacement: string, contentToken: string, revision: Revision | null,
+/**
+ * Null plans all matches in this unchanged file; otherwise selects the exact hit.
+ */
+range: Utf16Range | null, };
+export type SearchReplacePlan = { document: OpenDocument, edits: Array<TextEdit>, };
 export type CloseAction = "save" | "discard" | "cancel";
 export type RecoveryEntry = { documentId: DocumentId, path: string | null, revision: Revision, conflict: boolean, };
 export type WorkspaceEvent = { "type": "external_change", "payload": { documentId: DocumentId, path: string, dirty: boolean, deleted: boolean, } } | { "type": "snapshot", "payload": DocumentSnapshot } | { "type": "saved", "payload": SaveResult } | { "type": "error", "payload": { documentId: DocumentId, error: WorkspaceError, } };
 export type ImageData = { mime: string, bytes: Array<number>, };
 export type PasteResult = { path: string, snapshot: DocumentSnapshot, };
-export type NvimConfig = { path: string | null, errors: Array<string>, 
+export type NvimConfig = { path: string | null, errors: Array<string>,
 /**
  * Copy selectors read from the active vimrc. Values use Neovim key
  * notation (for example `<F6>`), so the shell can compare them with its
@@ -44,7 +61,7 @@ export type NvimConfig = { path: string | null, errors: Array<string>,
  */
 copyKeys: { [key in string]: string }, };
 export type CopyFormat = "markdown" | "text" | "rich" | "html";
-export type YankCopy = { format: CopyFormat, 
+export type YankCopy = { format: CopyFormat,
 /**
  * Exact native TextYankPost contents, including linewise newlines.
  */

@@ -302,6 +302,31 @@ beforeEach(() => {
   vi.mocked(readRuntimeStatus).mockResolvedValue({ contractVersion: 1, connection: "connected", detail: "connected" });
 });
 
+it("binds native search options and localized errors through the composed App shell", async () => {
+  await openWorkspace();
+  const backend = mockedInvoke.getMockImplementation()!;
+  mockedInvoke.mockImplementation(async (command, args) => {
+    if (command === "search_workspace") {
+      if ((args as { query: string }).query === "[") throw { code: "search_pattern" };
+      return { matches: [], limit: null };
+    }
+    return backend(command, args);
+  });
+  fireEvent.click(screen.getByRole("button", { name: "検索" }));
+  const panel = within(screen.getByTestId("search-panel"));
+  fireEvent.change(panel.getByLabelText("検索語句"), { target: { value: "cat" } });
+  fireEvent.click(panel.getByRole("button", { name: "大文字と小文字を区別" }));
+  fireEvent.click(panel.getByRole("button", { name: "単語単位で検索" }));
+  fireEvent.click(panel.getByRole("button", { name: "正規表現で検索" }));
+  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("search_workspace", {
+    query: "cat", root: "/ws", options: { caseSensitive: true, wholeWord: true, regex: true },
+  }));
+  expect(panel.getByRole("button", { name: "正規表現で検索" })).toHaveAttribute("aria-pressed", "true");
+  fireEvent.change(panel.getByLabelText("検索語句"), { target: { value: "[" } });
+  expect(await panel.findByRole("alert")).toHaveTextContent("検索パターンが不正");
+  expect(panel.getByRole("button", { name: "すべて置換する" })).toBeDisabled();
+});
+
 /** Open the fake workspace through the manual folder input. */
 async function openWorkspace() {
   render(<App />);

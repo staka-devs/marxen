@@ -571,6 +571,12 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             <SearchPanel
               query={workspace.searchQuery}
               onQuery={workspace.setSearchQuery}
+              searchOptions={workspace.searchOptions}
+              onSearchOptions={workspace.setSearchOptions}
+              searchError={workspace.searchError}
+              searchLimit={workspace.searchLimit}
+              resultsReady={workspace.resultsReady}
+              replacing={workspace.replacing}
               hits={desktop ? workspace.registryHits : workspace.localHits}
               searching={workspace.searching}
               canReplace={desktop}

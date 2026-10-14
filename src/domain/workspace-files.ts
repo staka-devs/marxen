@@ -26,7 +26,13 @@ export function entryKind(entry: WorkspaceEntry): WorkspaceFileKind | null {
   if (entry.kind) return entry.kind;
   if (entry.markdown) return "markdown";
   if (isImagePath(entry.path)) return "image";
-  if (/\.(txt|text|log|csv|tsv|jsonc?|ya?ml|toml|ini|conf|config|xml|html?|css|scss|less|[cm]?jsx?|tsx?|rs|py|rb|go|java|[ch]|cpp|hpp|cs|swift|kt|sh|bash|zsh|ps1|sql|lua|vim|tex|rst|env)$/i.test(entry.path)
+  if (/\.(txt|text|log|csv|tsv|jsonc?|ya?ml|toml|ini|conf|config|xml|html?|css|scss|less|jsx?|[cm]js|tsx?|rs|py|rb|go|java|[ch]|cpp|hpp|cs|swift|kt|sh|bash|zsh|ps1|sql|lua|vim|tex|rst|env)$/i.test(entry.path)
     || /(^|\/)(readme|license|copying|makefile|dockerfile|vimrc|_vimrc|\.vimrc|\.gitignore|\.gitattributes|\.editorconfig|\.env)$/i.test(entry.path)) return "text";
   return null;
+}
+
+/** Reuse workspace classification for the browser's explicitly literal search samples. */
+export function isSearchablePath(path: string): boolean {
+  const kind = entryKind({ path, name: path, directory: false, markdown: isMarkdownPath(path) });
+  return kind === "markdown" || kind === "text";
 }

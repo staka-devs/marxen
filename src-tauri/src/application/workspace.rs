@@ -313,28 +313,84 @@ impl Workspace {
         Ok(())
     }
 
-    /// Search supported contained text files using authoritative text for open documents.
+    /// Preserve literal callers while refusing to return incomplete results as exhaustive.
     pub fn search(&self, query: &str) -> Result<Vec<SearchMatch>, WorkspaceError> {
-        if query.is_empty() {
-            return Err(WorkspaceError::InvalidPath);
+        let result =
+            self.search_with_options(query, &SearchOptions::default(), &self.info().root)?;
+        if result.limit.is_some() {
+            return Err(WorkspaceError::SearchIncomplete);
         }
+        Ok(result.matches)
+    }
+
+    /// Search authoritative buffers and bounded disk text with one native matching policy.
+    pub fn search_with_options(
+        &self,
+        query: &str,
+        options: &SearchOptions,
+        root: &str,
+    ) -> Result<SearchResults, WorkspaceError> {
+        use crate::domain::search::{self, Matcher, MAX_MATCHES, MAX_TEXT_BYTES};
+        if self.info().root != root {
+            return Err(WorkspaceError::StaleSearch);
+        }
+        let matcher = Matcher::compile(query, options)?;
+        let began = self.clock.nanos();
+        let mut result = SearchResults {
+            matches: Vec::new(),
+            limit: None,
+        };
         let mut pending = vec![String::new()];
         let mut files = Vec::new();
-        while let Some(folder) = pending.pop() {
-            for entry in self.list(&folder)? {
-                if entry.directory {
-                    pending.push(entry.path);
-                } else if matches!(
-                    entry.kind,
-                    Some(WorkspaceFileKind::Markdown | WorkspaceFileKind::Text)
-                ) {
-                    files.push(entry.path);
+        let mut entries = 0;
+        'folders: while let Some(folder) = pending.pop() {
+            if self.clock.nanos().saturating_sub(began) > 2_000_000_000 {
+                result.limit = Some(SearchLimit::Time);
+                break;
+            }
+            let directory = if folder.is_empty() {
+                self.root.clone()
+            } else {
+                self.storage.resolve(&self.root, &folder)?
+            };
+            let (children, omitted) = self
+                .storage
+                .read_search_entries(&directory, 5000 - entries)?;
+            if omitted {
+                result.limit = Some(SearchLimit::Files);
+            }
+            for entry in children {
+                entries += 1;
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name == ".git" || name.starts_with(".marxen-") || entry.info.is_symlink() {
+                    continue;
                 }
+                let path = storage::relative(&self.root, &entry.path())?;
+                if self.storage.resolve(&self.root, &path).is_err() {
+                    continue;
+                }
+                if entry.info.is_dir() {
+                    pending.push(path);
+                } else if entry.info.is_file() && storage::text_family(&entry.path()) {
+                    if files.len() >= 2000 {
+                        result.limit = Some(SearchLimit::Files);
+                        break 'folders;
+                    }
+                    files.push(path);
+                }
+            }
+            if entries >= 5000 && !pending.is_empty() {
+                result.limit = Some(SearchLimit::Files);
+                break;
             }
         }
         files.sort();
-        let mut matches = Vec::new();
+        let mut bytes = 0;
         for path in files {
+            if self.clock.nanos().saturating_sub(began) > 2_000_000_000 {
+                result.limit = Some(SearchLimit::Time);
+                break;
+            }
             let target = self.storage.resolve(&self.root, &path)?;
             let actor = self
                 .actors
@@ -348,35 +404,107 @@ impl Workspace {
                     Some(snapshot.revision),
                 )
             } else {
-                let bytes = self
-                    .storage
-                    .read_disk(&target)?
-                    .ok_or(WorkspaceError::NotFound)?;
-                let text = String::from_utf8(bytes).map_err(|_| WorkspaceError::InvalidUtf8)?;
-                (text, None, None)
+                match self.storage.read_search_text(&target, MAX_TEXT_BYTES) {
+                    Ok(text) => (text, None, None),
+                    Err(WorkspaceError::SearchIncomplete) => {
+                        result.limit = Some(SearchLimit::FileBytes);
+                        continue;
+                    }
+                    Err(WorkspaceError::InvalidUtf8) => continue,
+                    Err(error) => return Err(error),
+                }
             };
-            for (byte, _) in text.match_indices(query) {
-                let start =
-                    crate::domain::validation::utf8_to_utf16(&text, Utf8ByteOffset(byte as u32))
-                        .map_err(|error| WorkspaceError::Contract { error })?;
-                let end = crate::domain::validation::utf8_to_utf16(
-                    &text,
-                    Utf8ByteOffset((byte + query.len()) as u32),
-                )
-                .map_err(|error| WorkspaceError::Contract { error })?;
-                let line_start = text[..byte].rfind('\n').map_or(0, |n| n + 1);
-                let line_end = text[byte..].find('\n').map_or(text.len(), |n| byte + n);
-                matches.push(SearchMatch {
+            bytes += text.len();
+            if bytes > 32 * 1024 * 1024 {
+                result.limit = Some(SearchLimit::WorkspaceBytes);
+                break;
+            }
+            let found = matcher.find(&text, MAX_MATCHES - result.matches.len());
+            let content_token = storage::fingerprint(text.as_bytes()).0;
+            for range in found.ranges {
+                let (preview, preview_range) = search::preview(&text, &range);
+                result.matches.push(SearchMatch {
                     path: path.clone(),
                     document_id: id.clone(),
                     revision,
-                    range: Utf16Range { start, end },
-                    line: text[..byte].bytes().filter(|b| *b == b'\n').count() as u32 + 1,
-                    preview: text[line_start..line_end].into(),
+                    range: search::utf16_range(&text, &range),
+                    line: text[..range.start].bytes().filter(|b| *b == b'\n').count() as u32 + 1,
+                    preview,
+                    preview_range,
+                    content_token: content_token.clone(),
                 });
             }
+            if let Some(limit) = found.limit {
+                let stop = limit == SearchLimit::Matches;
+                result.limit = Some(limit);
+                if stop {
+                    break;
+                }
+            }
         }
-        Ok(matches)
+        Ok(result)
+    }
+
+    /// Plan exact literal edits against unchanged searched content and a real Neovim revision.
+    pub fn plan_search_replacement(
+        &mut self,
+        request: SearchReplaceRequest,
+    ) -> Result<SearchReplacePlan, WorkspaceError> {
+        use crate::domain::search::{self, Matcher, MAX_MATCHES, MAX_TEXT_BYTES};
+        if self.info().root != request.root {
+            return Err(WorkspaceError::StaleSearch);
+        }
+        let matcher = Matcher::compile(&request.query, &request.options)?;
+        let target = self.storage.resolve(&self.root, &request.path)?;
+        if !storage::text_family(&target) {
+            return Err(WorkspaceError::NotText);
+        }
+        // Validate closed-file content before opening a native actor.
+        if !self
+            .actors
+            .values()
+            .any(|a| a.path().as_ref() == Some(&target))
+        {
+            let text = self.storage.read_search_text(&target, MAX_TEXT_BYTES)?;
+            if storage::fingerprint(text.as_bytes()).0 != request.content_token {
+                return Err(WorkspaceError::StaleSearch);
+            }
+        }
+        let mut document = self.open_text_file(&request.path)?;
+        document.snapshot = self
+            .actor(&document.snapshot.document_id.0)?
+            .sync_from_nvim()?;
+        let snapshot = &document.snapshot;
+        if storage::fingerprint(snapshot.text.as_bytes()).0 != request.content_token
+            || request
+                .revision
+                .is_some_and(|revision| revision != snapshot.revision)
+        {
+            return Err(WorkspaceError::StaleSearch);
+        }
+        let found = matcher.find(&snapshot.text, MAX_MATCHES);
+        if found.limit.is_some() && request.range.is_none() {
+            return Err(WorkspaceError::SearchIncomplete);
+        }
+        let edits: Vec<TextEdit> = found
+            .ranges
+            .iter()
+            .map(|range| search::utf16_range(&snapshot.text, range))
+            .filter(|range| {
+                request
+                    .range
+                    .as_ref()
+                    .is_none_or(|selected| selected == range)
+            })
+            .map(|range| TextEdit {
+                range,
+                text: request.replacement.clone(),
+            })
+            .collect();
+        if edits.is_empty() {
+            return Err(WorkspaceError::StaleSearch);
+        }
+        Ok(SearchReplacePlan { document, edits })
     }
 
     /// Polling emits changed fingerprints once; neither dirty nor clean buffers

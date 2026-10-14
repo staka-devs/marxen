@@ -274,8 +274,18 @@ mod desktop {
     pub fn search_workspace(
         state: tauri::State<'_, ActorState>,
         query: String,
-    ) -> Result<Vec<SearchMatch>, WorkspaceError> {
-        with_workspace(&state, |w| w.search(&query))
+        options: SearchOptions,
+        root: String,
+    ) -> Result<SearchResults, WorkspaceError> {
+        with_workspace(&state, |w| w.search_with_options(&query, &options, &root))
+    }
+    #[tauri::command(async)]
+    /// Prepare native search edits without saving or bypassing the document revision queue.
+    pub fn plan_search_replacement(
+        state: tauri::State<'_, ActorState>,
+        request: SearchReplaceRequest,
+    ) -> Result<SearchReplacePlan, WorkspaceError> {
+        with_workspace(&state, |w| w.plan_search_replacement(request))
     }
     #[tauri::command(async)]
     /// Collect pending document, save and disk-change events in registry order.
