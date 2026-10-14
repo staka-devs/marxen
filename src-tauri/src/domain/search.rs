@@ -89,8 +89,57 @@ impl Matcher {
     }
 }
 
-/// Convert an authoritative byte range into global UTF-16 code-unit offsets.
-pub fn utf16_range(text: &str, range: &std::ops::Range<usize>) -> Utf16Range {
+/// Forward-only position scan for the matcher's ascending, non-overlapping byte ranges.
+pub struct MatchPositions {
+    byte: usize,
+    utf16: u32,
+    line: u32,
+    line_start: usize,
+}
+
+impl MatchPositions {
+    /// Start one file's positions without building or retaining a general text index.
+    pub fn new() -> Self {
+        Self {
+            byte: 0,
+            utf16: 0,
+            line: 1,
+            line_start: 0,
+        }
+    }
+
+    /// Advance once through unvisited scalars, preserving Unicode and LF line coordinates.
+    fn advance(&mut self, text: &str, target: usize) {
+        for (local, scalar) in text[self.byte..target].char_indices() {
+            self.utf16 += scalar.len_utf16() as u32;
+            if scalar == '\n' {
+                self.line += 1;
+                self.line_start = self.byte + local + 1;
+            }
+        }
+        self.byte = target;
+    }
+
+    /// Convert the next authoritative match and return its starting line/context boundary.
+    pub fn next(&mut self, text: &str, range: &std::ops::Range<usize>) -> (Utf16Range, u32, usize) {
+        self.advance(text, range.start);
+        let start = Utf16Offset(self.utf16);
+        let line = self.line;
+        let line_start = self.line_start;
+        self.advance(text, range.end);
+        (
+            Utf16Range {
+                start,
+                end: Utf16Offset(self.utf16),
+            },
+            line,
+            line_start,
+        )
+    }
+}
+
+/// Convert a bounded preview's byte range into relative UTF-16 code-unit offsets.
+fn utf16_range(text: &str, range: &std::ops::Range<usize>) -> Utf16Range {
     Utf16Range {
         start: Utf16Offset(text[..range.start].encode_utf16().count() as u32),
         end: Utf16Offset(text[..range.end].encode_utf16().count() as u32),
@@ -98,8 +147,11 @@ pub fn utf16_range(text: &str, range: &std::ops::Range<usize>) -> Utf16Range {
 }
 
 /// Build bounded first-line context and the visible portion of this specific match.
-pub fn preview(text: &str, range: &std::ops::Range<usize>) -> (String, Utf16Range) {
-    let line_start = text[..range.start].rfind('\n').map_or(0, |n| n + 1);
+pub fn preview(
+    text: &str,
+    range: &std::ops::Range<usize>,
+    line_start: usize,
+) -> (String, Utf16Range) {
     let prefix: String = text[line_start..range.start]
         .chars()
         .rev()
@@ -250,7 +302,7 @@ mod tests {
                 end: Utf16Offset(4)
             }
         );
-        let (context, span) = preview(text, &(4..14));
+        let (context, span) = preview(text, &(4..14), 0);
         assert_eq!(context, "😀日本");
         assert_eq!(
             span,
@@ -269,5 +321,28 @@ mod tests {
         .unwrap()
         .find("x\ny", MAX_MATCHES);
         assert_eq!(found.ranges, vec![0..0, 2..2]);
+    }
+
+    #[test]
+    /// Scan non-overlapping supplementary, multiline and empty matches exactly once in order.
+    fn incremental_match_positions() {
+        let text = "😀cat\n日本\n𐐀";
+        let mut positions = MatchPositions::new();
+        for (bytes, utf16, line, line_start) in [
+            (4..7, 2..5, 1, 0),
+            (8..8, 6..6, 2, 8),
+            (8..14, 6..8, 2, 8),
+            (15..19, 9..11, 3, 15),
+        ] {
+            let (range, actual_line, actual_start) = positions.next(text, &bytes);
+            assert_eq!(
+                range,
+                Utf16Range {
+                    start: Utf16Offset(utf16.start),
+                    end: Utf16Offset(utf16.end)
+                }
+            );
+            assert_eq!((actual_line, actual_start), (line, line_start));
+        }
     }
 }

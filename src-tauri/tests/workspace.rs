@@ -479,6 +479,40 @@ fn native_search_limits_do_not_authorize_replace_all() {
     assert_eq!(found.matches.len(), 1);
     assert_eq!(found.limit, Some(SearchLimit::FileBytes));
 }
+
+#[test]
+/// Measure bounded conversion for 2000 late matches in near-1MiB text without requiring full results after a time limit.
+fn native_search_late_match_conversion_budget() {
+    let (root, _recovery, workspace) = setup();
+    let text = format!("{}\n{}", "z".repeat(1_040_000), "cat ".repeat(2000));
+    fs::write(root.path().join("late.txt"), &text).unwrap();
+    let began = std::time::Instant::now();
+    let result = workspace
+        .search_with_options("cat", &SearchOptions::default(), &workspace.info().root)
+        .unwrap();
+    let elapsed = began.elapsed();
+    eprintln!(
+        "late-match conversion: bytes={} matches={} limit={:?} elapsed={elapsed:?}",
+        text.len(),
+        result.matches.len(),
+        result.limit
+    );
+    assert!(matches!(result.limit, None | Some(SearchLimit::Time)));
+    if result.limit.is_none() {
+        assert_eq!(result.matches.len(), 2000);
+    }
+    for (index, hit) in result.matches.iter().enumerate() {
+        assert_eq!(
+            hit.range,
+            range(1_040_001 + index as u32 * 4, 1_040_004 + index as u32 * 4)
+        );
+        assert_eq!(hit.line, 2);
+        assert_eq!(
+            &hit.preview[hit.preview_range.start.0 as usize..hit.preview_range.end.0 as usize],
+            "cat"
+        );
+    }
+}
 #[test]
 /// When invoked by the crash fixture, checkpoint an unsaved edit and terminate before normal cleanup.
 fn crash_child() {

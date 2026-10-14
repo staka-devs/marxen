@@ -330,7 +330,7 @@ impl Workspace {
         options: &SearchOptions,
         root: &str,
     ) -> Result<SearchResults, WorkspaceError> {
-        use crate::domain::search::{self, Matcher, MAX_MATCHES, MAX_TEXT_BYTES};
+        use crate::domain::search::{self, MatchPositions, Matcher, MAX_MATCHES, MAX_TEXT_BYTES};
         if self.info().root != root {
             return Err(WorkspaceError::StaleSearch);
         }
@@ -386,7 +386,7 @@ impl Workspace {
         }
         files.sort();
         let mut bytes = 0;
-        for path in files {
+        'files: for path in files {
             if self.clock.nanos().saturating_sub(began) > 2_000_000_000 {
                 result.limit = Some(SearchLimit::Time);
                 break;
@@ -421,14 +421,20 @@ impl Workspace {
             }
             let found = matcher.find(&text, MAX_MATCHES - result.matches.len());
             let content_token = storage::fingerprint(text.as_bytes()).0;
+            let mut positions = MatchPositions::new();
             for range in found.ranges {
-                let (preview, preview_range) = search::preview(&text, &range);
+                if self.clock.nanos().saturating_sub(began) > 2_000_000_000 {
+                    result.limit = Some(SearchLimit::Time);
+                    break 'files;
+                }
+                let (coordinates, line, line_start) = positions.next(&text, &range);
+                let (preview, preview_range) = search::preview(&text, &range, line_start);
                 result.matches.push(SearchMatch {
                     path: path.clone(),
                     document_id: id.clone(),
                     revision,
-                    range: search::utf16_range(&text, &range),
-                    line: text[..range.start].bytes().filter(|b| *b == b'\n').count() as u32 + 1,
+                    range: coordinates,
+                    line,
                     preview,
                     preview_range,
                     content_token: content_token.clone(),
@@ -450,7 +456,7 @@ impl Workspace {
         &mut self,
         request: SearchReplaceRequest,
     ) -> Result<SearchReplacePlan, WorkspaceError> {
-        use crate::domain::search::{self, Matcher, MAX_MATCHES, MAX_TEXT_BYTES};
+        use crate::domain::search::{MatchPositions, Matcher, MAX_MATCHES, MAX_TEXT_BYTES};
         if self.info().root != request.root {
             return Err(WorkspaceError::StaleSearch);
         }
@@ -486,10 +492,11 @@ impl Workspace {
         if found.limit.is_some() && request.range.is_none() {
             return Err(WorkspaceError::SearchIncomplete);
         }
+        let mut positions = MatchPositions::new();
         let edits: Vec<TextEdit> = found
             .ranges
             .iter()
-            .map(|range| search::utf16_range(&snapshot.text, range))
+            .map(|range| positions.next(&snapshot.text, range).0)
             .filter(|range| {
                 request
                     .range
