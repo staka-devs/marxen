@@ -26,8 +26,8 @@ export function imageTabId(rootId: string, path: string): string {
 /**
  * Parse an image tab ID back to its owning root and relative path.
  *
- * Returns null for legacy single-root `image:path` IDs so old tabs keep
- * working without guessing a new owner.
+ * Returns null for non-image IDs; legacy single-root `image:path` IDs yield
+ * a null owner so old tabs keep working without guessing a new owner.
  */
 export function parseImageTabId(id: string): { rootId: string | null; path: string } | null {
   if (!id.startsWith("image:")) return null;

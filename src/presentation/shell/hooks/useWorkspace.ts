@@ -695,7 +695,6 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         const ownerScope = rootsRef.current.find((root) => root.scope.rootId === expected.target.rootId)?.scope;
         const entry = await workspaceGateway!.renameImage(expected.source, path, expected.fingerprint, ownerScope);
         if (!isTargetCurrent(expected.target)) return;
-        const ownerId = expected.target.rootId;
         const single = rootsRef.current.length === 1;
         const qualifiedOld = ownerScope ? imageTabId(ownerScope.rootId, expected.source) : null;
         const qualifiedNext = ownerScope ? imageTabId(ownerScope.rootId, entry.path) : null;
@@ -719,10 +718,6 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         setTabs((prev) => prev.map((id) => {
           if (qualifiedOld && id === qualifiedOld && qualifiedNext) return qualifiedNext;
           if (single && id === legacyOld) return legacyNext;
-          const parsed = parseImageTabId(id);
-          if (!parsed) return id;
-          if (parsed.rootId !== null && parsed.rootId !== ownerId) return id;
-          if (parsed.rootId === null && !single) return id;
           return id;
         }));
         setActiveId((prev) => {
