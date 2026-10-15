@@ -1,9 +1,44 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { EditorView } from "@codemirror/view";
 import { CodeMirrorEditor, singleEditFromDiff } from "./CodeMirrorEditor";
 import { applyTextEdits } from "../../domain/coordinates/utf16";
 
 afterEach(cleanup);
+
+describe("native snapshot newline coordinates", () => {
+  it.each(["日😀\r\n本文\r\n", "# Alpha 検証\n\n日本語の検索対象です。\r\n", "日\r本文\n"])("preserves every native UTF-16 unit in %j", (source) => {
+    const edits = vi.fn();
+    const selection = vi.fn();
+    const rendered = render(<CodeMirrorEditor value={source} ariaLabel="editor" onGuiEdits={edits} onSelectionChange={selection} initialSelection={{ anchor: source.length, head: source.length }} />);
+    const view = EditorView.findFromDOM(rendered.container.querySelector<HTMLElement>(".cm-content")!)!;
+    expect(view.state.doc.toString()).toBe(source);
+    expect(view.state.selection.main.head).toBe(source.length);
+    act(() => view.dispatch({ selection: { anchor: source.indexOf("\n") + 1 } }));
+    expect(selection).toHaveBeenLastCalledWith({ anchor: source.indexOf("\n") + 1, head: source.indexOf("\n") + 1 });
+    act(() => view.dispatch({ changes: { from: source.length, insert: "追😀" }, selection: { anchor: source.length + 3 } }));
+    expect(edits).toHaveBeenLastCalledWith([{ range: { start: source.length, end: source.length }, text: "追😀" }], source, { anchor: source.length + 3, head: source.length + 3 }, undefined);
+    const acknowledged = source + "追😀";
+    rendered.rerender(<CodeMirrorEditor value={acknowledged} ariaLabel="editor" />);
+    expect(view.state.doc.toString()).toBe(acknowledged);
+    rendered.rerender(<CodeMirrorEditor value={source} ariaLabel="editor" externalCursor={{ anchor: source.length, head: source.length, seq: 1 }} />);
+    expect(view.state.doc.toString()).toBe(source);
+    expect(view.state.selection.main.head).toBe(source.length);
+  });
+
+  it("resynchronizes a rejected first character at a mixed-newline document end without unmounting", () => {
+    const source = "# Alpha 検証\n\n日本語の検索対象です。\r\n";
+    const snapshot = { documentId: "native", revision: 0, text: source, dirty: false };
+    const rendered = render(<CodeMirrorEditor value={source} snapshot={snapshot} ariaLabel="editor" />);
+    const content = rendered.container.querySelector<HTMLElement>(".cm-content")!;
+    const view = EditorView.findFromDOM(content)!;
+    act(() => view.dispatch({ changes: { from: view.state.doc.length, insert: "q" }, selection: { anchor: view.state.doc.length + 1 } }));
+    rendered.rerender(<CodeMirrorEditor value={source} snapshot={{ ...snapshot }} ariaLabel="editor" />);
+    expect(rendered.getByRole("textbox", { name: "editor" })).toBe(content);
+    expect(view.state.doc.toString()).toBe(source);
+    expect(view.state.selection.main.head).toBe(source.length);
+  });
+});
 
 it("handles right click and keyboard menu gestures only in an explicitly wired editor", () => {
   const menu = vi.fn();

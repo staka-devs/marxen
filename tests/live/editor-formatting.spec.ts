@@ -11,6 +11,31 @@ async function openFixture(page: Page, options: Parameters<Window["__editorFixtu
   await expect(page.locator(".cm-content")).toBeVisible();
 }
 
+test("mixed native newlines survive first typing, Enter, Undo and rejected input", async ({ page }) => {
+  const source = "# Alpha 検証\n\n日本語😀の検索対象です。\r\n";
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await openFixture(page, { text: source });
+  await page.evaluate(() => { const end = window.__editorFixture.getText().length; window.__editorFixture.select(end, end); });
+  await page.keyboard.type("q");
+  await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toBe(source + "q");
+  await expect(page.getByTestId("editor-primary")).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toBe(source + "q\n");
+  await page.getByRole("button", { name: "元に戻す", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toBe(source + "q");
+  await page.getByRole("button", { name: "元に戻す", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toBe(source);
+  await openFixture(page, { text: source, readonly: true });
+  await page.evaluate(() => { const end = window.__editorFixture.getText().length; window.__editorFixture.select(end, end); });
+  await page.keyboard.type("q");
+  await expect(page.getByRole("alert")).toContainText("fixture read-only");
+  await expect(page.getByTestId("editor-primary")).toBeVisible();
+  await expect(page.locator(".cm-content")).not.toContainText("q");
+  expect(await page.evaluate(() => window.__editorFixture.getText())).toBe(source);
+  expect(errors).toEqual([]);
+});
+
 test("persistent toolbar, saved Enter preference and narrow-width controls", async ({ page }) => {
   await openFixture(page, { text: "日本😀の文章" });
   await expect(page.getByRole("button", { name: "太字にする" })).toBeVisible();
