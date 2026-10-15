@@ -335,7 +335,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         const open = target.kind === "text"
           ? await workspaceGateway!.openTextFile(target.path)
           : await workspaceGateway!.openMarkdown(target.path);
-        if (epoch !== generation.current) return;
+        if (epoch !== generation.current || !isTargetCurrent(target)) return;
         registry!.noteSnapshot(open.snapshot);
         doc = docFromOpen(open);
         setDocs((previous) => ({ ...previous, [doc!.documentId]: doc! }));

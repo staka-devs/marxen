@@ -326,7 +326,7 @@ impl Workspace {
         path: &str,
     ) -> Result<OpenDocument, WorkspaceError> {
         let target = self.storage.resolve(&self.root, path)?;
-        if !storage::markdown(&target) && !storage::text_family(&target) {
+        if !storage::text_family(&target) {
             return Err(WorkspaceError::NotText);
         }
         let actor = self.actor(&request.document_id.0)?;
