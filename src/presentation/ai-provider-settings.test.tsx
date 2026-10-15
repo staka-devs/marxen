@@ -2,6 +2,8 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AiProviderSettings, { describeProviderSummary } from "./ai-provider-settings";
 import { defaultProviderConfig } from "../domain/ai-config";
+import { I18nProvider } from "./i18n/I18nProvider";
+import { createTranslator } from "../infrastructure/localization/i18next-translator";
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -9,6 +11,20 @@ beforeEach(() => {
 });
 
 describe("provider settings", () => {
+  it.each([
+    ["ja-JP", "codex", "codex-acp アダプターを利用者が事前にインストールします。自動取得はしません。"],
+    ["ja-JP", "opencode", "OpenCode を opencode acp として起動します。"],
+    ["ja-JP", "copilot", "GitHub Copilot を copilot --acp --stdio として起動します。"],
+    ["en-US", "codex", "Install the codex-acp adapter beforehand. The app does not download it automatically."],
+    ["en-US", "opencode", "Launch OpenCode with opencode acp."],
+    ["en-US", "copilot", "Launch GitHub Copilot with copilot --acp --stdio."],
+  ] as const)("shows the matching %s launch description for %s", (language, preset, description) => {
+    const provider = defaultProviderConfig("acp");
+    provider.acp!.preset = preset;
+    render(<I18nProvider language={language} createTranslator={createTranslator}><AiProviderSettings embedded provider={provider} onProvider={vi.fn()} /></I18nProvider>);
+    expect(screen.getByText(description)).toBeVisible();
+  });
+
   it("mounts the dialog inside the live theme scope above its panel", () => {
     render(<div data-theme="dark" data-testid="theme-scope"><aside><AiProviderSettings provider={defaultProviderConfig("acp")} onProvider={vi.fn()} /></aside></div>);
     fireEvent.click(screen.getByRole("button", { name: /接続設定/ }));
