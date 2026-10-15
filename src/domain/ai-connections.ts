@@ -212,12 +212,13 @@ export function migrateLegacyProfile(profile: AiProfile, defaultName: string, id
 /**
  * Resolve a provider change against the stored list without side effects.
  *
- * ACP selections clear the named marker so restarts restore the chosen agent;
- * API configs carrying a connectionId switch to that saved record without
- * modifying any other record, while missing or deleted IDs report missing so
- * callers keep the previous selection. Same-ID field edits refresh only that
- * record. Callers persist the returned list first and apply the provider only
- * on persistence success.
+ * ACP and ID-less API selections clear the named marker without editing saved
+ * records. API configs carrying a connectionId restore that saved record;
+ * missing or deleted IDs report missing so callers keep the previous selection.
+ * Only same-ID, same-protocol field edits refresh the active record: historical
+ * configs using its old protocol cannot overwrite current endpoint/model data.
+ * Callers persist the returned list first and apply the provider only on
+ * persistence success.
  */
 export function resolveProviderChange(
   list: ApiConnectionList,
@@ -234,8 +235,8 @@ export function resolveProviderChange(
   if (nextId !== null) {
     const target = list.connections.find((item) => item.id === nextId) ?? null;
     if (target === null) return { persist: null, provider: null, missing: true };
-    if (target.id !== list.activeId) {
-      return { persist: { ...list, activeId: target.id }, provider: buildProviderConfigFromConnection(target), missing: false };
+    if (target.id !== list.activeId || target.protocol !== next.kind) {
+      return { persist: target.id === list.activeId ? null : { ...list, activeId: target.id }, provider: buildProviderConfigFromConnection(target), missing: false };
     }
     const endpoint = next.kind === "openai_compatible" ? (next.openai?.endpoint ?? "") : (next.anthropic?.endpoint ?? "");
     const model = next.kind === "openai_compatible" ? (next.openai?.model ?? "") : (next.anthropic?.model ?? "");
@@ -249,14 +250,8 @@ export function resolveProviderChange(
       missing: false,
     };
   }
-  const active = list.connections.find((item) => item.id === list.activeId) ?? null;
-  if (active === null || next.kind !== active.protocol) return { persist: null, provider: next, missing: false };
-  const endpoint = next.kind === "openai_compatible" ? (next.openai?.endpoint ?? "") : (next.anthropic?.endpoint ?? "");
-  const model = next.kind === "openai_compatible" ? (next.openai?.model ?? "") : (next.anthropic?.model ?? "");
-  if (endpoint === active.endpoint && model === active.model) return { persist: null, provider: next, missing: false };
-  const updated: ApiConnection = { ...active, endpoint, model };
   return {
-    persist: { ...list, connections: list.connections.map((item) => (item.id === active.id ? updated : item)) },
+    persist: list.activeId === null ? null : { ...list, activeId: null },
     provider: next,
     missing: false,
   };
