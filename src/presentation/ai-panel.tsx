@@ -52,6 +52,7 @@ import type {
   StagingTarget,
 } from "../contracts/ai-contracts";
 import type { AiGateway, AiProfileStore } from "../application/ports";
+import type { ApiConnectionControls } from "./ai/ApiConnections";
 
 export interface AiPanelProps {
   contexts: PromptContext[];
@@ -60,8 +61,8 @@ export interface AiPanelProps {
   ensureStaging?: (contexts: PromptContext[]) => Promise<StagingTarget>;
   /** Controlled provider shared with inline chat; uncontrolled when absent. */
   provider?: AiProviderConfig;
-  /** Replace the shared provider configuration. */
-  onProvider?: (provider: AiProviderConfig) => void;
+  /** Replace the shared provider configuration, reporting persistence failures. */
+  onProvider?: (provider: AiProviderConfig) => boolean | void;
   /** Increment to expand the collapsed connection settings (root Settings entry point). */
   openSettingsToken?: number;
   /** Compact header close control; root wires it to hide the AI pane. */
@@ -89,6 +90,14 @@ export interface AiPanelProps {
   profileStore?: AiProfileStore;
   /** Credential/connection gateway forwarded to the settings subview. */
   aiGateway?: AiGateway;
+  /** Named API connection controls forwarded to the settings subview. */
+  connectionControls?: ApiConnectionControls;
+  /**
+   * Stable connection scope fencing conversations apart from provider JSON.
+   *
+   * Twins sharing endpoint and model still fence runs and histories by ID.
+   */
+  sessionScopeKey?: string | null;
   /**
    * Optional model controls injected by the composition root.
    *
@@ -163,6 +172,8 @@ export default function AiPanel({
   startPrompt: startPromptProp,
   profileStore,
   aiGateway,
+  connectionControls,
+  sessionScopeKey,
   modelControls,
   headerActions,
 }: AiPanelProps) {
@@ -174,7 +185,7 @@ export default function AiPanel({
   const [saved] = useState(() => loadSavedProfile(profileStore));
   const [internal, setInternal] = useState<AiProviderConfig>(() => buildProviderConfig(saved));
   const provider = controlled ?? internal;
-  const providerKey = JSON.stringify(provider);
+  const providerKey = JSON.stringify([provider, sessionScopeKey ?? null]);
   const providerKeyRef = useRef(providerKey);
   // In-memory conversation list: 新規 preserves prior conversations in the
   // selector instead of destroying them. Nothing persists to storage.
@@ -231,9 +242,13 @@ export default function AiPanel({
 
   /** Change provider when different, moving conversation and notifying. */ function changeProvider(next: AiProviderConfig) {
     if (JSON.stringify(provider) === JSON.stringify(next)) return;
-    moveToProvider(JSON.stringify(next));
-    if (onProvider) onProvider(next);
-    else setInternal(next);
+    if (onProvider) {
+      const ok = onProvider(next);
+      if (ok === false) return;
+    } else {
+      setInternal(next);
+    }
+    moveToProvider(JSON.stringify([next, next.connectionId ?? null]));
   }
 
   useEffect(() => {
@@ -242,6 +257,7 @@ export default function AiPanel({
   }, [providerKey]);
 
   useEffect(() => {
+    if (provider.connectionId !== undefined) return;
     try {
       profileStore?.save({
         kind: provider.kind,
@@ -251,6 +267,7 @@ export default function AiPanel({
         endpoint: provider.openai?.endpoint ?? provider.anthropic?.endpoint ?? saved.endpoint,
         model: provider.openai?.model ?? provider.anthropic?.model ?? saved.model,
         anthropicEnabled: provider.anthropic?.enabled ?? saved.anthropicEnabled,
+        acpSelections: provider.acp?.selections ?? saved.acpSelections,
       });
     } catch {
       // Private mode/quota: profiles simply do not persist.
@@ -472,15 +489,25 @@ export default function AiPanel({
 
   /** Select a conversation fencing the previous run. */ function handleSelectConversation(id: string) {
     if (id === conversationId) return;
+    const previousActiveId = conversationId;
+    const previousKey = providerKeyRef.current;
     fenceRun();
     setActiveId(id);
     setStreamError(null);
     const key = conversations.find((item) => item.id === id)?.providerKey;
     if (key && key !== providerKey) {
-      const previousProvider = JSON.parse(key) as AiProviderConfig;
+      const [previousProvider] = JSON.parse(key) as [AiProviderConfig, unknown];
+      if (onProvider) {
+        const ok = onProvider(previousProvider);
+        if (ok === false) {
+          setActiveId(previousActiveId);
+          providerKeyRef.current = previousKey;
+          return;
+        }
+      } else {
+        setInternal(previousProvider);
+      }
       providerKeyRef.current = key;
-      if (onProvider) onProvider(previousProvider);
-      else setInternal(previousProvider);
     }
   }
 
@@ -492,7 +519,7 @@ export default function AiPanel({
       <div className="ai-chat-header flex shrink-0 items-center gap-1">
         <h2 id="ai-panel-title" className="min-w-0 flex-1 truncate text-[13px] font-medium">{historyOpen ? t("チャットの履歴") : t("チャット")}</h2>
         {headerActions}
-        <AiProviderSettings compact provider={provider} onProvider={changeProvider} openToken={openSettingsToken} gateway={aiGateway} profileStore={profileStore} />
+        <AiProviderSettings compact provider={provider} onProvider={changeProvider} openToken={openSettingsToken} gateway={aiGateway} profileStore={profileStore} connectionControls={connectionControls} />
         <button type="button" aria-label={historyOpen ? t("チャットに戻る") : t("履歴を開く")} aria-pressed={historyOpen} title={historyOpen ? t("チャットに戻る") : t("チャットの履歴")} className="rounded-sm p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setHistoryOpen((value) => !value)}><History size={15} aria-hidden="true" /></button>
         <button type="button" aria-label={t("新しい会話")} title={t("新しいチャット")} onClick={handleNewConversation} className="shrink-0 rounded-sm p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground">
           <Plus size={14} aria-hidden="true" />

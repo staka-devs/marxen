@@ -8,6 +8,12 @@ export interface HiddenAiModel {
   provider: AiProviderId;
   optionId: string;
   value: string;
+  /**
+   * Stable named-connection scope. Absent entries keep the legacy
+   * provider-wide behavior (ACP presets and the single-profile API kinds);
+   * present entries apply only to that connection ID, never across twins.
+   */
+  connectionId?: string;
 }
 
 /** View-only AI preferences, independent of credentials, native selections and editor settings. */

@@ -29,7 +29,8 @@ fn service(kind: AiProviderKind) -> AiService {
     let keyring = Arc::new(MemoryKeyring::default());
     keyring.set(kind, "disposable-test-key").unwrap();
     AiService {
-        keyring,
+        keyring: keyring.clone(),
+        connection_keyring: keyring,
         transport: Arc::new(NativeAiTransport),
         spawner: Arc::new(ProbeOnlySpawner),
         runs: Arc::new(RunRegistry::new()),
@@ -51,6 +52,7 @@ fn config(kind: AiProviderKind, endpoint: String) -> AiProviderConfig {
             endpoint,
             model: "fixture-model".into(),
         }),
+        connection_id: None,
     }
 }
 
@@ -140,6 +142,71 @@ async fn anthropic_service_probes_messages_once_at_the_validated_api_root() {
         serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(body["model"], "fixture-model");
     assert_eq!(body["max_tokens"], 1);
+}
+
+/// Build the production service boundary with separate kind and connection slots.
+fn connection_service() -> (AiService, std::sync::Arc<MemoryKeyring>) {
+    let keyring = Arc::new(MemoryKeyring::default());
+    (
+        AiService {
+            keyring: keyring.clone(),
+            connection_keyring: keyring.clone(),
+            transport: Arc::new(NativeAiTransport),
+            spawner: Arc::new(ProbeOnlySpawner),
+            runs: Arc::new(RunRegistry::new()),
+            usage: Arc::new(UsageRegistry::new()),
+        },
+        keyring,
+    )
+}
+
+/// Build one named OpenAI-compatible probe config carrying its stable ID.
+fn named_config(id: &str, endpoint: String) -> AiProviderConfig {
+    AiProviderConfig {
+        kind: AiProviderKind::OpenaiCompatible,
+        acp: None,
+        openai: Some(OpenAiConfig {
+            endpoint,
+            model: "fixture-model".into(),
+        }),
+        anthropic: None,
+        connection_id: Some(ApiConnectionId(id.into())),
+    }
+}
+
+/// Verify a named connection probe never falls back to the legacy kind slot.
+/// An empty selected slot reports missing credentials even when the kind slot
+/// is filled; a filled selected slot succeeds even when the kind slot differs.
+#[tokio::test]
+async fn named_connection_probe_never_falls_back_to_kind_slot() {
+    use marxen_lib::application::ai::credentials::ApiConnectionKeyring;
+    let (service, keyring) = connection_service();
+    let id = ApiConnectionId("api-probe".into());
+    keyring
+        .set(AiProviderKind::OpenaiCompatible, "legacy-key")
+        .unwrap();
+    let config = named_config("api-probe", "http://127.0.0.1:9/v1".into());
+    let readiness = service
+        .test_connection(config.clone(), false)
+        .await
+        .unwrap();
+    assert!(!readiness.ok);
+    assert!(!readiness.detail.contains("legacy-key"));
+    assert!(matches!(
+        service.test_connection(config, true).await,
+        Err(AiError::MissingCredentials { .. })
+    ));
+    keyring.set_connection(&id, "named-key").unwrap();
+    keyring.delete(AiProviderKind::OpenaiCompatible).unwrap();
+    let readiness = service
+        .test_connection(
+            named_config("api-probe", "http://127.0.0.1:9/v1".into()),
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(readiness.ok);
+    assert!(!readiness.detail.contains("named-key"));
 }
 
 /// Verify local readiness neither connects to the endpoint nor returns the dummy secret.

@@ -15,11 +15,13 @@ import type {
   AiRunId,
   AiStreamEvent,
   AiTestResult,
+  ApiConnectionId,
+  ConnectionCredentialRef,
   CredentialRef,
 } from "../../contracts/ai-contracts";
 import { AI_STREAM_EVENT } from "../../domain/ai-config";
 import { cancelPromptSafe as cancelPromptSafeCore } from "../../application/ai/ai-run-core";
-import type { AiGateway } from "../../application/ports";
+import type { AiGateway, ApiConnectionGateway } from "../../application/ports";
 
 /**
  * Require the desktop transport, throwing a localizable error in the browser.
@@ -70,6 +72,48 @@ export async function deleteCredential(kind: AiProviderKind): Promise<void> {
 export async function testConnection(config: AiProviderConfig, live: boolean): Promise<AiTestResult> {
   requireDesktop();
   return invoke<AiTestResult>("ai_test_connection", { config, live });
+}
+
+/**
+ * Read whether a secret exists for one named connection in the OS store.
+ *
+ * Presence only, never the secret value.
+ */
+export async function getConnectionCredentialState(connectionId: ApiConnectionId): Promise<ConnectionCredentialRef> {
+  requireDesktop();
+  return invoke<ConnectionCredentialRef>("ai_connection_credential_state", { connectionId });
+}
+
+/**
+ * Store a secret for one named connection in the OS store.
+ *
+ * Secrets never touch `localStorage`.
+ */
+export async function setConnectionCredential(connectionId: ApiConnectionId, secret: string): Promise<void> {
+  requireDesktop();
+  await invoke("ai_set_connection_credential", { connectionId, secret });
+}
+
+/**
+ * Delete the stored secret of one named connection from the OS store.
+ *
+ * Removes only that connection's slot; other connections and legacy
+ * kind slots stay untouched. Failures surface as invoke errors.
+ */
+export async function deleteConnectionCredential(connectionId: ApiConnectionId): Promise<void> {
+  requireDesktop();
+  await invoke("ai_delete_connection_credential", { connectionId });
+}
+
+/**
+ * Copy the legacy kind credential into an empty connection slot inside Rust.
+ *
+ * Copies only when the target slot is absent; legacy slots are never
+ * deleted and no secret crosses the IPC boundary.
+ */
+export async function migrateConnectionCredential(connectionId: ApiConnectionId, kind: AiProviderKind): Promise<ConnectionCredentialRef> {
+  requireDesktop();
+  return invoke<ConnectionCredentialRef>("ai_migrate_connection_credential", { connectionId, kind });
 }
 
 /** Owned prompt run with its cancellation handle. */
@@ -168,4 +212,16 @@ export const aiGateway: AiGateway = {
   deleteCredential,
   /** Test a provider connection. */
   testConnection,
+};
+
+/** Per-connection credential gateway adapter satisfying the application port with Tauri IPC. */
+export const apiConnectionGateway: ApiConnectionGateway = {
+  /** Read credential presence for one named connection. */
+  getConnectionCredentialState,
+  /** Store a secret for one named connection in the OS store. */
+  setConnectionCredential,
+  /** Delete the secret of one named connection from the OS store. */
+  deleteConnectionCredential,
+  /** Copy the legacy kind credential into an empty connection slot inside Rust. */
+  migrateConnectionCredential,
 };

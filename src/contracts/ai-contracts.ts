@@ -18,7 +18,16 @@ export type AcpChoice = { value: string, name: string, };
 export type AcpConfigOption = { id: string, name: string, category: string, currentValue: string, options: Array<AcpChoice>, };
 export type OpenAiConfig = { endpoint: string, model: string, };
 export type AnthropicConfig = { enabled: boolean, endpoint: string, model: string, };
-export type AiProviderConfig = { kind: AiProviderKind, acp: AcpConfig | null, openai: OpenAiConfig | null, anthropic: AnthropicConfig | null, };
+export type ApiConnectionId = string;
+export type ApiProtocol = "openai_compatible" | "anthropic";
+export type ApiConnection = { id: ApiConnectionId, name: string, protocol: ApiProtocol, endpoint: string, model: string, };
+export type AiProviderConfig = { kind: AiProviderKind, acp: AcpConfig | null, openai: OpenAiConfig | null, anthropic: AnthropicConfig | null, 
+/**
+ * Stable named-connection reference. Present exactly when this config was
+ * built from a registered API connection; absent for ACP and legacy
+ * single-profile providers, which keep resolving kind credential slots.
+ */
+connectionId?: ApiConnectionId, };
 export type PromptMode = "ask" | "generate" | "rewrite" | "workspace";
 export type PromptContext = { documentId: DocumentId, revision: Revision, ranges: Array<Utf16Range>, text: string, };
 export type IsolatedCopyId = string;
@@ -113,6 +122,7 @@ export type CodexAccountUsage = { buckets: Array<CodexUsageBucket>, receivedMs: 
 export type AiStreamEvent = { "type": "started", "payload": StreamStarted } | { "type": "chunk", "payload": StreamChunk } | { "type": "usage", "payload": StreamUsage } | { "type": "done", "payload": StreamDone } | { "type": "error", "payload": StreamError } | { "type": "cancelled", "payload": StreamCancelled };
 export type AiError = { "code": "invalid_config", detail: string, } | { "code": "missing_credentials", provider: AiProviderKind, } | { "code": "missing_binary", command: string, } | { "code": "spawn_failed", detail: string, } | { "code": "connection_failed", detail: string, } | { "code": "auth_failed", detail: string, } | { "code": "stream_failed", detail: string, } | { "code": "request_cancelled" } | { "code": "session_required" } | { "code": "session_busy" } | { "code": "unknown_session" } | { "code": "staging_unresolved", copy_id: IsolatedCopyId, } | { "code": "live_target_rejected", detail: string, } | { "code": "unsupported_protocol", version: number, } | { "code": "claude_code_refused", command: string, } | { "code": "credential_store_failed", detail: string, };
 export type CredentialRef = { provider: AiProviderKind, hasSecret: boolean, };
+export type ConnectionCredentialRef = { connectionId: ApiConnectionId, hasSecret: boolean, };
 export type AiTestResult = { 
 /**
  * Choices returned by an explicit ACP handshake; absent on local/API checks.

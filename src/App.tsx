@@ -36,6 +36,8 @@ export default function App() {
         dropGateway={composition.dropGateway}
         clipboardGateway={composition.clipboardGateway}
         aiProfileStore={composition.aiProfileStore}
+        apiConnectionStore={composition.apiConnectionStore}
+        apiConnectionGateway={composition.apiConnectionGateway}
         aiViewPreferencesStore={composition.aiViewPreferencesStore}
         editorPreferencesStore={composition.editorPreferencesStore}
         imageLoader={composition.imageLoader}

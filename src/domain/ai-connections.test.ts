@@ -1,0 +1,135 @@
+import { describe, expect, it } from "vitest";
+import { buildProviderConfigFromConnection, defaultConnectionList, findConnectionForProvider, isApiProtocol, isConnectionId, isConnectionName, isConnectionStorageCorrupted, migrateLegacyProfile, pickConnectionId, resolveProviderChange, sanitizeApiConnection, sanitizeApiConnectionList, validateConnectionFields } from "./ai-connections";
+import { defaultProviderConfig } from "./ai-config";
+import { defaultProfile } from "./ai-profile";
+import type { ApiConnection } from "../contracts/ai-contracts";
+
+/** Build one valid connection fixture with overridable fields. */
+function connection(overrides: Partial<ApiConnection> = {}): ApiConnection {
+  return { id: "api-fixture", name: "本番", protocol: "openai_compatible", endpoint: "https://api.example.com/v1", model: "model-x", ...overrides };
+}
+
+describe("named API connection rules", () => {
+  it("sanitizes one connection and drops unrecoverable entries", () => {
+    expect(sanitizeApiConnection(connection())).toEqual(connection());
+    expect(sanitizeApiConnection({ ...connection(), name: "  開発  " })?.name).toBe("開発");
+    expect(sanitizeApiConnection({ ...connection(), id: "bad id" })).toBeNull();
+    expect(sanitizeApiConnection({ ...connection(), protocol: "acp" })).toBeNull();
+    expect(sanitizeApiConnection({ ...connection(), name: "" })).toBeNull();
+    expect(sanitizeApiConnection({ ...connection(), endpoint: "" })).toBeNull();
+    expect(sanitizeApiConnection(null)).toBeNull();
+    expect(isConnectionId("api-1")).toBe(true);
+    expect(isConnectionId("")).toBe(false);
+    expect(isConnectionName("  a  ")).toBe(true);
+    expect(isConnectionName("   ")).toBe(false);
+    expect(isApiProtocol("anthropic")).toBe(true);
+    expect(isApiProtocol("acp")).toBe(false);
+  });
+  it("sanitizes stored lists, dedupes IDs, and repairs the active selection", () => {
+    expect(sanitizeApiConnectionList(null)).toEqual(defaultConnectionList());
+    expect(sanitizeApiConnectionList("broken")).toEqual({ ...defaultConnectionList(), initialized: true });
+    expect(sanitizeApiConnectionList({ version: 2, connections: [connection({ id: "api-9" })] })).toEqual({ version: 1, activeId: "api-9", connections: [connection({ id: "api-9" })], initialized: true });
+    const first = connection({ id: "api-1" });
+    const second = connection({ id: "api-2", protocol: "anthropic" });
+    const list = sanitizeApiConnectionList({ version: 1, activeId: "api-2", connections: [first, { ...first }, { ...second, protocol: "nope" }, second], initialized: true });
+    expect(list.connections).toEqual([first, second]);
+    expect(list.activeId).toBe("api-2");
+    expect(list.initialized).toBe(true);
+    const repaired = sanitizeApiConnectionList({ version: 1, activeId: "api-gone", connections: [first] });
+    expect(repaired.activeId).toBe("api-1");
+    expect(repaired.initialized).toBe(true);
+    const legacyEmpty = sanitizeApiConnectionList({ version: 1, activeId: null, connections: [] });
+    expect(legacyEmpty).toEqual({ version: 1, activeId: null, connections: [], initialized: true });
+    expect(sanitizeApiConnectionList({ version: 1, activeId: null, connections: [] }).activeId).toBeNull();
+  });
+  it("preserves an explicit null selection through save and load round-trips", () => {
+    const first = connection({ id: "api-1" });
+    const second = connection({ id: "api-2" });
+    const cleared = sanitizeApiConnectionList({ version: 1, activeId: null, connections: [first, second], initialized: true });
+    expect(cleared.activeId).toBeNull();
+    expect(cleared.connections).toEqual([first, second]);
+    const undefinedRepairs = sanitizeApiConnectionList({ version: 1, connections: [first, second] });
+    expect(undefinedRepairs.activeId).toBe("api-1");
+  });
+  it("picks deterministic IDs, skipping invalid and colliding candidates", () => {
+    expect(pickConnectionId([], ["api-a", "api-b"])).toBe("api-a");
+    expect(pickConnectionId(["api-a"], ["api-a", "bad id", "api-b"])).toBe("api-b");
+    expect(pickConnectionId(["api-0", "api-1"], [])).toBe("api-2");
+    expect(isConnectionId(pickConnectionId([], []))).toBe(true);
+  });
+  it("validates dialog input per field without inventing defaults", () => {
+    expect(validateConnectionFields({ name: "開発", protocol: "anthropic", endpoint: "https://api.example.com/v1", model: "m" })).toEqual([]);
+    expect(validateConnectionFields({ name: "", protocol: "anthropic", endpoint: "https://api.example.com/v1", model: "" })).toContain("接続先名は 1〜64 文字で指定します");
+    expect(validateConnectionFields({ name: "a", protocol: "acp", endpoint: "https://api.example.com/v1", model: "" })).toContain("通信形式を選びます。");
+    expect(validateConnectionFields({ name: "a", protocol: "openai_compatible", endpoint: "ftp://x", model: "" })).toContain("endpoint は http:// または https:// です");
+    expect(validateConnectionFields({ name: "a", protocol: "openai_compatible", endpoint: "https://user@host/v1", model: "" })).toContain("endpoint は http:// または https:// です");
+  });
+  it("migrates only a customized legacy backend and leaves ACP and defaults alone", () => {
+    expect(migrateLegacyProfile(defaultProfile(), "既定", "api-legacy")).toBeNull();
+    expect(migrateLegacyProfile({ ...defaultProfile(), kind: "acp" }, "既定", "api-legacy")).toBeNull();
+    const untouchedAnthropic = migrateLegacyProfile({ ...defaultProfile(), kind: "anthropic", anthropicEnabled: false }, "既定", "api-legacy");
+    expect(untouchedAnthropic).toBeNull();
+    const migrated = migrateLegacyProfile({ ...defaultProfile(), kind: "openai_compatible", endpoint: "https://proxy.example.com/v1", model: "g" }, "移行", "api-migrated");
+    expect(migrated?.connections).toHaveLength(1);
+    expect(migrated?.connections[0]).toMatchObject({ id: "api-migrated", name: "移行", protocol: "openai_compatible", endpoint: "https://proxy.example.com/v1", model: "g" });
+    expect(migrated?.activeId).toBe(migrated?.connections[0].id);
+    const modelOnly = migrateLegacyProfile({ ...defaultProfile(), kind: "anthropic", anthropicEnabled: true, model: "c" }, "移行", "api-second");
+    expect(modelOnly?.connections[0].protocol).toBe("anthropic");
+    expect(modelOnly?.connections[0].id).toBe("api-second");
+  });
+  it("maps connections to wire configs and matches providers back without mixing", () => {
+    const openai = connection();
+    const config = buildProviderConfigFromConnection(openai);
+    expect(config).toEqual({ kind: "openai_compatible", acp: null, openai: { endpoint: "https://api.example.com/v1", model: "model-x" }, anthropic: null, connectionId: "api-fixture" });
+    const anthropic = connection({ id: "api-2", protocol: "anthropic" });
+    const second = buildProviderConfigFromConnection(anthropic);
+    expect(second.anthropic).toMatchObject({ enabled: true, model: "model-x" });
+    const list = sanitizeApiConnectionList({ version: 1, activeId: "api-fixture", connections: [openai, anthropic], initialized: true });
+    expect(findConnectionForProvider(list, config)?.id).toBe("api-fixture");
+    expect(findConnectionForProvider(list, second)?.id).toBe("api-2");
+    expect(findConnectionForProvider(list, { kind: "acp", acp: { preset: "codex", argv: null }, openai: null, anthropic: null })).toBeNull();
+    expect(findConnectionForProvider(list, { ...config, openai: { endpoint: "https://other.example.com/v1", model: "model-x" } })).toBeNull();
+  });
+  it("flags corrupt storage for retention while missing keys stay migration-eligible", () => {
+    expect(isConnectionStorageCorrupted(null)).toBe(false);
+    expect(isConnectionStorageCorrupted(undefined)).toBe(false);
+    expect(isConnectionStorageCorrupted("{broken")).toBe(true);
+    expect(isConnectionStorageCorrupted({ version: 1, activeId: null, connections: [] })).toBe(false);
+    expect(isConnectionStorageCorrupted({ version: 2, activeId: "api-9", connections: [connection({ id: "api-9" })] })).toBe(true);
+    expect(isConnectionStorageCorrupted({ version: 1, activeId: null, connections: [{ ...connection(), id: "bad id" }] })).toBe(true);
+    expect(isConnectionStorageCorrupted({ version: 1, activeId: null, connections: [connection({ id: "api-1" }), connection({ id: "api-1" })] })).toBe(true);
+    expect(isConnectionStorageCorrupted({ version: 1, activeId: "api-gone", connections: [] })).toBe(true);
+  });
+  it("clears the named marker for ACP without touching records", () => {
+    const first = connection({ id: "api-1" });
+    const list = { version: 1 as const, activeId: "api-1", initialized: true, connections: [first] };
+    const acp = defaultProviderConfig("acp");
+    const cleared = resolveProviderChange(list, acp);
+    expect(cleared.missing).toBe(false);
+    expect(cleared.persist).toMatchObject({ activeId: null });
+    expect(cleared.persist?.connections).toEqual([first]);
+    expect(cleared.provider).toEqual(acp);
+    const alreadyClear = resolveProviderChange({ ...list, activeId: null }, acp);
+    expect(alreadyClear.persist).toBeNull();
+  });
+  it("switches to the referenced record without rewriting the active one", () => {
+    const first = connection({ id: "api-1", endpoint: "https://a.example.com/v1", model: "model-a" });
+    const second = connection({ id: "api-2", endpoint: "https://b.example.com/v1", model: "model-b" });
+    const list = { version: 1 as const, activeId: "api-1", initialized: true, connections: [first, second] };
+    const next = buildProviderConfigFromConnection(second);
+    const decided = resolveProviderChange(list, next);
+    expect(decided.missing).toBe(false);
+    expect(decided.persist).toMatchObject({ activeId: "api-2" });
+    expect(decided.persist?.connections).toEqual([first, second]);
+    expect(decided.provider).toEqual(next);
+  });
+  it("rejects missing or deleted connection IDs while keeping the previous selection", () => {
+    const first = connection({ id: "api-1" });
+    const list = { version: 1 as const, activeId: "api-1", initialized: true, connections: [first] };
+    const ghost = { ...buildProviderConfigFromConnection(first), connectionId: "api-gone" };
+    const decided = resolveProviderChange(list, ghost);
+    expect(decided.missing).toBe(true);
+    expect(decided.persist).toBeNull();
+    expect(decided.provider).toBeNull();
+  });
+});

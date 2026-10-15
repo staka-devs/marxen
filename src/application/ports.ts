@@ -279,6 +279,28 @@ export interface AiProfileStore {
   save(profile: import("../domain/ai-profile").AiProfile): void;
 }
 
+/** Non-secret named API connection store. */
+export interface ApiConnectionStore {
+  /** Load the sanitized connection list or an empty list. */
+  load(): import("../domain/ai-connections").ApiConnectionList;
+  /** Persist a sanitized connection list, reporting success. */
+  save(list: import("../domain/ai-connections").ApiConnectionList): boolean;
+  /** Report whether stored bytes are present but unusable and must be retained. */
+  inspect(): { corrupted: boolean };
+}
+
+/** Per-connection credential gateway over native IPC and the OS credential store. */
+export interface ApiConnectionGateway {
+  /** Read credential presence for one named connection. */
+  getConnectionCredentialState(connectionId: import("../contracts/ai-contracts").ApiConnectionId): Promise<import("../contracts/ai-contracts").ConnectionCredentialRef>;
+  /** Store a secret for one named connection in the OS store. */
+  setConnectionCredential(connectionId: import("../contracts/ai-contracts").ApiConnectionId, secret: string): Promise<void>;
+  /** Delete the secret of one named connection from the OS store. */
+  deleteConnectionCredential(connectionId: import("../contracts/ai-contracts").ApiConnectionId): Promise<void>;
+  /** Copy the legacy kind credential into an empty connection slot inside Rust. */
+  migrateConnectionCredential(connectionId: import("../contracts/ai-contracts").ApiConnectionId, kind: import("../contracts/ai-contracts").AiProviderKind): Promise<import("../contracts/ai-contracts").ConnectionCredentialRef>;
+}
+
 /** View-only editor preferences store. */
 export interface EditorPreferencesStore {
   /** Load normalized preferences or defaults. */

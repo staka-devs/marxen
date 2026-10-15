@@ -290,7 +290,15 @@ pub fn validate_model(model: &str) -> Result<(), AiError> {
 
 /// Require exactly the configuration matching the selected backend and validate
 /// its argv or endpoint/model; Anthropic additionally requires explicit opt-in.
+/// A named-connection reference never accompanies ACP: agents resolve presets,
+/// never per-connection credential slots.
 pub fn validate_provider_config(config: &AiProviderConfig) -> Result<(), AiError> {
+    if config.connection_id.is_some() && config.kind == AiProviderKind::Acp {
+        return Err(invalid("ACP に接続先 ID は付けません"));
+    }
+    if let Some(id) = config.connection_id.as_ref() {
+        validate_connection_id(id)?;
+    }
     match config.kind {
         AiProviderKind::Acp => {
             if config.openai.is_some() || config.anthropic.is_some() {
@@ -1203,6 +1211,80 @@ pub fn credential_account(kind: AiProviderKind) -> &'static str {
         AiProviderKind::Acp => "ai/acp",
         AiProviderKind::OpenaiCompatible => "ai/openai-compatible",
         AiProviderKind::Anthropic => "ai/anthropic",
+    }
+}
+
+/// Choose the stable credential-store account key for one named API connection.
+/// The ID was validated at registration; the account carries the address only,
+/// never the secret itself.
+pub fn connection_account(id: &ApiConnectionId) -> String {
+    format!("ai/api/{}", id.0)
+}
+
+/// Require a 1–128-byte ASCII alphanumeric/hyphen/underscore connection ID.
+/// IDs are minted once at registration and never change afterwards.
+pub fn validate_connection_id(id: &ApiConnectionId) -> Result<(), AiError> {
+    validate_handle(&id.0, "接続先 ID")
+}
+
+/// Require a 1–64-scalar display name without NUL or line breaks.
+/// Names are labels only; identity always comes from the connection ID.
+pub fn validate_connection_name(name: &str) -> Result<(), AiError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty()
+        || trimmed.chars().count() > 64
+        || name.bytes().any(|b| b == 0 || b == b'\n' || b == b'\r')
+    {
+        return Err(invalid("接続先名は 1〜64 文字で指定します"));
+    }
+    Ok(())
+}
+
+/// Validate one named API connection's non-secret fields.
+/// An empty model is allowed at rest and rejected when connecting, matching
+/// the legacy single-profile behavior.
+pub fn validate_api_connection(connection: &ApiConnection) -> Result<(), AiError> {
+    validate_connection_id(&connection.id)?;
+    validate_connection_name(&connection.name)?;
+    validate_endpoint(&connection.endpoint)?;
+    if !connection.model.trim().is_empty() {
+        validate_model(connection.model.trim())?;
+    }
+    Ok(())
+}
+
+/// Build the wire provider config for one named API connection.
+/// Anthropic connections always carry the opt-in flag; no session state changes.
+pub fn provider_config_for_connection(
+    connection: &ApiConnection,
+) -> Result<AiProviderConfig, AiError> {
+    validate_connection_id(&connection.id)?;
+    validate_connection_name(&connection.name)?;
+    let endpoint = validate_endpoint(connection.endpoint.trim())?;
+    let model = connection.model.trim();
+    validate_model(model)?;
+    match connection.protocol {
+        ApiProtocol::OpenaiCompatible => Ok(AiProviderConfig {
+            kind: AiProviderKind::OpenaiCompatible,
+            acp: None,
+            openai: Some(OpenAiConfig {
+                endpoint,
+                model: model.to_owned(),
+            }),
+            anthropic: None,
+            connection_id: Some(connection.id.clone()),
+        }),
+        ApiProtocol::Anthropic => Ok(AiProviderConfig {
+            kind: AiProviderKind::Anthropic,
+            acp: None,
+            openai: None,
+            anthropic: Some(AnthropicConfig {
+                enabled: true,
+                endpoint,
+                model: model.to_owned(),
+            }),
+            connection_id: Some(connection.id.clone()),
+        }),
     }
 }
 

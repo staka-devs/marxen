@@ -103,4 +103,48 @@ describe("provider settings", () => {
     expect(screen.queryByRole("dialog", { name: "接続設定" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
+
+  it("reverts visible preset selection when the owner rejects persistence", () => {
+    /** Reject persistence in the fixture to exercise the revert path. */
+    const onProvider = vi.fn(() => false);
+    render(<AiProviderSettings embedded provider={defaultProviderConfig("acp")} onProvider={onProvider} />);
+    fireEvent.click(screen.getByRole("combobox", { name: "ACP プリセット" }));
+    fireEvent.click(screen.getByRole("option", { name: "OpenCode" }));
+    expect(onProvider).toHaveBeenCalled();
+    expect(screen.getByRole("combobox", { name: "ACP プリセット" })).toHaveTextContent("Codex");
+  });
+
+  it("does not strip connection IDs through legacy persistence for named selections", () => {
+    const first = { id: "api-1", name: "API-A", protocol: "openai_compatible" as const, endpoint: "https://a.example.com/v1", model: "model-a" };
+    const second = { id: "api-2", name: "API-B", protocol: "openai_compatible" as const, endpoint: "https://b.example.com/v1", model: "model-b" };
+    const list = { version: 1 as const, activeId: "api-1", initialized: true, connections: [first, second] };
+    const controls = {
+      list,
+      activeId: "api-1",
+      /** Accept selection in the fixture without side effects. */
+      onSelect: vi.fn(() => true),
+      /** Accept registration in the fixture without side effects. */
+      onAdd: vi.fn(() => true),
+      /** Accept edits in the fixture without side effects. */
+      onUpdate: vi.fn(() => true),
+      /** Accept deletion in the fixture without side effects. */
+      onDelete: vi.fn(() => true),
+      /** Mint a fixed fixture ID. */
+      onMintId: vi.fn(() => "api-fresh" as const),
+    };
+    const profileSave = vi.fn();
+    const onProvider = vi.fn();
+    /** Load a fixture ACP profile without touching storage. */
+    const loadFixtureProfile = () => ({ kind: "acp" }) as never;
+    const { rerender } = render(
+      <AiProviderSettings embedded provider={{ kind: "openai_compatible", acp: null, openai: { endpoint: first.endpoint, model: first.model }, anthropic: null, connectionId: "api-1" }} onProvider={onProvider} profileStore={{ load: loadFixtureProfile, save: profileSave }} connectionControls={controls as never} />,
+    );
+    rerender(
+      <AiProviderSettings embedded provider={{ kind: "openai_compatible", acp: null, openai: { endpoint: second.endpoint, model: second.model }, anthropic: null, connectionId: "api-2" }} onProvider={onProvider} profileStore={{ load: loadFixtureProfile, save: profileSave }} connectionControls={{ ...controls, list: { ...list, activeId: "api-2" }, activeId: "api-2" } as never} />,
+    );
+    expect(profileSave).not.toHaveBeenCalled();
+    for (const call of onProvider.mock.calls) {
+      expect((call[0] as { connectionId?: string }).connectionId).toBeDefined();
+    }
+  });
 });

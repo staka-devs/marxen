@@ -30,4 +30,17 @@ describe("AI view preference rules", () => {
     expect(clampAiChatWidth(720, 200)).toBe(200);
     expect(clampAiChatWidth(400, -10)).toBe(0);
   });
+  it("separates named-connection model visibility by stable ID without touching kind entries", () => {
+    const scoped = { provider: "openai_compatible" as const, optionId: "model", value: "model-a" };
+    const hidden = setAiModelVisible(defaultAiViewPreferences(), { ...scoped, connectionId: "api-1" }, false);
+    expect(isAiModelVisible(hidden, "openai_compatible", "model", "model-a", "api-1")).toBe(false);
+    expect(isAiModelVisible(hidden, "openai_compatible", "model", "model-a", "api-2")).toBe(true);
+    expect(isAiModelVisible(hidden, "openai_compatible", "model", "model-a")).toBe(true);
+    const kindHidden = setAiModelVisible(defaultAiViewPreferences(), scoped, false);
+    expect(isAiModelVisible(kindHidden, "openai_compatible", "model", "model-a")).toBe(false);
+    expect(isAiModelVisible(kindHidden, "openai_compatible", "model", "model-a", "api-1")).toBe(true);
+    expect(setAiModelVisible(hidden, { ...scoped, connectionId: "api-1" }, true).hiddenModels).toEqual([]);
+    const normalized = normalizeAiViewPreferences({ hiddenModels: [{ ...scoped, connectionId: "api-1" }, { ...scoped, connectionId: "bad id" }, { ...scoped, connectionId: 7 }] });
+    expect(normalized.hiddenModels).toEqual([{ ...scoped, connectionId: "api-1" }]);
+  });
 });

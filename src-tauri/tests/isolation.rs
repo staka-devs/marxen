@@ -100,6 +100,7 @@ fn acp_request(
             }),
             openai: None,
             anthropic: None,
+            connection_id: None,
         },
         mode: PromptMode::Workspace,
         prompt: "修正してください".into(),
@@ -616,6 +617,7 @@ fn stale_revision_and_disk_conflict_refuse_until_resync() {
             }),
             openai: None,
             anthropic: None,
+            connection_id: None,
         },
         mode: PromptMode::Workspace,
         prompt: "x".into(),
@@ -936,17 +938,18 @@ fn startup_readiness_fails_before_pin_without_user_secrets() {
             model: "m".into(),
         }),
         anthropic: None,
+        connection_id: None,
     };
     // Missing secret: the empty store slot fails setup before pinning.
     let keyring = MemoryKeyring::default();
     assert!(matches!(
-        resolve_http_request(&keyring, &openai()),
+        resolve_http_request(&keyring, &keyring, &openai()),
         Err(marxen_lib::contracts::ai::AiError::MissingCredentials { .. })
     ));
     // Invalid endpoint is also a readiness failure, not a pinned run.
     let mut bad_endpoint = openai();
     bad_endpoint.openai.as_mut().expect("openai").endpoint = "ftp://x.test/v1".into();
-    assert!(resolve_http_request(&keyring, &bad_endpoint).is_err());
+    assert!(resolve_http_request(&keyring, &keyring, &bad_endpoint).is_err());
     // A failing credential store surfaces without pinning either.
     struct FailingStore;
     impl AgentKeyring for FailingStore {
@@ -976,7 +979,37 @@ fn startup_readiness_fails_before_pin_without_user_secrets() {
             })
         }
     }
-    assert!(resolve_http_request(&FailingStore, &openai()).is_err());
+    impl marxen_lib::application::ai::credentials::ApiConnectionKeyring for FailingStore {
+        /// Inject a connection credential-read failure without consulting any OS store.
+        fn get_connection(
+            &self,
+            _id: &marxen_lib::contracts::ai::ApiConnectionId,
+        ) -> Result<Option<String>, marxen_lib::contracts::ai::AiError> {
+            Err(marxen_lib::contracts::ai::AiError::CredentialStoreFailed {
+                detail: "injected store failure".into(),
+            })
+        }
+        /// Inject a connection credential-write failure without persisting the supplied secret.
+        fn set_connection(
+            &self,
+            _id: &marxen_lib::contracts::ai::ApiConnectionId,
+            _secret: &str,
+        ) -> Result<(), marxen_lib::contracts::ai::AiError> {
+            Err(marxen_lib::contracts::ai::AiError::CredentialStoreFailed {
+                detail: "injected store failure".into(),
+            })
+        }
+        /// Inject a connection credential-deletion failure without changing any stored entry.
+        fn delete_connection(
+            &self,
+            _id: &marxen_lib::contracts::ai::ApiConnectionId,
+        ) -> Result<(), marxen_lib::contracts::ai::AiError> {
+            Err(marxen_lib::contracts::ai::AiError::CredentialStoreFailed {
+                detail: "injected store failure".into(),
+            })
+        }
+    }
+    assert!(resolve_http_request(&FailingStore, &FailingStore, &openai()).is_err());
     // Disabled Anthropic opt-in is rejected at the same readiness gate.
     let anthropic = AiProviderConfig {
         kind: AiProviderKind::Anthropic,
@@ -987,8 +1020,9 @@ fn startup_readiness_fails_before_pin_without_user_secrets() {
             endpoint: "https://api.anthropic.example".into(),
             model: "m".into(),
         }),
+        connection_id: None,
     };
-    assert!(resolve_http_request(&keyring, &anthropic).is_err());
+    assert!(resolve_http_request(&keyring, &keyring, &anthropic).is_err());
     // None of the failures pinned the copy: it stays fully operable.
     let staging_dir = manager.resolve(&copy.copy_id).unwrap();
     mock_cli_write(&staging_dir, "a.md", "hello cli");
@@ -1258,6 +1292,7 @@ async fn http_delayed_terminal_settles_once_then_releases() {
             model: "mock-model".into(),
         }),
         anthropic: None,
+        connection_id: None,
     };
     let request = AiPromptRequest {
         provider,
@@ -1277,7 +1312,7 @@ async fn http_delayed_terminal_settles_once_then_releases() {
         .set(AiProviderKind::OpenaiCompatible, "mock-secret")
         .unwrap();
     // Same production readiness helper the IPC path calls before pinning.
-    let (target, secret) = resolve_http_request(&keyring, &request.provider).unwrap();
+    let (target, secret) = resolve_http_request(&keyring, &keyring, &request.provider).unwrap();
     let client =
         marxen_lib::infrastructure::ai::http::http_client(Duration::from_secs(20)).unwrap();
     let registry = Arc::new(RunRegistry::new());

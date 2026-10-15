@@ -1,5 +1,5 @@
 //! Run identity, cancellation, proposal assembly, and terminal settlement.
-use super::credentials::AgentKeyring;
+use super::credentials::{AgentKeyring, ApiConnectionKeyring};
 use crate::contracts::ai::*;
 use crate::domain::ai::*;
 use std::collections::HashMap;
@@ -281,11 +281,23 @@ impl TerminalGate {
 /// Resolve HTTP credentials and target without touching any scope state.
 /// Credential/target readiness runs BEFORE any scope pin, so missing secrets,
 /// store errors, and invalid endpoints fail without pinning the copy.
+/// A named-connection reference resolves only its own ID slot and never falls
+/// back to the legacy kind slot; absent references keep legacy kind behavior.
 pub fn resolve_http_request(
     keyring: &dyn AgentKeyring,
+    connection_keyring: &dyn ApiConnectionKeyring,
     provider: &AiProviderConfig,
 ) -> Result<(HttpTarget, String), AiError> {
     let target = http_target(provider)?;
+    if let Some(id) = provider.connection_id.as_ref() {
+        validate_connection_id(id)?;
+        let secret = connection_keyring
+            .get_connection(id)?
+            .ok_or(AiError::MissingCredentials {
+                provider: provider.kind,
+            })?;
+        return Ok((target, secret));
+    }
     let secret = keyring
         .get(provider.kind)?
         .ok_or(AiError::MissingCredentials {

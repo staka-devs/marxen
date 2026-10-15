@@ -31,6 +31,41 @@ pub fn ai_delete_credential(
     service.delete_credential(kind)
 }
 #[tauri::command]
+/// Return one named connection's credential presence without its value.
+pub fn ai_connection_credential_state(
+    service: tauri::State<'_, AiService>,
+    connection_id: ApiConnectionId,
+) -> Result<ConnectionCredentialRef, AiError> {
+    service.connection_credential_state(&connection_id)
+}
+#[tauri::command]
+/// Pass one named connection's explicitly supplied credential to the use case.
+pub fn ai_set_connection_credential(
+    service: tauri::State<'_, AiService>,
+    connection_id: ApiConnectionId,
+    secret: String,
+) -> Result<(), AiError> {
+    service.set_connection_credential(&connection_id, &secret)
+}
+#[tauri::command]
+/// Remove only the named connection's credential through the AI use case.
+pub fn ai_delete_connection_credential(
+    service: tauri::State<'_, AiService>,
+    connection_id: ApiConnectionId,
+) -> Result<(), AiError> {
+    service.delete_connection_credential(&connection_id)
+}
+#[tauri::command]
+/// Copy the legacy kind credential into a named connection slot inside Rust.
+/// Copies only when the target slot is absent; legacy slots are never deleted.
+pub fn ai_migrate_connection_credential(
+    service: tauri::State<'_, AiService>,
+    connection_id: ApiConnectionId,
+    kind: AiProviderKind,
+) -> Result<ConnectionCredentialRef, AiError> {
+    service.migrate_connection_credential(&connection_id, kind)
+}
+#[tauri::command]
 /// Run the caller's local readiness or explicit live provider probe.
 pub async fn ai_test_connection(
     service: tauri::State<'_, AiService>,
