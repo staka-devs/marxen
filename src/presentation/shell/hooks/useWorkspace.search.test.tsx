@@ -235,3 +235,29 @@ it("reports an already-accepted native edit after query cancellation and stops l
   expect(session.mergeSnapshot).toHaveBeenCalledWith(expect.objectContaining({ text: "😀 ", dirty: true }));
   expect(notify).toHaveBeenCalledWith(expect.objectContaining({ parameters: expect.objectContaining({ count: 2, files: 1 }) }));
 });
+
+it("keeps identical paths and match ranges separate across roots for one and all replacements", async () => {
+  const roots = [
+    { root: "/alpha", scope: { rootId: "root-a", generation: "1" } },
+    { root: "/beta", scope: { rootId: "root-b", generation: "1" } },
+  ];
+  const gateway = makeGateway({
+    /** Produce the same relative file and offsets under distinct native owners. */
+    searchWorkspace: vi.fn(async (_query, _options, root) => ({ matches: [{ ...matches()[0], path: "same.md", scope: roots.find((item) => item.root === root)!.scope }], limit: null })),
+    /** Use each captured native scope, never a path-only lookup. */
+    planSearchReplacement: vi.fn(async (request) => ({ ...plan({ ...request, path: "a.md" }), document: { path: "same.md", snapshot: { documentId: request.scope!.rootId, location: { scope: request.scope!, path: "same.md", position: 0 }, revision: 4, text: "cat", dirty: false } } })),
+  });
+  const session = makeSession();
+  vi.mocked(session.registry!.applyEdits).mockImplementation(async (request) => ({ documentId: request.documentId, revision: 5, text: "new", dirty: true }));
+  const { result } = renderHook(() => useWorkspaceSearch({ desktop: true, root: "/alpha", roots, gateway, session, notify: vi.fn() }));
+  await search(result);
+  expect(result.current.registryHits).toHaveLength(2);
+  await act(async () => result.current.replaceOne(result.current.registryHits[1]));
+  expect(gateway.planSearchReplacement).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ scope: roots[1].scope, root: "/beta", path: "same.md" }));
+  vi.mocked(gateway.planSearchReplacement).mockClear();
+  await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+  await act(async () => result.current.replaceAllMatches());
+  expect(gateway.planSearchReplacement).toHaveBeenCalledTimes(2);
+  expect(gateway.planSearchReplacement).toHaveBeenNthCalledWith(1, expect.objectContaining({ scope: roots[0].scope, root: "/alpha" }));
+  expect(gateway.planSearchReplacement).toHaveBeenNthCalledWith(2, expect.objectContaining({ scope: roots[1].scope, root: "/beta" }));
+});

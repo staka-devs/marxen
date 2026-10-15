@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, FileText, Replace } from "lucide-react";
+import { searchGroupKey, rootFileLabel } from "../../domain/workspace-roots";
 import { useI18n } from "../i18n/I18nProvider";
 import type { SearchHitItem } from "../../domain/search-hit";
 import type { SearchLimit, SearchOptions } from "../../contracts/contracts";
@@ -33,14 +34,15 @@ interface Props {
 function groupHits(hits: SearchHitItem[]) {
   const groups = new Map<string, SearchHitItem[]>();
   for (const hit of hits) {
-    const list = groups.get(hit.path) ?? [];
+    const list = groups.get(searchGroupKey(hit.scope, hit.path)) ?? [];
     list.push(hit);
-    groups.set(hit.path, list);
+    groups.set(searchGroupKey(hit.scope, hit.path), list);
   }
-  return [...groups].map(([path, items]) => {
+  return [...groups].map(([key, items]) => {
+    const path = items[0].root ? rootFileLabel(items[0].root, items[0].path) : items[0].path;
     const parts = path.split("/");
     const base = parts.pop() ?? path;
-    return { path, base, dir: parts.join("/"), hits: items };
+    return { key, path, base, dir: parts.join("/"), hits: items };
   });
 }
 
@@ -59,7 +61,7 @@ export function SearchPanel({ query, onQuery, hits, searching, canReplace, repla
   const [replaceOpen, setReplaceOpen] = useState(false);
   const rows = useRef(new Map<SearchHitItem, HTMLButtonElement>());
   const groups = useMemo(() => groupHits(hits), [hits]);
-  const visible = useMemo(() => groups.flatMap((group) => collapsed.has(group.path) ? [] : group.hits), [groups, collapsed]);
+  const visible = useMemo(() => groups.flatMap((group) => collapsed.has(group.key) ? [] : group.hits), [groups, collapsed]);
   const busy = searching || replacing;
   const actionsEnabled = canReplace ? resultsReady && !busy && !searchError : !busy;
   const replaceLabel = replaceOpen ? t("置換を隠す") : t("置換を表示する");
@@ -98,17 +100,17 @@ export function SearchPanel({ query, onQuery, hits, searching, canReplace, repla
       {searchLimit && <p role="status" className="mt-2 text-xs text-muted-foreground">{t("検索を上限で打ち切りました。表示件数は全件数ではありません。一括置換には検索範囲を絞ってください。")}</p>}
       {query !== "" && <p className="mt-2 text-xs text-muted-foreground" role="status">{busy ? (replacing ? t("置換中…") : t("検索中…")) : searchLimit ? t("表示 {{count}} 件・{{files}} ファイル以上", { count: hits.length, files: groups.length }) : t("{{count}} 件・{{files}} ファイル", { count: hits.length, files: groups.length })}</p>}
       <ul className="mt-2 space-y-1">
-        {groups.map((group) => <li key={group.path}>
-          <button type="button" aria-expanded={!collapsed.has(group.path)} aria-label={t("{{path}} の一致を折りたたむ", { path: group.path })} title={group.path} onClick={() => setCollapsed((previous) => { const next = new Set(previous); if (next.has(group.path)) next.delete(group.path); else next.add(group.path); return next; })} className="flex w-full items-center gap-1 rounded px-1 py-1 text-left text-xs hover:bg-muted">
-            {collapsed.has(group.path) ? <ChevronRight size={12} aria-hidden="true" className="shrink-0" /> : <ChevronDown size={12} aria-hidden="true" className="shrink-0" />}<FileText size={12} aria-hidden="true" className="shrink-0" /><span className="min-w-0 shrink truncate font-medium" title={group.path}>{group.base}</span><span className="min-w-0 flex-1 truncate text-muted-foreground" title={group.path}>{group.dir}</span><span className="shrink-0">{group.hits.length}</span>
+        {groups.map((group) => <li key={group.key}>
+          <button type="button" aria-expanded={!collapsed.has(group.key)} aria-label={t("{{path}} の一致を折りたたむ", { path: group.path })} title={group.path} onClick={() => setCollapsed((previous) => { const next = new Set(previous); if (next.has(group.key)) next.delete(group.key); else next.add(group.key); return next; })} className="flex w-full items-center gap-1 rounded px-1 py-1 text-left text-xs hover:bg-muted">
+            {collapsed.has(group.key) ? <ChevronRight size={12} aria-hidden="true" className="shrink-0" /> : <ChevronDown size={12} aria-hidden="true" className="shrink-0" />}<FileText size={12} aria-hidden="true" className="shrink-0" /><span className="min-w-0 shrink truncate font-medium" title={group.path}>{group.base}</span><span className="min-w-0 flex-1 truncate text-muted-foreground" title={group.path}>{group.dir}</span><span className="shrink-0">{group.hits.length}</span>
           </button>
-          {!collapsed.has(group.path) && <ul className="ml-4 border-l border-border pl-1">
+          {!collapsed.has(group.key) && <ul className="ml-4 border-l border-border pl-1">
             {group.hits.map((hit, index) => <li key={`${hit.offset}:${index}`} className="group flex gap-1">
-              <button type="button" ref={(element) => { if (element) rows.current.set(hit, element); else rows.current.delete(hit); }} onKeyDown={(event) => navigate(event, hit)} onClick={() => { if (actionsEnabled) onJump(hit); }} disabled={!actionsEnabled} aria-label={t("{{path}} {{line}} 行目の一致へ移動", { path: hit.path, line: hit.line })} className="min-w-0 flex-1 rounded px-1 py-1 text-left text-xs hover:bg-muted focus:bg-muted disabled:opacity-50">
+              <button type="button" ref={(element) => { if (element) rows.current.set(hit, element); else rows.current.delete(hit); }} onKeyDown={(event) => navigate(event, hit)} onClick={() => { if (actionsEnabled) onJump(hit); }} disabled={!actionsEnabled} aria-label={t("{{path}} {{line}} 行目の一致へ移動", { path: hit.root ? rootFileLabel(hit.root, hit.path) : hit.path, line: hit.line })} className="min-w-0 flex-1 rounded px-1 py-1 text-left text-xs hover:bg-muted focus:bg-muted disabled:opacity-50">
                 <span className="flex min-w-0 items-baseline gap-2"><span className="shrink-0 text-muted-foreground">{hit.line}</span><PreviewLine hit={hit} /></span>
                 {canReplace && replaceOpen && <span className="mt-0.5 block truncate text-muted-foreground" title={replaceText === "" ? t("削除") : replaceText}>{t("置換後:")} {replaceText === "" ? <em>{t("削除")}</em> : <span>{replaceText}</span>}</span>}
               </button>
-              {canReplace && replaceOpen && <button type="button" disabled={!actionsEnabled} onClick={() => onReplaceOne(hit)} aria-label={t("{{value0}}の一致を置換する", { value0: hit.path })} title={t("{{value0}}の一致を置換する", { value0: hit.path })} className="shrink-0 self-start rounded p-1 text-muted-foreground opacity-100 hover:bg-muted hover:text-foreground focus:bg-muted focus:text-foreground disabled:opacity-50 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus:opacity-100 md:focus-visible:opacity-100 md:disabled:opacity-50"><Replace size={14} aria-hidden="true" /></button>}
+              {canReplace && replaceOpen && <button type="button" disabled={!actionsEnabled} onClick={() => onReplaceOne(hit)} aria-label={t("{{value0}}の一致を置換する", { value0: hit.root ? rootFileLabel(hit.root, hit.path) : hit.path })} title={t("{{value0}}の一致を置換する", { value0: hit.root ? rootFileLabel(hit.root, hit.path) : hit.path })} className="shrink-0 self-start rounded p-1 text-muted-foreground opacity-100 hover:bg-muted hover:text-foreground focus:bg-muted focus:text-foreground disabled:opacity-50 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus:opacity-100 md:focus-visible:opacity-100 md:disabled:opacity-50"><Replace size={14} aria-hidden="true" /></button>}
             </li>)}
           </ul>}
         </li>)}

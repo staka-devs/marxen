@@ -65,3 +65,55 @@ it("never rewinds native rename positions when an earlier snapshot arrives late"
   await workspaceApi.fetchSnapshot(snapshot(a).documentId);
   expect(invoke).toHaveBeenLastCalledWith("fetch_snapshot", expect.objectContaining({ location: snapshot(a, 2).location }));
 });
+
+it("keeps pushed events for both additive roots and revokes only an acknowledged removed incarnation", async () => {
+  const { workspaceApi, listenWorkspaceEvents } = await import("./workspace-api");
+  vi.mocked(invoke).mockResolvedValueOnce({ root: "/a", scope: a });
+  await workspaceApi.openWorkspace("/a");
+  vi.mocked(invoke).mockResolvedValueOnce({ root: "/b", scope: b });
+  await workspaceApi.addWorkspace("/b");
+  const callback = vi.fn(); await listenWorkspaceEvents(callback);
+  const receive = vi.mocked(listen).mock.calls[0][1] as (event: { payload: RootEvent[] }) => void;
+  const events: RootEvent[] = [a, b].map((scope) => ({ scope, event: { type: "snapshot", payload: snapshot(scope) } }));
+  receive({ payload: events });
+  expect(callback).toHaveBeenLastCalledWith(events.map((entry) => entry.event));
+  vi.mocked(invoke).mockResolvedValueOnce(null);
+  await workspaceApi.removeWorkspace(a, "cancel");
+  receive({ payload: events });
+  expect(callback).toHaveBeenLastCalledWith(events.map((entry) => entry.event));
+  vi.mocked(invoke).mockRejectedValueOnce({ code: "conflict" });
+  await expect(workspaceApi.removeWorkspace(a, "save")).rejects.toEqual({ code: "conflict" });
+  receive({ payload: events });
+  expect(callback).toHaveBeenLastCalledWith(events.map((entry) => entry.event));
+  vi.mocked(invoke).mockResolvedValueOnce({ root: "/a", scope: a });
+  await workspaceApi.removeWorkspace(a, "discard");
+  receive({ payload: events });
+  expect(callback).toHaveBeenLastCalledWith([events[1].event]);
+});
+
+it("drops a polled event batch that completes after its root was removed", async () => {
+  const { workspaceApi } = await import("./workspace-api");
+  vi.mocked(invoke).mockResolvedValueOnce({ root: "/a", scope: a });
+  await workspaceApi.openWorkspace("/a");
+  vi.mocked(invoke).mockResolvedValueOnce({ root: "/b", scope: b });
+  await workspaceApi.addWorkspace("/b");
+  let finish!: (events: RootEvent[]) => void;
+  vi.mocked(invoke).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const pending = workspaceApi.pollEvents(a);
+  vi.mocked(invoke).mockResolvedValueOnce({ root: "/a", scope: a });
+  await workspaceApi.removeWorkspace(a, "discard");
+  finish([{ scope: a, event: { type: "snapshot", payload: snapshot(a) } }]);
+  expect(await pending).toEqual([]);
+  await workspaceApi.listWorkspace();
+  expect(invoke).toHaveBeenLastCalledWith("list_workspace", { path: "", scope: b });
+});
+
+it("reconciles the default owner with native roots when restoring the session", async () => {
+  const { workspaceApi } = await import("./workspace-api");
+  vi.mocked(invoke).mockResolvedValueOnce({ root: "/a", scope: a });
+  await workspaceApi.openWorkspace("/a");
+  vi.mocked(invoke).mockResolvedValueOnce([{ root: "/b", scope: b }]);
+  await workspaceApi.listWorkspaces();
+  await workspaceApi.listWorkspace();
+  expect(invoke).toHaveBeenLastCalledWith("list_workspace", { path: "", scope: b });
+});

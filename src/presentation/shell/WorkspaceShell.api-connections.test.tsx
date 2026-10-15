@@ -105,7 +105,7 @@ function historyPorts() {
     } as unknown as DocumentGateway,
     workspaceGateway: {
       /** Open the fixture workspace. */
-      openWorkspace: async () => ({ root: "/fixture" }),
+      openWorkspace: async () => ({ root: "/fixture", scope: { rootId: "fixture-root", generation: "1" } }),
       /** Keep the explorer empty; the document is already open natively. */
       listWorkspace: async () => [],
       /** Restore the open native document through the real shell. */

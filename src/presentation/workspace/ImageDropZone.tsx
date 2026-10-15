@@ -2,9 +2,9 @@ import { useI18n } from "../i18n/I18nProvider";
 import { useEffect, useRef, type ReactNode, type DragEvent } from "react";
 import { EditorView } from "@codemirror/view";
 import { isImagePath, WORKSPACE_IMAGE_DRAG, WORKSPACE_IMAGE_POINTER_DROP } from "../../domain/workspace-files";
-import type { Utf16Range } from "../../contracts/contracts";
+import type { Utf16Range, RootScope } from "../../contracts/contracts";
 
-export type ImageDrop = { kind: "workspace"; path: string } | { kind: "native"; paths: string[] } | { kind: "files"; files: File[] };
+export type ImageDrop = { kind: "workspace"; path: string; scope?: RootScope } | { kind: "native"; paths: string[] } | { kind: "files"; files: File[] };
 
 /** Native drop subscription injected by the composition root (Tauri webview). */
 export type NativeDropSubscribe = (
@@ -53,10 +53,10 @@ export function ImageDropZone({ children, enabled, hidden = false, selection, on
     /** Route internal pointer drops landing inside the editor bounds. */
     const handlePointerDrop = (event: Event) => {
       if (!latest.current.enabled || composing.current) return;
-      const { path, x, y } = (event as CustomEvent<{ path: string; x: number; y: number }>).detail;
+      const { path, scope, x, y } = (event as CustomEvent<{ path: string; scope?: RootScope; x: number; y: number }>).detail;
       const bounds = element.current?.getBoundingClientRect();
       if (!bounds || !bounds.width || x < bounds.left || x > bounds.right || y < bounds.top || y > bounds.bottom || !isImagePath(path)) return;
-      latest.current.onDrop({ kind: "workspace", path }, rangeAt(x, y));
+      latest.current.onDrop({ kind: "workspace", path, scope }, rangeAt(x, y));
     };
     window.addEventListener(WORKSPACE_IMAGE_POINTER_DROP, handlePointerDrop);
     return () => window.removeEventListener(WORKSPACE_IMAGE_POINTER_DROP, handlePointerDrop);

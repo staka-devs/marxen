@@ -7,6 +7,7 @@ import type { RootScope } from "../contracts/contracts";
 /** Panel hit with exact UTF-16 offsets for jump and replace. */
 export interface SearchHitItem {
   scope?: RootScope;
+  root?: string;
   path: string;
   line: number;
   col: number;

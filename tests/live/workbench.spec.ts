@@ -15,7 +15,7 @@ test("compact menus and captured contextual folder creation at full and narrow w
   await openWorkbench(page);
   await expect(page.getByRole("menubar").getByRole("menuitem")).toHaveCount(6);
   await page.getByRole("menuitem", { name: "ファイル", exact: true }).click();
-  await expect(page.getByRole("menuitem", { name: "ワークスペースにフォルダーを追加" })).toBeDisabled();
+  await expect(page.getByRole("menuitem", { name: "ワークスペースにフォルダーを追加" })).toBeEnabled();
   await page.screenshot({ path: ".local/issue57-full.png", fullPage: true });
   await page.keyboard.press("Escape");
   const notes = page.getByRole("button", { name: "notes", exact: true });

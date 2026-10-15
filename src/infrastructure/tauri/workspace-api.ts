@@ -39,8 +39,27 @@ import type {
 
 let currentScope: RootScope | undefined;
 const rootScopes = new Map<string, RootScope>();
+const scopesById = new Map<string, RootScope>();
 const locations = new Map<DocumentId, DocumentLocation>();
 const recoveryLocations = new Map<DocumentId, DocumentLocation>();
+
+/** Track every registered incarnation so pushed events survive multi-root adds. */
+function rememberScope(scope: RootScope, root: string): void {
+  currentScope = scope;
+  rootScopes.set(root, scope);
+  scopesById.set(scope.rootId, scope);
+}
+
+/** Filter pushed batches to registered incarnations, never to a stale UI folder. */
+function eventsForActive(events: RootEvent[]): WorkspaceEvent[] {
+  return events.filter((entry) => {
+    const active = scopesById.get(entry.scope.rootId);
+    return active?.rootId === entry.scope.rootId && active?.generation === entry.scope.generation;
+  }).map((entry) => {
+    if (entry.event.type === "snapshot") rememberSnapshot(entry.event.payload);
+    return entry.event;
+  });
+}
 
 /** Remember only Rust-issued document positions, without rewinding a renamed location. */
 function rememberSnapshot(snapshot: DocumentSnapshot): void {
@@ -75,10 +94,7 @@ function documentInvoke<T>(command: string, args: Record<string, unknown>): Prom
 
 /** Filter late event batches by their producing incarnation before exposing legacy event payloads. */
 function eventsForScope(events: RootEvent[], scope = currentScope): WorkspaceEvent[] {
-  return events.filter((entry) => entry.scope.rootId === scope?.rootId && entry.scope.generation === scope?.generation).map((entry) => {
-    if (entry.event.type === "snapshot") rememberSnapshot(entry.event.payload);
-    return entry.event;
-  });
+  return eventsForActive(events.filter((entry) => entry.scope.rootId === scope?.rootId && entry.scope.generation === scope?.generation));
 }
 
 /** Native commands never read/write files in JS; ranges count UTF-16 units. */
@@ -94,20 +110,53 @@ export const workspaceApi = {
   /** Open a workspace root and return its info. */
   openWorkspace: async (path: string) => {
     const info = await invoke<WorkspaceInfo>("open_workspace", { path });
-    currentScope = info.scope;
-    rootScopes.set(info.root, info.scope);
+    scopesById.clear();
+    rootScopes.clear();
+    rememberScope(info.scope, info.root);
+    return info;
+  },
+  /** Add one independent root while keeping existing documents and buffers. */
+  addWorkspace: async (path: string) => {
+    const info = await invoke<WorkspaceInfo>("add_workspace", { path });
+    rememberScope(info.scope, info.root);
+    return info;
+  },
+  /** List every registered root incarnation in stable identifier order. */
+  listWorkspaces: async () => {
+    const infos = await invoke<WorkspaceInfo[]>("list_workspaces");
+    scopesById.clear();
+    rootScopes.clear();
+    for (const info of infos) {
+      rootScopes.set(info.root, info.scope);
+      scopesById.set(info.scope.rootId, info.scope);
+    }
+    currentScope = infos.find((info) => info.scope.rootId === currentScope?.rootId && info.scope.generation === currentScope?.generation)?.scope ?? infos[0]?.scope;
+    return infos;
+  },
+  /** Remove one clean root incarnation while keeping all other roots. */
+  removeWorkspace: async (scope: RootScope, action: CloseAction) => {
+    const info = await invoke<WorkspaceInfo | null>("remove_workspace", { scope, action });
+    if (!info) return null;
+    scopesById.delete(scope.rootId);
+    for (const [root, cached] of rootScopes) {
+      if (cached.rootId === scope.rootId && cached.generation === scope.generation) rootScopes.delete(root);
+    }
+    if (currentScope?.rootId === scope.rootId && currentScope?.generation === scope.generation) {
+      const next = [...scopesById.values()][0];
+      currentScope = next;
+    }
     return info;
   },
   /** List direct children of a workspace-relative directory. */
-  listWorkspace: (path = "") => rootInvoke<WorkspaceEntry[]>("list_workspace", { path }),
+  listWorkspace: (path = "", scope?: RootScope) => rootInvoke<WorkspaceEntry[]>("list_workspace", { path }, scope ?? currentScope),
   /** List currently open documents from the registry. */
-  listDocuments: () => rootInvoke<OpenDocument[]>("list_documents"),
+  listDocuments: (scope?: RootScope) => rootInvoke<OpenDocument[]>("list_documents", {}, scope ?? currentScope),
   /** Open a Markdown file through the registry. */
-  openMarkdown: (path: string) => rootInvoke<OpenDocument>("open_markdown", { path }),
+  openMarkdown: (path: string, scope?: RootScope) => rootInvoke<OpenDocument>("open_markdown", { path }, scope ?? currentScope),
   /** Open a supported plain-text file through the registry. */
-  openTextFile: (path: string) => rootInvoke<OpenDocument>("open_text_file", { path }),
+  openTextFile: (path: string, scope?: RootScope) => rootInvoke<OpenDocument>("open_text_file", { path }, scope ?? currentScope),
   /** Load workspace image bytes for viewer and clipboard embedding. */
-  loadWorkspaceImage: (path: string) => rootInvoke<ImageData>("load_workspace_image", { path }),
+  loadWorkspaceImage: (path: string, scope?: RootScope) => rootInvoke<ImageData>("load_workspace_image", { path }, scope ?? currentScope),
   /** Insert a workspace image reference at the given UTF-16 range. */
   insertWorkspaceImage: (request: SaveRequest, path: string, range: Utf16Range) =>
     documentInvoke<DocumentSnapshot>("insert_workspace_image", { ...request, path, range }),
@@ -115,15 +164,15 @@ export const workspaceApi = {
   importExternalImage: (request: SaveRequest, path: string, range: Utf16Range) =>
     documentInvoke<PasteResult>("import_external_image", { ...request, path, range }),
   /** Create a new Markdown document with optional initial text. */
-  createMarkdown: (path: string, text = "") => rootInvoke<OpenDocument>("create_markdown", { path, text }),
+  createMarkdown: (path: string, text = "", scope?: RootScope) => rootInvoke<OpenDocument>("create_markdown", { path, text }, scope ?? currentScope),
   /** Create a contained directory using the existing Rust workspace owner. */
-  createFolder: (path: string) => rootInvoke<WorkspaceEntry>("create_folder", { path }),
+  createFolder: (path: string, scope?: RootScope) => rootInvoke<WorkspaceEntry>("create_folder", { path }, scope ?? currentScope),
   /** Rename a Markdown or supported UTF-8 text document, keeping its document ID. */
   renameMarkdown: (request: SaveRequest, path: string) => documentInvoke<OpenDocument>("rename_markdown", { ...request, path }),
   /** Rename a workspace image without a document actor, verifying its captured fingerprint. */
-  renameImage: (source: string, dest: string, fingerprint: string) => rootInvoke<WorkspaceEntry>("rename_image", { source, dest, fingerprint }),
+  renameImage: (source: string, dest: string, fingerprint: string, scope?: RootScope) => rootInvoke<WorkspaceEntry>("rename_image", { source, dest, fingerprint }, scope ?? currentScope),
   /** Rename a workspace folder without moving open descendants or AI working copies. */
-  renameFolder: (source: string, dest: string) => rootInvoke<WorkspaceEntry>("rename_folder", { source, dest }),
+  renameFolder: (source: string, dest: string, scope?: RootScope) => rootInvoke<WorkspaceEntry>("rename_folder", { source, dest }, scope ?? currentScope),
   /** Fetch the authoritative snapshot for a document ID. */
   fetchSnapshot: (documentId: DocumentId, location?: DocumentLocation) => documentInvoke<DocumentSnapshot>("fetch_snapshot", { documentId, location }),
   /** Apply GUI range edits at the given base revision. */
@@ -139,9 +188,9 @@ export const workspaceApi = {
   /** Request native revision-bound literal edits over authoritative search ranges. */
   planSearchReplacement: (request: SearchReplaceRequest) => rootInvoke<SearchReplacePlan>("plan_search_replacement", { request }, request.scope ?? rootScopes.get(request.root)),
   /** Poll queued workspace events for reconnecting consumers. */
-  pollEvents: () => { const scope = currentScope; return rootInvoke<RootEvent[]>("poll_workspace_events", {}, scope).then((events) => eventsForScope(events, scope)); },
+  pollEvents: (scope?: RootScope) => { const active = scope ?? currentScope; return rootInvoke<RootEvent[]>("poll_workspace_events", {}, active).then((events) => eventsForScope(events, active)); },
   /** List crash-recovery entries. */
-  listRecovery: () => rootInvoke<RecoveryEntry[]>("list_recovery").then((entries) => { for (const entry of entries) recoveryLocations.set(entry.documentId, entry.location); return entries; }),
+  listRecovery: (scope?: RootScope) => rootInvoke<RecoveryEntry[]>("list_recovery", {}, scope ?? currentScope).then((entries) => { for (const entry of entries) recoveryLocations.set(entry.documentId, entry.location); return entries; }),
   /** Restore a crash-recovery entry into an open document. */
   restoreRecovery: (documentId: DocumentId) => invoke<OpenDocument>("restore_recovery", { documentId, location: recoveryLocations.get(documentId) }).then(rememberResult),
   /** Discard a crash-recovery entry without opening it. */
@@ -184,7 +233,7 @@ export const workspaceApi = {
  */
 export function listenWorkspaceEvents(callback: (events: WorkspaceEvent[]) => void): Promise<UnlistenFn> {
   if (!isTauri()) return Promise.resolve(() => {});
-  return listen<RootEvent[]>("marxen:workspace", (event) => callback(eventsForScope(event.payload)));
+  return listen<RootEvent[]>("marxen:workspace", (event) => callback(eventsForActive(event.payload)));
 }
 
 /** Event source adapter satisfying the application port with Tauri events. */

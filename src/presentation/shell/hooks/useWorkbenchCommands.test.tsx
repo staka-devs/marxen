@@ -41,7 +41,7 @@ function fixture(desktop = true) {
     isTargetCurrent: (value: ExplorerTarget) => value.generation === generation,
     /** Report that this fixture's native lifecycle is available. */
     canOperate: () => true,
-    beginCreate: vi.fn(), beginRename: vi.fn(), refreshEntries: vi.fn(), pickFolderAndOpen: vi.fn(),
+    beginCreate: vi.fn(), beginRename: vi.fn(), refreshEntries: vi.fn(), pickFolderAndOpen: vi.fn(), pickFolderAndAdd: vi.fn(),
   } as unknown as WorkspaceHandle;
   const ui = vi.fn();
   const origin = document.createElement("div"); origin.className = "cm-editor"; origin.tabIndex = 0; document.body.append(origin);
@@ -54,11 +54,11 @@ function fixture(desktop = true) {
   };
 }
 
-it("shows unsupported actions disabled and rechecks stale targets on invocation", async () => {
+it("enables additive folder dispatch and rechecks stale targets on invocation", async () => {
   const f = fixture();
-  expect(f.result.current.command("folder-add")).toMatchObject({ enabled: false });
-  expect(f.result.current.command("folder-add")?.reason).toContain("単一");
+  expect(f.result.current.command("folder-add")).toMatchObject({ enabled: true });
   await act(async () => f.result.current.run("folder-add"));
+  expect(f.workspace.pickFolderAndAdd).toHaveBeenCalledOnce();
   expect(f.ui).not.toHaveBeenCalled();
   expect(f.result.current.command("folder-new")?.enabled).toBe(true);
   f.replaceRoot();

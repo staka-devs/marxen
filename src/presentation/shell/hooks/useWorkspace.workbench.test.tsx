@@ -73,9 +73,9 @@ it("captures a file's parent for creation and registers the returned snapshot", 
   expect(f.result.current.workspace.newFilePath).toBe("notes/");
   act(() => f.result.current.workspace.setNewFilePath("notes/new.md"));
   await act(async () => f.result.current.workspace.createFile());
-  expect(f.gateway.createMarkdown).toHaveBeenCalledExactlyOnceWith("notes/new.md", "");
+  expect(f.gateway.createMarkdown).toHaveBeenCalledExactlyOnceWith("notes/new.md", "", { rootId: "fixture-root", generation: "1" });
   expect(f.result.current.session.docs.owned).toMatchObject({ path: "notes/new.md", revision: 17, dirty: true });
-  expect(f.result.current.workspace.createdTarget).toMatchObject({ rootId: "C:/a", path: "notes/new.md", kind: "markdown" });
+  expect(f.result.current.workspace.createdTarget).toMatchObject({ rootId: "fixture-root", path: "notes/new.md", kind: "markdown" });
 });
 
 it("registers a restored native owner before the first GUI edit of its recovered ID", async () => {
@@ -95,7 +95,7 @@ it("creates one captured child folder without document-open commands", async () 
   act(() => f.result.current.workspace.beginCreate(f.result.current.workspace.targetFor("notes", true), true));
   act(() => f.result.current.workspace.setNewFilePath("notes/今日"));
   await act(async () => Promise.all([f.result.current.workspace.createFile(), f.result.current.workspace.createFile()]));
-  expect(f.gateway.createFolder).toHaveBeenCalledExactlyOnceWith("notes/今日");
+  expect(f.gateway.createFolder).toHaveBeenCalledExactlyOnceWith("notes/今日", { rootId: "fixture-root", generation: "1" });
   expect(f.gateway.openMarkdown).not.toHaveBeenCalled();
   expect(f.gateway.createMarkdown).not.toHaveBeenCalled();
   expect(f.result.current.session.tabs).toEqual([]);
@@ -148,7 +148,7 @@ it("renames UTF-8 text through the existing actor with its captured revision", a
   await act(async () => f.result.current.workspace.beginRename(f.result.current.workspace.targetFor("notes/code.ts", false, "text")));
   act(() => f.result.current.workspace.setRenamePath("notes/renamed.ts"));
   await act(async () => f.result.current.workspace.renameFile());
-  expect(f.gateway.openTextFile).toHaveBeenCalledExactlyOnceWith("notes/code.ts");
+  expect(f.gateway.openTextFile).toHaveBeenCalledExactlyOnceWith("notes/code.ts", { rootId: "fixture-root", generation: "1" });
   expect(f.gateway.openMarkdown).not.toHaveBeenCalled();
   expect(f.gateway.renameMarkdown).toHaveBeenCalledExactlyOnceWith({ documentId: "owned", baseRevision: 17 }, "notes/renamed.ts");
   expect(f.result.current.session.docs.owned).toMatchObject({ text: f.snapshot.text, dirty: true });
@@ -161,7 +161,7 @@ it("uses the captured native image fingerprint and maps its active tab without o
   await act(async () => f.result.current.workspace.beginRename(f.result.current.workspace.targetFor("notes/a.png", false, "image")));
   act(() => f.result.current.workspace.setRenamePath("notes/b.png"));
   await act(async () => f.result.current.workspace.renameFile());
-  expect(f.gateway.renameImage).toHaveBeenCalledExactlyOnceWith("notes/a.png", "notes/b.png", "a".repeat(64));
+  expect(f.gateway.renameImage).toHaveBeenCalledExactlyOnceWith("notes/a.png", "notes/b.png", "a".repeat(64), { rootId: "fixture-root", generation: "1" });
   expect(f.result.current.session.imageTabs).toEqual({ "image:notes/b.png": "notes/b.png" });
   expect(f.result.current.session.tabs).toEqual(["image:notes/b.png"]);
   expect(f.result.current.session.activeId).toBe("image:notes/b.png");
@@ -192,7 +192,7 @@ it("maps nested image tabs on folder rename while preserving unrelated paths", a
   await act(async () => f.result.current.workspace.beginRename(f.result.current.workspace.targetFor("notes", true)));
   act(() => f.result.current.workspace.setRenamePath("renamed"));
   await act(async () => f.result.current.workspace.renameFile());
-  expect(f.gateway.renameFolder).toHaveBeenCalledExactlyOnceWith("notes", "renamed");
+  expect(f.gateway.renameFolder).toHaveBeenCalledExactlyOnceWith("notes", "renamed", { rootId: "fixture-root", generation: "1" });
   expect(f.result.current.session.imageTabs).toEqual({ "image:renamed/child/a.png": "renamed/child/a.png", "image:notes-other/a.png": "notes-other/a.png" });
   expect(f.result.current.session.tabs).toEqual(["image:renamed/child/a.png", "image:notes-other/a.png"]);
   expect(f.result.current.session.activeId).toBe("image:renamed/child/a.png");

@@ -1,7 +1,7 @@
 import { useI18n } from "../i18n/I18nProvider";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ChevronDown, ChevronRight, FileCode2, FileText, Folder, FolderOpen, Image } from "lucide-react";
-import type { WorkspaceEntry, WorkspaceFileKind } from "../../contracts/contracts";
+import type { WorkspaceEntry, WorkspaceFileKind, RootScope } from "../../contracts/contracts";
 import { entryKind, WORKSPACE_IMAGE_DRAG, WORKSPACE_IMAGE_POINTER_DROP } from "../../domain/workspace-files";
 import type { WorkbenchCommand } from "../../contracts/workbench";
 import type { ThemeId } from "../../domain/workspace-content";
@@ -63,6 +63,10 @@ interface Props {
   desktop?: boolean;
   rootName?: string;
   rootPath?: string;
+  rootScope?: RootScope;
+  /** Ask the shell to remove this root while preserving its unsaved-document decision. */
+  onRemoveRoot?: () => void;
+  rootRemovalDisabled?: boolean;
   selectedPath?: string | null;
   theme?: ThemeId;
   /** Capture a focused or context-selected tree row without opening its document. */
@@ -72,7 +76,7 @@ interface Props {
   /** Run a tree command through the workbench dispatcher. */
   onCommand?: (id: string, node: TreeNode) => void;
 }
-interface NodeProps extends Pick<Props, "activePath" | "onOpenFile" | "desktop" | "rootPath"> {
+interface NodeProps extends Pick<Props, "activePath" | "onOpenFile" | "desktop" | "rootPath" | "rootScope" | "onRemoveRoot" | "rootRemovalDisabled"> {
   node: TreeNode;
   depth: number;
   selectedPath: string | null;
@@ -94,7 +98,8 @@ interface NodeProps extends Pick<Props, "activePath" | "onOpenFile" | "desktop" 
  * Pointer drags past 5px dispatch an internal drop event; HTML5 drags carry
  * the workspace path on desktop they are suppressed for native handling.
  */
-function Node({ node, activePath, onOpenFile, depth, desktop = false, selectedPath, focusedPath, expanded, onToggle, onSelect, onKey, onContext, rootPath }: NodeProps) {
+function Node({ node, activePath, onOpenFile, depth, desktop = false, selectedPath, focusedPath, expanded, onToggle, onSelect, onKey, onContext, rootPath, rootScope, onRemoveRoot, rootRemovalDisabled }: NodeProps) {
+  const { t } = useI18n();
   const open = expanded.has(node.path);
   const pointer = useRef<{ x: number; y: number; dragging: boolean } | null>(null);
   const suppressClick = useRef(false);
@@ -104,6 +109,7 @@ function Node({ node, activePath, onOpenFile, depth, desktop = false, selectedPa
     : /\.(jsonc?|ya?ml|toml|[cm]?jsx?|tsx?|rs|py|css|html?|lua|vim)$/i.test(node.path) ? FileCode2 : FileText;
   return (
     <li role="treeitem" aria-level={depth + 1} aria-selected={selected} aria-expanded={node.directory ? open : undefined}>
+      <div className="flex items-center">
       <button
         type="button"
         tabIndex={focusedPath === node.path ? 0 : -1}
@@ -136,7 +142,7 @@ function Node({ node, activePath, onOpenFile, depth, desktop = false, selectedPa
           suppressClick.current = true;
           event.preventDefault();
           window.dispatchEvent(new CustomEvent(WORKSPACE_IMAGE_POINTER_DROP, {
-            detail: { path: node.path, x: event.clientX, y: event.clientY },
+            detail: { path: node.path, scope: rootScope, x: event.clientX, y: event.clientY },
           }));
         }}
         onPointerCancel={() => { pointer.current = null; }}
@@ -148,15 +154,17 @@ function Node({ node, activePath, onOpenFile, depth, desktop = false, selectedPa
           event.dataTransfer.effectAllowed = "copy";
           event.dataTransfer.setData(WORKSPACE_IMAGE_DRAG, node.path);
         }}
-        className={`marxen-tree-row flex h-7 w-full items-center gap-1.5 truncate border-l-2 pr-3 text-left text-xs hover:bg-muted/50 ${selected ? "border-primary bg-primary/10 text-foreground" : "border-transparent text-foreground/85"}`}
+        className={`marxen-tree-row flex h-7 min-w-0 flex-1 items-center gap-1.5 truncate border-l-2 pr-3 text-left text-xs hover:bg-muted/50 ${selected ? "border-primary bg-primary/10 text-foreground" : "border-transparent text-foreground/85"}`}
         style={{ paddingLeft: 6 + depth * 16 }}
       >
         {node.directory ? (open ? <ChevronDown size={12} aria-hidden /> : <ChevronRight size={12} aria-hidden />) : <span className="w-3 shrink-0" />}
         <Icon size={15} aria-hidden data-file-icon={node.directory ? (open ? "folder-open" : "folder") : node.kind} className={`shrink-0 ${node.directory ? "text-[#bdad87]" : node.markdown ? "text-primary/70" : "text-muted-foreground"}`} />
         <span className="truncate">{node.name}</span>
       </button>
+      {onRemoveRoot && <button type="button" disabled={rootRemovalDisabled} aria-label={t("{{root}} をワークスペースから取り除く", { root: rootPath ?? node.name })} title={t("フォルダーをワークスペースから取り除く")} onClick={onRemoveRoot} className="h-7 shrink-0 rounded px-2 text-xs hover:bg-muted disabled:opacity-50">×</button>}
+      </div>
       {node.directory && open && <ul role="group" className="marxen-tree-children" style={{ "--tree-indent": `${20 + depth * 16}px` } as React.CSSProperties}>{(node.children ?? []).map(child =>
-        <Node key={child.path} node={child} activePath={activePath} onOpenFile={onOpenFile} depth={depth + 1} desktop={desktop} selectedPath={selectedPath} focusedPath={focusedPath} expanded={expanded} onToggle={onToggle} onSelect={onSelect} onKey={onKey} onContext={onContext} />
+        <Node rootPath={rootPath} rootScope={rootScope} key={child.path} node={child} activePath={activePath} onOpenFile={onOpenFile} depth={depth + 1} desktop={desktop} selectedPath={selectedPath} focusedPath={focusedPath} expanded={expanded} onToggle={onToggle} onSelect={onSelect} onKey={onKey} onContext={onContext} />
       )}</ul>}
     </li>
   );
@@ -168,7 +176,7 @@ function Node({ node, activePath, onOpenFile, depth, desktop = false, selectedPa
  * `desktop` switches image drags to native handling; the composition root
  * injects it so this view never imports the Tauri transport directly.
  */
-export function FileTree({ nodes, activePath, onOpenFile, desktop = false, rootName, rootPath, selectedPath = activePath, onSelect, contextCommands, onCommand, theme }: Props) {
+export function FileTree({ nodes, activePath, onOpenFile, desktop = false, rootName, rootPath, rootScope, onRemoveRoot, rootRemovalDisabled, selectedPath = activePath, onSelect, contextCommands, onCommand, theme }: Props) {
   const { t } = useI18n();
   const roots: TreeNode[] = rootName ? [{ path: "", name: rootName, directory: true, markdown: false, children: nodes }] : nodes;
   const host = useRef<HTMLElement>(null);
@@ -216,7 +224,7 @@ export function FileTree({ nodes, activePath, onOpenFile, desktop = false, rootN
   }
   return <nav ref={host} data-testid="file-tree" aria-label={t("フォルダーツリー")} className="overflow-auto">
     <ul role="tree" aria-label={t("ワークスペース")} className="py-1">{roots.map(node =>
-      <Node rootPath={rootPath} key={node.path} node={node} activePath={activePath} onOpenFile={onOpenFile} depth={0} desktop={desktop} selectedPath={selectedPath ?? roving} focusedPath={roving} expanded={expanded} onToggle={toggle} onSelect={select} onKey={key} onContext={openContext} />
+      <Node rootPath={rootPath} rootScope={rootScope} onRemoveRoot={node.path === "" ? onRemoveRoot : undefined} rootRemovalDisabled={rootRemovalDisabled} key={node.path} node={node} activePath={activePath} onOpenFile={onOpenFile} depth={0} desktop={desktop} selectedPath={selectedPath ?? roving} focusedPath={roving} expanded={expanded} onToggle={toggle} onSelect={select} onKey={key} onContext={openContext} />
     )}</ul>
     {context && <CommandMenu label={t("エクスプローラーの操作")} point={context.point} commands={contextCommands?.(context.node) ?? []} onRun={(id) => onCommand?.(id, context.node)} onDismiss={dismiss} theme={theme} />}
   </nav>;

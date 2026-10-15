@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { EditorContext } from "../../../contracts/contracts";
+import type { EditorContext, RootScope } from "../../../contracts/contracts";
 import type { ExplorerTarget, WorkbenchCommand, WorkbenchMenu } from "../../../contracts/workbench";
 import type { LabelKey, LocalizedText } from "../../../contracts/localization";
 import type { EditorAction } from "../../../application/ports";
@@ -22,7 +22,7 @@ interface Args {
   /** Report checked state without moving view preferences into a second owner. */
   checked: (id: string) => boolean | undefined;
   /** Open a supported tree path and focus its existing editor or image view. */
-  openFile: (path: string) => Promise<void>;
+  openFile: (path: string, scope?: RootScope) => Promise<void>;
 }
 
 const DEFINITIONS: Array<[string, WorkbenchMenu, LabelKey, string?]> = [
@@ -125,7 +125,7 @@ export function useWorkbenchCommands(args: Args) {
       reason = "現在のエディターの選択またはVimモードでは操作できません。";
     }
     if (id === "selection-all") { enabled = editorReady; reason = "現在のエディターの選択またはVimモードでは操作できません。"; }
-    if (id === "folder-add") { enabled = false; reason = "現在は単一フォルダーのみ対応しています。"; }
+    if (id === "folder-add") enabled = native;
     if (!desktop && !enabled) reason = "デスクトップで利用できます。";
     else if (workspace.busy && !enabled) reason = "フォルダーの操作中です。";
     return { id, menu: definition[1], label: t(definition[2]), paletteLabel: PALETTE_LABELS[id] ? t(PALETTE_LABELS[id]) : `${t(MENU_LABELS[definition[1]])}: ${t(definition[2])}`, shortcut: definition[3], enabled, reason: enabled ? undefined : t(reason), checked: checked(id) };
@@ -139,7 +139,8 @@ export function useWorkbenchCommands(args: Args) {
     if (id === "file-new" || id === "folder-new") workspace.beginCreate(location, id === "folder-new");
     else if (id === "file-rename") await workspace.beginRename(location);
     else if (id === "tree-refresh") await workspace.refreshEntries();
-    else if (id === "tree-open") await openFile(location.path);
+    else if (id === "tree-open") await openFile(location.path, workspace.roots.find((root) => root.scope.rootId === location.rootId)?.scope);
+    else if (id === "folder-add") await workspace.pickFolderAndAdd();
     else if (id === "folder-open") await workspace.pickFolderAndOpen();
     else if (id === "file-save") await session.handleSave();
     else if (id === "file-reload") await session.handleReload();

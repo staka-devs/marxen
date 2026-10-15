@@ -1,5 +1,9 @@
 /** Complete Japanese catalog; its literal templates define the interpolation contract. */
 export const japaneseMessages = {
+  "このフォルダーのタブを閉じます。未保存の変更をどうしますか。": "このフォルダーのタブを閉じます。未保存の変更をどうしますか。",
+  "フォルダーが見つかりません。復元情報を保持しています: {{root}}": "フォルダーが見つかりません。復元情報を保持しています: {{root}}",
+  "フォルダーをワークスペースから取り除く": "フォルダーをワークスペースから取り除く",
+  "{{root}} をワークスペースから取り除く": "{{root}} をワークスペースから取り除く",
   "フォルダーまたは文書の位置が変わりました。操作し直してください。": "フォルダーまたは文書の位置が変わりました。操作し直してください。",
   "既存の会話は元のフォルダーに属しています。新しいチャットを開始してください。": "既存の会話は元のフォルダーに属しています。新しいチャットを開始してください。",
   "検索オプション": "検索オプション",
@@ -811,6 +815,10 @@ export const japaneseMessages = {
 
 /** Complete English catalog checked against every Japanese key. */
 export const englishMessages = {
+  "このフォルダーのタブを閉じます。未保存の変更をどうしますか。": "Close the tabs in this folder. What should happen to unsaved changes?",
+  "フォルダーが見つかりません。復元情報を保持しています: {{root}}": "Folder unavailable. Restore information retained: {{root}}",
+  "フォルダーをワークスペースから取り除く": "Remove folder from workspace",
+  "{{root}} をワークスペースから取り除く": "Remove {{root}} from workspace",
   "フォルダーまたは文書の位置が変わりました。操作し直してください。": "The folder or document location changed. Try the action again.",
   "既存の会話は元のフォルダーに属しています。新しいチャットを開始してください。": "This conversation belongs to its original folder. Start a new chat.",
   "検索オプション": "Search options",
