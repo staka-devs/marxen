@@ -132,4 +132,39 @@ describe("named API connection rules", () => {
     expect(decided.persist).toBeNull();
     expect(decided.provider).toBeNull();
   });
+  it.each(["openai_compatible", "anthropic"] as const)("restores the saved %s record when a same-ID conversation uses the old protocol", (protocol) => {
+    const target = connection({ protocol });
+    const other = connection({ id: "api-other" });
+    const stale = buildProviderConfigFromConnection(connection({ protocol: protocol === "anthropic" ? "openai_compatible" : "anthropic", endpoint: "https://old.example.com/v1", model: "old-model" }));
+    for (const activeId of [target.id, other.id, null]) {
+      const list = { version: 1 as const, activeId, initialized: true, connections: [target, other] };
+      const decided = resolveProviderChange(list, stale);
+      expect(decided.provider).toEqual(buildProviderConfigFromConnection(target));
+      expect(decided.missing).toBe(false);
+      if (activeId === target.id) expect(decided.persist).toBeNull();
+      else expect(decided.persist).toEqual({ ...list, activeId: target.id });
+      expect(list.connections).toEqual([target, other]);
+    }
+  });
+  it.each(["openai_compatible", "anthropic"] as const)("clears named selection for ID-less %s choices without editing any record", (protocol) => {
+    const first = connection();
+    const second = connection({ id: "api-second", protocol: "anthropic" });
+    const list = { version: 1 as const, activeId: first.id, initialized: true, connections: [first, second] };
+    const legacy = buildProviderConfigFromConnection(connection({ protocol, endpoint: "https://legacy.example.com/v1", model: "legacy-model" }));
+    const next = { ...legacy, connectionId: undefined };
+    expect(resolveProviderChange(list, next)).toEqual({ persist: { ...list, activeId: null }, provider: next, missing: false });
+    expect(resolveProviderChange({ ...list, activeId: null }, next)).toEqual({ persist: null, provider: next, missing: false });
+    const defaults = defaultProviderConfig(protocol);
+    expect(resolveProviderChange(list, defaults)).toEqual({ persist: { ...list, activeId: null }, provider: defaults, missing: false });
+    expect(list.connections).toEqual([first, second]);
+  });
+  it.each(["openai_compatible", "anthropic"] as const)("preserves explicit same-ID %s field edits", (protocol) => {
+    const target = connection({ protocol });
+    const other = connection({ id: "api-other" });
+    const list = { version: 1 as const, activeId: target.id, initialized: true, connections: [target, other] };
+    const updated = { ...target, model: "chosen-model" };
+    const next = buildProviderConfigFromConnection(updated);
+    expect(resolveProviderChange(list, next)).toEqual({ persist: { ...list, connections: [updated, other] }, provider: next, missing: false });
+    expect(resolveProviderChange(list, buildProviderConfigFromConnection(target))).toEqual({ persist: null, provider: buildProviderConfigFromConnection(target), missing: false });
+  });
 });
