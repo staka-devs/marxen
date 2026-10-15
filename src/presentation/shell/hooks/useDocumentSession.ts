@@ -423,7 +423,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       }
       if (beforeText !== undefined) pendingGui.current[id] = (pendingGui.current[id] ?? 0) + 1;
       try {
-        const request = { documentId: id, baseRevision: current.revision };
+        const request = { ...(current.location ? { location: current.location } : {}), documentId: id, baseRevision: current.revision };
         if (key !== undefined && beforeText !== undefined && edits.length === 1 && edits[0].text === key) {
           const decision = await registry.routeCharKey(id, key, edits[0].range, (copy) => writeYankToClipboard(copy, id), beforeText);
           mergeSnapshot(decision.snapshot);
@@ -487,7 +487,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
     const current = docsRef.current[id];
     if (!current) return;
     try {
-      const result = await registry.save({ documentId: id, baseRevision: current.revision });
+      const result = await registry.save({ ...(current.location ? { location: current.location } : {}), documentId: id, baseRevision: current.revision });
       setDocs((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], revision: result.revision, dirty: result.dirty } } : prev));
       setConflictDoc((prev) => (prev === id ? null : prev));
       setNotice(message("保存しました。"), "success");
@@ -514,7 +514,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
     const current = docsRef.current[id];
     if (!current) return;
     try {
-      mergeSnapshot(await registry.reload({ documentId: id, baseRevision: current.revision }));
+      mergeSnapshot(await registry.reload({ ...(current.location ? { location: current.location } : {}), documentId: id, baseRevision: current.revision }));
       setExternalByDoc((prev) => {
         if (!(id in prev)) return prev;
         const next = { ...prev };
@@ -553,7 +553,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
         return;
       }
       try {
-        await workspaceGateway!.closeDocument({ documentId: id, baseRevision: current?.revision ?? 0 }, "discard");
+        await workspaceGateway!.closeDocument({ ...(current?.location ? { location: current.location } : {}), documentId: id, baseRevision: current?.revision ?? 0 }, "discard");
       } catch (cause) {
         setNotice(localizedFailure(cause, workspaceErrorText), "error");
         return;
@@ -581,7 +581,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       if (!registry) return;
       const current = docsRef.current[id];
       try {
-        const closed = await workspaceGateway!.closeDocument({ documentId: id, baseRevision: current?.revision ?? 0 }, action);
+        const closed = await workspaceGateway!.closeDocument({ ...(current?.location ? { location: current.location } : {}), documentId: id, baseRevision: current?.revision ?? 0 }, action);
         if (!closed) {
           setNotice(message("閉じる操作を取り消しました。本文は保持しています。"));
           return;

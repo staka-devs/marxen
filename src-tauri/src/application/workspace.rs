@@ -8,11 +8,15 @@ use crate::application::ports::*;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 pub struct Workspace {
     storage: Arc<dyn WorkspaceStorage>,
     services: DocumentServices,
     clock: Arc<dyn Clock>,
     root: PathBuf,
+    scope: RootScope,
+    next_document: u64,
     recovery: PathBuf,
     actors: BTreeMap<String, DocumentActor>,
     observed: BTreeMap<String, Option<Fingerprint>>,
@@ -39,7 +43,16 @@ impl Workspace {
         if !storage.metadata(&root).is_ok_and(|m| m.directory) {
             return Err(WorkspaceError::InvalidPath);
         }
-        let namespace = storage::fingerprint(root.to_string_lossy().as_bytes()).0;
+        let namespace =
+            storage::fingerprint(root.to_str().ok_or(WorkspaceError::InvalidPath)?.as_bytes()).0;
+        let scope = RootScope {
+            root_id: RootId(format!("root-{namespace}")),
+            generation: format!(
+                "{}-{}",
+                clock.nanos(),
+                NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ),
+        };
         let recovery = recovery_home.join(namespace);
         storage.create_dir_all(&recovery)?;
         if storage.metadata(&recovery)?.file_type().is_symlink() {
@@ -50,6 +63,8 @@ impl Workspace {
             services,
             clock,
             root,
+            scope,
+            next_document: 0,
             recovery,
             actors: BTreeMap::new(),
             observed: BTreeMap::new(),
@@ -60,12 +75,35 @@ impl Workspace {
     /// Return workspace identity and open document descriptors.
     pub fn info(&self) -> WorkspaceInfo {
         WorkspaceInfo {
+            scope: self.scope.clone(),
             root: self.root.display().to_string(),
         }
     }
     /// Borrow the canonical workspace root used for path containment checks.
     pub fn root(&self) -> &Path {
         &self.root
+    }
+    /// Borrow the Rust-issued owner incarnation used by registry and staging checks.
+    pub fn scope(&self) -> &RootScope {
+        &self.scope
+    }
+
+    /// Reject mismatched owner, incarnation, or renamed document position.
+    pub fn validate_location(
+        &self,
+        id: &str,
+        location: &DocumentLocation,
+    ) -> Result<(), WorkspaceError> {
+        if location.scope.root_id != self.scope.root_id {
+            return Err(WorkspaceError::WrongOwner);
+        }
+        if location.scope != self.scope {
+            return Err(WorkspaceError::StaleRoot);
+        }
+        if self.actor(id)?.snapshot().location.as_ref() != Some(location) {
+            return Err(WorkspaceError::StaleLocation);
+        }
+        Ok(())
     }
     /// Report whether the workspace has any registered documents.
     pub fn is_empty(&self) -> bool {
@@ -81,8 +119,19 @@ impl Workspace {
             .join(format!("{}.json", storage::fingerprint(id.as_bytes()).0))
     }
     /// Allocate a process-local document identifier using the injected clock.
-    fn new_id(&self) -> String {
-        format!("doc-{}-{}", self.clock.nanos(), self.actors.len())
+    pub fn new_id(&mut self) -> String {
+        loop {
+            self.next_document += 1;
+            let id = format!(
+                "doc-{}-{}-{}",
+                &self.scope.root_id.0[5..],
+                self.scope.generation,
+                self.next_document
+            );
+            if !self.actors.contains_key(&id) && !self.storage.exists(&self.record_path(&id)) {
+                return id;
+            }
+        }
     }
     /// Build a document descriptor from its current authoritative snapshot and relative path.
     fn description(&self, actor: &DocumentActor) -> Result<OpenDocument, WorkspaceError> {
@@ -200,7 +249,7 @@ impl Workspace {
         if actor.baseline() != Some(baseline) {
             return Err(WorkspaceError::Conflict { path: path.into() });
         }
-        actor.attach_storage(self.root.clone(), self.record_path(&id))?;
+        actor.attach_storage(self.root.clone(), self.record_path(&id), self.scope.clone())?;
         let result = self.description(&actor)?;
         self.observed.insert(id.clone(), actor.baseline());
         self.actors.insert(id, actor);
@@ -217,7 +266,11 @@ impl Workspace {
             return Err(WorkspaceError::AlreadyExists);
         }
         let actor = DocumentActor::open(id.clone(), text, None, self.services.clone())?;
-        actor.attach_storage(self.root.clone(), self.record_path(&id.0))?;
+        actor.attach_storage(
+            self.root.clone(),
+            self.record_path(&id.0),
+            self.scope.clone(),
+        )?;
         // Untitled initial content is unsaved and must be recoverable.
         actor.mark_unsaved()?;
         let result = self.description(&actor)?;
@@ -307,7 +360,9 @@ impl Workspace {
         for actor in self.actors.values() {
             let snapshot = actor.sync_from_nvim().unwrap_or_else(|_| actor.snapshot());
             if snapshot.dirty {
-                return Err(WorkspaceError::UnsavedChanges { snapshot });
+                return Err(WorkspaceError::UnsavedChanges {
+                    snapshot: Box::new(snapshot),
+                });
             }
         }
         Ok(())
@@ -396,16 +451,17 @@ impl Workspace {
                 .actors
                 .values()
                 .find(|a| a.path().as_ref() == Some(&target));
-            let (text, id, revision) = if let Some(actor) = actor {
+            let (text, id, revision, location) = if let Some(actor) = actor {
                 let snapshot = actor.sync_from_nvim()?;
                 (
                     snapshot.text,
                     Some(snapshot.document_id),
                     Some(snapshot.revision),
+                    snapshot.location,
                 )
             } else {
                 match self.storage.read_search_text(&target, MAX_TEXT_BYTES) {
-                    Ok(text) => (text, None, None),
+                    Ok(text) => (text, None, None, None),
                     Err(WorkspaceError::SearchIncomplete) => {
                         result.limit = Some(SearchLimit::FileBytes);
                         continue;
@@ -430,6 +486,8 @@ impl Workspace {
                 let (coordinates, line, line_start) = positions.next(&text, &range);
                 let (preview, preview_range) = search::preview(&text, &range, line_start);
                 result.matches.push(SearchMatch {
+                    location: location.clone(),
+                    scope: Some(self.scope.clone()),
                     path: path.clone(),
                     document_id: id.clone(),
                     revision,
@@ -457,7 +515,25 @@ impl Workspace {
         request: SearchReplaceRequest,
     ) -> Result<SearchReplacePlan, WorkspaceError> {
         use crate::domain::search::{MatchPositions, Matcher, MAX_MATCHES, MAX_TEXT_BYTES};
-        if self.info().root != request.root {
+        if let Some(location) = &request.location {
+            if location.path.as_ref() != Some(&request.path) {
+                return Err(WorkspaceError::StaleLocation);
+            }
+            self.validate_location(
+                &request
+                    .document_id
+                    .as_ref()
+                    .ok_or(WorkspaceError::WrongOwner)?
+                    .0,
+                location,
+            )?;
+        }
+        if self.info().root != request.root
+            || request
+                .scope
+                .as_ref()
+                .is_some_and(|scope| scope != &self.scope)
+        {
             return Err(WorkspaceError::StaleSearch);
         }
         let matcher = Matcher::compile(&request.query, &request.options)?;
@@ -583,8 +659,26 @@ impl Workspace {
                 serde_json::from_slice(&bytes).map_err(|e| WorkspaceError::Io {
                     detail: format!("invalid recovery {}: {e}", entry.path().display()),
                 })?;
-            if record.version != 1 || record.root != self.root || !record.snapshot.dirty {
+            if !matches!(record.version, 1 | 2)
+                || record.root != self.root
+                || !record.snapshot.dirty
+            {
                 return Err(WorkspaceError::InvalidPath);
+            }
+            if record.version == 2 && record.root_id.as_ref() != Some(&self.scope.root_id) {
+                return Err(WorkspaceError::WrongOwner);
+            }
+            if record.version == 2 {
+                let id = &record.snapshot.document_id.0;
+                let root = &self.scope.root_id.0[5..];
+                if !(id.starts_with(&format!("doc-{root}-"))
+                    || id.starts_with(&format!("legacy-{root}-")))
+                    || record.snapshot.location.as_ref().is_none_or(|location| {
+                        location.scope.root_id != self.scope.root_id || location.path != record.path
+                    })
+                {
+                    return Err(WorkspaceError::WrongOwner);
+                }
             }
             crate::domain::validation::validate_document_id(&record.snapshot.document_id)
                 .map_err(|error| WorkspaceError::Contract { error })?;
@@ -618,6 +712,11 @@ impl Workspace {
                     .transpose()?
                     .flatten();
                 Ok(RecoveryEntry {
+                    location: DocumentLocation {
+                        scope: self.scope.clone(),
+                        path: r.path.clone(),
+                        position: 0,
+                    },
                     document_id: r.snapshot.document_id,
                     path: r.path,
                     revision: r.snapshot.revision,
@@ -632,7 +731,7 @@ impl Workspace {
         if self.actors.contains_key(id) {
             return Err(WorkspaceError::AlreadyExists);
         }
-        let record = self
+        let mut record = self
             .records()?
             .into_iter()
             .find(|r| r.snapshot.document_id.0 == id)
@@ -649,17 +748,40 @@ impl Workspace {
         {
             return Err(WorkspaceError::AlreadyExists);
         }
+        // Legacy IDs are mapped into this root namespace before the old bytes are retired.
+        let restored_id = if record.version == 1 {
+            format!(
+                "legacy-{}-{}",
+                &self.scope.root_id.0[5..],
+                &storage::fingerprint(id.as_bytes()).0[..32]
+            )
+        } else {
+            id.to_owned()
+        };
+        if self.actors.contains_key(&restored_id)
+            || (restored_id != id && self.storage.exists(&self.record_path(&restored_id)))
+        {
+            return Err(WorkspaceError::AlreadyExists);
+        }
+        record.snapshot.document_id = DocumentId(restored_id.clone());
         let actor = DocumentActor::open(
             record.snapshot.document_id.clone(),
             record.snapshot.text.clone(),
             path,
             self.services.clone(),
         )?;
-        actor.attach_storage(self.root.clone(), self.record_path(id))?;
         actor.restore_record(&record)?;
+        actor.attach_storage(
+            self.root.clone(),
+            self.record_path(&restored_id),
+            self.scope.clone(),
+        )?;
+        if restored_id != id {
+            self.storage.remove_checkpoint(&self.record_path(id))?;
+        }
         let result = self.description(&actor)?;
-        self.observed.insert(id.into(), actor.baseline());
-        self.actors.insert(id.into(), actor);
+        self.observed.insert(restored_id.clone(), actor.baseline());
+        self.actors.insert(restored_id, actor);
         Ok(result)
     }
 

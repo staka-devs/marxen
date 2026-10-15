@@ -139,6 +139,8 @@ pub struct Fingerprint(pub String);
 #[serde(deny_unknown_fields)]
 pub struct RecoveryRecord {
     pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_id: Option<crate::contracts::RootId>,
     pub root: PathBuf,
     pub path: Option<String>,
     pub baseline: Option<Fingerprint>,

@@ -83,6 +83,24 @@ pub async fn ai_prompt_stream(
     isolation: tauri::State<'_, IsolationState>,
     request: AiPromptRequest,
 ) -> Result<AiRunId, AiError> {
+    if request
+        .conversation_id
+        .as_ref()
+        .is_none_or(|id| id.is_empty() || id.len() > 128)
+    {
+        return Err(AiError::InvalidConfig {
+            detail: "会話の識別子がありません".into(),
+        });
+    }
+    if request
+        .contexts
+        .iter()
+        .any(|context| context.location.is_none())
+    {
+        return Err(AiError::InvalidConfig {
+            detail: "送信対象の所有ルートがありません".into(),
+        });
+    }
     service.prompt_stream(
         Arc::new(move |event| {
             let _ = app.emit("ai-stream", event);

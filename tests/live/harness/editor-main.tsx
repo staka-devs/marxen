@@ -76,7 +76,7 @@ const backend = {
     treeEntries.push(entry); calls.push(`create_folder:${relative}`); return entry;
   },
   /** Open only this fixture workspace. */
-  openWorkspace: async () => ({ root: "fixture" }),
+  openWorkspace: async () => ({ root: "fixture", scope: { rootId: "fixture-root", generation: "1" } }),
   /** Return the current fixture document descriptor. */
   listDocuments: async () => [{ path, snapshot: snapshot() }],
   /** Return the same contained fixture document. */

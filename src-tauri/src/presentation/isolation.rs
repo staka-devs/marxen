@@ -6,22 +6,28 @@ use crate::contracts::isolation::{
     ApproveResult, IsolatedCopyInfo, IsolationDiff, StagedImportOutcome, StagedNewFile,
     StagedProposal,
 };
-use crate::contracts::WorkspaceError;
+use crate::contracts::{RootScope, WorkspaceError};
 use crate::presentation::document::ActorState;
 
 /// Lock workspace before isolation so review operations share the same mutation order as AI scope pins.
 fn with_both<T>(
     workspace: &ActorState,
     isolation: &IsolationState,
+    scope: Option<&RootScope>,
+    copy_id: Option<&IsolatedCopyId>,
     call: impl FnOnce(&mut Workspace, &mut IsolationManager) -> Result<T, WorkspaceError>,
 ) -> Result<T, WorkspaceError> {
     let mut wguard = workspace.workspace.lock().map_err(|_| WorkspaceError::Io {
         detail: "workspace lock poisoned".into(),
     })?;
-    let workspace = wguard.as_mut().ok_or(WorkspaceError::NoWorkspace)?;
     let mut mguard = isolation.manager.lock().map_err(|_| WorkspaceError::Io {
         detail: "isolation lock poisoned".into(),
     })?;
+    let owner = match scope {
+        Some(scope) => scope.clone(),
+        None => mguard.owner(copy_id.ok_or(WorkspaceError::NotFound)?)?,
+    };
+    let workspace = wguard.workspace_mut(&owner)?;
     call(workspace, &mut mguard)
 }
 
@@ -30,9 +36,19 @@ fn with_both<T>(
 pub fn isolation_create(
     workspace_state: tauri::State<'_, ActorState>,
     isolation: tauri::State<'_, IsolationState>,
+    scope: RootScope,
     contexts: Vec<PromptContext>,
 ) -> Result<IsolatedCopyInfo, WorkspaceError> {
-    with_both(&workspace_state, &isolation, |w, m| {
+    with_both(&workspace_state, &isolation, Some(&scope), None, |w, m| {
+        for context in &contexts {
+            w.validate_location(
+                &context.document_id.0,
+                context
+                    .location
+                    .as_ref()
+                    .ok_or(WorkspaceError::WrongOwner)?,
+            )?;
+        }
         m.create_copy(w, &contexts)
     })
 }
@@ -45,7 +61,9 @@ pub fn isolation_diff(
     copy_id: String,
 ) -> Result<Vec<IsolationDiff>, WorkspaceError> {
     let id = IsolatedCopyId(copy_id);
-    with_both(&workspace_state, &isolation, |w, m| m.diff(w, &id))
+    with_both(&workspace_state, &isolation, None, Some(&id), |w, m| {
+        m.diff(w, &id)
+    })
 }
 
 #[tauri::command(async)]
@@ -59,7 +77,7 @@ pub fn isolation_new_files(
     copy_id: String,
 ) -> Result<Vec<StagedNewFile>, WorkspaceError> {
     let id = IsolatedCopyId(copy_id);
-    with_both(&workspace_state, &isolation, |w, m| {
+    with_both(&workspace_state, &isolation, None, Some(&id), |w, m| {
         m.staged_new_files(w, &id)
     })
 }
@@ -78,7 +96,7 @@ pub fn isolation_import_new(
     files: Vec<crate::contracts::isolation::ImportFileRequest>,
 ) -> Result<Vec<StagedImportOutcome>, WorkspaceError> {
     let id = IsolatedCopyId(copy_id);
-    with_both(&workspace_state, &isolation, |w, m| {
+    with_both(&workspace_state, &isolation, None, Some(&id), |w, m| {
         m.import_new_files(w, &id, &files)
     })
 }
@@ -93,7 +111,7 @@ pub fn isolation_stage_proposal(
     mode: PromptMode,
 ) -> Result<StagedProposal, WorkspaceError> {
     let id = IsolatedCopyId(copy_id);
-    with_both(&workspace_state, &isolation, |w, m| {
+    with_both(&workspace_state, &isolation, None, Some(&id), |w, m| {
         m.stage_proposal(w, &id, &proposal, mode)
     })
 }
@@ -106,7 +124,9 @@ pub fn isolation_approve(
     copy_id: String,
 ) -> Result<ApproveResult, WorkspaceError> {
     let id = IsolatedCopyId(copy_id);
-    with_both(&workspace_state, &isolation, |w, m| m.approve(w, &id))
+    with_both(&workspace_state, &isolation, None, Some(&id), |w, m| {
+        m.approve(w, &id)
+    })
 }
 
 #[tauri::command(async)]
@@ -117,7 +137,7 @@ pub fn isolation_reject(
     copy_id: String,
 ) -> Result<(), WorkspaceError> {
     let id = IsolatedCopyId(copy_id);
-    with_both(&workspace_state, &isolation, |w, m| {
+    with_both(&workspace_state, &isolation, None, Some(&id), |w, m| {
         let _ = w;
         m.reject(&id)
     })
@@ -131,7 +151,7 @@ pub fn isolation_cancel(
     copy_id: String,
 ) -> Result<(), WorkspaceError> {
     let id = IsolatedCopyId(copy_id);
-    with_both(&workspace_state, &isolation, |w, m| {
+    with_both(&workspace_state, &isolation, None, Some(&id), |w, m| {
         let _ = w;
         m.cancel(&id)
     })

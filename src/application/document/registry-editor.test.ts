@@ -41,7 +41,7 @@ describe("serialized editor Enter and table navigation", () => {
     const context: EditorContext = { cursor: { documentId: "doc", revision: 4, anchor: 3, head: 3 }, mode: "insert", presentation: { editable: true, selectionToolbar: false, mappings: [] } };
     transport.fetchEditorContext = vi.fn(async () => context);
     expect(await client.selectAll(context)).toEqual({ documentId: "doc", revision: 4, anchor: 0, head: 3 });
-    expect(transport.reportCursor).toHaveBeenCalledExactlyOnceWith({ documentId: "doc", revision: 4, anchor: 0, head: 3 });
+    expect(transport.reportCursor).toHaveBeenCalledExactlyOnceWith({ documentId: "doc", revision: 4, anchor: 0, head: 3 }, undefined);
     expect(transport.inputWithCopy).not.toHaveBeenCalled(); expect(transport.applyEdits).not.toHaveBeenCalled();
   });
   it.each(["visual_block", "command_line", "terminal"] as const)("rejects native Select All in %s mode and after selection drift", async (mode) => {

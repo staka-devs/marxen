@@ -1,6 +1,6 @@
 // Generated from src-tauri/src/contracts/ai.rs. Run npm run ai-contracts:generate.
 // Do not edit by hand. AI IPC schema version 6.
-import type { DocumentId, Revision, Utf16Range } from "./contracts";
+import type { DocumentId, Revision, Utf16Range, DocumentLocation } from "./contracts";
 export type AiProviderKind = "acp" | "openai_compatible" | "anthropic";
 export type AcpPreset = "codex" | "opencode" | "copilot" | "custom";
 export type AcpArgv = { command: string, args: Array<string>, };
@@ -29,7 +29,7 @@ export type AiProviderConfig = { kind: AiProviderKind, acp: AcpConfig | null, op
  */
 connectionId?: ApiConnectionId, };
 export type PromptMode = "ask" | "generate" | "rewrite" | "workspace";
-export type PromptContext = { documentId: DocumentId, revision: Revision, ranges: Array<Utf16Range>, text: string, };
+export type PromptContext = { location?: DocumentLocation, documentId: DocumentId, revision: Revision, ranges: Array<Utf16Range>, text: string, };
 export type IsolatedCopyId = string;
 export type AcpSessionId = string;
 export type AiRunId = string;
@@ -38,14 +38,14 @@ export type ChatRole = "user" | "assistant";
 export type ChatHistoryMessage = { role: ChatRole, text: string, };
 export type AiPromptRequest = { provider: AiProviderConfig, mode: PromptMode, prompt: string, contexts: Array<PromptContext>, staging: StagingTarget, 
 /**
- * Resume an existing ACP session. Required to be absent for HTTP backends.
+ * Unproven resume handles are rejected before provider launch.
  */
 sessionId: AcpSessionId | null, 
 /**
  * Explicit multi-turn history (oldest first). Only completed turns;
  * bounded and validated by Rust before any side effect.
  */
-history: Array<ChatHistoryMessage>, };
+history: Array<ChatHistoryMessage>, conversationId?: string, };
 export type ContextRef = { documentId: DocumentId, revision: Revision, };
 export type ProposalText = { text: string, baseContexts: Array<ContextRef>, };
 export type ContextSummary = { documentId: DocumentId, revision: Revision, ranges: Array<Utf16Range>, chars: number, };

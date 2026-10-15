@@ -41,6 +41,34 @@ const labels = { doc_01: "a.md" };
 }
 
 describe("agent chat", () => {
+  it("keeps a completed conversation on its original root and requires a new chat after a switch", async () => {
+    const first = { ...contexts[0], location: { scope: { rootId: "root-a", generation: "1" }, path: "same.md", position: 0 } };
+    const second = { ...contexts[0], documentId: "doc-b", location: { scope: { rootId: "root-b", generation: "2" }, path: "same.md", position: 0 } };
+    mockStartPrompt.mockImplementation(async (_request, onEvent) => {
+      onEvent({ type: "done", payload: { runId: "owned-chat", proposal: { text: "answer", baseContexts: [] }, sent: [] } });
+      return {
+        runId: "owned-chat",
+        /** Stop the already completed mock run. */
+        stop: async () => undefined,
+      };
+    });
+    const { rerender } = render(<AiPanel startPrompt={mockStartPrompt} contexts={[first]} staging={staging} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "first question" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(mockStartPrompt).toHaveBeenCalledOnce());
+    const conversationId = mockStartPrompt.mock.calls[0][0].conversationId;
+    expect(conversationId).toBeTruthy();
+    rerender(<AiPanel startPrompt={mockStartPrompt} contexts={[second]} staging={staging} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "second question" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    expect(await screen.findByText(/既存の会話は元のフォルダー/)).toBeVisible();
+    expect(mockStartPrompt).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "新しい会話" }));
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "new root question" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(mockStartPrompt).toHaveBeenCalledTimes(2));
+    expect(mockStartPrompt.mock.calls[1][0].conversationId).not.toBe(conversationId);
+  });
   it("does not publish a done event that races with cancellation", async () => {
     let handler!: (event: AiStreamEvent) => void;
     /** Owned stop handle recording cancellation. */

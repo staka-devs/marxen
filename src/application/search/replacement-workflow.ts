@@ -39,13 +39,16 @@ export async function replaceSearchResults(gateway: WorkspaceGateway, editor: Se
     if (!run.current()) { outcome.cancelled = true; break; }
     try {
       const plan = await gateway.planSearchReplacement({
+        ...(hit.location ? { location: hit.location } : {}),
+        ...(hit.documentId ? { documentId: hit.documentId } : {}),
+        ...(hit.scope ? { scope: hit.scope } : {}),
         root: run.root, path: hit.path, query: run.query, options: run.options,
         replacement: run.replacement, contentToken: hit.contentToken,
         revision: hit.revision, range: run.all ? null : hit.range,
       });
       if (!run.current()) { outcome.cancelled = true; break; }
       run.opened(plan);
-      const snapshot = await editor.applyEdits({ documentId: plan.document.snapshot.documentId, baseRevision: plan.document.snapshot.revision }, plan.edits, run.current);
+      const snapshot = await editor.applyEdits({ ...(plan.document.snapshot.location ? { location: plan.document.snapshot.location } : {}), documentId: plan.document.snapshot.documentId, baseRevision: plan.document.snapshot.revision }, plan.edits, run.current);
       outcome.count += plan.edits.length;
       outcome.files += 1;
       run.changed(snapshot);

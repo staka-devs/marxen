@@ -12,6 +12,7 @@ fn key(actor: &DocumentActor, key: &str) {
     actor
         .input_checked(
             SaveRequest {
+                location: None,
                 document_id: snapshot.document_id,
                 base_revision: snapshot.revision,
             },

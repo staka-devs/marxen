@@ -47,6 +47,7 @@ enum CopyStatus {
 
 #[derive(Debug, Clone)]
 struct CopyBase {
+    location: crate::contracts::DocumentLocation,
     document_id: DocumentId,
     revision: Revision,
     relative_path: Option<String>,
@@ -59,6 +60,7 @@ struct CopyBase {
 
 #[derive(Debug)]
 struct IsolatedCopy {
+    scope: crate::contracts::RootScope,
     workspace_root: PathBuf,
     staging_dir: PathBuf,
     bases: Vec<CopyBase>,
@@ -74,6 +76,7 @@ struct IsolatedCopy {
 /// bound to the approving workspace even after the copy is consumed; records
 /// clear only once every pending file imports on a fully successful request.
 pub struct IsolationManager {
+    conversations: HashMap<String, crate::contracts::RootScope>,
     storage: Arc<dyn StagingStorage>,
     clock: Arc<dyn Clock>,
     staging_root: PathBuf,
@@ -97,6 +100,7 @@ pub struct IsolationManager {
 /// trusting caller-supplied paths and content.
 #[derive(Debug, Clone)]
 struct RetiredCopy {
+    scope: crate::contracts::RootScope,
     root: PathBuf,
     pending: HashMap<String, String>,
 }
@@ -125,6 +129,7 @@ impl IsolationManager {
             return Err(WorkspaceError::OutsideWorkspace);
         }
         Ok(Self {
+            conversations: HashMap::new(),
             storage,
             clock,
             staging_root,
@@ -139,6 +144,23 @@ impl IsolationManager {
     /// Borrow the canonical guarded staging root.
     pub fn staging_root(&self) -> &Path {
         &self.staging_root
+    }
+
+    /// Resolve the owner captured by an active copy or its approved pending imports.
+    pub fn owner(
+        &self,
+        copy_id: &IsolatedCopyId,
+    ) -> Result<crate::contracts::RootScope, WorkspaceError> {
+        validate_copy_id_string(&copy_id.0)?;
+        self.copies
+            .get(&copy_id.0)
+            .map(|copy| copy.scope.clone())
+            .or_else(|| {
+                self.retired_imports
+                    .get(&copy_id.0)
+                    .map(|record| record.scope.clone())
+            })
+            .ok_or(WorkspaceError::NotFound)
     }
 
     /// Allocate a process-local copy identifier without exposing a live document path.
@@ -231,6 +253,9 @@ impl IsolationManager {
         let mut order: Vec<String> = Vec::new();
         let mut grouped: HashMap<String, Vec<&PromptContext>> = HashMap::new();
         for context in contexts {
+            if let Some(location) = &context.location {
+                workspace.validate_location(&context.document_id.0, location)?;
+            }
             crate::domain::validation::validate_document_id(&context.document_id)
                 .map_err(|_| WorkspaceError::InvalidPath)?;
             if !grouped.contains_key(&context.document_id.0) {
@@ -329,6 +354,10 @@ impl IsolationManager {
                 self.storage
                     .check_no_symlink(&staging_file, &self.staging_root)?;
                 bases.push(CopyBase {
+                    location: snapshot
+                        .location
+                        .clone()
+                        .ok_or(WorkspaceError::WrongOwner)?,
                     document_id: snapshot.document_id.clone(),
                     revision: snapshot.revision,
                     relative_path: relative_path.clone(),
@@ -359,6 +388,7 @@ impl IsolationManager {
         self.copies.insert(
             copy_id.0.clone(),
             IsolatedCopy {
+                scope: workspace.scope().clone(),
                 workspace_root,
                 staging_dir,
                 bases,
@@ -408,8 +438,26 @@ impl IsolationManager {
         workspace: &Workspace,
         request: &crate::contracts::ai::AiPromptRequest,
     ) -> Result<PathBuf, WorkspaceError> {
+        // Each run creates a new ACP process/session. No resumed session has a proven owner.
+        if request.session_id.is_some() {
+            return Err(WorkspaceError::WrongOwner);
+        }
         let dir = self.resolve(&request.staging.copy_id)?;
         self.authorize_prompt(workspace, request)?;
+        if let Some(id) = &request.conversation_id {
+            if id.is_empty() || id.len() > 128 {
+                return Err(WorkspaceError::InvalidPath);
+            }
+            if self
+                .conversations
+                .get(id)
+                .is_some_and(|scope| scope != workspace.scope())
+            {
+                return Err(WorkspaceError::WrongOwner);
+            }
+            self.conversations
+                .insert(id.clone(), workspace.scope().clone());
+        }
         self.pin_for_run(&request.staging.copy_id)?;
         Ok(dir)
     }
@@ -444,6 +492,9 @@ impl IsolationManager {
                 .iter()
                 .filter(|context| context.document_id == base.document_id)
             {
+                if let Some(location) = &context.location {
+                    workspace.validate_location(&context.document_id.0, location)?;
+                }
                 matched += 1;
                 if context.revision != base.revision {
                     return Err(stale(context.revision, base.revision));
@@ -514,6 +565,12 @@ impl IsolationManager {
     ) -> Result<(), WorkspaceError> {
         if workspace.root() != copy.workspace_root {
             return Err(WorkspaceError::OutsideWorkspace);
+        }
+        if workspace.scope() != &copy.scope {
+            return Err(WorkspaceError::StaleRoot);
+        }
+        for base in &copy.bases {
+            workspace.validate_location(&base.document_id.0, &base.location)?;
         }
         Ok(())
     }
@@ -1126,6 +1183,7 @@ impl IsolationManager {
                 self.retired_imports.insert(
                     copy_id.0.clone(),
                     RetiredCopy {
+                        scope: copy.scope.clone(),
                         root: copy.workspace_root.clone(),
                         pending: pending_imports,
                     },
@@ -1180,6 +1238,13 @@ impl IsolationManager {
             .ok_or(WorkspaceError::NotFound)?;
         if workspace.root() != root.as_path() {
             return Err(WorkspaceError::OutsideWorkspace);
+        }
+        if self
+            .retired_imports
+            .get(&copy_id.0)
+            .is_some_and(|record| &record.scope != workspace.scope())
+        {
+            return Err(WorkspaceError::StaleRoot);
         }
         if files.is_empty() {
             return Ok(Vec::new());

@@ -13,6 +13,7 @@ import {
   workspaceErrorText,
 } from "../../domain/document-errors";
 import { serializeVimKey } from "../../domain/vim-keys";
+import { applySnapshot, docFromOpen } from "./document-helpers";
 import type { DocumentSnapshot } from "../../contracts/contracts";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -29,6 +30,46 @@ const mockedInvoke = vi.mocked(invoke);
 }
 
 beforeEach(() => vi.resetAllMocks());
+
+it("keeps a renamed view when an old-position snapshot arrives at the same text revision", () => {
+  const scope = { rootId: "view-root", generation: "1" };
+  const current = docFromOpen({ path: "new.md", snapshot: { ...snapshot("view", 4, "current"), location: { scope, path: "new.md", position: 2 } } });
+  const late = { ...snapshot("view", 4, "old"), location: { scope, path: "old.md", position: 1 } };
+  expect(applySnapshot(current, late)).toBe(current);
+  expect(applySnapshot(current, { ...late, location: { scope: { ...scope, generation: "removed" }, path: "new.md", position: 3 } })).toBe(current);
+});
+
+it("rejects a queued save captured before a native rename without sending it to the new position", async () => {
+  const client = new RegistryClient(workspaceApi);
+  const scope = { rootId: "queue-root", generation: "1" };
+  const initial = { ...snapshot("rename-queue", 4, "same", false), location: { scope, path: "old.md", position: 0 } };
+  client.noteSnapshot(initial);
+  let release!: (value: { path: string; snapshot: DocumentSnapshot }) => void;
+  mockedInvoke.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+  const rename = client.rename({ documentId: initial.documentId, baseRevision: 4 }, "new.md");
+  const save = client.save({ documentId: initial.documentId, baseRevision: 4 });
+  const rejected = expect(save).rejects.toEqual({ code: "stale_location" });
+  await vi.waitFor(() => expect(mockedInvoke).toHaveBeenCalledOnce());
+  release({ path: "new.md", snapshot: { ...initial, location: { scope, path: "new.md", position: 1 } } });
+  await rename; await rejected;
+  expect(mockedInvoke).toHaveBeenCalledOnce();
+});
+
+it("keeps an operation's captured location while it awaits native reads", async () => {
+  const client = new RegistryClient(workspaceApi);
+  const scope = { rootId: "await-root", generation: "1" };
+  const initial = { ...snapshot("await-owner", 0, "text", false), location: { scope, path: "old.md", position: 0 } };
+  client.noteSnapshot(initial);
+  let release!: (value: unknown) => void;
+  mockedInvoke.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+  mockedInvoke.mockResolvedValueOnce({ ...initial, revision: 1 });
+  const input = client.insertNativeText(initial.documentId, "x");
+  await vi.waitFor(() => expect(mockedInvoke).toHaveBeenCalledOnce());
+  client.noteSnapshot({ ...initial, location: { scope, path: "new.md", position: 1 } });
+  release({ documentId: initial.documentId, revision: 0, mode: "insert" });
+  await input;
+  expect(mockedInvoke).toHaveBeenLastCalledWith("nvim_input", expect.objectContaining({ location: initial.location }));
+});
 
 it("rechecks a cancelled search guard when its edit reaches the native document queue", async () => {
   const client = new RegistryClient(workspaceApi);

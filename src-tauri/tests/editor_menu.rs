@@ -28,6 +28,7 @@ impl Clipboard for MemoryClipboard {
 fn request(actor: &marxen_lib::application::document::DocumentActor) -> SaveRequest {
     let snapshot = actor.snapshot();
     SaveRequest {
+        location: None,
         document_id: snapshot.document_id,
         base_revision: snapshot.revision,
     }
@@ -179,6 +180,7 @@ fn clipboard_guards_reject_drift() {
     assert!(actor
         .editor_history(
             SaveRequest {
+                location: None,
                 document_id: DocumentId("editor-stale".into()),
                 base_revision: Revision(0)
             },

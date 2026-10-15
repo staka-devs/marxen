@@ -9,6 +9,27 @@ use ts_rs::TS;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct DocumentId(pub String);
 
+/// Stable Rust-issued identity of one canonical workspace root.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
+pub struct RootId(pub String);
+
+/// One registered incarnation of a root; reopening invalidates earlier scopes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RootScope {
+    pub root_id: RootId,
+    pub generation: String,
+}
+
+/// Captured owner and root-relative position, including pathless documents.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentLocation {
+    pub scope: RootScope,
+    pub path: Option<String>,
+    pub position: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct Revision(pub u32);
 
@@ -21,6 +42,10 @@ pub struct Utf8ByteOffset(pub u32);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DocumentSnapshot {
+    /// Absent only for standalone actors and legacy recovery v1 snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub location: Option<DocumentLocation>,
     pub document_id: DocumentId,
     pub revision: Revision,
     pub text: String,
@@ -61,6 +86,10 @@ pub struct EditRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SaveRequest {
+    /// Internal standalone actors may omit this; document IPC requires a location.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub location: Option<DocumentLocation>,
     pub document_id: DocumentId,
     pub base_revision: Revision,
 }
@@ -177,6 +206,10 @@ pub enum ContractError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum WorkspaceError {
+    UnknownRoot,
+    StaleRoot,
+    WrongOwner,
+    StaleLocation,
     InvalidPath,
     OutsideWorkspace,
     NotMarkdown,
@@ -187,7 +220,7 @@ pub enum WorkspaceError {
     NoWorkspace,
     UnknownDocument,
     UnsavedChanges {
-        snapshot: DocumentSnapshot,
+        snapshot: Box<DocumentSnapshot>,
     },
     Conflict {
         path: String,
@@ -221,6 +254,7 @@ impl std::error::Error for WorkspaceError {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceInfo {
+    pub scope: RootScope,
     pub root: String,
 }
 
@@ -254,6 +288,12 @@ pub struct OpenDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchMatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub location: Option<DocumentLocation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub scope: Option<RootScope>,
     pub path: String,
     pub document_id: Option<DocumentId>,
     pub revision: Option<Revision>,
@@ -310,6 +350,15 @@ pub struct SearchResults {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SearchReplaceRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub location: Option<DocumentLocation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub document_id: Option<DocumentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub scope: Option<RootScope>,
     pub root: String,
     pub path: String,
     pub query: String,
@@ -340,6 +389,7 @@ pub enum CloseAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryEntry {
+    pub location: DocumentLocation,
     pub document_id: DocumentId,
     pub path: Option<String>,
     pub revision: Revision,
@@ -366,6 +416,14 @@ pub enum WorkspaceEvent {
         document_id: DocumentId,
         error: WorkspaceError,
     },
+}
+
+/// Events retain the producing root incarnation across switches and reconnects.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RootEvent {
+    pub scope: RootScope,
+    pub event: WorkspaceEvent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -433,6 +491,10 @@ pub fn typescript() -> String {
     let cfg = ts_rs::Config::default();
     let declarations = [
         DocumentId::decl(&cfg),
+        RootId::decl(&cfg),
+        RootScope::decl(&cfg),
+        DocumentLocation::decl(&cfg),
+        RootEvent::decl(&cfg),
         Revision::decl(&cfg),
         Utf16Offset::decl(&cfg),
         Utf8ByteOffset::decl(&cfg),

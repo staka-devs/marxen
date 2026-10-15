@@ -74,6 +74,7 @@ fn codex_account_reader_bounds_waiting_and_never_returns_private_error_bodies() 
 /// Build a fixed revision context containing emoji and Japanese text for wire and streaming checks.
 fn context() -> PromptContext {
     PromptContext {
+        location: None,
         document_id: DocumentId("doc_07".into()),
         revision: Revision(3),
         ranges: vec![Utf16Range {
@@ -87,6 +88,7 @@ fn context() -> PromptContext {
 /// Build a rewrite request pointed at the supplied loopback OpenAI-compatible endpoint.
 fn openai_request(base: &str) -> AiPromptRequest {
     AiPromptRequest {
+        conversation_id: None,
         provider: AiProviderConfig {
             kind: AiProviderKind::OpenaiCompatible,
             acp: None,
@@ -556,6 +558,7 @@ async fn live_tests_use_mock_server_without_real_credentials() {
 /// Build a custom ACP rewrite request with a fixed scope and no resumable session.
 fn acp_request(argv: AcpArgv) -> AiPromptRequest {
     AiPromptRequest {
+        conversation_id: None,
         provider: AiProviderConfig {
             kind: AiProviderKind::Acp,
             acp: Some(AcpConfig {

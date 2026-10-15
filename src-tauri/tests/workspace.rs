@@ -16,6 +16,7 @@ fn setup() -> (TempDir, TempDir, Workspace) {
 /// Capture the snapshot identity and revision for a guarded save or workspace action.
 fn request(snapshot: &DocumentSnapshot) -> SaveRequest {
     SaveRequest {
+        location: None,
         document_id: snapshot.document_id.clone(),
         base_revision: snapshot.revision,
     }
@@ -187,7 +188,18 @@ fn listing_open_create_rename_and_tabs_are_safe() {
     assert!(w.open_markdown("other.txt").is_err());
     let s = edit(w.actor(&a.snapshot.document_id.0).unwrap(), 0, 1, "X");
     let renamed = w.rename(request(&s), "notes/renamed.md").unwrap();
-    assert_eq!(renamed.snapshot, s);
+    assert_eq!(renamed.snapshot.document_id, s.document_id);
+    assert_eq!(renamed.snapshot.revision, s.revision);
+    assert_eq!(renamed.snapshot.text, s.text);
+    assert_eq!(renamed.snapshot.dirty, s.dirty);
+    assert_eq!(
+        renamed.snapshot.location.as_ref().unwrap().path.as_deref(),
+        Some("notes/renamed.md")
+    );
+    assert_eq!(
+        renamed.snapshot.location.as_ref().unwrap().position,
+        s.location.as_ref().unwrap().position + 1
+    );
     assert!(!root.path().join("notes/a.md").exists());
     assert_eq!(
         fs::read(root.path().join("notes/renamed.md")).unwrap(),
@@ -292,6 +304,9 @@ fn native_search_replacement_plans_are_exact_and_do_not_save() {
     let hit = &found.matches[1];
     let plan = workspace
         .plan_search_replacement(SearchReplaceRequest {
+            location: None,
+            document_id: None,
+            scope: None,
             root: workspace.info().root,
             path: hit.path.clone(),
             query: "cat".into(),
@@ -328,6 +343,9 @@ fn native_search_replacement_plans_are_exact_and_do_not_save() {
     let hit = &refreshed.matches[0];
     let plan = workspace
         .plan_search_replacement(SearchReplaceRequest {
+            location: None,
+            document_id: None,
+            scope: None,
             root: workspace.info().root,
             path: hit.path.clone(),
             query: r"cat|\$1".into(),
@@ -370,6 +388,9 @@ fn native_search_plan_rejects_stale_sources_and_contexts() {
         .unwrap();
     let hit = &found.matches[0];
     let request = SearchReplaceRequest {
+        location: None,
+        document_id: None,
+        scope: None,
         root: workspace.info().root,
         path: hit.path.clone(),
         query: "cat".into(),
@@ -440,6 +461,9 @@ fn native_search_limits_do_not_authorize_replace_all() {
     assert!(found.matches.iter().all(|hit| hit.path == "a.txt"));
     let hit = &found.matches[1999];
     let request = SearchReplaceRequest {
+        location: None,
+        document_id: None,
+        scope: None,
         root: workspace.info().root,
         path: hit.path.clone(),
         query: "cat".into(),
@@ -467,6 +491,7 @@ fn native_search_limits_do_not_authorize_replace_all() {
     workspace
         .close(
             SaveRequest {
+                location: None,
                 document_id: open.snapshot.document_id,
                 base_revision: open.snapshot.revision,
             },

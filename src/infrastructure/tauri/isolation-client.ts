@@ -41,7 +41,7 @@ export function requireDesktop(): void {
  */
 export async function createIsolatedCopy(contexts: PromptContext[]): Promise<IsolatedCopyInfo> {
   requireDesktop();
-  return invoke<IsolatedCopyInfo>("isolation_create", { contexts });
+  return invoke<IsolatedCopyInfo>("isolation_create", { contexts, scope: contexts[0]?.location?.scope });
 }
 
 /**

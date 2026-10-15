@@ -3,7 +3,7 @@ use super::{
     credentials::AgentKeyring, credentials::ApiConnectionKeyring, runs::*, transport::*,
     usage::UsageRegistry,
 };
-use crate::application::{isolation::IsolationManager, workspace::Workspace};
+use crate::application::{isolation::IsolationManager, root_registry::RootRegistry};
 use crate::contracts::ai::*;
 use crate::domain::ai::*;
 use std::sync::{Arc, Mutex};
@@ -42,7 +42,7 @@ fn scope_error(request: &AiPromptRequest, error: crate::contracts::WorkspaceErro
 /// Rust snapshots, and pin the copy for the run. Workspace is locked before
 /// the isolation manager, matching the isolation IPC order.
 fn prepare_scoped_run(
-    workspace_state: &Arc<Mutex<Option<Workspace>>>,
+    workspace_state: &Arc<Mutex<RootRegistry>>,
     isolation: &Arc<Mutex<IsolationManager>>,
     request: &AiPromptRequest,
 ) -> Result<std::path::PathBuf, AiError> {
@@ -51,12 +51,15 @@ fn prepare_scoped_run(
         .map_err(|_| AiError::ConnectionFailed {
             detail: "ワークスペースの状態を取得できません".into(),
         })?;
-    let workspace = wguard.as_mut().ok_or_else(|| AiError::StagingUnresolved {
-        copy_id: request.staging.copy_id.clone(),
-    })?;
     let mut mguard = isolation.lock().map_err(|_| AiError::ConnectionFailed {
         detail: "隔離コピーの状態を取得できません".into(),
     })?;
+    let owner = mguard
+        .owner(&request.staging.copy_id)
+        .map_err(|error| scope_error(request, error))?;
+    let workspace = wguard
+        .workspace_mut(&owner)
+        .map_err(|error| scope_error(request, error))?;
     mguard
         .prepare_prompt_run(workspace, request)
         .map_err(|error| scope_error(request, error))
@@ -209,11 +212,15 @@ impl AiService {
     pub fn prompt_stream(
         &self,
         emit: Arc<dyn Fn(AiStreamEvent) + Send + Sync>,
-        workspace_state: Arc<Mutex<Option<Workspace>>>,
+        workspace_state: Arc<Mutex<RootRegistry>>,
         isolation: Arc<Mutex<IsolationManager>>,
         request: AiPromptRequest,
     ) -> Result<AiRunId, AiError> {
         validate_prompt_request(&request)?;
+        // Native transport owns fresh session/new runs and cannot authorize a foreign resume ID.
+        if request.session_id.is_some() {
+            return Err(AiError::UnknownSession);
+        }
         match request.provider.kind {
             AiProviderKind::Acp => {
                 let argv = resolve_acp_argv(request.provider.acp.as_ref().expect("validated"))?;
