@@ -118,4 +118,24 @@ describe("chat model selection", () => {
     await act(async () => resolve({ ok: true, detail: "old", configOptions: options }));
     await waitFor(() => expect(screen.getByTestId("models").textContent).toBe("0"));
   });
+  it("isolates discovery by stable connection scope and drops late foreign results", async () => {
+    let resolve!: (value: { ok: boolean; detail: string; configOptions: AcpConfigOption[] }) => void;
+    const testConnection = vi.fn().mockImplementation(() => new Promise((done) => { resolve = done; }));
+    /** Flip connection scopes while probing to prove per-connection result isolation. */
+    function ScopedHarness() {
+      const [scope, setScope] = useState<string | null>("api-1");
+      const models = useAiModels(defaultProviderConfig("acp"), { testConnection } as unknown as AiGateway, scope);
+      return <><ScopedStatus discovered={models.discovered} options={models.options} /><button onClick={() => void models.refresh()}>Probe</button><button onClick={() => setScope("api-2")}>Scope</button></>;
+    }
+    /** Show discovery presence and size for the scope-isolation regression. */
+    function ScopedStatus({ discovered, options: values }: { discovered: boolean; options: AcpConfigOption[] }) { return <output data-testid="scoped">{`${discovered}:${values.length}`}</output>; }
+    render(<ScopedHarness />);
+    fireEvent.click(screen.getByText("Probe"));
+    fireEvent.click(screen.getByText("Scope"));
+    await act(async () => resolve({ ok: true, detail: "old-scope", configOptions: options }));
+    await waitFor(() => expect(screen.getByTestId("scoped").textContent).toBe("false:0"));
+    fireEvent.click(screen.getByText("Probe"));
+    await act(async () => resolve({ ok: true, detail: "new-scope", configOptions: [] }));
+    await waitFor(() => expect(screen.getByTestId("scoped").textContent).toBe("true:0"));
+  });
 });

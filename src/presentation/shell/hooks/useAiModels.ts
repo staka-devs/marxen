@@ -9,10 +9,10 @@ import { aiProviderId } from "../../../domain/ai-view-preferences";
 import type { AiProviderId, AdvertisedAiProvider } from "../../../contracts/ai-view-preferences";
 
 /** Share explicit agent discovery across both chat surfaces, fencing stale connection results. */
-export function useAiModels(provider: AiProviderConfig, gateway?: AiGateway) {
+export function useAiModels(provider: AiProviderConfig, gateway?: AiGateway, scopeKey?: string | null) {
   const { t } = useI18n();
   const providerId = aiProviderId(provider);
-  const connection = JSON.stringify({ kind: provider.kind, preset: provider.acp?.preset, argv: provider.acp?.argv });
+  const connection = JSON.stringify({ kind: provider.kind, preset: provider.acp?.preset, argv: provider.acp?.argv, scope: scopeKey ?? null });
   const current = useRef(connection);
   current.current = connection;
   const attempt = useRef(0);

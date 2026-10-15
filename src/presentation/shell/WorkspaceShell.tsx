@@ -20,8 +20,12 @@ import { EditorActionsPopover } from "../workspace/EditorActionsPopover";
 import { WorkspaceSidebar } from "../workspace/WorkspaceSidebar";
 import InlineChat from "../ai-inline-chat";
 import ReviewPanel from "../review-panel";
-import type { AiProviderConfig } from "../../contracts/ai-contracts";
-import { buildProviderConfig } from "../../domain/ai-config";
+import type { AiProviderConfig, ApiConnection, ApiConnectionId, AiProviderKind } from "../../contracts/ai-contracts";
+import { buildProviderConfig, defaultProviderConfig, describeInvokeError } from "../../domain/ai-config";
+import { buildProviderConfigFromConnection, defaultConnectionList, migrateLegacyProfile, resolveProviderChange, type ApiConnectionList } from "../../domain/ai-connections";
+import { mintConnectionId } from "../ai/connection-id";
+import { defaultProfile } from "../../domain/ai-profile";
+import type { ApiConnectionControls } from "../ai/ApiConnections";
 import { FileTree, buildTree } from "../workspace/FileTree";
 import { ImageViewer } from "../workspace/ImageViewer";
 import { ImageDropZone } from "../workspace/ImageDropZone";
@@ -64,6 +68,8 @@ import { docFromOpen, fileLabel } from "../../application/document/document-help
 import type {
   AiGateway,
   AiProfileStore,
+  ApiConnectionGateway,
+  ApiConnectionStore,
   ClipboardGateway,
   DialogGateway,
   DocumentGateway,
@@ -118,6 +124,10 @@ export interface WorkspaceShellProps {
   clipboardGateway?: ClipboardGateway;
   /** Non-secret AI profile persistence. */
   aiProfileStore?: AiProfileStore;
+  /** Non-secret named API connection persistence. */
+  apiConnectionStore?: ApiConnectionStore;
+  /** Per-connection OS credential gateway. */
+  apiConnectionGateway?: ApiConnectionGateway;
   /** Persist AI control visibility and right-chat width independently of editor settings. */
   aiViewPreferencesStore?: AiViewPreferencesStore;
   /** View-only editor preferences persistence. */
@@ -149,6 +159,43 @@ const MODE_LABEL: Record<ViewMode, string> = {
 };
 
 /**
+ * Load the initial chat provider, preferring the active named connection.
+ *
+ * Falls back to the legacy single profile (and finally Codex defaults) so
+ * existing settings keep working until the user registers a connection.
+ */
+function initialAiProvider(aiProfileStore: AiProfileStore | undefined, apiConnectionStore: ApiConnectionStore | undefined): AiProviderConfig {
+  try {
+    const list = apiConnectionStore?.load();
+    const active = list?.connections.find((item) => item.id === list.activeId) ?? null;
+    if (active) return buildProviderConfigFromConnection(active);
+  } catch {
+    // Corrupt connection storage: fall through to the legacy profile.
+  }
+  try {
+    const saved = aiProfileStore?.load();
+    if (!saved) return buildProviderConfig({ kind: "acp", preset: "codex", command: "", argsText: "", endpoint: "https://api.openai.com/v1", model: "", anthropicEnabled: false });
+    return buildProviderConfig(saved);
+  } catch {
+    return buildProviderConfig({ kind: "acp", preset: "codex", command: "", argsText: "", endpoint: "https://api.openai.com/v1", model: "", anthropicEnabled: false });
+  }
+}
+
+/**
+ * Load the initial named-connection list without migrating.
+ *
+ * Migration runs once in an effect so localized default names are available;
+ * the legacy single profile stays untouched either way.
+ */
+function initialApiConnections(apiConnectionStore: ApiConnectionStore | undefined): ApiConnectionList {
+  try {
+    return apiConnectionStore?.load() ?? defaultConnectionList();
+  } catch {
+    return defaultConnectionList();
+  }
+}
+
+/**
  * Workspace shell composing editors, sidebars, AI, and review via injected ports.
  *
  * Owns UI layout and React state; revision, staging, and transport operations
@@ -170,6 +217,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     dropGateway,
     clipboardGateway,
     aiProfileStore,
+    apiConnectionStore,
+    apiConnectionGateway,
     editorPreferencesStore,
     imageLoader,
     vimSettingsGateway,
@@ -186,21 +235,360 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   const [manualFolder, setManualFolder] = useState(false);
   const [explorerTarget, setExplorerTarget] = useState<ExplorerTarget | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [aiProvider, setAiProvider] = useState<AiProviderConfig>(() => {
+  const [aiProvider, setAiProviderState] = useState<AiProviderConfig>(() => initialAiProvider(aiProfileStore, apiConnectionStore));
+  const [apiConnections, setApiConnections] = useState<ApiConnectionList>(() => initialApiConnections(apiConnectionStore));
+  const [connectionNotice, setConnectionNotice] = useState<import("../../contracts/localization").LocalizedText | null>(null);
+  const [migrationStatus, setMigrationStatus] = useState<"pending" | "failed" | null>(null);
+  const apiConnectionsRef = useRef(apiConnections);
+  apiConnectionsRef.current = apiConnections;
+  /**
+   * True when stored bytes are present but unusable and must be retained.
+   *
+   * Initialized once from the store inspection so corrupt/unsupported/
+   * duplicate payloads never become an editable empty state that overwrites
+   * the original; only a missing key stays migration-eligible.
+   */
+  const [connectionsCorrupted] = useState<boolean>(() => {
     try {
-      const saved = aiProfileStore?.load();
-      if (!saved) return buildProviderConfig({ kind: "acp", preset: "codex", command: "", argsText: "", endpoint: "https://api.openai.com/v1", model: "", anthropicEnabled: false });
-      return buildProviderConfig(saved);
+      return apiConnectionStore?.inspect?.()?.corrupted ?? false;
     } catch {
-      return buildProviderConfig({ kind: "acp", preset: "codex", command: "", argsText: "", endpoint: "https://api.openai.com/v1", model: "", anthropicEnabled: false });
+      return false;
     }
   });
+  useEffect(() => {
+    if (connectionsCorrupted) {
+      setConnectionNotice(message("保存データが壊れているため上書きしません。"));
+    }
+  }, [connectionsCorrupted]);
 
-  const aiModels = useAiModels(aiProvider, aiGateway);
+  /**
+   * Commit a connection list: storage first, state second.
+   *
+   * The sanitized whole list persists atomically in one write; the adapter
+   * reports quota/private-mode failures instead of swallowing them. Corrupt
+   * storage and save failures both keep the previous state and surface an
+   * API-specific notice: guarded callers retain the previous provider and
+   * record, so the change is not applied. Every committed write marks
+   * initialization so the one-shot legacy migration never reruns, including
+   * after deleting the last connection.
+   */
+  function persistConnections(list: ApiConnectionList): boolean {
+    if (connectionsCorrupted) {
+      setNotice(message("保存データが壊れているため上書きしません。"));
+      return false;
+    }
+    const stamped: ApiConnectionList = { ...list, initialized: true };
+    let saved = false;
+    try {
+      saved = apiConnectionStore?.save(stamped) ?? true;
+    } catch {
+      saved = false;
+    }
+    if (!saved) {
+      setNotice(message("API接続先を保存できませんでした。変更は適用されませんでした。"));
+      return false;
+    }
+    setApiConnections(stamped);
+    return true;
+  }
+
+  /**
+   * Replace the chat provider, resolving stable connection identity first.
+   *
+   * Delegates the pure identity decision to the domain resolver: ACP clears
+   * the named marker, ID-carrying API configs switch without touching other
+   * records, missing IDs are rejected, and same-ID edits update one record.
+   * Storage commits before any state changes; failures keep the previous
+   * provider and record. Returns false on persistence or identity failure.
+   */
+  function setAiProvider(next: AiProviderConfig): boolean {
+    const decision = resolveProviderChange(apiConnections, next);
+    if (decision.missing || decision.provider === null) {
+      setNotice(message("指定のAPI接続先が見つかりません。選択を保持します。"));
+      return false;
+    }
+    if (decision.persist !== null) {
+      if (!persistConnections(decision.persist)) return false;
+    }
+    setAiProviderState(decision.provider);
+    return true;
+  }
+
+  /**
+   * Switch the chat to one named connection wholesale.
+   *
+   * Endpoint and model replace together only after the selection persists;
+   * persistence failures keep the previous connection and provider. Returns
+   * false when the target is missing or persistence fails.
+   */
+  function selectApiConnection(id: ApiConnectionId): boolean {
+    const connection = apiConnections.connections.find((item) => item.id === id) ?? null;
+    if (connection === null) return false;
+    if (!persistConnections({ ...apiConnections, activeId: connection.id })) return false;
+    setAiProviderState(buildProviderConfigFromConnection(connection));
+    return true;
+  }
+
+  /**
+   * Mint a fresh stable connection ID outside render.
+   *
+   * Collides with none of the registered IDs so credential slots stay distinct.
+   */
+  function mintApiConnectionId(): ApiConnectionId {
+    return mintConnectionId(apiConnections.connections.map((item) => item.id)) as ApiConnectionId;
+  }
+
+  /**
+   * Register a new connection, select it, and store its optional secret.
+   *
+   * Metadata persists first: failures keep the previous provider, record, and
+   * credential with no secret written and no dialog success. Credential
+   * failures after metadata success keep the selected record and surface a
+   * notice; the secret can be retried from the edit dialog. Returns false on
+   * metadata failure so the dialog stays open.
+   */
+  function addApiConnection(connection: ApiConnection, secret: string | null): boolean {
+    const list: ApiConnectionList = {
+      ...apiConnections,
+      activeId: connection.id,
+      connections: [...apiConnections.connections, connection],
+    };
+    if (!persistConnections(list)) return false;
+    setAiProviderState(buildProviderConfigFromConnection(connection));
+    if (secret !== null && apiConnectionGateway) {
+      apiConnectionGateway.setConnectionCredential(connection.id, secret).catch((cause: unknown) => {
+        setNotice(localizedFailure(cause, describeInvokeError));
+      });
+    }
+    return true;
+  }
+
+  /**
+   * Persist edits to one saved connection, refreshing the chat when active.
+   *
+   * The endpoint/model replace together only after persistence; failures keep
+   * the previous record and provider. Returns false on persistence failure so
+   * the dialog stays open.
+   */
+  function updateApiConnection(connection: ApiConnection): boolean {
+    const list: ApiConnectionList = {
+      ...apiConnections,
+      connections: apiConnections.connections.map((item) => (item.id === connection.id ? connection : item)),
+    };
+    if (!persistConnections(list)) return false;
+    if (list.activeId === connection.id) setAiProviderState(buildProviderConfigFromConnection(connection));
+    return true;
+  }
+
+  /**
+   * Delete one connection and only its OS-store credential.
+   *
+   * Metadata persists first: failures keep the previous record, provider, and
+   * credential with no secret deleted. Credential failures after metadata
+   * success keep the removed record and surface a truthful notice with an
+   * explicit retry; the secret slot stays reserved under the deleted ID until
+   * the retry succeeds. Other connections, legacy kind slots, and ACP
+   * settings stay untouched. Returns false on metadata failure.
+   */
+  function deleteApiConnection(id: ApiConnectionId): boolean {
+    const deleted = apiConnections.connections.find((item) => item.id === id) ?? null;
+    const remaining = apiConnections.connections.filter((item) => item.id !== id);
+    const list: ApiConnectionList = {
+      ...apiConnections,
+      activeId: apiConnections.activeId === id ? (remaining[0]?.id ?? null) : apiConnections.activeId,
+      connections: remaining,
+    };
+    if (!persistConnections(list)) return false;
+    const next = remaining.find((item) => item.id === list.activeId) ?? null;
+    if (apiConnections.activeId === id) {
+      setAiProviderState(next ? buildProviderConfigFromConnection(next) : defaultProviderConfig("acp"));
+    }
+    if (apiConnectionGateway) {
+      apiConnectionGateway.deleteConnectionCredential(id).catch((cause: unknown) => {
+        setDeleteCredentialFailure({ id, name: deleted?.name ?? id });
+        setConnectionNotice(message("接続先を削除しましたが、OSストアの資格情報の削除に失敗しました。再試行できます。"));
+        setNotice(localizedFailure(cause, describeInvokeError));
+      });
+    }
+    return true;
+  }
+
+  /**
+   * Pending OS credential deletion that failed after its record was removed.
+   *
+   * Retains the deleted ID and display name so the retry targets exactly the
+   * orphaned slot; cleared only when the retry succeeds or the owner resets.
+   */
+  const [deleteCredentialFailure, setDeleteCredentialFailure] = useState<{ id: ApiConnectionId; name: string } | null>(null);
+
+  /**
+   * Retry a failed post-delete credential removal without touching records.
+   *
+   * Reuses the retained deleted ID; success clears the failure and its
+   * notice, while another failure keeps both for a further retry.
+   */
+  function retryDeleteCredential() {
+    const pending = deleteCredentialFailure;
+    if (!pending || !apiConnectionGateway) return;
+    void apiConnectionGateway.deleteConnectionCredential(pending.id).then(
+      () => {
+        setDeleteCredentialFailure(null);
+        setConnectionNotice(null);
+        setNotice(message("資格情報を削除しました。"));
+      },
+      (cause: unknown) => {
+        setConnectionNotice(message("接続先を削除しましたが、OSストアの資格情報の削除に失敗しました。再試行できます。"));
+        setNotice(localizedFailure(cause, describeInvokeError));
+      },
+    );
+  }
+
+  /** Named-connection controls shared by the chat switcher and settings. */
+  const connectionControls: ApiConnectionControls | undefined = useMemo(() => {
+    if (!apiConnectionStore) return undefined;
+    return {
+      list: apiConnections,
+      activeId: apiConnections.activeId,
+      onSelect: selectApiConnection,
+      onAdd: addApiConnection,
+      onUpdate: updateApiConnection,
+      onDelete: deleteApiConnection,
+      onMintId: mintApiConnectionId,
+      connectionGateway: apiConnectionGateway,
+      notice: connectionNotice,
+      onRetryMigration: migrationStatus === "failed" ? retryMigrationCredential : undefined,
+      onRetryDeleteCredential: deleteCredentialFailure ? retryDeleteCredential : undefined,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiConnectionStore, apiConnections, apiConnectionGateway, connectionNotice, migrationStatus, deleteCredentialFailure]);
+
+  const aiModels = useAiModels(aiProvider, aiGateway, aiProvider.connectionId ?? null);
   const aiView = useAiViewPreferences(props.aiViewPreferencesStore);
   const [aiVisibilityOpen, setAiVisibilityOpen] = useState(false);
   /** Restore the composer after managing its view-only preferences. */
   const closeAiVisibility = useCallback(() => setAiVisibilityOpen(false), []);
+
+  const migratedOnce = useRef(false);
+  const migrationRef = useRef<{ id: ApiConnectionId; kind: AiProviderKind; name: string } | null>(null);
+
+  /**
+   * Carry the legacy kind credential into the migrated connection slot.
+   *
+   * Selects the migrated connection only when the copy proves a secret is
+   * present; pending, failed, or empty copies keep the previous provider so
+   * nothing auto-selects or sends without credentials. Failures surface with
+   * an explicit retry instead of silent drift.
+   */
+  async function carryOverMigrationCredential() {
+    const pending = migrationRef.current;
+    if (!pending || !apiConnectionGateway) return;
+    try {
+      const carried = await apiConnectionGateway.migrateConnectionCredential(pending.id, pending.kind);
+      if (migrationRef.current?.id !== pending.id) return;
+      const current = apiConnectionsRef.current.connections.find((item) => item.id === pending.id) ?? null;
+      if (current === null) {
+        migrationRef.current = null;
+        setMigrationStatus(null);
+        setConnectionNotice(null);
+        return;
+      }
+      if (!carried.hasSecret) {
+        migrationRef.current = null;
+        setMigrationStatus(null);
+        setConnectionNotice(message("資格情報を引き継げませんでした。接続先の編集画面で設定します。"));
+        return;
+      }
+      if (!persistConnections({ ...apiConnectionsRef.current, activeId: current.id })) {
+        // Keep the recorded target and the previous selection: the secret
+        // already sits in its slot, so retry only re-applies the selection.
+        setMigrationStatus("failed");
+        setConnectionNotice(message("API接続先を保存できませんでした。変更は適用されませんでした。"));
+        return;
+      }
+      setAiProviderState(buildProviderConfigFromConnection(current));
+      migrationRef.current = null;
+      setMigrationStatus(null);
+      setConnectionNotice(message("以前の単一設定から {{value0}} を引き継ぎました。", { value0: current.name }));
+    } catch {
+      if (migrationRef.current?.id !== pending.id) return;
+      setMigrationStatus("failed");
+      setConnectionNotice(message("資格情報の引き継ぎに失敗しました。再試行できます。"));
+    }
+  }
+
+  /**
+   * Retry a failed credential carry-over without reselecting anything.
+   *
+   * Reuses the recorded migration target; superseded or removed targets
+   * settle quietly instead of touching the current selection.
+   */
+  function retryMigrationCredential() {
+    if (migrationRef.current === null || migrationStatus !== "failed") return;
+    setMigrationStatus("pending");
+    setConnectionNotice(message("資格情報を引き継いでいます…"));
+    void carryOverMigrationCredential();
+  }
+  useEffect(() => {
+    if (migratedOnce.current || !apiConnectionStore) return;
+    /**
+     * Migrate the legacy single profile into one named connection exactly once.
+     *
+     * Runs only for uninitialized empty stores with clean storage; corrupt or
+     * unsupported bytes never migrate so the original stays retained. The
+     * legacy profile and its kind credential slots stay untouched, and the
+     * secret moves slot to slot inside Rust without crossing IPC. The list
+     * persists first WITHOUT selecting the new connection: the previous
+     * provider stays active and nothing sends until the key copy succeeds. A
+     * failed persist retries on remount, while a failed or empty key copy
+     * keeps the old selection and offers an explicit retry beside the notice.
+     */
+    try {
+      try {
+        if (apiConnectionStore.inspect?.()?.corrupted) {
+          migratedOnce.current = true;
+          return;
+        }
+      } catch {
+        // Inspection failures block migration to avoid overwriting unknown bytes.
+        migratedOnce.current = true;
+        return;
+      }
+      const stored = apiConnectionStore.load();
+      if (stored.initialized || stored.connections.length > 0) {
+        migratedOnce.current = true;
+        return;
+      }
+      const legacy = aiProfileStore?.load() ?? defaultProfile();
+      if (legacy.kind !== "openai_compatible" && legacy.kind !== "anthropic") {
+        migratedOnce.current = true;
+        return;
+      }
+      const migrated = migrateLegacyProfile(legacy, t(legacy.kind === "anthropic" ? "Anthropic 1" : "OpenAI 互換 1"), mintConnectionId([]));
+      if (!migrated) {
+        migratedOnce.current = true;
+        return;
+      }
+      const active = migrated.connections.find((item) => item.id === migrated.activeId) ?? migrated.connections[0];
+      if (!active) {
+        migratedOnce.current = true;
+        return;
+      }
+      if (!persistConnections({ version: 1, activeId: null, connections: migrated.connections, initialized: true })) return;
+      migratedOnce.current = true;
+      migrationRef.current = { id: active.id, kind: legacy.kind, name: active.name };
+      setMigrationStatus("pending");
+      setConnectionNotice(message("資格情報を引き継いでいます…"));
+      if (!apiConnectionGateway) {
+        setMigrationStatus(null);
+        setConnectionNotice(message("資格情報を引き継げませんでした。接続先の編集画面で設定します。"));
+        return;
+      }
+      void carryOverMigrationCredential();
+    } catch {
+      migratedOnce.current = true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiConnectionStore]);
 
   const [preferences, setPreferences] = useState(() => {
     try {
@@ -293,7 +681,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     isolationGateway,
     onWorkspaceChanged: refreshAfterImport,
   });
-  const modelControls = <AiModelControls provider={aiProvider} onProvider={setAiProvider} {...aiModels} preferences={aiView.preferences} onManageVisibility={() => setAiVisibilityOpen(true)} onRefresh={() => void aiModels.refresh()} disabled={staging.agentBusy || staging.inlineBusy} />;
+  const modelControls = <AiModelControls provider={aiProvider} onProvider={setAiProvider} {...aiModels} preferences={aiView.preferences} onManageVisibility={() => setAiVisibilityOpen(true)} onRefresh={() => void aiModels.refresh()} disabled={staging.agentBusy || staging.inlineBusy} connectionSelection={connectionControls ?? undefined} />;
   // Read-through aliases for narrowing-heavy JSX; ownership stays in hooks.
   /** Active document for pane rendering. */
   const active = session.active;
@@ -998,7 +1386,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             onTheme={setTheme}
             preferences={preferences}
             onPreferences={updatePreferences}
-            aiSettings={<AiProviderSettings embedded provider={aiProvider} onProvider={setAiProvider} gateway={aiGateway} profileStore={aiProfileStore} />}
+            aiSettings={<AiProviderSettings embedded provider={aiProvider} onProvider={setAiProvider} gateway={aiGateway} profileStore={aiProfileStore} connectionControls={connectionControls} />}
             aiVisibilitySettings={<AiVisibilitySettings preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} saveFailed={aiView.saveFailed} />}
             vimSettings={desktop && vimSettingsGateway ? <VimSettingsHost gateway={vimSettingsGateway} initialPath={workspace.configPath} onSaved={workspace.setConfigPath} dialogGateway={dialogGateway} /> : undefined}
             configPath={workspace.configPath}
@@ -1042,6 +1430,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             startPrompt={aiGateway?.startPrompt}
             profileStore={aiProfileStore}
             aiGateway={aiGateway}
+            connectionControls={connectionControls}
+            sessionScopeKey={connectionControls ? (aiProvider.connectionId ?? null) : undefined}
           />
           </div>
           <div className="max-h-72 min-h-0 overflow-y-auto">

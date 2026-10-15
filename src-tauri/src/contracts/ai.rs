@@ -104,6 +104,34 @@ pub struct AnthropicConfig {
     pub model: String,
 }
 
+/// Stable identifier of one named direct-API connection. Minted once at
+/// registration, never changed afterwards; identity always comes from here,
+/// never from the display name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApiConnectionId(pub String);
+
+/// Wire protocol of one named API connection. ACP presets stay separate;
+/// the settings dropdown offers exactly these two values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiProtocol {
+    OpenaiCompatible,
+    Anthropic,
+}
+
+/// Non-secret fields of one named direct-API connection. Secrets live in the
+/// OS credential store under `ai/api/<id>` and never appear in this struct.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApiConnection {
+    pub id: ApiConnectionId,
+    pub name: String,
+    pub protocol: ApiProtocol,
+    pub endpoint: String,
+    pub model: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AiProviderConfig {
@@ -111,6 +139,12 @@ pub struct AiProviderConfig {
     pub acp: Option<AcpConfig>,
     pub openai: Option<OpenAiConfig>,
     pub anthropic: Option<AnthropicConfig>,
+    /// Stable named-connection reference. Present exactly when this config was
+    /// built from a registered API connection; absent for ACP and legacy
+    /// single-profile providers, which keep resolving kind credential slots.
+    #[serde(default)]
+    #[ts(optional)]
+    pub connection_id: Option<ApiConnectionId>,
 }
 
 /// How the model output is used. Only workspace mode may yield file patches,
@@ -646,6 +680,14 @@ pub struct CredentialRef {
     pub has_secret: bool,
 }
 
+/// Credential presence for one named API connection. Values never cross IPC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConnectionCredentialRef {
+    pub connection_id: ApiConnectionId,
+    pub has_secret: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AiTestResult {
@@ -671,6 +713,9 @@ pub fn typescript() -> String {
         AcpConfigOption::decl(&cfg),
         OpenAiConfig::decl(&cfg),
         AnthropicConfig::decl(&cfg),
+        ApiConnectionId::decl(&cfg),
+        ApiProtocol::decl(&cfg),
+        ApiConnection::decl(&cfg),
         AiProviderConfig::decl(&cfg),
         PromptMode::decl(&cfg),
         PromptContext::decl(&cfg),
@@ -716,6 +761,7 @@ pub fn typescript() -> String {
         AiStreamEvent::decl(&cfg),
         AiError::decl(&cfg),
         CredentialRef::decl(&cfg),
+        ConnectionCredentialRef::decl(&cfg),
         AiTestResult::decl(&cfg),
     ];
     let mut output = format!(

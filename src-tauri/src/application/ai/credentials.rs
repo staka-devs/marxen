@@ -15,3 +15,21 @@ pub trait AgentKeyring: Send + Sync {
             .unwrap_or(false))
     }
 }
+
+/// Per-connection secret port; callers expose presence only to IPC.
+/// Legacy kind slots stay untouched: named connections own `ai/api/<id>` slots.
+pub trait ApiConnectionKeyring: Send + Sync {
+    /// Read one named connection's credential inside Rust; None when absent.
+    fn get_connection(&self, id: &ApiConnectionId) -> Result<Option<String>, AiError>;
+    /// Validate and persist one named connection's credential without exposing it.
+    fn set_connection(&self, id: &ApiConnectionId, secret: &str) -> Result<(), AiError>;
+    /// Delete only the named connection's credential slot.
+    fn delete_connection(&self, id: &ApiConnectionId) -> Result<(), AiError>;
+    /// Report presence while keeping the value out of the IPC response.
+    fn has_connection(&self, id: &ApiConnectionId) -> Result<bool, AiError> {
+        Ok(self
+            .get_connection(id)?
+            .map(|secret| !secret.is_empty())
+            .unwrap_or(false))
+    }
+}

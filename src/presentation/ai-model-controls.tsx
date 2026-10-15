@@ -1,18 +1,19 @@
 import type { LabelKey } from "../contracts/localization";
 import { useI18n } from "./i18n/I18nProvider";
-import type { AcpConfigOption, AiProviderConfig } from "../contracts/ai-contracts";
+import type { AcpConfigOption, AiProviderConfig, ApiConnectionId } from "../contracts/ai-contracts";
 import { defaultProviderConfig, PRESET_LABELS } from "../domain/ai-config";
 import { RefreshCw } from "lucide-react";
 import { Settings2 } from "lucide-react";
 import { ChoiceMenu } from "./ui/choice-menu";
 import type { AiViewPreferences } from "../contracts/ai-view-preferences";
 import { aiProviderId, defaultAiViewPreferences, isAiModelVisible } from "../domain/ai-view-preferences";
+import type { ApiConnectionSelection } from "./ai/ApiConnections";
 import { ProviderIcon } from "./ai/provider-icon";
 
 interface AiModelControlsProps {
   provider: AiProviderConfig;
-  /** Replace the active non-secret chat provider. */
-  onProvider: (provider: AiProviderConfig) => void;
+  /** Replace the active non-secret chat provider, reporting persistence failures. */
+  onProvider: (provider: AiProviderConfig) => boolean | void;
   options: AcpConfigOption[];
   loading: boolean;
   discovered: boolean;
@@ -23,21 +24,50 @@ interface AiModelControlsProps {
   preferences?: AiViewPreferences;
   /** Open visibility management while preserving the active connection and selections. */
   onManageVisibility?: () => void;
+  /** Named API connections replacing the single direct-API kinds when non-empty. */
+  connectionSelection?: ApiConnectionSelection;
 }
 
 /** Keep provider, actual model and reasoning controls beside both chat composers. */
-export function AiModelControls({ provider, onProvider, options, loading, discovered, error, onRefresh, disabled = false, preferences = defaultAiViewPreferences(), onManageVisibility }: AiModelControlsProps) {
+export function AiModelControls({ provider, onProvider, options, loading, discovered, error, onRefresh, disabled = false, preferences = defaultAiViewPreferences(), onManageVisibility, connectionSelection }: AiModelControlsProps) {
   const { t } = useI18n();
   const selectedProvider = aiProviderId(provider);
+  /** Named connections replace the single direct-API kinds only when at least one is registered. */
+  const namedConnections = connectionSelection && connectionSelection.list.connections.length > 0 ? connectionSelection.list.connections : null;
   const providerChoices = [
     ...Object.entries(PRESET_LABELS).map(([value, label]) => ({ value, label: t(label as LabelKey), group: t("ACP エージェント"), icon: <ProviderIcon provider={value as typeof selectedProvider} /> })),
-    { value: "openai_compatible", label: t("OpenAI 互換 API"), group: t("直接 API"), icon: <ProviderIcon provider="openai_compatible" /> },
-    { value: "anthropic", label: "Anthropic API", group: t("直接 API"), icon: <ProviderIcon provider="anthropic" /> },
+    ...(namedConnections
+      ? namedConnections.map((connection) => ({ value: connection.id as string, label: connection.name, description: connection.model === "" ? connection.endpoint : `${connection.model} • ${connection.endpoint}`, group: t("直接 API"), icon: <ProviderIcon provider={connection.protocol} /> }))
+      : [
+          { value: "openai_compatible", label: t("OpenAI 互換 API"), group: t("直接 API"), icon: <ProviderIcon provider="openai_compatible" /> },
+          { value: "anthropic", label: "Anthropic API", group: t("直接 API"), icon: <ProviderIcon provider="anthropic" /> },
+        ]),
   ];
-  const hiddenCurrent = preferences.hiddenProviders.includes(selectedProvider) || options.some((option) => option.category === "model" && !isAiModelVisible(preferences, selectedProvider, option.id, provider.acp?.selections?.find((item) => item.id === option.id)?.value ?? option.currentValue));
+  /** Chat switcher value: the stable connection ID for named API use, else the provider ID. */
+  const providerScopeId = provider.connectionId ?? null;
+  const switcherValue = namedConnections && provider.kind !== "acp" ? (providerScopeId && namedConnections.some((connection) => connection.id === providerScopeId) ? providerScopeId : "") : selectedProvider;
+  /** Active named connection backing the label, or null for ACP and legacy providers. */
+  const activeConnection = providerScopeId ? (namedConnections?.find((connection) => connection.id === providerScopeId) ?? null) : null;
+  /**
+   * Stable connection backing a named API provider, or null otherwise.
+   *
+   * Derived from the actual provider connectionId so ACP and stale selections
+   * never share hide state; same-protocol twins never share hide state either.
+   */
+  const scopedConnectionId = providerScopeId;
+  const switcherLabel = activeConnection?.name ?? providerChoices.find((choice) => choice.value === switcherValue)?.label;
+  const hiddenCurrent = preferences.hiddenProviders.includes(selectedProvider) || options.some((option) => option.category === "model" && !isAiModelVisible(preferences, selectedProvider, option.id, provider.acp?.selections?.find((item) => item.id === option.id)?.value ?? option.currentValue, scopedConnectionId));
   /** Switch to a configured adapter or an API profile without starting or authenticating it. */
   function changeProvider(value: string) {
-    if (value === selectedProvider) return;
+    if (namedConnections) {
+      if (value === switcherValue) return;
+      if (value === "openai_compatible" || value === "anthropic" || (Object.keys(PRESET_LABELS) as string[]).includes(value)) {
+        if (value === selectedProvider) return;
+      } else {
+        connectionSelection?.onSelect(value as ApiConnectionId);
+        return;
+      }
+    } else if (value === selectedProvider) return;
     if (value === "openai_compatible" || value === "anthropic") {
       onProvider(provider.kind === value ? provider : defaultProviderConfig(value));
     } else {
@@ -59,12 +89,15 @@ export function AiModelControls({ provider, onProvider, options, loading, discov
     if (provider.openai) onProvider({ ...provider, openai: { ...provider.openai, model } });
     else if (provider.anthropic) onProvider({ ...provider, anthropic: { ...provider.anthropic, model } });
   }
+  // Named connection entries carry stable IDs that never equal kind-level
+  // hiddenProviders values, so kind hides do not cascade across twins; model
+  // rows above stay scoped per connection instead.
   return <div className="ai-model-controls">
-    {preferences.showProviderSelector && <ChoiceMenu label={t("チャットの接続先")} value={selectedProvider} valueLabel={providerChoices.find((choice) => choice.value === selectedProvider)?.label} valueIcon={<ProviderIcon provider={selectedProvider} />} disabled={disabled} onChange={changeProvider} searchLabel={t("接続先を検索")} emptyLabel={t("表示する候補がありません。表示設定で変更できます。")} choices={providerChoices.filter((choice) => !preferences.hiddenProviders.includes(choice.value as typeof selectedProvider))} />}
+    {preferences.showProviderSelector && <ChoiceMenu label={t("チャットの接続先")} value={switcherValue} valueLabel={switcherLabel} valueIcon={<ProviderIcon provider={selectedProvider} />} disabled={disabled} onChange={changeProvider} searchLabel={t("接続先を検索")} emptyLabel={t("表示する候補がありません。表示設定で変更できます。")} choices={providerChoices.filter((choice) => !preferences.hiddenProviders.includes(choice.value as typeof selectedProvider))} />}
     {provider.kind === "acp" ? <>
       {preferences.showModelSelector && options.filter((option) => option.category === "model" || option.category === "thought_level").map((option) => {
         const value = provider.acp?.selections?.find((item) => item.id === option.id)?.value ?? option.currentValue;
-        return <ChoiceMenu key={option.id} label={option.category === "model" ? t("チャットのモデル") : t("チャットの推論強度")} value={value} valueLabel={option.options.find((choice) => choice.value === value)?.name ?? value} disabled={disabled || loading} onChange={(next) => changeChoice(option.id, next)} searchLabel={option.category === "model" ? t("モデルを検索") : undefined} emptyLabel={t("表示する候補がありません。表示設定で変更できます。")} choices={option.options.filter((choice) => option.category !== "model" || isAiModelVisible(preferences, selectedProvider, option.id, choice.value)).map((choice) => ({ value: choice.value, label: choice.name, description: choice.value, group: option.name }))} />;
+        return <ChoiceMenu key={option.id} label={option.category === "model" ? t("チャットのモデル") : t("チャットの推論強度")} value={value} valueLabel={option.options.find((choice) => choice.value === value)?.name ?? value} disabled={disabled || loading} onChange={(next) => changeChoice(option.id, next)} searchLabel={option.category === "model" ? t("モデルを検索") : undefined} emptyLabel={t("表示する候補がありません。表示設定で変更できます。")} choices={option.options.filter((choice) => option.category !== "model" || isAiModelVisible(preferences, selectedProvider, option.id, choice.value, scopedConnectionId)).map((choice) => ({ value: choice.value, label: choice.name, description: choice.value, group: option.name }))} />;
       })}
       <button type="button" className="ai-model-refresh inline-flex items-center gap-1" disabled={disabled || loading} onClick={onRefresh} aria-label={t("接続して候補を確認")} title={t("接続先が公開するモデル候補を取得")}><RefreshCw size={12} aria-hidden="true" className={loading ? "animate-spin" : undefined} />{loading ? t("接続中…") : t("接続を確認")}</button>
       {preferences.showModelSelector && discovered && !loading && !error && !options.some((option) => option.category === "model" && option.options.length > 0) && <small>{t("この接続先はモデル候補を公開していません。CLI の設定を使用します。")}</small>}

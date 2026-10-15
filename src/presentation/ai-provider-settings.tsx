@@ -21,6 +21,7 @@ import {
   isClaudeCommand,
 } from "../domain/ai-config";
 import { defaultProfile, sanitizeAiProfile, type AiProfile } from "../domain/ai-profile";
+import { ApiConnectionSettings, describeApiConnection, type ApiConnectionControls } from "./ai/ApiConnections";
 import type {
   AcpPreset,
   AiProviderConfig,
@@ -32,8 +33,8 @@ import type { AiGateway, AiProfileStore } from "../application/ports";
 
 export interface AiProviderSettingsProps {
   provider: AiProviderConfig;
-  /** Replace the edited provider configuration. */
-  onProvider: (provider: AiProviderConfig) => void;
+  /** Replace the edited provider configuration, reporting persistence failures. */
+  onProvider: (provider: AiProviderConfig) => boolean | void;
   /** Increment to expand the collapsed settings from outside (e.g. root Settings). */
   openToken?: number;
   /** Credential/connection gateway injected by the composition root. */
@@ -44,6 +45,8 @@ export interface AiProviderSettingsProps {
   embedded?: boolean;
   /** Show an icon trigger in the chat header instead of the full connection summary. */
   compact?: boolean;
+  /** Named API connection controls; absence keeps the legacy single-profile form. */
+  connectionControls?: ApiConnectionControls;
 }
 
 const KIND_ORDER: AiProviderKind[] = ["acp", "openai_compatible", "anthropic"];
@@ -119,7 +122,7 @@ export function sanitizeProfileForTest(raw: unknown): AiProfile {
  * All native calls go through the injected `gateway`; profile persistence
  * goes through `profileStore`. No direct Tauri or storage imports.
  */
-export default function AiProviderSettings({ provider, onProvider, openToken, gateway, profileStore, embedded = false, compact = false }: AiProviderSettingsProps) {
+export default function AiProviderSettings({ provider, onProvider, openToken, gateway, profileStore, embedded = false, compact = false, connectionControls }: AiProviderSettingsProps) {
   const { t, message } = useI18n();
   const [kind, setKind] = useState<AiProviderKind>(provider.kind);
   const [preset, setPreset] = useState<AcpPreset>(provider.acp?.preset ?? "codex");
@@ -198,15 +201,28 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
   }, [open, embedded]);
 
   useEffect(() => {
-    try {
-      profileStore?.save({ kind, preset, command, argsText, endpoint, model, anthropicEnabled, acpSelections });
-    } catch {
-      // Private mode/quota: profiles simply do not persist.
-    }
+    if (connectionControls !== undefined && kind !== "acp") return;
     const next = buildProviderConfig({ kind, preset, command, argsText, endpoint, model, anthropicEnabled, acpSelections });
     if (JSON.stringify(next) !== JSON.stringify(publishedProvider.current)) {
       publishedProvider.current = next;
-      onProvider(next);
+      const ok = onProvider(next);
+      if (ok === false) {
+        publishedProvider.current = provider;
+        setKind(provider.kind);
+        setPreset(provider.acp?.preset ?? "codex");
+        setCommand(provider.acp?.argv?.command ?? "");
+        setArgsText((provider.acp?.argv?.args ?? []).join("\n"));
+        setEndpoint(provider.openai?.endpoint ?? provider.anthropic?.endpoint ?? DEFAULT_ENDPOINTS.openai_compatible);
+        setModel(provider.openai?.model ?? provider.anthropic?.model ?? "");
+        setAnthropicEnabled(provider.anthropic?.enabled ?? false);
+        setAcpSelections(provider.acp?.selections);
+        return;
+      }
+      try {
+        profileStore?.save({ kind, preset, command, argsText, endpoint, model, anthropicEnabled, acpSelections });
+      } catch {
+        // Private mode/quota: profiles simply do not persist.
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, preset, command, argsText, endpoint, model, anthropicEnabled, acpSelections]);
@@ -317,7 +333,23 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
   const fields = (
       <div className={embedded ? "space-y-4" : "space-y-2.5 px-2.5 py-2"}>
         <div role="group" aria-label={t("接続先")}>
-          {KIND_ORDER.map((candidate) => (
+          {connectionControls !== undefined ? (
+            <Button
+              variant={kind === "acp" ? "default" : "outline"}
+              size="sm"
+              className="mb-1 mr-1"
+              aria-pressed={kind === "acp"}
+              onClick={() => {
+                setKind("acp");
+                setCredentialState(null);
+                setTestResult(null);
+                setTestFailure(null);
+              }}
+            >
+              <ProviderIcon provider={preset} size={14} />
+              ACP
+            </Button>
+          ) : KIND_ORDER.map((candidate) => (
             <Button
               key={candidate}
               variant={candidate === kind ? "default" : "outline"}
@@ -376,6 +408,17 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
               </p>
             )}
           </div>
+        ) : connectionControls !== undefined ? (
+          <div className="space-y-2">
+            {(() => {
+              const active = connectionControls.list.connections.find((item) => item.id === connectionControls.activeId) ?? null;
+              return (
+                <p className="text-[11px] text-muted-foreground">
+                  {active !== null ? describeApiConnection(active, t) : describeProviderSummary(provider, t)}
+                </p>
+              );
+            })()}
+          </div>
         ) : (
           <div className="space-y-2">
             {kind === "anthropic" && (
@@ -403,7 +446,22 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
             </label>
           </div>
         )}
-        {kind !== "acp" && <div className="border-t border-border pt-2">
+        {connectionControls !== undefined && (
+          <ApiConnectionSettings
+            list={connectionControls.list}
+            activeId={connectionControls.activeId}
+            onSelect={connectionControls.onSelect}
+            onAdd={connectionControls.onAdd}
+            onUpdate={connectionControls.onUpdate}
+            onDelete={connectionControls.onDelete}
+            onMintId={connectionControls.onMintId}
+            connectionGateway={connectionControls.connectionGateway}
+            notice={connectionControls.notice}
+            onRetryMigration={connectionControls.onRetryMigration}
+            onRetryDeleteCredential={connectionControls.onRetryDeleteCredential}
+          />
+        )}
+        {kind !== "acp" && connectionControls === undefined && <div className="border-t border-border pt-2">
           <p className="text-xs font-medium">{t("API キー")}</p>
           <p className="mt-1 text-[11px] text-muted-foreground">
             {credential === null ? t("状態を確認してください。値は表示しません。") : credential.hasSecret ? t("保存済み。値は表示しません。") : t("未保存。")}

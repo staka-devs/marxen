@@ -79,6 +79,7 @@ pub fn run() {
         ))
         .manage(application::ai::service::AiService {
             keyring: Arc::new(infrastructure::ai::credentials::OsKeyring),
+            connection_keyring: Arc::new(infrastructure::ai::credentials::OsKeyring),
             transport: Arc::new(infrastructure::ai::transport::NativeAiTransport),
             spawner: Arc::new(infrastructure::ai::transport::NativeTaskSpawner),
             runs: Arc::new(application::ai::runs::RunRegistry::new()),
@@ -166,6 +167,10 @@ pub fn run() {
             presentation::ai::ai_credential_state,
             presentation::ai::ai_set_credential,
             presentation::ai::ai_delete_credential,
+            presentation::ai::ai_connection_credential_state,
+            presentation::ai::ai_set_connection_credential,
+            presentation::ai::ai_delete_connection_credential,
+            presentation::ai::ai_migrate_connection_credential,
             presentation::ai::ai_test_connection,
             presentation::ai::ai_prompt_stream,
             presentation::ai::ai_prompt_cancel,

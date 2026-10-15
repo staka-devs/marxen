@@ -69,6 +69,7 @@ mod regression {
                 }),
                 openai: None,
                 anthropic: None,
+                connection_id: None,
             },
             mode: PromptMode::Ask,
             prompt: "これは何ですか".into(),
@@ -204,6 +205,7 @@ mod regression {
                 model: "gpt-x".into(),
             }),
             anthropic: None,
+            connection_id: None,
         };
         assert!(validate_provider_config(&openai).is_ok());
         openai.acp = Some(AcpConfig {
@@ -222,6 +224,7 @@ mod regression {
                 endpoint: "https://api.anthropic.example".into(),
                 model: "claude-x".into(),
             }),
+            connection_id: None,
         };
         assert!(matches!(
             validate_provider_config(&disabled),
@@ -275,6 +278,7 @@ mod regression {
                 model: "m".into(),
             }),
             anthropic: None,
+            connection_id: None,
         };
         http.session_id = Some(AcpSessionId("sess_1".into()));
         assert!(validate_prompt_request(&http).is_err());
@@ -1384,6 +1388,282 @@ mod regression {
         assert!(validate_secret("").is_err());
     }
 
+    /// Keep named connection credential slots isolated from each other and from
+    /// legacy kind slots; deleting one connection leaves the rest untouched.
+    #[test]
+    fn connection_keyring_isolates_named_slots_from_kind_slots() {
+        let keyring = MemoryKeyring::default();
+        let first = ApiConnectionId("api-first".into());
+        let second = ApiConnectionId("api-second".into());
+        keyring
+            .set(AiProviderKind::OpenaiCompatible, "legacy")
+            .unwrap();
+        keyring.set_connection(&first, "one").unwrap();
+        keyring.set_connection(&second, "two").unwrap();
+        assert!(keyring.has_connection(&first).unwrap());
+        assert!(keyring.has_connection(&second).unwrap());
+        assert!(keyring.has(AiProviderKind::OpenaiCompatible).unwrap());
+        assert_ne!(connection_account(&first), connection_account(&second));
+        assert_ne!(
+            connection_account(&first),
+            credential_account(AiProviderKind::OpenaiCompatible).to_owned()
+        );
+        keyring.delete_connection(&first).unwrap();
+        assert!(!keyring.has_connection(&first).unwrap());
+        assert_eq!(
+            keyring.get_connection(&second).unwrap().as_deref(),
+            Some("two")
+        );
+        assert_eq!(
+            keyring
+                .get(AiProviderKind::OpenaiCompatible)
+                .unwrap()
+                .as_deref(),
+            Some("legacy")
+        );
+    }
+
+    /// Reject malformed connection IDs on every connection keyring operation.
+    #[test]
+    fn connection_keyring_rejects_invalid_ids() {
+        let keyring = MemoryKeyring::default();
+        let bad = ApiConnectionId("has space".into());
+        let empty = ApiConnectionId(String::new());
+        assert!(validate_connection_id(&bad).is_err());
+        assert!(validate_connection_id(&empty).is_err());
+        assert!(keyring.set_connection(&bad, "s").is_err());
+        assert!(keyring.get_connection(&empty).is_err());
+        assert!(keyring.has_connection(&bad).is_err());
+        assert!(keyring.delete_connection(&empty).is_err());
+    }
+
+    /// Reject blank names, overlong names, bad IDs, and bad endpoints while
+    /// allowing an empty model at rest for later connection-time validation.
+    #[test]
+    fn api_connection_validation_rejects_blank_and_bad_input() {
+        let valid = ApiConnection {
+            id: ApiConnectionId("api-1".into()),
+            name: "本番".into(),
+            protocol: ApiProtocol::OpenaiCompatible,
+            endpoint: "https://api.example.com/v1".into(),
+            model: "model-x".into(),
+        };
+        assert!(validate_api_connection(&valid).is_ok());
+        assert!(validate_api_connection(&ApiConnection {
+            model: String::new(),
+            ..valid.clone()
+        })
+        .is_ok());
+        assert!(validate_api_connection(&ApiConnection {
+            name: "   ".into(),
+            ..valid.clone()
+        })
+        .is_err());
+        assert!(validate_api_connection(&ApiConnection {
+            name: "n".repeat(65),
+            ..valid.clone()
+        })
+        .is_err());
+        assert!(validate_api_connection(&ApiConnection {
+            id: ApiConnectionId("bad id".into()),
+            ..valid.clone()
+        })
+        .is_err());
+        assert!(validate_api_connection(&ApiConnection {
+            endpoint: "not-a-url".into(),
+            ..valid.clone()
+        })
+        .is_err());
+        assert!(validate_api_connection(&ApiConnection {
+            model: "has\nnewline".into(),
+            ..valid.clone()
+        })
+        .is_err());
+    }
+
+    /// Map each protocol to its wire provider config, trimming pasted values
+    /// and requiring a model before any connection attempt.
+    #[test]
+    fn provider_config_for_connection_maps_protocols() {
+        let openai = ApiConnection {
+            id: ApiConnectionId("api-o".into()),
+            name: "  Open  ".into(),
+            protocol: ApiProtocol::OpenaiCompatible,
+            endpoint: "https://api.example.com/v1/".into(),
+            model: "  model-a  ".into(),
+        };
+        let config = provider_config_for_connection(&openai).unwrap();
+        assert_eq!(config.kind, AiProviderKind::OpenaiCompatible);
+        let openai_config = config.openai.expect("openai section");
+        assert_eq!(openai_config.endpoint, "https://api.example.com/v1");
+        assert_eq!(openai_config.model, "model-a");
+        assert!(config.anthropic.is_none());
+        let anthropic = ApiConnection {
+            id: ApiConnectionId("api-a".into()),
+            name: "A".into(),
+            protocol: ApiProtocol::Anthropic,
+            endpoint: "https://api.anthropic.com/v1".into(),
+            model: "claude-x".into(),
+        };
+        let config = provider_config_for_connection(&anthropic).unwrap();
+        assert_eq!(config.kind, AiProviderKind::Anthropic);
+        let anthropic_config = config.anthropic.expect("anthropic section");
+        assert!(anthropic_config.enabled);
+        assert!(config.openai.is_none());
+        let modeless = ApiConnection {
+            model: String::new(),
+            ..openai
+        };
+        assert!(provider_config_for_connection(&modeless).is_err());
+    }
+
+    struct StubTransport;
+    struct StubSpawner;
+
+    impl crate::application::ai::transport::AiTransport for StubTransport {
+        /// Never called by credential tests; panic if the wiring changes.
+        fn resolve_launch(
+            &self,
+            _argv: &AcpArgv,
+        ) -> Result<crate::application::ai::transport::ResolvedAcpLaunch, AiError> {
+            unimplemented!("credential tests never resolve launches")
+        }
+        /// Never called by credential tests; panic if the wiring changes.
+        fn handshake(&self, _argv: &AcpArgv) -> Result<AiTestResult, AiError> {
+            unimplemented!("credential tests never handshake")
+        }
+        /// Never called by credential tests; panic if the wiring changes.
+        fn test_http<'a>(
+            &'a self,
+            _target: &'a HttpTarget,
+            _secret: &'a str,
+        ) -> crate::application::ai::transport::AiFuture<'a, Result<AiTestResult, AiError>>
+        {
+            unimplemented!("credential tests never probe http")
+        }
+        /// Never called by credential tests; panic if the wiring changes.
+        fn run_acp(
+            &self,
+            _params: &crate::application::ai::transport::AcpRunParams,
+            _request: &AiPromptRequest,
+            _run_id: &AiRunId,
+            _registry: &std::sync::Arc<RunRegistry>,
+            _cancel: &AtomicBool,
+            _emit: &mut (dyn FnMut(AiStreamEvent) + Send),
+        ) -> Result<(), AiError> {
+            unimplemented!("credential tests never run acp")
+        }
+        /// Never called by credential tests; panic if the wiring changes.
+        fn run_http<'a>(
+            &'a self,
+            _target: &'a HttpTarget,
+            _secret: &'a str,
+            _request: &'a AiPromptRequest,
+            _run_id: &'a AiRunId,
+            _cancel: &'a AtomicBool,
+            _emit: &'a mut (dyn FnMut(AiStreamEvent) + Send),
+        ) -> crate::application::ai::transport::AiFuture<'a, Result<(), AiError>> {
+            unimplemented!("credential tests never run http")
+        }
+    }
+
+    impl crate::application::ai::transport::TaskSpawner for StubSpawner {
+        /// Never called by credential tests; panic if the wiring changes.
+        fn spawn_blocking(&self, _task: Box<dyn FnOnce() + Send>) {
+            unimplemented!("credential tests never spawn")
+        }
+        /// Never called by credential tests; panic if the wiring changes.
+        fn spawn_async(&self, _task: crate::application::ai::transport::AiFuture<'static, ()>) {
+            unimplemented!("credential tests never spawn")
+        }
+    }
+
+    /// Copy a legacy kind credential into an empty connection slot without
+    /// exposing it, keep the legacy slot, and never overwrite an owned secret.
+    #[test]
+    fn service_migrates_connection_credential_without_exposing_or_overwriting() {
+        use std::sync::Arc;
+        let keyring = Arc::new(MemoryKeyring::default());
+        let service = crate::application::ai::service::AiService {
+            keyring: keyring.clone(),
+            connection_keyring: keyring.clone(),
+            transport: Arc::new(StubTransport),
+            spawner: Arc::new(StubSpawner),
+            runs: Arc::new(RunRegistry::new()),
+            usage: Arc::new(UsageRegistry::new()),
+        };
+        let id = ApiConnectionId("api-migrated".into());
+        keyring
+            .set(AiProviderKind::Anthropic, "legacy-secret")
+            .unwrap();
+        let state = service
+            .migrate_connection_credential(&id, AiProviderKind::Anthropic)
+            .unwrap();
+        assert_eq!(state.connection_id, id);
+        assert!(state.has_secret);
+        assert_eq!(
+            keyring.get_connection(&id).unwrap().as_deref(),
+            Some("legacy-secret")
+        );
+        assert!(keyring.has(AiProviderKind::Anthropic).unwrap());
+        keyring.set_connection(&id, "owned-secret").unwrap();
+        let state = service
+            .migrate_connection_credential(&id, AiProviderKind::Anthropic)
+            .unwrap();
+        assert!(state.has_secret);
+        assert_eq!(
+            keyring.get_connection(&id).unwrap().as_deref(),
+            Some("owned-secret")
+        );
+        service.delete_connection_credential(&id).unwrap();
+        assert!(!keyring.has_connection(&id).unwrap());
+        assert!(keyring.has(AiProviderKind::Anthropic).unwrap());
+    }
+
+    /// Build one named OpenAI-compatible provider config carrying its stable ID.
+    fn named_openai_config(id: &str) -> AiProviderConfig {
+        AiProviderConfig {
+            kind: AiProviderKind::OpenaiCompatible,
+            acp: None,
+            openai: Some(OpenAiConfig {
+                endpoint: "https://api.example.com/v1".into(),
+                model: "m".into(),
+            }),
+            anthropic: None,
+            connection_id: Some(ApiConnectionId(id.into())),
+        }
+    }
+
+    /// Resolve each named request from its own ID slot without any kind fallback.
+    /// Two same-protocol connections select different secrets; a missing or
+    /// deleted selected secret fails even when the legacy kind slot is filled.
+    #[test]
+    fn named_requests_resolve_only_their_own_secret_slot() {
+        let keyring = MemoryKeyring::default();
+        let first = ApiConnectionId("api-first".into());
+        let second = ApiConnectionId("api-second".into());
+        keyring.set_connection(&first, "secret-one").unwrap();
+        keyring.set_connection(&second, "secret-two").unwrap();
+        keyring
+            .set(AiProviderKind::OpenaiCompatible, "legacy-secret")
+            .unwrap();
+        let (_, one) =
+            resolve_http_request(&keyring, &keyring, &named_openai_config("api-first")).unwrap();
+        let (_, two) =
+            resolve_http_request(&keyring, &keyring, &named_openai_config("api-second")).unwrap();
+        assert_eq!(one, "secret-one");
+        assert_eq!(two, "secret-two");
+        keyring.delete_connection(&second).unwrap();
+        assert!(matches!(
+            resolve_http_request(&keyring, &keyring, &named_openai_config("api-second")),
+            Err(AiError::MissingCredentials { .. })
+        ));
+        assert!(validate_connection_id(&ApiConnectionId("bad id".into())).is_err());
+        let mut acp = acp_request().provider;
+        acp.connection_id = Some(ApiConnectionId("api-first".into()));
+        assert!(validate_provider_config(&acp).is_err());
+    }
+
     /// Stream started/chunk events before completion, concatenate Unicode output,
     /// and retain the request's base revision and scalar-count scope echo.
     #[test]
@@ -1680,6 +1960,7 @@ mod regression {
                 model: "m".into(),
             }),
             anthropic: None,
+            connection_id: None,
         };
         openai.prompt = "2件目の質問".into();
         openai.history = history.clone();
@@ -1704,6 +1985,7 @@ mod regression {
                 endpoint: "https://api.anthropic.example".into(),
                 model: "m".into(),
             }),
+            connection_id: None,
         };
         let body = anthropic_body(&openai, "m");
         let messages = body["messages"].as_array().expect("messages");
@@ -2351,6 +2633,7 @@ mod regression {
             }),
             openai: None,
             anthropic: None,
+            connection_id: None,
         };
         assert_eq!(acp_preset_of(&acp), Some(AcpPreset::Copilot));
         let http = AiProviderConfig {
@@ -2361,6 +2644,7 @@ mod regression {
                 model: "m".into(),
             }),
             anthropic: None,
+            connection_id: None,
         };
         assert_eq!(acp_preset_of(&http), None);
     }

@@ -8,13 +8,14 @@
 
 import { isDesktop, workspaceApi, workspaceEventSource } from "./infrastructure/tauri/workspace-api";
 import { ReadonlyRegistry, RegistryClient } from "./application/document/registry-client";
-import { aiGateway } from "./infrastructure/tauri/ai-client";
+import { aiGateway, apiConnectionGateway } from "./infrastructure/tauri/ai-client";
 import { isolationGateway } from "./infrastructure/tauri/isolation-client";
 import { runtimeGateway } from "./infrastructure/tauri/runtime-client";
 import { dialogGateway } from "./infrastructure/native/dialog";
 import { dropGateway } from "./infrastructure/native/drop";
 import { clipboardGateway } from "./infrastructure/clipboard/clipboard-writer";
 import { aiProfileStore } from "./infrastructure/storage/ai-profile-store";
+import { apiConnectionStore } from "./infrastructure/storage/api-connections-store";
 import { createAiViewPreferencesStore } from "./infrastructure/storage/ai-view-preferences-store";
 import { editorPreferencesStore } from "./infrastructure/storage/editor-preferences-store";
 import { imageLoader } from "./infrastructure/images/image-loader";
@@ -58,6 +59,8 @@ export function createComposition() {
     dropGateway,
     clipboardGateway,
     aiProfileStore,
+    apiConnectionStore,
+    apiConnectionGateway: desktop ? apiConnectionGateway : undefined,
     aiViewPreferencesStore,
     editorPreferencesStore,
     imageLoader,

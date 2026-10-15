@@ -1,11 +1,15 @@
 //! AI use cases own scope authorization, credential readiness, cancellation, and terminal order.
-use super::{credentials::AgentKeyring, runs::*, transport::*, usage::UsageRegistry};
+use super::{
+    credentials::AgentKeyring, credentials::ApiConnectionKeyring, runs::*, transport::*,
+    usage::UsageRegistry,
+};
 use crate::application::{isolation::IsolationManager, workspace::Workspace};
 use crate::contracts::ai::*;
 use crate::domain::ai::*;
 use std::sync::{Arc, Mutex};
 pub struct AiService {
     pub keyring: Arc<dyn AgentKeyring>,
+    pub connection_keyring: Arc<dyn ApiConnectionKeyring>,
     pub transport: Arc<dyn AiTransport>,
     pub spawner: Arc<dyn TaskSpawner>,
     pub runs: Arc<RunRegistry>,
@@ -81,6 +85,47 @@ impl AiService {
     pub fn delete_credential(&self, kind: AiProviderKind) -> Result<(), AiError> {
         self.keyring.delete(kind)
     }
+    /// Return one named connection's credential presence without its value.
+    pub fn connection_credential_state(
+        &self,
+        id: &ApiConnectionId,
+    ) -> Result<ConnectionCredentialRef, AiError> {
+        validate_connection_id(id)?;
+        Ok(ConnectionCredentialRef {
+            connection_id: id.clone(),
+            has_secret: self.connection_keyring.has_connection(id)?,
+        })
+    }
+    /// Validate and store one named connection's credential through the connection port.
+    pub fn set_connection_credential(
+        &self,
+        id: &ApiConnectionId,
+        secret: &str,
+    ) -> Result<(), AiError> {
+        validate_connection_id(id)?;
+        self.connection_keyring.set_connection(id, secret)
+    }
+    /// Delete only the named connection's credential without contacting its provider.
+    pub fn delete_connection_credential(&self, id: &ApiConnectionId) -> Result<(), AiError> {
+        validate_connection_id(id)?;
+        self.connection_keyring.delete_connection(id)
+    }
+    /// Copy the legacy kind credential into a named connection slot inside Rust.
+    /// Copies only when the target slot is absent; legacy slots are never
+    /// deleted here and no secret crosses the IPC boundary.
+    pub fn migrate_connection_credential(
+        &self,
+        id: &ApiConnectionId,
+        kind: AiProviderKind,
+    ) -> Result<ConnectionCredentialRef, AiError> {
+        validate_connection_id(id)?;
+        if !self.connection_keyring.has_connection(id)? {
+            if let Some(secret) = self.keyring.get(kind)? {
+                self.connection_keyring.set_connection(id, &secret)?;
+            }
+        }
+        self.connection_credential_state(id)
+    }
     /// Check local readiness or perform the caller's explicit live connection probe.
     pub async fn test_connection(
         &self,
@@ -114,17 +159,26 @@ impl AiService {
                         Err(error) => return Err(error),
                     })
                 }
-                kind => Ok(if self.keyring.has(kind)? {
-                    AiTestResult {
-                        config_options: None,
-                        ok: true,
-                        detail: "設定と資格情報の存在を確認しました（通信なし）".into(),
-                    }
-                } else {
-                    AiTestResult {
-                        config_options: None,
-                        ok: false,
-                        detail: "資格情報が OS ストアにありません".into(),
+                kind => Ok({
+                    let has_secret = match config.connection_id.as_ref() {
+                        Some(id) => {
+                            validate_connection_id(id)?;
+                            self.connection_keyring.has_connection(id)?
+                        }
+                        None => self.keyring.has(kind)?,
+                    };
+                    if has_secret {
+                        AiTestResult {
+                            config_options: None,
+                            ok: true,
+                            detail: "設定と資格情報の存在を確認しました（通信なし）".into(),
+                        }
+                    } else {
+                        AiTestResult {
+                            config_options: None,
+                            ok: false,
+                            detail: "資格情報が OS ストアにありません".into(),
+                        }
                     }
                 }),
             };
@@ -135,10 +189,18 @@ impl AiService {
                 .handshake(&resolve_acp_argv(config.acp.as_ref().expect("validated"))?),
             kind => {
                 let target = http_target(&config)?;
-                let secret = self
-                    .keyring
-                    .get(kind)?
-                    .ok_or(AiError::MissingCredentials { provider: kind })?;
+                let secret = match config.connection_id.as_ref() {
+                    Some(id) => {
+                        validate_connection_id(id)?;
+                        self.connection_keyring
+                            .get_connection(id)?
+                            .ok_or(AiError::MissingCredentials { provider: kind })?
+                    }
+                    None => self
+                        .keyring
+                        .get(kind)?
+                        .ok_or(AiError::MissingCredentials { provider: kind })?,
+                };
                 self.transport.test_http(&target, &secret).await
             }
         }
@@ -214,8 +276,11 @@ impl AiService {
                 // secret or keyring failure must return without pinning, so the
                 // copy stays usable for reject/cancel/approve. Scope
                 // authorization still precedes every network side effect.
-                let (target, secret) =
-                    resolve_http_request(self.keyring.as_ref(), &request.provider)?;
+                let (target, secret) = resolve_http_request(
+                    self.keyring.as_ref(),
+                    self.connection_keyring.as_ref(),
+                    &request.provider,
+                )?;
                 prepare_scoped_run(&workspace_state, &isolation, &request)?;
                 let (run_id, cancel) = self.runs.register();
                 self.usage.reset_for_run(&run_id);

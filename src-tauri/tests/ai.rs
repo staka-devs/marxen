@@ -95,6 +95,7 @@ fn openai_request(base: &str) -> AiPromptRequest {
                 model: "mock-model".into(),
             }),
             anthropic: None,
+            connection_id: None,
         },
         mode: PromptMode::Rewrite,
         prompt: "書き換えてください".into(),
@@ -119,6 +120,7 @@ fn anthropic_request(base: &str) -> AiPromptRequest {
             endpoint: base.into(),
             model: "mock-model".into(),
         }),
+        connection_id: None,
     };
     request
 }
@@ -563,6 +565,7 @@ fn acp_request(argv: AcpArgv) -> AiPromptRequest {
             }),
             openai: None,
             anthropic: None,
+            connection_id: None,
         },
         mode: PromptMode::Workspace,
         prompt: "修正案をください".into(),
@@ -1093,6 +1096,7 @@ fn dry_runs_and_handshakes_use_no_real_credentials() {
         }),
         openai: None,
         anthropic: None,
+        connection_id: None,
     };
     let report = dry_run_report(&config, &keyring).unwrap();
     assert!(!report.ok);
@@ -1339,6 +1343,7 @@ fn codex_adapter_without_install_is_a_clear_missing_binary() {
         }),
         openai: None,
         anthropic: None,
+        connection_id: None,
     };
     let report = dry_run_report(&config, &MemoryKeyring::default()).unwrap();
     assert!(!report.ok);

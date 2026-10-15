@@ -23,6 +23,11 @@ export function clampAiChatWidth(width: number, availableWidth = Infinity): numb
   return Math.round(Math.min(max, Math.max(min, Number.isFinite(width) ? width : AI_CHAT_WIDTH.default)));
 }
 
+/** Check a raw value as a stable connection scope for hidden models. */
+function isConnectionScope(value: unknown): value is string {
+  return typeof value === "string" && value.length >= 1 && value.length <= 128 && /^[A-Za-z0-9_-]+$/.test(value);
+}
+
 /** Sanitize persisted view state without consulting or mutating native connection selections. */
 export function normalizeAiViewPreferences(value: unknown): AiViewPreferences {
   const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
@@ -32,7 +37,11 @@ export function normalizeAiViewPreferences(value: unknown): AiViewPreferences {
   const hiddenModels: HiddenAiModel[] = [];
   if (Array.isArray(raw.hiddenModels)) for (const item of raw.hiddenModels.slice(0, 4096)) {
     if (!item || !AI_PROVIDER_IDS.includes(item.provider) || typeof item.optionId !== "string" || typeof item.value !== "string" || !item.optionId || !item.value || item.optionId.length > 1024 || item.value.length > 1024) continue;
-    if (!hiddenModels.some((entry) => entry.provider === item.provider && entry.optionId === item.optionId && entry.value === item.value)) hiddenModels.push({ provider: item.provider, optionId: item.optionId, value: item.value });
+    // A present but malformed scope drops the entry instead of demoting it:
+    // demotion would leak a per-connection hide into provider-wide behavior.
+    if (item.connectionId !== undefined && !isConnectionScope(item.connectionId)) continue;
+    const connectionId = isConnectionScope(item.connectionId) ? item.connectionId : undefined;
+    if (!hiddenModels.some((entry) => entry.provider === item.provider && entry.optionId === item.optionId && entry.value === item.value && (entry.connectionId ?? null) === (connectionId ?? null))) hiddenModels.push(connectionId === undefined ? { provider: item.provider, optionId: item.optionId, value: item.value } : { provider: item.provider, optionId: item.optionId, value: item.value, connectionId });
   }
   return {
     showProviderSelector: typeof raw.showProviderSelector === "boolean" ? raw.showProviderSelector : defaults.showProviderSelector,
@@ -43,8 +52,8 @@ export function normalizeAiViewPreferences(value: unknown): AiViewPreferences {
 }
 
 /** Determine whether an advertised model belongs in a selector. */
-export function isAiModelVisible(preferences: AiViewPreferences, provider: AiProviderId, optionId: string, value: string): boolean {
-  return !preferences.hiddenModels.some((entry) => entry.provider === provider && entry.optionId === optionId && entry.value === value);
+export function isAiModelVisible(preferences: AiViewPreferences, provider: AiProviderId, optionId: string, value: string, connectionId?: string | null): boolean {
+  return !preferences.hiddenModels.some((entry) => entry.provider === provider && entry.optionId === optionId && entry.value === value && (entry.connectionId ?? null) === (connectionId ?? null));
 }
 
 /** Toggle a provider's candidate visibility without touching the current provider. */
@@ -54,6 +63,7 @@ export function setAiProviderVisible(preferences: AiViewPreferences, provider: A
 
 /** Toggle one actual model ID without touching native selections or related reasoning options. */
 export function setAiModelVisible(preferences: AiViewPreferences, model: HiddenAiModel, visible: boolean): AiViewPreferences {
-  const retained = preferences.hiddenModels.filter((entry) => entry.provider !== model.provider || entry.optionId !== model.optionId || entry.value !== model.value);
+  const scope = model.connectionId ?? null;
+  const retained = preferences.hiddenModels.filter((entry) => entry.provider !== model.provider || entry.optionId !== model.optionId || entry.value !== model.value || (entry.connectionId ?? null) !== scope);
   return { ...preferences, hiddenModels: visible ? retained : [...retained, model] };
 }
