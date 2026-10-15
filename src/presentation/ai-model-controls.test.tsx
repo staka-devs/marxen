@@ -7,6 +7,8 @@ import { defaultProviderConfig } from "../domain/ai-config";
 import type { AiProviderConfig, AcpConfigOption } from "../contracts/ai-contracts";
 import type { AiGateway } from "../application/ports";
 import { defaultAiViewPreferences } from "../domain/ai-view-preferences";
+import { buildProviderConfigFromConnection } from "../domain/ai-connections";
+import type { ApiConnection } from "../contracts/ai-contracts";
 afterEach(cleanup);
 const options: AcpConfigOption[] = [
   { id: "model", name: "Model", category: "model", currentValue: "fixture-a", options: [{ value: "fixture-a", name: "Fixture A" }, { value: "fixture-b", name: "Fixture B" }] },
@@ -26,6 +28,36 @@ function choose(label: string, name: string) {
   fireEvent.click(screen.getByRole("option", { name }));
 }
 describe("chat model selection", () => {
+  it("hides only the named connection ID while retaining the active connection and model", () => {
+    const first: ApiConnection = { id: "api-a", name: "Twin", protocol: "openai_compatible", endpoint: "https://a.example/v1", model: "model-a" };
+    const second = { ...first, id: "api-b", endpoint: "https://b.example/v1" };
+    const provider = buildProviderConfigFromConnection(first);
+    const onProvider = vi.fn();
+    const onSelect = vi.fn();
+    const onRefresh = vi.fn();
+    const onManageVisibility = vi.fn();
+    const preferences = { ...defaultAiViewPreferences(), hiddenConnectionIds: [first.id], hiddenProviders: ["openai_compatible" as const] };
+    const props = { provider, onProvider, options: [], loading: false, discovered: false, error: null, onRefresh, onManageVisibility, connectionSelection: { list: { version: 1 as const, initialized: true, activeId: first.id, connections: [first, second] }, activeId: first.id, onSelect } };
+    const { rerender } = render(<AiModelControls {...props} preferences={preferences} />);
+    const trigger = screen.getByRole("combobox", { name: "チャットの接続先" });
+    expect(trigger).toHaveTextContent("Twin");
+    expect(screen.getByRole("textbox", { name: "チャットのモデル" })).toHaveValue("model-a");
+    fireEvent.click(trigger);
+    expect(screen.getAllByRole("option", { name: "Twin" })).toHaveLength(1);
+    expect(screen.getByRole("option", { name: "Twin" })).toHaveAttribute("aria-description", "model-a • https://b.example/v1");
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "接続先を検索" }), { key: "Escape" });
+    expect(screen.getByText("選択中の候補は非表示です")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "AI の表示設定" }));
+    expect(onManageVisibility).toHaveBeenCalledOnce();
+    rerender(<AiModelControls {...props} preferences={{ ...preferences, hiddenConnectionIds: [] }} />);
+    expect(screen.queryByText("選択中の候補は非表示です")).toBeNull();
+    fireEvent.click(trigger);
+    expect(screen.getAllByRole("option", { name: "Twin" })).toHaveLength(2);
+    expect(onProvider).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(provider).toEqual(buildProviderConfigFromConnection(first));
+  });
   it("preserves model and reasoning overrides when the same provider or model is chosen again", () => {
     const provider = defaultProviderConfig("acp");
     provider.acp!.selections = [{ id: "model", value: "fixture-a" }, { id: "reasoning", value: "xhigh" }];
