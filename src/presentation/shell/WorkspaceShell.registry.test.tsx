@@ -345,6 +345,7 @@ it("binds native search options and localized errors through the composed App sh
 async function openWorkspace() {
   render(<App />);
   fireEvent.click(screen.getByRole("menuitem", { name: "ファイル" }));
+  await waitFor(() => expect(screen.getByRole("menuitem", { name: "パスを入力する" })).toBeEnabled());
   fireEvent.click(screen.getByRole("menuitem", { name: "パスを入力する" }));
   fireEvent.change(screen.getByLabelText("開くフォルダーの絶対パス"), { target: { value: "/ws" } });
   fireEvent.click(screen.getByRole("button", { name: "開く" }));
@@ -518,6 +519,7 @@ it("opens the natively picked folder instead of a typed prompt", async () => {
   vi.mocked(open).mockResolvedValueOnce("/picked/ws");
   render(<App />);
   fireEvent.click(screen.getByRole("menuitem", { name: "ファイル" }));
+  await waitFor(() => expect(screen.getByRole("menuitem", { name: "フォルダーを開く" })).toBeEnabled());
   fireEvent.click(screen.getByRole("menuitem", { name: "フォルダーを開く" }));
   await screen.findByRole("button", { name: "メモ/a.md" });
   expect(mockedInvoke).toHaveBeenCalledWith("open_workspace", { path: "/picked/ws" });

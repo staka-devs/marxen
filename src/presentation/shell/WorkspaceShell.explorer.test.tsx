@@ -47,7 +47,7 @@ beforeEach(() => {
   mockInvoke.mockImplementation((command, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     switch (command) {
-      case "open_workspace": return Promise.resolve({ root: a.path });
+      case "open_workspace": return Promise.resolve({ root: a.path, scope: { rootId: "fixture-root", generation: "1" } });
       case "list_workspace": return Promise.resolve([
         { path: "a.md", name: "a.md", directory: false, markdown: true, kind: "markdown" },
         { path: "notes.txt", name: "notes.txt", directory: false, markdown: false, kind: "text" },
@@ -79,6 +79,7 @@ beforeEach(() => {
 async function openWorkspace() {
   render(<App />);
   fireEvent.click(screen.getByRole("menuitem", { name: "ファイル" }));
+  await waitFor(() => expect(screen.getByRole("menuitem", { name: "パスを入力する" })).toBeEnabled());
   fireEvent.click(screen.getByRole("menuitem", { name: "パスを入力する" }));
   fireEvent.change(screen.getByLabelText("開くフォルダーの絶対パス"), { target: { value: "C:/workspace" } });
   fireEvent.click(screen.getByRole("button", { name: "開く" }));
@@ -91,7 +92,7 @@ it("moves folder opening to File and invokes native folder creation once without
   fireEvent.click(screen.getByRole("button", { name: "新規フォルダー" }));
   fireEvent.change(screen.getByLabelText("新規フォルダーのパス"), { target: { value: "今日" } });
   fireEvent.click(screen.getByRole("button", { name: "作成する" }));
-  await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("create_folder", { path: "今日" }));
+  await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("create_folder", { path: "今日", scope: { rootId: "fixture-root", generation: "1" } }));
   expect(mockInvoke.mock.calls.filter(([name]) => name === "create_folder")).toHaveLength(1);
   expect(mockInvoke.mock.calls.some(([name]) => name === "open_markdown" || name === "create_markdown" || name === "open_text_file")).toBe(false);
 });
@@ -165,7 +166,7 @@ it("limits desktop quick-open to supported workspace files and opens its keyboar
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("# literal **text**"));
   expect(screen.queryByTestId("quick-open")).toBeNull();
-  expect(mockInvoke).toHaveBeenCalledWith("open_text_file", { path: "notes.txt" });
+  expect(mockInvoke).toHaveBeenCalledWith("open_text_file", { path: "notes.txt", scope: { rootId: "fixture-root", generation: "1" } });
   const editor = screen.getByTestId("editor-primary").querySelector(".cm-content");
   await waitFor(() => expect(editor).toHaveFocus());
   const file = within(screen.getByTestId("file-tree")).getByRole("button", { name: "notes.txt" });
@@ -176,4 +177,51 @@ it("limits desktop quick-open to supported workspace files and opens its keyboar
   tab.focus();
   fireEvent.click(tab);
   await waitFor(() => expect(editor).toHaveFocus());
+});
+
+it("adds a second real shell root, distinguishes text/image tabs and qualifies quick-open selection", async () => {
+  const original = mockInvoke.getMockImplementation()!;
+  const alpha = { rootId: "root-alpha", generation: "1" };
+  const beta = { rootId: "root-beta", generation: "1" };
+  mockInvoke.mockImplementation((command, args) => {
+    const a = (args ?? {}) as Record<string, unknown>;
+    const scope = a.scope as typeof alpha;
+    if (command === "list_workspaces") return Promise.resolve([]);
+    if (command === "open_workspace") return Promise.resolve({ root: a.path, scope: alpha });
+    if (command === "add_workspace") return Promise.resolve({ root: a.path, scope: beta });
+    if (command === "open_text_file") return Promise.resolve({ path: "notes.txt", snapshot: { documentId: `${scope.rootId}-text`, location: { scope, path: "notes.txt", position: 0 }, revision: 0, text: scope.rootId, dirty: false } });
+    return original(command, args);
+  });
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  vi.mocked(open).mockResolvedValueOnce("C:/beta");
+  await openWorkspace();
+  fireEvent.click(screen.getByRole("button", { name: "notes.txt" }));
+  await waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("root-alpha"));
+  fireEvent.click(screen.getByRole("menuitem", { name: "ファイル" }));
+  const add = screen.getByRole("menuitem", { name: "ワークスペースにフォルダーを追加" });
+  expect(add).toBeEnabled(); fireEvent.click(add);
+  await waitFor(() => expect(screen.getAllByTestId("file-tree")).toHaveLength(2));
+  expect(screen.getByTestId("editor-primary")).toHaveTextContent("root-alpha");
+  const trees = screen.getAllByTestId("file-tree");
+  expect(screen.queryByText("C:/workspace", { exact: true })).toBeNull();
+  expect(within(trees[0]).getByRole("button", { name: "workspace" })).toHaveAttribute("title", "C:/workspace");
+  expect(within(trees[1]).getByRole("button", { name: "beta" })).toHaveAttribute("title", "C:/beta");
+  expect(within(trees[0]).getByRole("button", { name: "C:/workspace をワークスペースから取り除く" })).toBeEnabled();
+  fireEvent.click(within(trees[1]).getByRole("button", { name: "notes.txt" }));
+  await waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("root-beta"));
+  expect(screen.getByRole("tab", { name: "workspace/notes.txt" })).toBeVisible();
+  expect(screen.getByRole("tab", { name: "beta/notes.txt" })).toBeVisible();
+  for (const tree of trees) fireEvent.click(within(tree).getByRole("button", { name: "photo.png" }));
+  expect(screen.getByRole("tab", { name: "workspace/photo.png" })).toBeVisible();
+  expect(screen.getByRole("tab", { name: "beta/photo.png" })).toBeVisible();
+  await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("load_workspace_image", { path: "photo.png", scope: beta }));
+  fireEvent.keyDown(window, { key: "p", ctrlKey: true });
+  const picker = screen.getByTestId("quick-open");
+  fireEvent.change(within(picker).getByRole("combobox"), { target: { value: "beta/notes.txt" } });
+  fireEvent.keyDown(within(picker).getByRole("combobox"), { key: "Enter" });
+  await waitFor(() => expect(screen.getByRole("tab", { name: "beta/notes.txt" })).toHaveAttribute("aria-selected", "true"));
+  fireEvent.click(screen.getByRole("button", { name: "C:/workspace をワークスペースから取り除く" }));
+  fireEvent.click(within(screen.getByTestId("remove-root-dialog")).getByRole("button", { name: "キャンセル" }));
+  expect(screen.getAllByTestId("file-tree")).toHaveLength(2);
+  expect(mockInvoke.mock.calls.some(([name]) => name === "remove_workspace")).toBe(false);
 });

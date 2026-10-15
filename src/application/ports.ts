@@ -52,6 +52,15 @@ import type {
 } from "../contracts/isolation-contracts";
 import type { PromptContext, PromptMode, ProposalText, IsolatedCopyId } from "../contracts/ai-contracts";
 import type { ImageResolver } from "../domain/image-sources";
+import type { WorkspaceMetadata } from "../contracts/workspace-metadata";
+
+/** Persist layout metadata independently from Rust-owned unsaved recovery. */
+export interface WorkspaceMetadataStore {
+  /** Read supported metadata, returning null to retain corrupt or newer bytes. */
+  load(): WorkspaceMetadata | null;
+  /** Store a supported layout without deleting unavailable roots. */
+  save(value: WorkspaceMetadata): boolean;
+}
 
 /** Revision-aware document gateway owned by the registry transport. */
 export interface DocumentGateway {
@@ -194,18 +203,24 @@ export type EditorAction = "copy" | "cut" | "paste" | "undo" | "redo";
 export interface WorkspaceGateway {
   /** Open a workspace root. */
   openWorkspace(path: string): Promise<WorkspaceInfo>;
+  /** Add one independent root while keeping existing documents and buffers. */
+  addWorkspace?(path: string): Promise<WorkspaceInfo>;
+  /** List every registered root incarnation in stable identifier order. */
+  listWorkspaces?(): Promise<WorkspaceInfo[]>;
+  /** Remove one clean root incarnation while keeping all other roots. */
+  removeWorkspace?(scope: import("../contracts/contracts").RootScope, action: CloseAction): Promise<WorkspaceInfo | null>;
   /** List direct children of a workspace-relative directory. */
-  listWorkspace(path?: string): Promise<WorkspaceEntry[]>;
+  listWorkspace(path?: string, scope?: import("../contracts/contracts").RootScope): Promise<WorkspaceEntry[]>;
   /** List open documents. */
-  listDocuments(): Promise<OpenDocument[]>;
+  listDocuments(scope?: import("../contracts/contracts").RootScope): Promise<OpenDocument[]>;
   /** Open a Markdown file. */
-  openMarkdown(path: string): Promise<OpenDocument>;
+  openMarkdown(path: string, scope?: import("../contracts/contracts").RootScope): Promise<OpenDocument>;
   /** Open a plain-text file. */
-  openTextFile(path: string): Promise<OpenDocument>;
+  openTextFile(path: string, scope?: import("../contracts/contracts").RootScope): Promise<OpenDocument>;
   /** Create a Markdown document. */
-  createMarkdown(path: string, text?: string): Promise<OpenDocument>;
+  createMarkdown(path: string, text?: string, scope?: import("../contracts/contracts").RootScope): Promise<OpenDocument>;
   /** Create one contained folder under an existing parent without opening a document. */
-  createFolder(path: string): Promise<WorkspaceEntry>;
+  createFolder(path: string, scope?: import("../contracts/contracts").RootScope): Promise<WorkspaceEntry>;
   /** Rename a Markdown document. */
   renameMarkdown(request: SaveRequest, path: string): Promise<OpenDocument>;
   /** Close a document with an explicit decision. */
@@ -215,9 +230,9 @@ export interface WorkspaceGateway {
   /** Prepare authoritative match edits only for unchanged searched content and root. */
   planSearchReplacement(request: SearchReplaceRequest): Promise<SearchReplacePlan>;
   /** Poll queued workspace events. */
-  pollEvents(): Promise<WorkspaceEvent[]>;
+  pollEvents(scope?: import("../contracts/contracts").RootScope): Promise<WorkspaceEvent[]>;
   /** List crash-recovery entries. */
-  listRecovery(): Promise<RecoveryEntry[]>;
+  listRecovery(scope?: import("../contracts/contracts").RootScope): Promise<RecoveryEntry[]>;
   /** Restore a recovery entry. */
   restoreRecovery(documentId: DocumentId): Promise<OpenDocument>;
   /** Discard a recovery entry. */
@@ -225,7 +240,7 @@ export interface WorkspaceGateway {
   /** Load a document-relative image. */
   loadImage(documentId: DocumentId, path: string): Promise<ImageData>;
   /** Load a workspace image by path. */
-  loadWorkspaceImage(path: string): Promise<ImageData>;
+  loadWorkspaceImage(path: string, scope?: import("../contracts/contracts").RootScope): Promise<ImageData>;
   /** Fetch a snapshot for replace flows. */
   fetchSnapshot(documentId: DocumentId): Promise<DocumentSnapshot>;
   /** Fetch a Neovim grid screen batch for the raw view. */

@@ -114,6 +114,60 @@ mod desktop {
         Ok(info)
     }
     #[tauri::command(async)]
+    /// Add one independent root while keeping existing documents and buffers.
+    pub fn add_workspace(
+        app: tauri::AppHandle,
+        state: tauri::State<'_, ActorState>,
+        path: String,
+    ) -> Result<WorkspaceInfo, WorkspaceError> {
+        let recovery = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| WorkspaceError::Io {
+                detail: e.to_string(),
+            })?
+            .join("recovery");
+        let mut guard = state.workspace.lock().map_err(|_| WorkspaceError::Io {
+            detail: "workspace lock poisoned".into(),
+        })?;
+        let workspace = Workspace::open(
+            std::path::Path::new(&path),
+            &recovery,
+            state.services.clone(),
+            state.files.clone(),
+            state.clock.clone(),
+        )?;
+        guard.add(workspace)
+    }
+    #[tauri::command(async)]
+    /// List every registered root incarnation in stable identifier order.
+    pub fn list_workspaces(
+        state: tauri::State<'_, ActorState>,
+    ) -> Result<Vec<WorkspaceInfo>, WorkspaceError> {
+        let guard = state.workspace.lock().map_err(|_| WorkspaceError::Io {
+            detail: "workspace lock poisoned".into(),
+        })?;
+        Ok(guard.list())
+    }
+    #[tauri::command(async)]
+    /// Remove one clean root incarnation while keeping all other roots and tabs.
+    pub fn remove_workspace(
+        state: tauri::State<'_, ActorState>,
+        scope: RootScope,
+        action: CloseAction,
+    ) -> Result<Option<WorkspaceInfo>, WorkspaceError> {
+        let mut guard = state.workspace.lock().map_err(|_| WorkspaceError::Io {
+            detail: "workspace lock poisoned".into(),
+        })?;
+        let info = guard.remove_with_decision(&scope, action)?;
+        if info.is_some() {
+            if let Ok(mut pending) = state.pending.lock() {
+                pending.retain(|event| event.scope != scope);
+            }
+        }
+        Ok(info)
+    }
+    #[tauri::command(async)]
     /// Return supported direct workspace children through the registry use case.
     pub fn list_workspace(
         state: tauri::State<'_, ActorState>,

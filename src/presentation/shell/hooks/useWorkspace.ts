@@ -10,7 +10,11 @@ import { useI18n } from "../../i18n/I18nProvider";
 // session, so this hook never imports infrastructure directly.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { SaveRequest, RecoveryEntry, RuntimeStatus, SearchOptions, SearchLimit, WorkspaceEntry, WorkspaceEvent } from "../../../contracts/contracts";
+import type { SaveRequest, RecoveryEntry, RuntimeStatus, SearchOptions, SearchLimit, WorkspaceEntry, WorkspaceEvent, WorkspaceInfo, RootScope, CloseAction } from "../../../contracts/contracts";
+import { sameRoot } from "../../../domain/document-location";
+import { imageTabId } from "../../../domain/workspace-roots";
+import { isMarkdownPath } from "../../../domain/workspace-files";
+import type { PersistedTab, WorkspaceMetadata } from "../../../contracts/workspace-metadata";
 import type { ExplorerTarget } from "../../../contracts/workbench";
 import type { SearchHitItem } from "../../../domain/search-hit";
 import { docFromOpen, type OpenDoc } from "../../../application/document/document-helpers";
@@ -21,6 +25,7 @@ import { StaleResync, workspaceErrorText } from "../../../domain/document-errors
 import { applyGridUpdates, createGridState, type NvimGridState } from "../../../domain/coordinates/grid";
 import type {
   DialogGateway,
+  WorkspaceMetadataStore,
   RuntimeGateway,
   WorkspaceEventSource,
   WorkspaceGateway,
@@ -32,6 +37,8 @@ import { useWorkspaceSearch } from "./useWorkspaceSearch";
 export interface WorkspaceArgs {
   /** True on desktop; the browser demo searches local samples only. */
   desktop: boolean;
+  /** Layout persistence, separate from native unsaved recovery. */
+  metadataStore?: WorkspaceMetadataStore;
   /** Surface a notice without importing shell state. */
   notify: (message: LocalizedText | null) => void;
   /** Document session owning docs, tabs, selections, and snapshots. */
@@ -56,13 +63,25 @@ export interface WorkspaceArgs {
 
 /** Workspace lifecycle state and operations. */
 export interface Workspace {
+  roots: WorkspaceInfo[];
+  entriesByRoot: Record<string, WorkspaceEntry[]>;
+  missingRoots: string[];
+  removingRoot: WorkspaceInfo | null;
+  /** Add an independent folder while retaining existing buffers and tabs. */
+  addWorkspaceFolder: (path: string) => Promise<void>;
+  /** Pick an independent folder to add. */
+  pickFolderAndAdd: () => Promise<void>;
+  /** Ask for a root-wide removal decision. */
+  beginRemoveRoot: (scope: RootScope) => void;
+  /** Resolve root removal without dropping tabs on cancellation or save failure. */
+  resolveRemoveRoot: (action: CloseAction) => Promise<void>;
   busy: boolean;
   generation: number;
   refreshing: boolean;
   entryKind: "file" | "folder";
   createdTarget: ExplorerTarget | null;
   /** Capture a relative tree location in the current root generation. */
-  targetFor: (path?: string, directory?: boolean, kind?: WorkspaceEntry["kind"]) => ExplorerTarget;
+  targetFor: (path?: string, directory?: boolean, kind?: WorkspaceEntry["kind"], scope?: RootScope) => ExplorerTarget;
   /** Check that a captured target still belongs to this root session. */
   isTargetCurrent: (target: ExplorerTarget) => boolean;
   /** Recheck lifecycle availability synchronously before executing an operation. */
@@ -181,7 +200,7 @@ export interface Workspace {
  */
 export function useWorkspace(args: WorkspaceArgs): Workspace {
   const { t, message } = useI18n();
-  const { desktop, notify, session, workspaceGateway, eventSource, runtimeGateway, dialogGateway, showRaw, settingsOpen, routeVimKeys, onWorkspaceOpened } = args;
+  const { desktop, metadataStore, notify, session, workspaceGateway, eventSource, runtimeGateway, dialogGateway, showRaw, settingsOpen, routeVimKeys, onWorkspaceOpened } = args;
   const setNotice = notify;
   const {
     registry,
@@ -199,7 +218,19 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   } = session;
 
   const [wsRoot, setWsRootState] = useState<string | null>(null);
-  const search = useWorkspaceSearch({ desktop, root: wsRoot, gateway: workspaceGateway, session, notify });
+  const [roots, setRoots] = useState<WorkspaceInfo[]>([]);
+  const rootsRef = useRef<WorkspaceInfo[]>([]);
+  const [entriesByRoot, setEntriesByRoot] = useState<Record<string, WorkspaceEntry[]>>({});
+  const [missingRoots, setMissingRoots] = useState<string[]>([]);
+  const [removingRoot, setRemovingRoot] = useState<WorkspaceInfo | null>(null);
+  const layoutStarted = useRef(false);
+  const layoutLoading = useRef(desktop && !!metadataStore);
+  const [layoutReady, setLayoutReady] = useState(false);
+  const retainedLayout = useRef<WorkspaceMetadata | null>(null);
+  const unavailableTabs = useRef<PersistedTab[]>([]);
+  const search = useWorkspaceSearch({ desktop, root: wsRoot, roots, gateway: workspaceGateway, session, notify });
+  /** Publish native owners before asynchronous opens can settle. */
+  const updateRoots = useCallback((next: WorkspaceInfo[]) => { rootsRef.current = next; session.configureRoots(next); setRoots(next); }, [session.configureRoots]);
   /** Fence search work before changing workspace identity. */
   const setWsRoot = useCallback((value: React.SetStateAction<string | null>) => { search.invalidate(); setWsRootState(value); }, [search.invalidate]);
   const rootRef = useRef<string | null>(null);
@@ -229,42 +260,41 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   const [renameDoc, setRenameDoc] = useState<string | null>(null);
   const [renamePath, setRenamePath] = useState("");
 
-  /** Load all workspace entries recursively up to 2000 items. */
+  /** List every root separately, rejecting listings from a changed lifecycle. */
   const loadEntries = useCallback(async (): Promise<WorkspaceEntry[]> => {
     const epoch = generation.current;
     const ticket = ++listing.current;
-    const root = await workspaceGateway!.listWorkspace("");
-    if (epoch !== generation.current) return [];
-    const all = [...root];
-    const queue = root.filter((entry) => entry.directory).map((entry) => entry.path);
-    const seen = new Set<string>(queue);
-    while (queue.length > 0) {
-      const dir = queue.shift()!;
-      try {
-        const children = await workspaceGateway!.listWorkspace(dir);
-        if (epoch !== generation.current) return [];
-        all.push(...children);
-        for (const child of children) {
-          if (child.directory && !seen.has(child.path)) {
-            seen.add(child.path);
-            queue.push(child.path);
-          }
-        }
-      } catch {
-        // Unreadable directories stay collapsed with their parent visible.
+    const next: Record<string, WorkspaceEntry[]> = {};
+    for (const owner of rootsRef.current) {
+      const initial = await workspaceGateway!.listWorkspace("", owner.scope);
+      if (epoch !== generation.current) return [];
+      const all = [...initial];
+      const queue = initial.filter((entry) => entry.directory).map((entry) => entry.path);
+      const seen = new Set(queue);
+      while (queue.length && all.length < 2000) {
+        const dir = queue.shift()!;
+        try {
+          const children = await workspaceGateway!.listWorkspace(dir, owner.scope);
+          if (epoch !== generation.current) return [];
+          all.push(...children.slice(0, 2000 - all.length));
+          for (const child of children) if (child.directory && !seen.has(child.path)) { seen.add(child.path); queue.push(child.path); }
+        } catch { /* Keep unreadable directory rows available. */ }
       }
-      if (all.length > 2000) break;
+      next[owner.scope.rootId] = all;
     }
-    if (epoch === generation.current && ticket === listing.current) setEntries(all);
-    return all;
+    const first = next[rootsRef.current[0]?.scope.rootId] ?? [];
+    if (epoch === generation.current && ticket === listing.current) { setEntriesByRoot(next); setEntries(first); }
+    return first;
   }, [workspaceGateway]);
 
-  /** Capture a location in this single-root session before focus or active tabs change. */
-  const targetFor = useCallback((path = "", directory = true, kind?: WorkspaceEntry["kind"]): ExplorerTarget => ({ rootId: rootRef.current ?? "", generation: generation.current, path, directory, kind }), []);
-  /** Reject targets captured in a replaced workspace, including pending dialogs. */
-  const isTargetCurrent = useCallback((target: ExplorerTarget) => target.rootId !== "" && target.rootId === rootRef.current && target.generation === generation.current, []);
+  /** Capture an explicit root and relative path before focus changes. */
+  const targetFor = useCallback((path = "", directory = true, kind?: WorkspaceEntry["kind"], scope?: RootScope): ExplorerTarget => ({ rootId: (scope ?? rootsRef.current[0]?.scope)?.rootId ?? "", generation: generation.current, path, directory, kind }), []);
+  /** Reject removed or replaced tree sessions, including pending dialogs. */
+  const isTargetCurrent = useCallback((target: ExplorerTarget) => target.generation === generation.current && rootsRef.current.some((root) => root.scope.rootId === target.rootId), []);
+  /** Resolve the native incarnation captured by an explorer target. */
+  const scopeFor = useCallback((target: ExplorerTarget) => rootsRef.current.find((root) => root.scope.rootId === target.rootId)?.scope, []);
   /** Recheck native lifecycle availability synchronously before every invocation. */
-  const canOperate = useCallback(() => desktop && !!registry && !!workspaceGateway && !busyRef.current, [desktop, registry, workspaceGateway]);
+  const canOperate = useCallback(() => desktop && !!registry && !!workspaceGateway && !busyRef.current && !layoutLoading.current, [desktop, registry, workspaceGateway]);
   /** Refresh only the tree, preserving buffers and discarding results from replaced roots. */
   const refreshEntries = useCallback(async () => {
     if (!canOperate() || !rootRef.current) return;
@@ -291,9 +321,9 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     const epoch = generation.current;
     busyRef.current = true; setBusy(true);
     try {
-      let doc = Object.values(docsRef.current).find((item) => item.path === target.path);
+      let doc = Object.values(docsRef.current).find((item) => item.path === target.path && ((!item.location && rootsRef.current.length === 1) || sameRoot(item.location?.scope, scopeFor(target))));
       if (!doc) {
-        const open = await workspaceGateway!.openMarkdown(target.path);
+        const open = await workspaceGateway!.openMarkdown(target.path, scopeFor(target));
         if (epoch !== generation.current) return;
         registry!.noteSnapshot(open.snapshot);
         doc = docFromOpen(open);
@@ -310,58 +340,195 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   const refreshRecovery = useCallback(async () => {
     if (!registry) return;
     try {
-      setRecovery(await workspaceGateway!.listRecovery());
+      const groups = await Promise.all(rootsRef.current.map((root) => workspaceGateway!.listRecovery(root.scope)));
+      setRecovery(groups.flat());
     } catch (cause) {
       setNotice(localizedFailure(cause, workspaceErrorText));
     }
   }, [registry, workspaceGateway, notify]);
 
   /** Open a workspace root and load entries, docs, and recovery. */
-  const openWorkspaceFolder = useCallback(
-    async (path: string) => {
-      if (busyRef.current) return;
+  const registerFolder = useCallback(
+    async (path: string, additive = false): Promise<WorkspaceInfo | null> => {
+      if (busyRef.current) return null;
       if (!registry) {
         setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
-        return;
+        return null;
       }
       const trimmed = path.trim();
       if (trimmed === "") {
         setNotice(message("フォルダーの絶対パスを入力してください。"));
-        return;
+        return null;
       }
       search.suspend();
       const epoch = ++generation.current;
       busyRef.current = true; setBusy(true); setRefreshing(false);
       setNewFileOpen(false); setRenameDoc(null); setCreatedTarget(null);
+      let registered: WorkspaceInfo | null = null;
       try {
-        const info = await workspaceGateway!.openWorkspace(trimmed);
-        if (epoch !== generation.current) return;
-        rootRef.current = info.root;
-        setWsRoot(info.root);
+        const info = await (additive ? workspaceGateway!.addWorkspace!(trimmed) : workspaceGateway!.openWorkspace(trimmed));
+        if (epoch !== generation.current) return null;
+        registered = info;
+        setMissingRoots((previous) => previous.filter((root) => root !== trimmed && root !== info.root));
+        updateRoots(additive ? [...rootsRef.current, info] : [info]);
+        rootRef.current = rootsRef.current[0].root;
+        setWsRoot(rootRef.current);
         onWorkspaceOpened?.();
         await loadEntries();
-        const open = await workspaceGateway!.listDocuments();
-        if (epoch !== generation.current) return;
+        const open = await workspaceGateway!.listDocuments(info.scope);
+        if (epoch !== generation.current) return null;
         const next: Record<string, OpenDoc> = {};
         for (const doc of open) {
           if (registry) registry.noteSnapshot(doc.snapshot);
           next[doc.snapshot.documentId] = docFromOpen(doc);
         }
-        setDocs(next);
-        setTabs(open.map((doc) => doc.snapshot.documentId));
-        setActiveId(open.map((doc) => doc.snapshot.documentId)[0] ?? null);
-        setExternalByDoc({});
+        setDocs((previous) => additive ? { ...previous, ...next } : next);
+        if (!additive) {
+          session.setImageTabs({});
+          setTabs(open.map((doc) => doc.snapshot.documentId));
+          setActiveId(open.map((doc) => doc.snapshot.documentId)[0] ?? null);
+          setExternalByDoc({});
+        }
         await refreshRecovery();
         setNotice(null);
+        return info;
       } catch (cause) {
         setNotice(localizedFailure(cause, workspaceErrorText));
+        return registered;
       } finally {
         busyRef.current = false; setBusy(false);
         search.resume();
       }
     },
-    [registry, workspaceGateway, loadEntries, refreshRecovery, setDocs, setTabs, setActiveId, setExternalByDoc, onWorkspaceOpened, notify],
+    [registry, workspaceGateway, loadEntries, refreshRecovery, setDocs, setTabs, setActiveId, setExternalByDoc, onWorkspaceOpened, notify, updateRoots, session.setImageTabs],
   );
+
+  /** Replace the workspace through the native unsaved-buffer guard. */
+  const openWorkspaceFolder = useCallback(async (path: string) => { await registerFolder(path); }, [registerFolder]);
+  /** Add a root without replacing documents, images, tabs, or selections. */
+  const addWorkspaceFolder = useCallback(async (path: string) => { if (workspaceGateway?.addWorkspace) await registerFolder(path, true); }, [registerFolder, workspaceGateway]);
+  /** Pick an independent folder without altering the active tab. */
+  const pickFolderAndAdd = useCallback(async () => {
+    if (!canOperate() || !workspaceGateway?.addWorkspace) return;
+    const path = await dialogGateway?.pickFolder(t("ワークスペースにフォルダーを追加"));
+    if (path) await addWorkspaceFolder(path);
+  }, [canOperate, workspaceGateway, dialogGateway, t, addWorkspaceFolder]);
+  /** Offer a root-wide decision while leaving every native buffer alive. */
+  const beginRemoveRoot = useCallback((scope: RootScope) => {
+    if (canOperate() && workspaceGateway?.removeWorkspace) setRemovingRoot(rootsRef.current.find((root) => sameRoot(root.scope, scope)) ?? null);
+  }, [canOperate, workspaceGateway]);
+  /** Commit removal on native acknowledgement; failures retain roots and every tab. */
+  const resolveRemoveRoot = useCallback(async (action: CloseAction) => {
+    const owner = removingRoot;
+    if (action === "cancel") { setRemovingRoot(null); return; }
+    if (!owner || !canOperate() || !workspaceGateway?.removeWorkspace) return;
+    busyRef.current = true; setBusy(true); search.suspend(); ++generation.current;
+    try {
+      const removed = await workspaceGateway.removeWorkspace(owner.scope, action);
+      if (!removed) return;
+      const removedIds = new Set(Object.values(docsRef.current).filter((doc) => sameRoot(doc.location?.scope, owner.scope)).map((doc) => doc.documentId));
+      for (const id of session.tabs) if (sameRoot(session.imageScope(id), owner.scope)) removedIds.add(id);
+      updateRoots(rootsRef.current.filter((root) => !sameRoot(root.scope, owner.scope)));
+      rootRef.current = rootsRef.current[0]?.root ?? null; setWsRoot(rootRef.current);
+      setDocs((previous) => Object.fromEntries(Object.entries(previous).filter(([id]) => !removedIds.has(id))));
+      session.setImageTabs((previous) => Object.fromEntries(Object.entries(previous).filter(([id]) => !removedIds.has(id))));
+      setTabs((previous) => { const next = previous.filter((id) => !removedIds.has(id)); if (activeRef.current && removedIds.has(activeRef.current)) setActiveId(next.at(-1) ?? null); return next; });
+      setRemovingRoot(null); onWorkspaceOpened?.();
+      await loadEntries(); await refreshRecovery();
+    } catch (cause) {
+      setNotice(localizedFailure(cause, workspaceErrorText));
+      // Earlier saves may have succeeded; refresh acknowledgements without closing tabs.
+      for (const root of rootsRef.current) for (const open of await workspaceGateway.listDocuments(root.scope).catch(() => [])) mergeSnapshot(open.snapshot);
+    } finally { busyRef.current = false; setBusy(false); search.resume(); }
+  }, [removingRoot, canOperate, workspaceGateway, session.tabs, session.imageScope, session.setImageTabs, updateRoots, setWsRoot, setDocs, setTabs, setActiveId, activeRef, docsRef, loadEntries, refreshRecovery, mergeSnapshot, notify, onWorkspaceOpened]);
+
+  // Restore metadata only after Rust reissues each root incarnation. Text recovery
+  // remains separate and is never discarded merely to reopen a previous tab.
+  useEffect(() => {
+    if (layoutStarted.current || !desktop || !metadataStore || !registry || !workspaceGateway) return;
+    layoutStarted.current = true;
+    const metadata = metadataStore.load();
+    retainedLayout.current = metadata;
+    /** Restore reachable owners, retaining unavailable roots and tabs verbatim. */
+    async function restoreLayout() {
+      const existing = await workspaceGateway!.listWorkspaces?.().catch(() => []) ?? [];
+      const nativeDocs: Record<string, OpenDoc> = {};
+      if (existing.length) {
+        updateRoots(existing); rootRef.current = existing[0].root; setWsRoot(existing[0].root);
+        for (const root of existing) for (const open of await workspaceGateway!.listDocuments(root.scope)) {
+          registry!.noteSnapshot(open.snapshot);
+          nativeDocs[open.snapshot.documentId] = docFromOpen(open);
+        }
+        await loadEntries(); await refreshRecovery();
+      }
+      if (!metadata) {
+        setDocs((previous) => ({ ...previous, ...nativeDocs }));
+        setTabs(Object.keys(nativeDocs)); setActiveId(Object.keys(nativeDocs)[0] ?? null);
+        layoutLoading.current = false; setLayoutReady(true); return;
+      }
+      const missing: string[] = [];
+      for (const owner of metadata.roots) {
+        if (rootsRef.current.some((root) => root.root === owner.root)) continue;
+        const info = await registerFolder(owner.root, rootsRef.current.length > 0);
+        if (!info) missing.push(owner.root);
+      }
+      const restoredDocs: Record<string, OpenDoc> = { ...nativeDocs };
+      const restoredImages: Record<string, string> = {};
+      const restoredTabs: string[] = [];
+      let restoredActive: string | null = null;
+      unavailableTabs.current = [];
+      for (const tab of metadata.tabs) {
+        const owner = rootsRef.current.find((root) => root.root === tab.root);
+        if (!owner) { unavailableTabs.current.push(tab); continue; }
+        try {
+          let id: string;
+          if (tab.image) {
+            // Validate the image through its owner; never borrow another root's bytes.
+            await workspaceGateway!.loadWorkspaceImage(tab.path, owner.scope);
+            id = imageTabId(owner.scope.rootId, tab.path);
+            restoredImages[id] = tab.path;
+          } else {
+            const open = await (isMarkdownPath(tab.path) ? workspaceGateway!.openMarkdown(tab.path, owner.scope) : workspaceGateway!.openTextFile(tab.path, owner.scope));
+            registry!.noteSnapshot(open.snapshot);
+            const doc = docFromOpen(open); id = doc.documentId; restoredDocs[id] = doc;
+            if (tab.selection) {
+              const anchor = Math.min(tab.selection.anchor, doc.text.length);
+              const head = Math.min(tab.selection.head, doc.text.length);
+              await registry!.reportCursorNow(id, anchor, head);
+              session.setSelections((previous) => ({ ...previous, [id]: { anchor, head } }));
+              session.echoCursor(id, anchor, head);
+            }
+          }
+          if (!restoredTabs.includes(id)) restoredTabs.push(id);
+          if (metadata.active?.root === tab.root && metadata.active.path === tab.path && metadata.active.image === tab.image) restoredActive = id;
+        } catch { unavailableTabs.current.push(tab); }
+      }
+      for (const id of Object.keys(nativeDocs)) if (!restoredTabs.includes(id)) restoredTabs.push(id);
+      setDocs((previous) => ({ ...previous, ...restoredDocs }));
+      session.setImageTabs(restoredImages); setTabs(restoredTabs); setActiveId(restoredActive ?? restoredTabs[0] ?? null);
+      setMissingRoots(missing);
+      layoutLoading.current = false; setLayoutReady(true);
+    }
+    void restoreLayout().catch((cause) => { layoutLoading.current = false; setLayoutReady(true); setNotice(localizedFailure(cause, workspaceErrorText)); });
+  }, [desktop, metadataStore, registry, workspaceGateway, registerFolder, setDocs, setTabs, setActiveId, session.setImageTabs, session.setSelections, session.echoCursor, notify]);
+
+  useEffect(() => {
+    if (!desktop || !metadataStore || !layoutReady || busy || !retainedLayout.current) return;
+    const tabs: PersistedTab[] = [...unavailableTabs.current];
+    let activeTab: PersistedTab | null = null;
+    for (const id of session.tabs) {
+      const doc = session.docs[id];
+      const scope = session.imageScope(id) ?? doc?.location?.scope;
+      const owner = roots.find((root) => sameRoot(root.scope, scope));
+      const path = session.imageTabs[id] ?? doc?.path;
+      if (!owner || !path) continue;
+      const tab: PersistedTab = { root: owner.root, path, image: !!session.imageTabs[id], ...(session.selections[id] ? { selection: session.selections[id] } : {}) };
+      tabs.push(tab);
+      if (id === session.activeId) activeTab = tab;
+    }
+    const metadata: WorkspaceMetadata = { version: 1, roots: [...roots.map(({ root }) => ({ root })), ...missingRoots.map((root) => ({ root }))], tabs, active: activeTab ?? (session.activeId === null ? retainedLayout.current.active : null) };
+    metadataStore.save(metadata);
+  }, [desktop, metadataStore, layoutReady, busy, roots, missingRoots, session.tabs, session.docs, session.imageTabs, session.selections, session.activeId, session.imageScope]);
 
   /** Pick a folder natively and open it, staying read-only in browser. */
   const pickFolderAndOpen = useCallback(async () => {
@@ -391,14 +558,14 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     busyRef.current = true; setBusy(true);
     try {
       if (entryKind === "folder") {
-        await workspaceGateway!.createFolder(path);
+        await workspaceGateway!.createFolder(path, scopeFor(target));
         if (epoch !== generation.current) return;
         setNewFileOpen(false);
         await loadEntries();
-        setCreatedTarget(targetFor(path, true));
+        setCreatedTarget(targetFor(path, true, undefined, scopeFor(target)));
         return;
       }
-      const open = await workspaceGateway!.createMarkdown(path, "");
+      const open = await workspaceGateway!.createMarkdown(path, "", scopeFor(target));
       if (epoch !== generation.current) return;
       registry.noteSnapshot(open.snapshot);
       const doc = docFromOpen(open);
@@ -407,7 +574,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
       setActiveId(doc.documentId);
       setNewFileOpen(false);
       await loadEntries();
-      setCreatedTarget(targetFor(path, false, "markdown"));
+      setCreatedTarget(targetFor(path, false, "markdown", scopeFor(target)));
     } catch (cause) {
       setNotice(localizedFailure(cause, workspaceErrorText));
     } finally { busyRef.current = false; setBusy(false); }
@@ -434,7 +601,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
       setRenameDoc(null);
       await loadEntries();
       setNotice(message("名前を変更しました。"));
-      setCreatedTarget(targetFor(path, false, "markdown"));
+      setCreatedTarget(targetFor(path, false, "markdown", doc.location?.scope));
     } catch (cause) {
       setNotice(localizedFailure(cause, workspaceErrorText));
     } finally { busyRef.current = false; setBusy(false); }
@@ -507,7 +674,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
       stop = unlisten;
     });
     const timer = window.setInterval(() => {
-      workspaceGateway!.pollEvents().then(handleEvents).catch(() => undefined);
+      Promise.all(rootsRef.current.map((root) => workspaceGateway!.pollEvents(root.scope))).then((events) => handleEvents(events.flat())).catch(() => undefined);
     }, 4000);
     return () => {
       window.clearInterval(timer);
@@ -629,7 +796,8 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   }, [settingsOpen, registry, activeId, docsRef]);
 
   return {
-    busy, generation: generation.current, refreshing, entryKind, createdTarget, targetFor, isTargetCurrent, canOperate, beginCreate, beginRename, refreshEntries,
+    roots, entriesByRoot, missingRoots, removingRoot, addWorkspaceFolder, pickFolderAndAdd, beginRemoveRoot, resolveRemoveRoot,
+    busy: busy || layoutLoading.current, generation: generation.current, refreshing, entryKind, createdTarget, targetFor, isTargetCurrent, canOperate, beginCreate, beginRename, refreshEntries,
     wsRoot,
     setWsRoot,
     entries: entries as WorkspaceEntry[],

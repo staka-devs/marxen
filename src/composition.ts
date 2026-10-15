@@ -18,6 +18,7 @@ import { aiProfileStore } from "./infrastructure/storage/ai-profile-store";
 import { apiConnectionStore } from "./infrastructure/storage/api-connections-store";
 import { createAiViewPreferencesStore } from "./infrastructure/storage/ai-view-preferences-store";
 import { editorPreferencesStore } from "./infrastructure/storage/editor-preferences-store";
+import { workspaceMetadataStore } from "./infrastructure/storage/workspace-metadata-store";
 import { imageLoader } from "./infrastructure/images/image-loader";
 import { vimSettingsGateway } from "./infrastructure/vim-settings/tauri-vim-settings";
 import { aiUsageGateway, codexAccountUsageGateway } from "./infrastructure/tauri/ai-usage";
@@ -49,6 +50,7 @@ export function createComposition() {
     desktop,
     documentGateway,
     workspaceGateway,
+    workspaceMetadataStore,
     eventSource: workspaceEventSource,
     aiGateway,
     aiUsageGateway: desktop ? aiUsageGateway : undefined,

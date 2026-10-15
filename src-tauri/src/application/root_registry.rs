@@ -9,6 +9,82 @@ pub struct RootRegistry {
 }
 
 impl RootRegistry {
+    /// List every registered root incarnation in stable identifier order.
+    pub fn list(&self) -> Vec<WorkspaceInfo> {
+        self.roots
+            .values()
+            .map(|workspace| workspace.info())
+            .collect()
+    }
+
+    /// Reject a duplicate or nested canonical root, including alias targets.
+    fn reject_nested(&self, workspace: &Workspace) -> Result<(), WorkspaceError> {
+        for existing in self.roots.values() {
+            if existing.root() == workspace.root() {
+                return Err(WorkspaceError::AlreadyExists);
+            }
+            if workspace.root().starts_with(existing.root())
+                || existing.root().starts_with(workspace.root())
+            {
+                return Err(WorkspaceError::OutsideWorkspace);
+            }
+        }
+        Ok(())
+    }
+
+    /// Add one independent root while keeping existing documents and buffers.
+    pub fn add(&mut self, workspace: Workspace) -> Result<WorkspaceInfo, WorkspaceError> {
+        self.reject_nested(&workspace)?;
+        self.register(workspace)
+    }
+
+    /// Remove one root incarnation, refusing when its own buffers stay dirty.
+    pub fn remove(&mut self, scope: &RootScope) -> Result<WorkspaceInfo, WorkspaceError> {
+        let info = {
+            let workspace = self.workspace_mut(scope)?;
+            workspace.ensure_clean()?;
+            workspace.info()
+        };
+        self.roots.remove(&scope.root_id);
+        Ok(info)
+    }
+
+    /// Save or discard a whole root only after every save succeeds, retaining all actors on failure.
+    pub fn remove_with_decision(
+        &mut self,
+        scope: &RootScope,
+        action: CloseAction,
+    ) -> Result<Option<WorkspaceInfo>, WorkspaceError> {
+        let workspace = self.workspace_mut(scope)?;
+        if action == CloseAction::Cancel {
+            return Ok(None);
+        }
+        let documents = workspace.documents()?;
+        if action == CloseAction::Save {
+            for document in &documents {
+                let actor = workspace.actor(&document.snapshot.document_id.0)?;
+                let snapshot = actor.sync_from_nvim()?;
+                if snapshot.dirty {
+                    actor.save(SaveRequest {
+                        location: snapshot.location.clone(),
+                        document_id: snapshot.document_id.clone(),
+                        base_revision: snapshot.revision,
+                    })?;
+                }
+            }
+            workspace.ensure_clean()?;
+        }
+        // Do not close any actor before all fallible saves finish.
+        for document in &documents {
+            workspace
+                .actor(&document.snapshot.document_id.0)?
+                .discard_recovery()?;
+        }
+        let info = workspace.info();
+        self.roots.remove(&scope.root_id);
+        Ok(Some(info))
+    }
+
     /// Register an already validated workspace without replacing another owner.
     pub fn register(&mut self, workspace: Workspace) -> Result<WorkspaceInfo, WorkspaceError> {
         let info = workspace.info();

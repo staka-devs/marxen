@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { SearchMatch, SearchOptions, SearchResults } from "../../../contracts/contracts";
+import type { SearchMatch, SearchOptions, SearchResults, WorkspaceInfo, SearchMatch as NativeMatch } from "../../../contracts/contracts";
 import type { LocalizedText } from "../../../contracts/localization";
 import type { WorkspaceGateway } from "../../../application/ports";
+import { sameRoot } from "../../../domain/document-location";
 import { docFromOpen, matchToHit } from "../../../application/document/document-helpers";
 import { replaceSearchResults } from "../../../application/search/replacement-workflow";
 import type { SearchHitItem } from "../../../domain/search-hit";
@@ -17,6 +18,7 @@ import type { DocumentSession } from "./useDocumentSession";
 interface Args {
   desktop: boolean;
   root: string | null;
+  roots?: WorkspaceInfo[];
   gateway?: WorkspaceGateway;
   session: DocumentSession;
   /** Surface localized search and partial replacement outcomes. */
@@ -24,7 +26,7 @@ interface Args {
 }
 
 /** Debounced native search with context fences and serialized, revision-bound replacement. */
-export function useWorkspaceSearch({ desktop, root, gateway, session, notify }: Args) {
+export function useWorkspaceSearch({ desktop, root, roots, gateway, session, notify }: Args) {
   const { t, message } = useI18n();
   const [query, setQuery] = useState("");
   const [options, setOptions] = useState<SearchOptions>(DEFAULT_SEARCH_OPTIONS);
@@ -35,7 +37,10 @@ export function useWorkspaceSearch({ desktop, root, gateway, session, notify }: 
   const [mutating, setMutating] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const lifecycle = useRef({ identity: "", epoch: 0, request: 0, mounted: true, locked: false, suspended: 0, root });
-  const identity = searchIdentity(root, query, options);
+  const rootIdentity = roots?.map((owner) => `${owner.scope.rootId}:${owner.scope.generation}`).join("|") ?? root;
+  const identity = searchIdentity(rootIdentity ?? null, query, options);
+  /** Resolve native result ownership without consulting the active document. */
+  const rootFor = (hit: NativeMatch) => roots?.find((owner) => sameRoot(owner.scope, hit.scope))?.root ?? root!;
   if (lifecycle.current.identity !== identity) {
     lifecycle.current.identity = identity;
     lifecycle.current.epoch += 1;
@@ -94,7 +99,8 @@ export function useWorkspaceSearch({ desktop, root, gateway, session, notify }: 
     /** Accept only the active lifecycle and request, including catch/finally callbacks. */
     const current = () => state.mounted && state.epoch === epoch && state.request === request;
     const timer = window.setTimeout(() => {
-      gateway.searchWorkspace(query, options, root)
+      Promise.all((roots?.length ? roots.map((owner) => owner.root) : [root]).map((path) => gateway.searchWorkspace(query, options, path)))
+        .then((groups): SearchResults => { const matches = groups.flatMap((group) => group.matches); return { matches: matches.slice(0, 2000), limit: groups.find((group) => group.limit)?.limit ?? (matches.length > 2000 ? "matches" : null) }; })
         .then((value) => { if (current()) setResults({ identity, epoch, value }); })
         .catch((cause: unknown) => { if (current()) setError(localizedFailure(cause, workspaceErrorText)); })
         .finally(() => { if (current()) setSearching(false); });
@@ -107,7 +113,7 @@ export function useWorkspaceSearch({ desktop, root, gateway, session, notify }: 
     const doc = hit.documentId ? session.docs[hit.documentId] : undefined;
     return !doc || hit.revision === doc.revision;
   });
-  const registryHits = useMemo(() => activeResults?.matches.map(matchToHit) ?? [], [activeResults]);
+  const registryHits = useMemo(() => activeResults?.matches.map((match) => ({ ...matchToHit(match), ...(roots && roots.length > 1 ? { root: rootFor(match) } : {}) })) ?? [], [activeResults, rootIdentity]);
   const localHits = useMemo((): SearchHitItem[] => {
     if (desktop || !query) return [];
     // Browser samples are explicitly labelled literal and case-sensitive; no JS regex executes.
@@ -122,7 +128,7 @@ export function useWorkspaceSearch({ desktop, root, gateway, session, notify }: 
     if (state.locked || state.suspended || !ready || !activeResults || !root) return;
     if (!selected && activeResults.limit) return;
     const hits: SearchMatch[] = selected ? activeResults.matches.filter((hit) =>
-      hit.path === selected.path && hit.range.start === selected.offset && hit.range.end === selected.end
+      sameRoot(hit.scope, selected.scope) && hit.path === selected.path && hit.range.start === selected.offset && hit.range.end === selected.end
       && hit.contentToken === selected.contentToken && hit.revision === selected.revision) : activeResults.matches;
     if (hits.length === 0) return;
     const epoch = state.epoch;
@@ -133,7 +139,7 @@ export function useWorkspaceSearch({ desktop, root, gateway, session, notify }: 
     /** Fence plan completions and the queued edit send against changed workspace/query/unmount. */
     const current = () => state.mounted && !state.suspended && state.epoch === epoch && state.identity === identity;
     const outcome = await replaceSearchResults(gateway, session.registry, {
-      root, query, options, replacement, hits, all: !selected, current,
+      root, rootFor, query, options, replacement, hits, all: !selected, current,
       /** Register the native document at its acknowledged plan revision. */
       opened: (plan) => {
         const doc = docFromOpen(plan.document);
@@ -172,14 +178,14 @@ export function useWorkspaceSearch({ desktop, root, gateway, session, notify }: 
       return;
     }
     if (!ready || !root || !gateway || !activeResults) return;
-    const captured = activeResults.matches.find((match) => match.path === hit.path
+    const captured = activeResults.matches.find((match) => sameRoot(match.scope, hit.scope) && match.path === hit.path
       && match.range.start === hit.offset && match.range.end === hit.end
       && match.contentToken === hit.contentToken && match.revision === hit.revision);
     if (!captured) return;
     const state = lifecycle.current;
     const epoch = state.epoch;
     try {
-      const plan = await gateway.planSearchReplacement({ ...(captured.location ? { location: captured.location } : {}), ...(captured.documentId ? { documentId: captured.documentId } : {}), ...(captured.scope ? { scope: captured.scope } : {}), root, path: hit.path, query, options,
+      const plan = await gateway.planSearchReplacement({ ...(captured.location ? { location: captured.location } : {}), ...(captured.documentId ? { documentId: captured.documentId } : {}), ...(captured.scope ? { scope: captured.scope } : {}), root: rootFor(captured), path: hit.path, query, options,
         replacement: "", contentToken: captured.contentToken, revision: captured.revision, range: captured.range });
       if (!state.mounted || state.epoch !== epoch || state.locked || state.suspended) return;
       const doc = docFromOpen(plan.document);

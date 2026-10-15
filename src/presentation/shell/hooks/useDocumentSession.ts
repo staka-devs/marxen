@@ -11,7 +11,9 @@ import { useI18n } from "../../i18n/I18nProvider";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EditorSelection, ExternalCursor } from "../../editor/CodeMirrorEditor";
-import type { DocumentSnapshot, TextEdit, YankCopy } from "../../../contracts/contracts";
+import type { DocumentSnapshot, TextEdit, YankCopy, RootScope, WorkspaceInfo } from "../../../contracts/contracts";
+import { sameRoot } from "../../../domain/document-location";
+import { imageTabId, parseImageTabId } from "../../../domain/workspace-roots";
 import { SAMPLE_WORKSPACE } from "../../../domain/workspace-content";
 import { StaleResync, workspaceErrorText } from "../../../domain/document-errors";
 import { isImagePath, isMarkdownPath } from "../../../domain/workspace-files";
@@ -137,7 +139,11 @@ export interface DocumentSession {
   /** Resolve the dirty-close dialog with save, discard, or cancel. */
   resolveCloseDecision: (action: "save" | "discard" | "cancel") => Promise<void>;
   /** Open a file by path through the registry with cursor refresh. */
-  openFile: (path: string) => Promise<void>;
+  openFile: (path: string, scope?: RootScope) => Promise<void>;
+  /** Register the available native incarnations before accepting asynchronous opens. */
+  configureRoots: (roots: WorkspaceInfo[]) => void;
+  /** Resolve the captured owner of an image tab. */
+  imageScope: (id: string) => RootScope | undefined;
   /** Static demo documents for the browser, never authoritative. */
   demo: Record<string, OpenDoc>;
 }
@@ -182,6 +188,11 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
   const [conflictDoc, setConflictDoc] = useState<string | null>(null);
   const [closeDecision, setCloseDecision] = useState<string | null>(null);
   const [copyReady, setCopyReady] = useState<string | null>(null);
+  const roots = useRef<WorkspaceInfo[]>([]);
+  /** Replace available incarnations synchronously to fence removed-root completions. */
+  const configureRoots = useCallback((value: WorkspaceInfo[]) => { roots.current = value; }, []);
+  /** Resolve a qualified image tab without guessing its owner from the active folder. */
+  const imageScope = useCallback((id: string) => roots.current.find((root) => root.scope.rootId === parseImageTabId(id)?.rootId)?.scope, []);
 
   const docsRef = useRef(docs);
   docsRef.current = docs;
@@ -606,7 +617,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
 
   /** Open a file by path through the registry with cursor refresh. */
   const openFile = useCallback(
-    async (path: string) => {
+    async (path: string, scope?: RootScope) => {
       if (!registry) {
         // Browser demo: tabs over static samples.
         setTabs((prev) => (prev.includes(path) ? prev : [...prev, path]));
@@ -614,14 +625,16 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
         return;
       }
       if (isImagePath(path)) {
-        const id = "image:" + path;
+        if (scope && !roots.current.some((root) => sameRoot(root.scope, scope))) return;
+        const id = scope ? imageTabId(scope.rootId, path) : "image:" + path;
         setImageTabs(prev => ({ ...prev, [id]: path }));
         setTabs(prev => prev.includes(id) ? prev : [...prev, id]);
         setActiveId(id);
         return;
       }
       try {
-        const open = await (isMarkdownPath(path) ? workspaceGateway!.openMarkdown(path) : workspaceGateway!.openTextFile(path));
+        const open = await (isMarkdownPath(path) ? workspaceGateway!.openMarkdown(path, scope) : workspaceGateway!.openTextFile(path, scope));
+        if (scope && !roots.current.some((root) => sameRoot(root.scope, scope))) return;
         const doc = docFromOpen(open);
         if (registry) registry.noteSnapshot(open.snapshot);
         setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
@@ -698,6 +711,8 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
     closeTab,
     resolveCloseDecision,
     openFile,
+    configureRoots,
+    imageScope,
     demo,
   };
 }

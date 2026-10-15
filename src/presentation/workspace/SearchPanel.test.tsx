@@ -173,3 +173,16 @@ it("keeps replacement folded while file collapse still navigates ordinary result
   expect(screen.getByLabelText("置換後の文字列")).toHaveValue("kept");
   expect(screen.getAllByText("kept")).toHaveLength(1);
 });
+
+it("groups equal relative paths by root and collapses only the chosen owner's matches", () => {
+  const scoped = [
+    { ...hits[0], root: "/alpha", path: "same.md", scope: { rootId: "root-a", generation: "1" } },
+    { ...hits[0], root: "/beta", path: "same.md", scope: { rootId: "root-b", generation: "1" } },
+  ];
+  const { props } = setup({ hits: scoped });
+  expect(screen.getByText("2 件・2 ファイル")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "alpha/same.md の一致を折りたたむ" }));
+  expect(screen.queryByRole("button", { name: "alpha/same.md 1 行目の一致へ移動" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "beta/same.md 1 行目の一致へ移動" }));
+  expect(props.onJump).toHaveBeenCalledExactlyOnceWith(scoped[1]);
+});

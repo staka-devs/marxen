@@ -43,6 +43,9 @@ import { EditorMenu } from "../editor/EditorMenu";
 import { useEditorMenu } from "./hooks/useEditorMenu";
 import { useWorkbenchCommands } from "./hooks/useWorkbenchCommands";
 import { WorkbenchMenuBar } from "../workspace/WorkbenchMenuBar";
+import type { RootScope } from "../../contracts/contracts";
+import { sameRoot } from "../../domain/document-location";
+import { rootFileLabel, type RootFile } from "../../domain/workspace-roots";
 import type { ExplorerTarget } from "../../contracts/workbench";
 import type { TreeNode } from "../workspace/FileTree";
 import { NotificationToast, WorkspaceDialog, type Notice, type NoticeKind } from "../workspace/Notifications";
@@ -80,6 +83,7 @@ import type {
   RuntimeGateway,
   WorkspaceEventSource,
   WorkspaceGateway,
+  WorkspaceMetadataStore,
 } from "../../application/ports";
 import type { ViewMode, NavBasis, SideView } from "./shellView";
 import { useDocumentSession } from "./hooks/useDocumentSession";
@@ -104,6 +108,8 @@ export interface WorkspaceShellProps {
   documentGateway?: DocumentGateway;
   /** Workspace file and recovery gateway over native IPC. */
   workspaceGateway?: WorkspaceGateway;
+  /** Restore versioned roots and tabs while keeping native recovery separate. */
+  workspaceMetadataStore?: WorkspaceMetadataStore;
   /** Pushed workspace event subscription with polling fallback. */
   eventSource?: WorkspaceEventSource;
   /** AI streaming, credentials, and connection tests. */
@@ -207,6 +213,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   const {
     documentGateway,
     workspaceGateway,
+    workspaceMetadataStore,
     eventSource,
     aiGateway,
     aiUsageGateway,
@@ -638,8 +645,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   const editorMenu = useEditorMenu({ session, desktop, notify: setNotice });
   const [editorFocus, setEditorFocus] = useState<{ path: string; sequence: number } | null>(null);
   /** Open a file and request editor focus after React commits the active pane. */
-  async function openFileForEditing(path: string) {
-    await session.openFile(path);
+  async function openFileForEditing(path: string, scope?: RootScope) {
+    await session.openFile(path, scope ?? workspace.roots[0]?.scope);
     setEditorFocus((previous) => ({ path, sequence: (previous?.sequence ?? 0) + 1 }));
   }
   /** Vim key routing with optimistic ranges and mapping-first execution. */
@@ -647,6 +654,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   /** Workspace lifecycle: entries, search, events, runtime, grid, config. */
   const workspace = useWorkspace({
     desktop,
+    metadataStore: workspaceMetadataStore,
     notify: setNotice,
     session,
     workspaceGateway,
@@ -664,6 +672,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   /** Image attachments: resolvers, paste capture, and drop routing. */
   const image = useImageAttachments({
     desktop,
+    roots: workspace.roots,
     notify: setNotice,
     session,
     vim,
@@ -687,6 +696,9 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   const active = session.active;
   /** Active image path for `image:` tabs, if any. */
   const activeImage = session.activeImage;
+  const activeScope = session.activeId ? session.imageScope(session.activeId) ?? session.active?.location?.scope : undefined;
+  /** Load viewer bytes from the captured root even when another root becomes active. */
+  const loadViewerImage = useCallback((path: string) => workspaceGateway!.loadWorkspaceImage(path, activeScope), [workspaceGateway, activeScope?.rootId, activeScope?.generation]);
   /** Whether the active document renders as Markdown. */
   const activeIsMarkdown = session.activeIsMarkdown;
   /** Active tab ID for tabs and footer display. */
@@ -781,9 +793,9 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       : id.startsWith("nav-") ? navBasis === id.slice(4) : id === "palette-ai" ? showAi : id === "palette-raw" ? showRaw : undefined,
   });
   /** Capture a tree row in the current native workspace session. */
-  function treeTarget(node: TreeNode) { return workspace.targetFor(node.path, node.directory, node.kind); }
+  function treeTarget(node: TreeNode, scope?: RootScope) { return workspace.targetFor(node.path, node.directory, node.kind, scope); }
   /** Use the same invocation guards for captured tree contexts and the top menus. */
-  function runTreeCommand(id: string, node: TreeNode) { void workbench.run(id, treeTarget(node)); }
+  function runTreeCommand(id: string, node: TreeNode, scope?: RootScope) { void workbench.run(id, treeTarget(node, scope)); }
   useEffect(() => { setExplorerTarget(null); }, [workspace.generation]);
   useEffect(() => { if (workspace.createdTarget) setExplorerTarget(workspace.createdTarget); }, [workspace.createdTarget]);
   useEffect(() => {
@@ -817,16 +829,25 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     () =>
       session.tabs.map((id) => {
         const doc = session.docs[id];
-        return { id, label: fileLabel(session.imageTabs[id] ?? doc?.path ?? null, id), dirty: doc?.dirty ?? false };
+        const path = session.imageTabs[id] ?? doc?.path ?? null;
+        const scope = session.imageScope(id) ?? doc?.location?.scope;
+        const owner = workspace.roots.find((root) => sameRoot(root.scope, scope));
+        return { id, label: workspace.roots.length > 1 && owner && path ? rootFileLabel(owner.root, path) : fileLabel(path, id), dirty: doc?.dirty ?? false };
       }),
-    [session.tabs, session.docs, session.imageTabs],
+    [session.tabs, session.docs, session.imageTabs, workspace.roots],
   );
 
-  /** Collect deduplicated quick-open paths from docs and entries. */ const quickPaths = useMemo(() => {
-    const fromEntries = workspace.entries.filter((entry) => !entry.directory && entryKind(entry)).map((entry) => entry.path);
-    const fromDocs = Object.values(session.docs).map((doc) => doc.path).filter((path): path is string => path !== null);
-    return Array.from(new Set([...fromDocs, ...fromEntries, ...(desktop ? [] : Object.keys(session.demo))]));
-  }, [desktop, workspace.entries, session.docs, session.demo]);
+  /** Keep quick-open identity separate from root-qualified display labels. */
+  const quickFiles = useMemo(() => {
+    const files = new Map<string, RootFile>();
+    for (const owner of workspace.roots) {
+      const paths = (workspace.entriesByRoot[owner.scope.rootId] ?? []).filter((entry) => !entry.directory && entryKind(entry)).map((entry) => entry.path);
+      for (const doc of Object.values(session.docs)) if (doc.path && sameRoot(doc.location?.scope, owner.scope)) paths.push(doc.path);
+      for (const path of paths) files.set(JSON.stringify([owner.scope.rootId, path]), { ...owner, path });
+    }
+    return files;
+  }, [workspace.roots, workspace.entriesByRoot, session.docs]);
+  const quickPaths = desktop ? [...quickFiles.keys()] : Object.keys(session.demo);
 
   /** Format the cursor as 1-based line:column or null. */ const cursorPos = useMemo(() => {
     if (!session.active) return null;
@@ -904,10 +925,14 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   return <button key={id as string} type="button" aria-label={t(label as LabelKey)} title={item.reason ?? t(label as LabelKey)} disabled={!item.enabled || workspace.refreshing} onClick={() => void workbench.run(id as string)} className="rounded-sm p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"><ActionIcon size={15} aria-hidden="true" /></button>;
                 })}
               </div>
-              <FileTree key={`${workspace.wsRoot ?? "demo"}:${workspace.generation}`} theme={theme} desktop={desktop} nodes={treeNodes} rootPath={workspace.wsRoot ?? undefined} rootName={workspace.wsRoot?.split(/[\\/]/).filter(Boolean).at(-1)} activePath={activeImage ?? active?.path ?? null} selectedPath={explorerTarget?.path ?? null}
-                onSelect={(node) => setExplorerTarget(treeTarget(node))} onCommand={runTreeCommand}
-                contextCommands={(node) => ["tree-open", "file-new", "folder-new", "file-rename", "tree-refresh"].map((id) => workbench.command(id, treeTarget(node))!)}
-                onOpenFile={(path) => { void openFileForEditing(path); if (window.innerWidth < 768) setSideView(null); }} />
+              {desktop ? workspace.roots.map((owner) => <div key={owner.scope.rootId} data-workspace-root={owner.scope.rootId}>
+                <FileTree key={owner.scope.generation} theme={theme} desktop nodes={buildTree(workspace.entriesByRoot[owner.scope.rootId] ?? [])} rootPath={owner.root} rootScope={owner.scope} rootName={owner.root.split(/[\\/]/).filter(Boolean).at(-1)} activePath={sameRoot(activeScope, owner.scope) ? activeImage ?? active?.path ?? null : null} selectedPath={explorerTarget?.rootId === owner.scope.rootId ? explorerTarget.path : null}
+                  onRemoveRoot={() => workspace.beginRemoveRoot(owner.scope)} rootRemovalDisabled={workspace.busy}
+                  onSelect={(node) => setExplorerTarget(treeTarget(node, owner.scope))} onCommand={(id, node) => runTreeCommand(id, node, owner.scope)}
+                  contextCommands={(node) => ["tree-open", "file-new", "folder-new", "file-rename", "tree-refresh"].map((id) => workbench.command(id, treeTarget(node, owner.scope))!)}
+                  onOpenFile={(path) => { void openFileForEditing(path, owner.scope); if (window.innerWidth < 768) setSideView(null); }} />
+              </div>) : <FileTree theme={theme} nodes={treeNodes} activePath={active?.path ?? null} onOpenFile={(path) => { void openFileForEditing(path); if (window.innerWidth < 768) setSideView(null); }} />}
+              {workspace.missingRoots.map((root) => <p key={root} className="px-4 py-2 text-xs text-muted-foreground">{t("フォルダーが見つかりません。復元情報を保持しています: {{root}}", { root })}</p>)}
               {desktop && !workspace.wsRoot && <p className="px-4 py-3 text-xs leading-5 text-muted-foreground">{t("フォルダーが選択されていません。")}</p>}
             </div>
           )}
@@ -1094,7 +1119,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   void (async () => {
                     try {
                       await workspaceGateway!.closeDocument({ documentId: id, baseRevision: current.revision }, "discard");
-                      const open = await workspaceGateway!.openMarkdown(active.path ?? "");
+                      const open = await workspaceGateway!.openMarkdown(active.path ?? "", active.location?.scope);
                       const doc = docFromOpen(open);
                       session.setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
                       session.setTabs((prev) => prev.map((tab) => (tab === id ? doc.documentId : tab)));
@@ -1132,6 +1157,17 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                 ))}
               </ul>
               <div className="mt-4 flex justify-end"><button type="button" onClick={() => setRecoveryPromptOpen(false)} className="rounded-md border border-border px-3 py-1">{t("後で")}</button></div>
+            </WorkspaceDialog>
+          )}
+          {workspace.removingRoot && (
+            <WorkspaceDialog theme={theme} label={t("フォルダーをワークスペースから取り除く")} testId="remove-root-dialog" onDismiss={() => { if (!workspace.busy) void workspace.resolveRemoveRoot("cancel"); }}>
+              <p className="mb-2 break-all">{workspace.removingRoot.root}</p>
+              <p className="mb-2">{t("このフォルダーのタブを閉じます。未保存の変更をどうしますか。")}</p>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" disabled={workspace.busy} onClick={() => void workspace.resolveRemoveRoot("save")} className="rounded-md border border-border px-3 py-1">{t("保存して閉じる")}</button>
+                <button type="button" disabled={workspace.busy} onClick={() => void workspace.resolveRemoveRoot("discard")} className="rounded-md border border-border px-3 py-1">{t("破棄して閉じる")}</button>
+                <button type="button" disabled={workspace.busy} onClick={() => void workspace.resolveRemoveRoot("cancel")} className="rounded-md border border-border px-3 py-1">{t("キャンセル")}</button>
+              </div>
             </WorkspaceDialog>
           )}
           {session.closeDecision && (
@@ -1190,7 +1226,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           {/* One editor-primary at a time: live owns the inline preview
               pane, source/split own the raw pane. Selections live in shell
               state so scroll/cursor survive mode switches. */}
-          {activeImage ? <ImageViewer key={activeImage} path={activeImage} loadImage={(path) => workspaceGateway!.loadWorkspaceImage(path)} /> : active ? (
+          {activeImage ? <ImageViewer key={activeId} path={activeImage} loadImage={loadViewerImage} /> : active ? (
             effectiveViewMode === "live" ? (
               <ImageDropZone desktop={desktop} subscribeNativeDrop={dropGateway?.listen} enabled={desktop && activeIsMarkdown} selection={image.dropSelection} onDrop={image.handleImageDrop} onError={setNotice}>
               <div onKeyDownCapture={vim.onEditorKeyDown} onPasteCapture={image.onPasteCapture} className="h-full min-h-0 min-w-0">
@@ -1334,9 +1370,10 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         <QuickOpen
           open={quickOpen}
           paths={quickPaths}
+          labelFor={(id) => { const file = quickFiles.get(id); return file ? workspace.roots.length > 1 ? rootFileLabel(file.root, file.path) : file.path : id; }}
           label={t("クイックオープン")}
           testId="quick-open"
-          onSelect={(path) => void openFileForEditing(path)}
+          onSelect={(id) => { const file = quickFiles.get(id); void openFileForEditing(file?.path ?? id, file?.scope); }}
           onClose={() => setQuickOpen(false)}
         />
           {staging.inlineOpen && staging.inlineSnapshot && active && staging.inlineSnapshot.documentId === active.documentId && (

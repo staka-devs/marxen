@@ -65,9 +65,9 @@ it("captures a file's parent for creation and registers the returned snapshot", 
   expect(f.result.current.workspace.newFilePath).toBe("notes/");
   act(() => f.result.current.workspace.setNewFilePath("notes/new.md"));
   await act(async () => f.result.current.workspace.createFile());
-  expect(f.gateway.createMarkdown).toHaveBeenCalledExactlyOnceWith("notes/new.md", "");
+  expect(f.gateway.createMarkdown).toHaveBeenCalledExactlyOnceWith("notes/new.md", "", { rootId: "fixture-root", generation: "1" });
   expect(f.result.current.session.docs.owned).toMatchObject({ path: "notes/new.md", revision: 17, dirty: true });
-  expect(f.result.current.workspace.createdTarget).toMatchObject({ rootId: "C:/a", path: "notes/new.md", kind: "markdown" });
+  expect(f.result.current.workspace.createdTarget).toMatchObject({ rootId: "fixture-root", path: "notes/new.md", kind: "markdown" });
 });
 
 it("registers a restored native owner before the first GUI edit of its recovered ID", async () => {
@@ -87,7 +87,7 @@ it("creates one captured child folder without document-open commands", async () 
   act(() => f.result.current.workspace.beginCreate(f.result.current.workspace.targetFor("notes", true), true));
   act(() => f.result.current.workspace.setNewFilePath("notes/今日"));
   await act(async () => Promise.all([f.result.current.workspace.createFile(), f.result.current.workspace.createFile()]));
-  expect(f.gateway.createFolder).toHaveBeenCalledExactlyOnceWith("notes/今日");
+  expect(f.gateway.createFolder).toHaveBeenCalledExactlyOnceWith("notes/今日", { rootId: "fixture-root", generation: "1" });
   expect(f.gateway.openMarkdown).not.toHaveBeenCalled();
   expect(f.gateway.createMarkdown).not.toHaveBeenCalled();
   expect(f.result.current.session.tabs).toEqual([]);

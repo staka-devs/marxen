@@ -6,6 +6,7 @@ afterEach(cleanup);
 
 // Existing product fixtures describe a Japanese host; locale acceptance tests override this explicitly.
 beforeEach(() => {
+  localStorage.removeItem("marxen.workspace-metadata.v1");
   Object.defineProperty(navigator, "language", {
     configurable: true,
     /** Report the Japanese host locale used by the existing product fixtures. */

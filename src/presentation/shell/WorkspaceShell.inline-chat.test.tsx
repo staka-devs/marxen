@@ -65,7 +65,7 @@ const backend = {
     const a = (args ?? {}) as Record<string, unknown>;
     switch (command) {
       case "open_workspace":
-        return Promise.resolve({ root: a.path });
+        return Promise.resolve({ root: a.path, scope: { rootId: "fixture-root", generation: "1" } });
       case "list_workspace":
         return Promise.resolve(
           a.path === ""
@@ -153,6 +153,7 @@ let handler: ((event: AiStreamEvent) => void) | null = null;
 /** Open the sample document and reveal the AI sidebar. */ async function openDocAndAi() {
   render(<App />);
   fireEvent.click(screen.getByRole("menuitem", { name: "ファイル" }));
+  await waitFor(() => expect(screen.getByRole("menuitem", { name: "パスを入力する" })).toBeEnabled());
   fireEvent.click(screen.getByRole("menuitem", { name: "パスを入力する" }));
   fireEvent.change(screen.getByLabelText("開くフォルダーの絶対パス"), { target: { value: "/ws" } });
   fireEvent.click(screen.getByRole("button", { name: "開く" }));

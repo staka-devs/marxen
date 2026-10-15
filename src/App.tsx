@@ -26,6 +26,7 @@ export default function App() {
         desktop={composition.desktop}
         documentGateway={composition.documentGateway}
         workspaceGateway={composition.workspaceGateway}
+        workspaceMetadataStore={composition.workspaceMetadataStore}
         eventSource={composition.eventSource}
         aiGateway={composition.aiGateway}
         aiUsageGateway={composition.aiUsageGateway}
