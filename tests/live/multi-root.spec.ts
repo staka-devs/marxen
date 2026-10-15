@@ -11,7 +11,7 @@ test("multi-root keyboard navigation, image ownership, cancellation and restart 
   await expect(page.getByTestId("file-tree")).toHaveCount(2);
   await expect(page.getByTestId("editor-primary")).toContainText("root-alpha");
   await page.keyboard.press("Control+p");
-  await page.getByRole("combobox").fill("beta/same.txt");
+  await page.getByTestId("quick-open").getByRole("combobox", { name: "ファイル名で絞り込む" }).fill("beta/same.txt");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("editor-primary")).toContainText("root-beta");
   for (const tree of await page.getByTestId("file-tree").all()) await tree.getByRole("button", { name: "same.png", exact: true }).click();
