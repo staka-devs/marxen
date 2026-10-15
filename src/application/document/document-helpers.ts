@@ -70,6 +70,8 @@ export function matchToHit(match: SearchMatch): SearchHitItem {
     revision: match.revision,
     offset: match.range.start,
     end: match.range.end,
+    previewRange: match.previewRange,
+    contentToken: match.contentToken,
   };
 }
 

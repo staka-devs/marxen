@@ -276,6 +276,243 @@ fn search_uses_unsaved_neovim_text_and_utf16_ranges() {
     assert_eq!(found[0].revision, Some(s.revision));
     assert_eq!(found[0].line, 1);
 }
+
+#[test]
+/// Apply native one/all plans exactly at acknowledged revisions and leave disk unsaved.
+fn native_search_replacement_plans_are_exact_and_do_not_save() {
+    let (root, _recovery, mut workspace) = setup();
+    fs::write(root.path().join("notes.txt"), "😀cat cat").unwrap();
+    let options = SearchOptions::default();
+    let found = workspace
+        .search_with_options("cat", &options, &workspace.info().root)
+        .unwrap();
+    assert_eq!(found.limit, None);
+    assert_eq!(found.matches.len(), 2);
+    assert_eq!(found.matches[1].preview_range, range(6, 9));
+    let hit = &found.matches[1];
+    let plan = workspace
+        .plan_search_replacement(SearchReplaceRequest {
+            root: workspace.info().root,
+            path: hit.path.clone(),
+            query: "cat".into(),
+            options: options.clone(),
+            replacement: "$1".into(),
+            content_token: hit.content_token.clone(),
+            revision: hit.revision,
+            range: Some(hit.range.clone()),
+        })
+        .unwrap();
+    assert_eq!(plan.edits.len(), 1);
+    let snapshot = workspace
+        .actor(&plan.document.snapshot.document_id.0)
+        .unwrap()
+        .apply_edits(EditRequest {
+            document_id: plan.document.snapshot.document_id.clone(),
+            base_revision: plan.document.snapshot.revision,
+            source: EditSource::Gui,
+            edits: plan.edits,
+        })
+        .unwrap();
+    assert_eq!(snapshot.text, "😀cat $1");
+    assert!(snapshot.dirty);
+    let refreshed = workspace
+        .search_with_options(
+            r"cat|\$1",
+            &SearchOptions {
+                regex: true,
+                ..options.clone()
+            },
+            &workspace.info().root,
+        )
+        .unwrap();
+    let hit = &refreshed.matches[0];
+    let plan = workspace
+        .plan_search_replacement(SearchReplaceRequest {
+            root: workspace.info().root,
+            path: hit.path.clone(),
+            query: r"cat|\$1".into(),
+            options: SearchOptions {
+                regex: true,
+                ..options
+            },
+            replacement: "".into(),
+            content_token: hit.content_token.clone(),
+            revision: hit.revision,
+            range: None,
+        })
+        .unwrap();
+    assert_eq!(plan.edits.len(), 2);
+    let snapshot = workspace
+        .actor(&plan.document.snapshot.document_id.0)
+        .unwrap()
+        .apply_edits(EditRequest {
+            document_id: plan.document.snapshot.document_id.clone(),
+            base_revision: plan.document.snapshot.revision,
+            source: EditSource::Gui,
+            edits: plan.edits,
+        })
+        .unwrap();
+    assert_eq!(snapshot.text, "😀 ");
+    assert_eq!(
+        fs::read_to_string(root.path().join("notes.txt")).unwrap(),
+        "😀cat cat"
+    );
+}
+
+#[test]
+/// Reject changed closed-file content, changed buffer revisions, wrong roots and guessed ranges.
+fn native_search_plan_rejects_stale_sources_and_contexts() {
+    let (root, _recovery, mut workspace) = setup();
+    fs::write(root.path().join("a.md"), "cat").unwrap();
+    let options = SearchOptions::default();
+    let found = workspace
+        .search_with_options("cat", &options, &workspace.info().root)
+        .unwrap();
+    let hit = &found.matches[0];
+    let request = SearchReplaceRequest {
+        root: workspace.info().root,
+        path: hit.path.clone(),
+        query: "cat".into(),
+        options,
+        replacement: "dog".into(),
+        content_token: hit.content_token.clone(),
+        revision: hit.revision,
+        range: Some(hit.range.clone()),
+    };
+    fs::write(root.path().join("a.md"), "cat changed").unwrap();
+    assert_eq!(
+        workspace
+            .plan_search_replacement(request.clone())
+            .unwrap_err(),
+        WorkspaceError::StaleSearch
+    );
+    assert!(workspace.documents().unwrap().is_empty());
+    fs::write(root.path().join("a.md"), "cat").unwrap();
+    let opened = workspace.open_markdown("a.md").unwrap();
+    let mut request = request;
+    request.revision = Some(opened.snapshot.revision);
+    edit(
+        workspace.actor(&opened.snapshot.document_id.0).unwrap(),
+        0,
+        3,
+        "cat",
+    );
+    assert_eq!(
+        workspace
+            .plan_search_replacement(request.clone())
+            .unwrap_err(),
+        WorkspaceError::StaleSearch
+    );
+    request.revision = None;
+    request.range = Some(range(1, 3));
+    assert_eq!(
+        workspace
+            .plan_search_replacement(request.clone())
+            .unwrap_err(),
+        WorkspaceError::StaleSearch
+    );
+    request.root = "other".into();
+    assert_eq!(
+        workspace.plan_search_replacement(request).unwrap_err(),
+        WorkspaceError::StaleSearch
+    );
+    assert_eq!(
+        workspace
+            .search_with_options("cat", &SearchOptions::default(), "other")
+            .unwrap_err(),
+        WorkspaceError::StaleSearch
+    );
+}
+
+#[test]
+/// Expose incomplete counts, permit an exact displayed single edit and reject exhaustive plans.
+fn native_search_limits_do_not_authorize_replace_all() {
+    let (root, _recovery, mut workspace) = setup();
+    fs::write(root.path().join("a.txt"), "cat ".repeat(2001)).unwrap();
+    fs::write(root.path().join("large.txt"), "cat".repeat(400000)).unwrap();
+    fs::write(root.path().join("ignored.png"), "cat").unwrap();
+    let options = SearchOptions::default();
+    let found = workspace
+        .search_with_options("cat", &options, &workspace.info().root)
+        .unwrap();
+    assert_eq!(found.matches.len(), 2000);
+    assert_eq!(found.limit, Some(SearchLimit::Matches));
+    assert!(found.matches.iter().all(|hit| hit.path == "a.txt"));
+    let hit = &found.matches[1999];
+    let request = SearchReplaceRequest {
+        root: workspace.info().root,
+        path: hit.path.clone(),
+        query: "cat".into(),
+        options,
+        replacement: "dog".into(),
+        content_token: hit.content_token.clone(),
+        revision: hit.revision,
+        range: Some(hit.range.clone()),
+    };
+    let plan = workspace.plan_search_replacement(request.clone()).unwrap();
+    assert_eq!(plan.edits.len(), 1);
+    assert_eq!(plan.edits[0].range, hit.range);
+    assert_eq!(
+        workspace
+            .plan_search_replacement(SearchReplaceRequest {
+                range: None,
+                ..request
+            })
+            .unwrap_err(),
+        WorkspaceError::SearchIncomplete
+    );
+    fs::write(root.path().join("a.txt"), "cat").unwrap();
+    // The open authoritative buffer still contains the original text.
+    let open = workspace.documents().unwrap().pop().unwrap();
+    workspace
+        .close(
+            SaveRequest {
+                document_id: open.snapshot.document_id,
+                base_revision: open.snapshot.revision,
+            },
+            CloseAction::Discard,
+        )
+        .unwrap();
+    let found = workspace
+        .search_with_options("cat", &SearchOptions::default(), &workspace.info().root)
+        .unwrap();
+    assert_eq!(found.matches.len(), 1);
+    assert_eq!(found.limit, Some(SearchLimit::FileBytes));
+}
+
+#[test]
+/// Measure bounded conversion for 2000 late matches in near-1MiB text without requiring full results after a time limit.
+fn native_search_late_match_conversion_budget() {
+    let (root, _recovery, workspace) = setup();
+    let text = format!("{}\n{}", "z".repeat(1_040_000), "cat ".repeat(2000));
+    fs::write(root.path().join("late.txt"), &text).unwrap();
+    let began = std::time::Instant::now();
+    let result = workspace
+        .search_with_options("cat", &SearchOptions::default(), &workspace.info().root)
+        .unwrap();
+    let elapsed = began.elapsed();
+    eprintln!(
+        "late-match conversion: bytes={} matches={} limit={:?} elapsed={elapsed:?}",
+        text.len(),
+        result.matches.len(),
+        result.limit
+    );
+    assert!(matches!(result.limit, None | Some(SearchLimit::Time)));
+    if result.limit.is_none() {
+        assert_eq!(result.matches.len(), 2000);
+    }
+    for (index, hit) in result.matches.iter().enumerate() {
+        assert_eq!(
+            hit.range,
+            range(1_040_001 + index as u32 * 4, 1_040_004 + index as u32 * 4)
+        );
+        assert_eq!(hit.line, 2);
+        assert_eq!(
+            &hit.preview[hit.preview_range.start.0 as usize..hit.preview_range.end.0 as usize],
+            "cat"
+        );
+    }
+}
 #[test]
 /// When invoked by the crash fixture, checkpoint an unsaved edit and terminate before normal cleanup.
 fn crash_child() {

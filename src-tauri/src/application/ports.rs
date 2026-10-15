@@ -213,6 +213,14 @@ pub trait DirectoryStorage: Send + Sync {
 }
 /// Folder browsing and image reads in addition to the document save contract.
 pub trait WorkspaceStorage: DocumentStorage + DirectoryStorage {
+    /// Enumerate only a bounded search slice, reporting omitted directory entries.
+    fn read_search_entries(
+        &self,
+        path: &Path,
+        limit: usize,
+    ) -> Result<(Vec<DirectoryEntry>, bool), WorkspaceError>;
+    /// Read at most limit plus one bytes; an oversized file is SearchIncomplete.
+    fn read_search_text(&self, path: &Path, limit: usize) -> Result<String, WorkspaceError>;
     /// Resolve a workspace-relative path and reject escapes or external link targets.
     fn resolve(&self, root: &Path, relative: &str) -> Result<PathBuf, WorkspaceError>;
     /// Read supported image bytes within the product size limit.

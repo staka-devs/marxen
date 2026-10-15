@@ -356,6 +356,54 @@ impl DirectoryStorage for NativeStorage {
     }
 }
 impl WorkspaceStorage for NativeStorage {
+    /// Bound directory enumeration before allocating entries for search traversal.
+    fn read_search_entries(
+        &self,
+        path: &Path,
+        limit: usize,
+    ) -> Result<(Vec<DirectoryEntry>, bool), WorkspaceError> {
+        let mut entries = Vec::new();
+        let mut truncated = false;
+        for entry in fs::read_dir(path)?.take(limit + 1) {
+            let entry = entry?;
+            if entries.len() == limit {
+                truncated = true;
+                break;
+            }
+            let metadata = entry.file_type()?;
+            entries.push(DirectoryEntry {
+                path: entry.path(),
+                info: FileInfo {
+                    directory: metadata.is_dir(),
+                    regular: metadata.is_file(),
+                    link: metadata.is_symlink(),
+                },
+            });
+        }
+        entries.sort_by_key(|entry| entry.path());
+        Ok((entries, truncated))
+    }
+    /// Bound disk allocation before decoding text for native search.
+    fn read_search_text(&self, path: &Path, limit: usize) -> Result<String, WorkspaceError> {
+        let metadata = fs::symlink_metadata(path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(WorkspaceError::OutsideWorkspace);
+        }
+        if !metadata.is_file() {
+            return Err(WorkspaceError::InvalidPath);
+        }
+        if metadata.len() > limit as u64 {
+            return Err(WorkspaceError::SearchIncomplete);
+        }
+        let mut bytes = Vec::new();
+        fs::File::open(path)?
+            .take(limit as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > limit {
+            return Err(WorkspaceError::SearchIncomplete);
+        }
+        String::from_utf8(bytes).map_err(|_| WorkspaceError::InvalidUtf8)
+    }
     /// Delegate canonical workspace path resolution to the shared containment helper.
     fn resolve(&self, root: &Path, relative: &str) -> Result<PathBuf, WorkspaceError> {
         resolve(root, relative)

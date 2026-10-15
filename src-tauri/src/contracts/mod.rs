@@ -186,12 +186,28 @@ pub enum WorkspaceError {
     NotFound,
     NoWorkspace,
     UnknownDocument,
-    UnsavedChanges { snapshot: DocumentSnapshot },
-    Conflict { path: String },
-    Io { detail: String },
-    Neovim { detail: String },
-    Contract { error: ContractError },
+    UnsavedChanges {
+        snapshot: DocumentSnapshot,
+    },
+    Conflict {
+        path: String,
+    },
+    Io {
+        detail: String,
+    },
+    Neovim {
+        detail: String,
+    },
+    Contract {
+        error: ContractError,
+    },
     InvalidImage,
+    /// Invalid, unsupported or over-budget native search pattern.
+    SearchPattern,
+    /// Search context or source text no longer agrees with the captured result.
+    StaleSearch,
+    /// A bounded search cannot authorize an exhaustive replacement.
+    SearchIncomplete,
 }
 
 impl std::fmt::Display for WorkspaceError {
@@ -244,6 +260,73 @@ pub struct SearchMatch {
     pub range: Utf16Range,
     pub line: u32,
     pub preview: String,
+    /// Visible portion of this match, relative to the bounded preview in UTF-16.
+    pub preview_range: Utf16Range,
+    /// Fingerprint of the complete searched text, including closed files.
+    pub content_token: String,
+}
+
+/// Native matching flags; regular expressions follow regex 1.13.1 syntax.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SearchOptions {
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+    pub regex: bool,
+}
+
+impl Default for SearchOptions {
+    /// Default to literal, Unicode case-insensitive substring search.
+    fn default() -> Self {
+        Self {
+            case_sensitive: false,
+            whole_word: false,
+            regex: false,
+        }
+    }
+}
+
+/// Explicit reason a search result is incomplete, never an exact total count.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchLimit {
+    Matches,
+    Candidates,
+    FileBytes,
+    WorkspaceBytes,
+    Files,
+    Time,
+}
+
+/// Bounded search results whose completeness gates all-replacement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResults {
+    pub matches: Vec<SearchMatch>,
+    pub limit: Option<SearchLimit>,
+}
+
+/// Captured search context for a native revision-bound replacement plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SearchReplaceRequest {
+    pub root: String,
+    pub path: String,
+    pub query: String,
+    pub options: SearchOptions,
+    pub replacement: String,
+    pub content_token: String,
+    pub revision: Option<Revision>,
+    /// Null plans all matches in this unchanged file; otherwise selects the exact hit.
+    pub range: Option<Utf16Range>,
+}
+
+/// Native document and exact edits; applying them still requires the snapshot revision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchReplacePlan {
+    pub document: OpenDocument,
+    pub edits: Vec<TextEdit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -376,6 +459,11 @@ pub fn typescript() -> String {
         WorkspaceEntry::decl(&cfg),
         OpenDocument::decl(&cfg),
         SearchMatch::decl(&cfg),
+        SearchOptions::decl(&cfg),
+        SearchLimit::decl(&cfg),
+        SearchResults::decl(&cfg),
+        SearchReplaceRequest::decl(&cfg),
+        SearchReplacePlan::decl(&cfg),
         CloseAction::decl(&cfg),
         RecoveryEntry::decl(&cfg),
         WorkspaceEvent::decl(&cfg),

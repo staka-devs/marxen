@@ -20,7 +20,10 @@ import type {
   RecoveryEntry,
   SaveRequest,
   SaveResult,
-  SearchMatch,
+  SearchOptions,
+  SearchResults,
+  SearchReplaceRequest,
+  SearchReplacePlan,
   TextEdit,
   Utf16Range,
   VimInputResult,
@@ -62,7 +65,7 @@ export interface DocumentGateway {
   /** Record an authoritative snapshot (newer-or-equal wins). */
   noteSnapshot(snapshot: DocumentSnapshot): void;
   /** Apply GUI edits serially, resyncing once on stale. */
-  applyEdits(request: SaveRequest, edits: TextEdit[]): Promise<DocumentSnapshot>;
+  applyEdits(request: SaveRequest, edits: TextEdit[], current?: () => boolean): Promise<DocumentSnapshot>;
   /** Commit a locally captured GUI change only against its exact source text. */
   applyGuiEdits(request: SaveRequest, beforeText: string, edits: TextEdit[], selection?: { anchor: number; head: number }): Promise<DocumentSnapshot>;
   /** Insert committed text at the native cursor after queued mode transitions. */
@@ -205,7 +208,9 @@ export interface WorkspaceGateway {
   /** Close a document with an explicit decision. */
   closeDocument(request: SaveRequest, action: CloseAction): Promise<boolean>;
   /** Native full-text search. */
-  searchWorkspace(query: string): Promise<SearchMatch[]>;
+  searchWorkspace(query: string, options: SearchOptions, root: string): Promise<SearchResults>;
+  /** Prepare authoritative match edits only for unchanged searched content and root. */
+  planSearchReplacement(request: SearchReplaceRequest): Promise<SearchReplacePlan>;
   /** Poll queued workspace events. */
   pollEvents(): Promise<WorkspaceEvent[]>;
   /** List crash-recovery entries. */

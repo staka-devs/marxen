@@ -30,6 +30,21 @@ const mockedInvoke = vi.mocked(invoke);
 
 beforeEach(() => vi.resetAllMocks());
 
+it("rechecks a cancelled search guard when its edit reaches the native document queue", async () => {
+  const client = new RegistryClient(workspaceApi);
+  let release!: (value: DocumentSnapshot) => void;
+  mockedInvoke.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+  let current = true;
+  const earlier = client.applyEdits({ documentId: "search", baseRevision: 4 }, [{ range: { start: 0, end: 1 }, text: "a" }]);
+  const queued = client.applyEdits({ documentId: "search", baseRevision: 5 }, [{ range: { start: 0, end: 1 }, text: "b" }], () => current);
+  const rejected = expect(queued).rejects.toThrow("search context cancelled");
+  await vi.waitFor(() => expect(mockedInvoke).toHaveBeenCalledOnce());
+  current = false;
+  release(snapshot("search", 5, "a"));
+  await earlier; await rejected;
+  expect(mockedInvoke).toHaveBeenCalledOnce();
+});
+
 it("serializes copy formatting and native writes before accepting the next key", async () => {
   const client = new RegistryClient(workspaceApi);
   let releaseCopy!: () => void;

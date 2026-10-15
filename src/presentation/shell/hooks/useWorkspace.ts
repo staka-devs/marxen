@@ -9,15 +9,13 @@ import { useI18n } from "../../i18n/I18nProvider";
 // application. All native access arrives via injected ports and the document
 // session, so this hook never imports infrastructure directly.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { RecoveryEntry, RuntimeStatus, WorkspaceEntry, WorkspaceEvent } from "../../../contracts/contracts";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { RecoveryEntry, RuntimeStatus, SearchOptions, SearchLimit, WorkspaceEntry, WorkspaceEvent } from "../../../contracts/contracts";
 import type { ExplorerTarget } from "../../../contracts/workbench";
 import type { SearchHitItem } from "../../../domain/search-hit";
-import { docFromOpen, matchToHit, type OpenDoc } from "../../../application/document/document-helpers";
+import { docFromOpen, type OpenDoc } from "../../../application/document/document-helpers";
 import {
   isSupportedConfigName,
-  replaceEdits,
-  searchWorkspace as searchLocal,
 } from "../../../domain/workspace-content";
 import { StaleResync, workspaceErrorText } from "../../../domain/document-errors";
 import { applyGridUpdates, createGridState, type NvimGridState } from "../../../domain/coordinates/grid";
@@ -28,6 +26,7 @@ import type {
   WorkspaceGateway,
 } from "../../../application/ports";
 import type { DocumentSession } from "./useDocumentSession";
+import { useWorkspaceSearch } from "./useWorkspaceSearch";
 
 /** Injected ports for workspace lifecycle, search, events, and views. */
 export interface WorkspaceArgs {
@@ -88,6 +87,18 @@ export interface Workspace {
   searchQuery: string;
   /** Replace the search query. */
   setSearchQuery: React.Dispatch<React.SetStateAction<string>>;
+  /** Native search options wired to the real panel. */
+  searchOptions: SearchOptions;
+  /** Update native matching flags and invalidate obsolete work. */
+  setSearchOptions: (options: SearchOptions) => void;
+  /** Localized native query errors. */
+  searchError: string | null;
+  /** Explicit incomplete result reason. */
+  searchLimit: SearchLimit | null;
+  /** Whether native results can authorize actions. */
+  resultsReady: boolean;
+  /** Whether a serialized replacement is active. */
+  replacing: boolean;
   /** Registry search hits for the panel. */
   registryHits: SearchHitItem[];
   /** Whether a debounced registry search is in flight. */
@@ -174,7 +185,6 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   const setNotice = notify;
   const {
     registry,
-    docs,
     setDocs,
     docsRef,
     activeRef,
@@ -184,12 +194,14 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     active,
     mergeSnapshot,
     sayStale,
-    jumpToOffset,
     refreshModeCursor,
     setExternalByDoc,
   } = session;
 
-  const [wsRoot, setWsRoot] = useState<string | null>(null);
+  const [wsRoot, setWsRootState] = useState<string | null>(null);
+  const search = useWorkspaceSearch({ desktop, root: wsRoot, gateway: workspaceGateway, session, notify });
+  /** Fence search work before changing workspace identity. */
+  const setWsRoot = useCallback((value: React.SetStateAction<string | null>) => { search.invalidate(); setWsRootState(value); }, [search.invalidate]);
   const rootRef = useRef<string | null>(null);
   const generation = useRef(0);
   const listing = useRef(0);
@@ -202,10 +214,6 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   const renameRequest = useRef<{ documentId: string; baseRevision: number; generation: number } | null>(null);
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
   const [recovery, setRecovery] = useState<RecoveryEntry[]>([]);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [registryHits, setRegistryHits] = useState<SearchHitItem[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [replaceText, setReplaceText] = useState("");
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [nvimGrid, setNvimGrid] = useState<NvimGridState | null>(null);
   const [gridRev, setGridRev] = useState<number | null>(null);
@@ -321,6 +329,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         setNotice(message("フォルダーの絶対パスを入力してください。"));
         return;
       }
+      search.suspend();
       const epoch = ++generation.current;
       busyRef.current = true; setBusy(true); setRefreshing(false);
       setNewFileOpen(false); setRenameDoc(null); setCreatedTarget(null);
@@ -346,7 +355,10 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         setNotice(null);
       } catch (cause) {
         setNotice(localizedFailure(cause, workspaceErrorText));
-      } finally { busyRef.current = false; setBusy(false); }
+      } finally {
+        busyRef.current = false; setBusy(false);
+        search.resume();
+      }
     },
     [registry, workspaceGateway, loadEntries, refreshRecovery, setDocs, setTabs, setActiveId, setExternalByDoc, onWorkspaceOpened, notify],
   );
@@ -449,149 +461,6 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     },
     [registry, workspaceGateway, refreshRecovery, setDocs, setTabs, setActiveId, notify],
   );
-
-  useEffect(() => {
-    if (!desktop || !wsRoot) return;
-    if (searchQuery === "") {
-      setRegistryHits([]);
-      setSearching(false);
-      return;
-    }
-    setSearching(true);
-    const timer = window.setTimeout(() => {
-      workspaceGateway!
-        .searchWorkspace(searchQuery)
-        .then((matches) => setRegistryHits(matches.map(matchToHit)))
-        .catch((cause: unknown) => setNotice(localizedFailure(cause, workspaceErrorText)))
-        .finally(() => setSearching(false));
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [desktop, wsRoot, searchQuery, workspaceGateway, notify]);
-
-  /** Local demo hits for the browser search panel. */
-  const localHits: SearchHitItem[] = useMemo(() => {
-    if (desktop) return [];
-    if (searchQuery === "") return [];
-    const files = Object.values(docs).map((doc) => ({ path: doc.path ?? doc.documentId, text: doc.text }));
-    const hits: SearchHitItem[] = [];
-    for (const file of files) {
-      for (const local of searchLocal([{ path: file.path, text: file.text }], searchQuery, 50)) {
-        hits.push({ ...local, offset: 0, end: 0 });
-      }
-    }
-    return hits.slice(0, 50);
-  }, [desktop, docs, searchQuery]);
-
-  /** Jump to a search hit opening the document when needed. */
-  const jumpToHit = useCallback(
-    async (hit: SearchHitItem) => {
-      if (!desktop || !registry) {
-        if (hit.path) {
-          setTabs((prev) => (prev.includes(hit.path) ? prev : [...prev, hit.path]));
-          setActiveId(hit.path);
-        }
-        return;
-      }
-      let id = hit.documentId ?? null;
-      if (!id) {
-        try {
-          const open = await workspaceGateway!.openMarkdown(hit.path);
-          const doc = docFromOpen(open);
-          if (registry) registry.noteSnapshot(open.snapshot);
-          setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
-          setTabs((prev) => (prev.includes(doc.documentId) ? prev : [...prev, doc.documentId]));
-          id = doc.documentId;
-        } catch (cause) {
-          setNotice(localizedFailure(cause, workspaceErrorText));
-          return;
-        }
-      } else {
-        setTabs((prev) => (prev.includes(id!) ? prev : [...prev, id!]));
-      }
-      setActiveId(id);
-      const start = hit.offset ?? 0;
-      await jumpToOffset(id, start, hit.end ?? start);
-    },
-    [desktop, registry, workspaceGateway, jumpToOffset, setDocs, setTabs, setActiveId, notify],
-  );
-
-  /** Replace one hit revision-aware with resync on stale. */
-  const replaceOne = useCallback(
-    async (hit: SearchHitItem) => {
-      if (!registry) {
-        setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
-        return;
-      }
-      if (searchQuery === "") return;
-      let id = hit.documentId ?? null;
-      try {
-        if (!id) {
-          const open = await workspaceGateway!.openMarkdown(hit.path);
-          const doc = docFromOpen(open);
-          if (registry) registry.noteSnapshot(open.snapshot);
-          setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
-          setTabs((prev) => (prev.includes(doc.documentId) ? prev : [...prev, doc.documentId]));
-          id = doc.documentId;
-        }
-        const snapshot = await workspaceGateway!.fetchSnapshot(id);
-        mergeSnapshot(snapshot);
-        const { edits, count } = replaceEdits(snapshot.text, searchQuery, replaceText);
-        const single = edits.find((edit) => edit.range.start <= (hit.offset ?? 0) && (hit.offset ?? 0) < edit.range.end + searchQuery.length);
-        const chosen = single ? [single] : [];
-        if (chosen.length === 0 || count === 0) {
-          setNotice(message("置換対象が見つかりませんでした。検索し直してください。"));
-          return;
-        }
-        const next = await registry.applyEdits({ documentId: id, baseRevision: snapshot.revision }, chosen);
-        mergeSnapshot(next);
-        const refreshed = await workspaceGateway!.searchWorkspace(searchQuery);
-        setRegistryHits(refreshed.map(matchToHit));
-      } catch (cause) {
-        if (cause instanceof StaleResync) sayStale(cause.snapshot);
-        else setNotice(localizedFailure(cause, workspaceErrorText));
-      }
-    },
-    [registry, workspaceGateway, searchQuery, replaceText, mergeSnapshot, sayStale, setDocs, setTabs, notify],
-  );
-
-  /** Replace all registry hits per file with chained revisions. */
-  const replaceAllMatches = useCallback(async () => {
-    if (!registry) {
-      setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
-      return;
-    }
-    if (searchQuery === "") return;
-    const byPath = new Map<string, SearchHitItem[]>();
-    for (const hit of registryHits) {
-      const list = byPath.get(hit.path) ?? [];
-      list.push(hit);
-      byPath.set(hit.path, list);
-    }
-    let total = 0;
-    for (const [path] of byPath) {
-      try {
-        const open = await workspaceGateway!.openMarkdown(path);
-        const doc = docFromOpen(open);
-        setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
-        setTabs((prev) => (prev.includes(doc.documentId) ? prev : [...prev, doc.documentId]));
-        const { edits, count } = replaceEdits(doc.text, searchQuery, replaceText);
-        if (count === 0) continue;
-        const next = await registry.applyEdits({ documentId: doc.documentId, baseRevision: doc.revision }, edits);
-        mergeSnapshot(next);
-        total += count;
-      } catch (cause) {
-        if (cause instanceof StaleResync) sayStale(cause.snapshot);
-        else setNotice(localizedFailure(cause, workspaceErrorText));
-        return;
-      }
-    }
-    setNotice(message("{{count}} 件を置換しました。", { count: (total) }));
-    try {
-      setRegistryHits((await workspaceGateway!.searchWorkspace(searchQuery)).map(matchToHit));
-    } catch {
-      // Count notice already shown; refresh is best-effort.
-    }
-  }, [registry, workspaceGateway, registryHits, searchQuery, replaceText, mergeSnapshot, sayStale, setDocs, setTabs, notify]);
 
   // -- events / recovery -----------------------------------------------------
 
@@ -765,13 +634,19 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     entries: entries as WorkspaceEntry[],
     setEntries,
     recovery,
-    searchQuery,
-    setSearchQuery,
-    registryHits,
-    searching,
-    replaceText,
-    setReplaceText,
-    localHits,
+    searchQuery: search.searchQuery,
+    setSearchQuery: search.setSearchQuery,
+    searchOptions: search.searchOptions,
+    setSearchOptions: search.setSearchOptions,
+    searchError: search.searchError,
+    searchLimit: search.searchLimit,
+    resultsReady: search.resultsReady,
+    replacing: search.replacing,
+    registryHits: search.registryHits,
+    searching: search.searching,
+    replaceText: search.replaceText,
+    setReplaceText: search.setReplaceText,
+    localHits: search.localHits,
     runtime,
     nvimGrid,
     gridRev,
@@ -796,9 +671,9 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     createFile,
     renameFile,
     restoreEntry,
-    jumpToHit,
-    replaceOne,
-    replaceAllMatches,
+    jumpToHit: search.jumpToHit,
+    replaceOne: search.replaceOne,
+    replaceAllMatches: search.replaceAllMatches,
     refreshRuntime,
     handleRawGridKeys,
     handleRawGridRefresh,

@@ -1,7 +1,7 @@
 use std::{fs, path::Path};
 
 /// Write document/workspace TypeScript contracts to the default or `--output` path.
-/// `--check` requires exact generated text after normalizing existing CRLF;
+/// Normalize ts-rs line-end padding; `--check` compares exact output after existing CRLF normalization.
 /// missing/stale output or failed filesystem operations panic.
 fn main() {
     let default_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/contracts/contracts.ts");
@@ -11,7 +11,12 @@ fn main() {
         .find(|pair| pair[0] == "--output")
         .map(|pair| std::path::PathBuf::from(&pair[1]))
         .unwrap_or(default_path);
-    let generated = marxen_lib::contracts::typescript();
+    let generated = marxen_lib::contracts::typescript()
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
     if std::env::args().any(|arg| arg == "--check") {
         let current = fs::read_to_string(&path).expect("Generate contracts first");
         assert_eq!(

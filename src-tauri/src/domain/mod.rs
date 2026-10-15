@@ -5,6 +5,7 @@ pub mod ai_account_usage;
 pub mod clipboard_format;
 pub mod coordinates;
 pub mod isolation;
+pub mod search;
 pub mod storage;
 pub mod validation;
 pub mod vim_settings;

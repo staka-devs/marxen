@@ -15,4 +15,8 @@ export interface SearchHitItem {
   offset?: number;
   /** Global UTF-16 offset of the match end. */
   end?: number;
+  /** Authoritative UTF-16 highlight span relative to this bounded preview. */
+  previewRange?: { start: number; end: number };
+  /** Complete searched-text fingerprint used by native replacement planning. */
+  contentToken?: string;
 }
