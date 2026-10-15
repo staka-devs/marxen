@@ -335,6 +335,8 @@ it("binds native search options and localized errors through the composed App sh
   expect(panel.getByRole("button", { name: "正規表現で検索" })).toHaveAttribute("aria-pressed", "true");
   fireEvent.change(panel.getByLabelText("検索語句"), { target: { value: "[" } });
   expect(await panel.findByRole("alert")).toHaveTextContent("検索パターンが不正");
+  expect(panel.queryByRole("button", { name: "すべて置換する" })).not.toBeInTheDocument();
+  fireEvent.click(panel.getByRole("button", { name: "置換を表示する" }));
   expect(panel.getByRole("button", { name: "すべて置換する" })).toBeDisabled();
 });
 
