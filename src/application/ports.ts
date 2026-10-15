@@ -181,7 +181,7 @@ export interface DocumentTransport {
   saveDocument(request: SaveRequest): Promise<SaveResult>;
   /** Reload the document from disk at the given base revision. */
   reloadDocument(request: SaveRequest): Promise<DocumentSnapshot>;
-  /** Rename a Markdown document, keeping its document ID. */
+  /** Rename a Markdown or supported UTF-8 text document, keeping its document ID. */
   renameMarkdown(request: SaveRequest, path: string): Promise<OpenDocument>;
   /** Apply a Neovim config file and restart the buffer actor. */
   configure(request: SaveRequest, path: string | null): Promise<NvimConfig>;
@@ -221,8 +221,12 @@ export interface WorkspaceGateway {
   createMarkdown(path: string, text?: string, scope?: import("../contracts/contracts").RootScope): Promise<OpenDocument>;
   /** Create one contained folder under an existing parent without opening a document. */
   createFolder(path: string, scope?: import("../contracts/contracts").RootScope): Promise<WorkspaceEntry>;
-  /** Rename a Markdown document. */
+  /** Rename a Markdown or supported UTF-8 text document, keeping its document ID. */
   renameMarkdown(request: SaveRequest, path: string): Promise<OpenDocument>;
+  /** Rename a workspace image without a document actor, verifying its captured fingerprint. */
+  renameImage(source: string, dest: string, fingerprint: string, scope?: import("../contracts/contracts").RootScope): Promise<WorkspaceEntry>;
+  /** Rename a workspace folder without moving open descendants or AI working copies. */
+  renameFolder(source: string, dest: string, scope?: import("../contracts/contracts").RootScope): Promise<WorkspaceEntry>;
   /** Close a document with an explicit decision. */
   closeDocument(request: SaveRequest, action: CloseAction): Promise<boolean>;
   /** Native full-text search. */
@@ -364,6 +368,8 @@ export interface EditorPreferencesStore {
 
 /** Image byte loader with per-document scoping. */
 export interface ImageLoader {
+  /** Invalidate cached URLs and pending reads after workspace paths change. */
+  invalidate(): void;
   /** Resolve a relative source to a displayable URL or null. */
   resolve(documentId: string, src: string, signal: AbortSignal): Promise<string | null>;
   /** Shared resolver factory for the active document. */

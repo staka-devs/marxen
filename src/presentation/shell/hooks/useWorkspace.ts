@@ -12,7 +12,7 @@ import { useI18n } from "../../i18n/I18nProvider";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SaveRequest, RecoveryEntry, RuntimeStatus, SearchOptions, SearchLimit, WorkspaceEntry, WorkspaceEvent, WorkspaceInfo, RootScope, CloseAction } from "../../../contracts/contracts";
 import { sameRoot } from "../../../domain/document-location";
-import { imageTabId } from "../../../domain/workspace-roots";
+import { imageTabId, parseImageTabId } from "../../../domain/workspace-roots";
 import { isMarkdownPath } from "../../../domain/workspace-files";
 import type { PersistedTab, WorkspaceMetadata } from "../../../contracts/workspace-metadata";
 import type { ExplorerTarget } from "../../../contracts/workbench";
@@ -32,6 +32,12 @@ import type {
 } from "../../../application/ports";
 import type { DocumentSession } from "./useDocumentSession";
 import { useWorkspaceSearch } from "./useWorkspaceSearch";
+
+/** Captured rename source across documents, images, and folders with its tree context. */
+type RenameRequest =
+  | { kind: "document"; request: SaveRequest; generation: number; source: string; target: ExplorerTarget }
+  | { kind: "image"; source: string; generation: number; fingerprint: string; target: ExplorerTarget }
+  | { kind: "folder"; source: string; generation: number; target: ExplorerTarget };
 
 /** Injected ports for workspace lifecycle, search, events, and views. */
 export interface WorkspaceArgs {
@@ -88,7 +94,7 @@ export interface Workspace {
   canOperate: () => boolean;
   /** Open a contextual creation dialog under its captured parent. */
   beginCreate: (target: ExplorerTarget, folder?: boolean) => void;
-  /** Open a captured Markdown document's rename dialog. */
+  /** Open a captured text, image, or folder rename dialog. */
   beginRename: (target: ExplorerTarget) => Promise<void>;
   /** Refresh the tree while preserving authoritative dirty buffers. */
   refreshEntries: () => Promise<void>;
@@ -154,7 +160,7 @@ export interface Workspace {
   newFilePath: string;
   /** Replace the new-file path input. */
   setNewFilePath: React.Dispatch<React.SetStateAction<string>>;
-  /** Document ID awaiting rename, if any. */
+  /** Document ID or `image:`/`folder:` source awaiting rename, if any. */
   renameDoc: string | null;
   /** Replace the rename target. */
   setRenameDoc: React.Dispatch<React.SetStateAction<string | null>>;
@@ -172,7 +178,7 @@ export interface Workspace {
   pickFolderAndOpen: () => Promise<void>;
   /** Create a Markdown file from the dialog path and open it. */
   createFile: () => Promise<void>;
-  /** Rename the dialog document keeping its ID. */
+  /** Rename the dialog target keeping document IDs and updating tabs. */
   renameFile: () => Promise<void>;
   /** Restore or discard a crash-recovery entry by ID. */
   restoreEntry: (documentId: string, discard: boolean) => Promise<void>;
@@ -209,6 +215,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     activeRef,
     setTabs,
     setActiveId,
+    setImageTabs,
     activeId,
     active,
     mergeSnapshot,
@@ -242,7 +249,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   const [entryKind, setEntryKind] = useState<"file" | "folder">("file");
   const creationTarget = useRef<ExplorerTarget | null>(null);
   const [createdTarget, setCreatedTarget] = useState<ExplorerTarget | null>(null);
-  const renameRequest = useRef<(SaveRequest & { generation: number }) | null>(null);
+  const renameRequest = useRef<RenameRequest | null>(null);
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
   const [recovery, setRecovery] = useState<RecoveryEntry[]>([]);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
@@ -315,22 +322,57 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     setNewFileOpen(true);
   }, [canOperate, isTargetCurrent]);
 
-  /** Capture a supported Markdown actor and revision for the rename dialog. */
+  /** Capture a tree target for the rename dialog across documents, images, and folders. */
   const beginRename = useCallback(async (target: ExplorerTarget) => {
-    if (!canOperate() || !isTargetCurrent(target) || target.directory || target.kind !== "markdown") return;
+    if (!canOperate() || !isTargetCurrent(target)) return;
+    if (target.directory && target.path === "") {
+      setNotice(message("ルートフォルダーの名前は変更できません。"));
+      return;
+    }
+    if (target.directory) {
+      const prefix = `${target.path}/`;
+      const ownerScope = scopeFor(target);
+      const blocked = Object.values(docsRef.current).some((doc) => doc.path !== null && (doc.path === target.path || doc.path.startsWith(prefix)) && (!doc.location || sameRoot(doc.location.scope, ownerScope)));
+      if (blocked) {
+        setNotice(message("フォルダー内に開いた文書があるため名前を変更できません。"));
+        return;
+      }
+      renameRequest.current = { kind: "folder", source: target.path, generation: generation.current, target };
+      setRenamePath(target.path);
+      setRenameDoc(`folder:${target.path}`);
+      return;
+    }
+    if (target.kind === "image") {
+      const epoch = generation.current;
+      busyRef.current = true; setBusy(true);
+      try {
+        const data = await workspaceGateway!.loadWorkspaceImage(target.path, scopeFor(target));
+        if (epoch !== generation.current || !isTargetCurrent(target)) return;
+        const fingerprint = data.fingerprint;
+        if (!/^[a-f0-9]{64}$/.test(fingerprint ?? "")) throw { code: "invalid_image" };
+        renameRequest.current = { kind: "image", source: target.path, generation: epoch, fingerprint, target };
+        setRenamePath(target.path);
+        setRenameDoc(`image:${target.path}`);
+      } catch (cause) { if (epoch === generation.current) setNotice(localizedFailure(cause, workspaceErrorText)); }
+      finally { busyRef.current = false; setBusy(false); }
+      return;
+    }
+    if (target.kind !== "markdown" && target.kind !== "text") return;
     const epoch = generation.current;
     busyRef.current = true; setBusy(true);
     try {
       let doc = Object.values(docsRef.current).find((item) => item.path === target.path && ((!item.location && rootsRef.current.length === 1) || sameRoot(item.location?.scope, scopeFor(target))));
       if (!doc) {
-        const open = await workspaceGateway!.openMarkdown(target.path, scopeFor(target));
-        if (epoch !== generation.current) return;
+        const open = target.kind === "text"
+          ? await workspaceGateway!.openTextFile(target.path, scopeFor(target))
+          : await workspaceGateway!.openMarkdown(target.path, scopeFor(target));
+        if (epoch !== generation.current || !isTargetCurrent(target)) return;
         registry!.noteSnapshot(open.snapshot);
         doc = docFromOpen(open);
         setDocs((previous) => ({ ...previous, [doc!.documentId]: doc! }));
         setTabs((previous) => previous.includes(doc!.documentId) ? previous : [...previous, doc!.documentId]);
       }
-      renameRequest.current = { ...(doc.location ? { location: doc.location } : {}), documentId: doc.documentId, baseRevision: doc.revision, generation: epoch };
+      renameRequest.current = { kind: "document", request: { ...(doc.location ? { location: doc.location } : {}), documentId: doc.documentId, baseRevision: doc.revision }, generation: epoch, source: target.path, target };
       setRenamePath(doc.path ?? target.path); setRenameDoc(doc.documentId);
     } catch (cause) { if (epoch === generation.current) setNotice(localizedFailure(cause, workspaceErrorText)); }
     finally { busyRef.current = false; setBusy(false); }
@@ -580,13 +622,11 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     } finally { busyRef.current = false; setBusy(false); }
   }, [registry, workspaceGateway, newFilePath, loadEntries, setDocs, setTabs, setActiveId, notify, canOperate, isTargetCurrent, entryKind, targetFor]);
 
-  /** Rename the dialog document keeping its ID. */
+  /** Rename the dialog target keeping document IDs and updating tabs. */
   const renameFile = useCallback(async () => {
     const expected = renameRequest.current;
-    if (!canOperate() || !expected || expected.generation !== generation.current || expected.documentId !== renameDoc) return;
-    if (!registry || !renameDoc) return;
-    const current = docsRef.current[renameDoc];
-    if (!current) return;
+    if (!canOperate() || !expected || expected.generation !== generation.current || !renameDoc) return;
+    if (!isTargetCurrent(expected.target)) return;
     const path = renamePath.trim();
     if (path === "") {
       setNotice(message("新しいパスを入力してください。"));
@@ -594,18 +634,123 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     }
     busyRef.current = true; setBusy(true);
     try {
-      const open = await registry.rename({ ...(expected.location ? { location: expected.location } : {}), documentId: expected.documentId, baseRevision: expected.baseRevision }, path);
+      if (expected.kind === "folder") {
+        const ownerScope = rootsRef.current.find((root) => root.scope.rootId === expected.target.rootId)?.scope;
+        const entry = await workspaceGateway!.renameFolder(expected.source, path, ownerScope);
+        if (!isTargetCurrent(expected.target)) return;
+        const oldPrefix = `${expected.source}/`;
+        const newPrefix = `${entry.path}/`;
+        const ownerId = expected.target.rootId;
+        const single = rootsRef.current.length === 1;
+        setImageTabs((prev) => {
+          const next: Record<string, string> = {};
+          for (const [id, imagePath] of Object.entries(prev)) {
+            const parsed = parseImageTabId(id);
+            const tabRoot = parsed?.rootId ?? null;
+            const tabPath = parsed ? parsed.path : imagePath;
+            const owned = tabRoot !== null ? tabRoot === ownerId : single;
+            if (owned && (tabPath === expected.source || tabPath.startsWith(oldPrefix))) {
+              const mapped = tabPath === expected.source ? entry.path : `${newPrefix}${tabPath.slice(oldPrefix.length)}`;
+              const nextId = tabRoot !== null && ownerScope ? imageTabId(ownerScope.rootId, mapped) : `image:${mapped}`;
+              next[nextId] = mapped;
+            } else {
+              next[id] = imagePath;
+            }
+          }
+          return next;
+        });
+        setTabs((prev) => prev.map((id) => {
+          const parsed = parseImageTabId(id);
+          if (!parsed) return id;
+          const tabRoot = parsed.rootId;
+          const owned = tabRoot !== null ? tabRoot === ownerId : single;
+          if (!owned) return id;
+          if (parsed.path === expected.source || parsed.path.startsWith(oldPrefix)) {
+            const mapped = parsed.path === expected.source ? entry.path : `${newPrefix}${parsed.path.slice(oldPrefix.length)}`;
+            if (tabRoot !== null && ownerScope) return imageTabId(ownerScope.rootId, mapped);
+            return `image:${mapped}`;
+          }
+          return id;
+        }));
+        setActiveId((prev) => {
+          const parsed = prev ? parseImageTabId(prev) : null;
+          if (!parsed || !prev) return prev;
+          const tabRoot = parsed.rootId;
+          const owned = tabRoot !== null ? tabRoot === ownerId : single;
+          if (!owned) return prev;
+          if (parsed.path === expected.source || parsed.path.startsWith(oldPrefix)) {
+            const mapped = parsed.path === expected.source ? entry.path : `${newPrefix}${parsed.path.slice(oldPrefix.length)}`;
+            if (tabRoot !== null && ownerScope) return imageTabId(ownerScope.rootId, mapped);
+            return `image:${mapped}`;
+          }
+          return prev;
+        });
+        setRenameDoc(null);
+        await loadEntries();
+        setNotice(message("名前を変更しました。"));
+        setCreatedTarget(targetFor(entry.path, true, undefined, ownerScope));
+        return;
+      }
+      if (expected.kind === "image") {
+        const ownerScope = rootsRef.current.find((root) => root.scope.rootId === expected.target.rootId)?.scope;
+        const entry = await workspaceGateway!.renameImage(expected.source, path, expected.fingerprint, ownerScope);
+        if (!isTargetCurrent(expected.target)) return;
+        const ownerId = expected.target.rootId;
+        const single = rootsRef.current.length === 1;
+        const qualifiedOld = ownerScope ? imageTabId(ownerScope.rootId, expected.source) : null;
+        const qualifiedNext = ownerScope ? imageTabId(ownerScope.rootId, entry.path) : null;
+        const legacyOld = `image:${expected.source}`;
+        const legacyNext = `image:${entry.path}`;
+        setImageTabs((prev) => {
+          if (qualifiedOld && qualifiedOld in prev && qualifiedNext) {
+            const next = { ...prev };
+            delete next[qualifiedOld];
+            next[qualifiedNext] = entry.path;
+            return next;
+          }
+          if (single && legacyOld in prev) {
+            const next = { ...prev };
+            delete next[legacyOld];
+            next[legacyNext] = entry.path;
+            return next;
+          }
+          return prev;
+        });
+        setTabs((prev) => prev.map((id) => {
+          if (qualifiedOld && id === qualifiedOld && qualifiedNext) return qualifiedNext;
+          if (single && id === legacyOld) return legacyNext;
+          const parsed = parseImageTabId(id);
+          if (!parsed) return id;
+          if (parsed.rootId !== null && parsed.rootId !== ownerId) return id;
+          if (parsed.rootId === null && !single) return id;
+          return id;
+        }));
+        setActiveId((prev) => {
+          if (qualifiedOld && prev === qualifiedOld && qualifiedNext) return qualifiedNext;
+          if (single && prev === legacyOld) return legacyNext;
+          return prev;
+        });
+        setRenameDoc(null);
+        await loadEntries();
+        setNotice(message("名前を変更しました。"));
+        setCreatedTarget(targetFor(entry.path, false, "image", ownerScope));
+        return;
+      }
+      if (!registry || expected.kind !== "document") return;
+      const current = docsRef.current[expected.request.documentId];
+      if (!current || expected.request.documentId !== renameDoc) return;
+      const open = await registry.rename({ ...(expected.request.location ? { location: expected.request.location } : {}), documentId: expected.request.documentId, baseRevision: expected.request.baseRevision }, path);
       registry.noteSnapshot(open.snapshot);
       const doc = docFromOpen(open);
       setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
       setRenameDoc(null);
       await loadEntries();
       setNotice(message("名前を変更しました。"));
-      setCreatedTarget(targetFor(path, false, "markdown", doc.location?.scope));
+      setCreatedTarget(targetFor(path, false, doc.path !== null && /\.(md|markdown)$/i.test(doc.path ?? "") ? "markdown" : "text", doc.location?.scope));
     } catch (cause) {
       setNotice(localizedFailure(cause, workspaceErrorText));
     } finally { busyRef.current = false; setBusy(false); }
-  }, [registry, renameDoc, renamePath, loadEntries, docsRef, setDocs, notify, canOperate, targetFor]);
+  }, [registry, workspaceGateway, renameDoc, renamePath, loadEntries, docsRef, setDocs, setTabs, setActiveId, setImageTabs, notify, canOperate, isTargetCurrent, targetFor]);
 
   /** Restore or discard a crash-recovery entry by ID. */
   const restoreEntry = useCallback(

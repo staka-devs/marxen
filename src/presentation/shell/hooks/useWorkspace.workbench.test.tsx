@@ -24,6 +24,14 @@ function fixture() {
     pollEvents: vi.fn(async () => []),
     /** Open the selected Markdown actor at its authoritative revision. */
     openMarkdown: vi.fn(async (path: string) => ({ path, snapshot })),
+    /** Open a supported UTF-8 text actor without converting it to Markdown. */
+    openTextFile: vi.fn(async (path: string) => ({ path, snapshot })),
+    /** Return the native fingerprint of the captured image bytes. */
+    loadWorkspaceImage: vi.fn(async () => ({ mime: "image/png", bytes: [137, 80, 78, 71], fingerprint: "a".repeat(64) })),
+    /** Move the captured image without opening a text actor. */
+    renameImage: vi.fn(async (_source: string, path: string, _fingerprint: string): Promise<WorkspaceEntry> => ({ path, name: path.split("/").at(-1)!, directory: false, markdown: false, kind: "image" })),
+    /** Move a folder whose native guards have accepted the captured source. */
+    renameFolder: vi.fn(async (_source: string, path: string): Promise<WorkspaceEntry> => ({ path, name: path.split("/").at(-1)!, directory: true, markdown: false })),
     /** Create a Markdown actor using the supplied relative path. */
     createMarkdown: vi.fn(async (path: string) => ({ path, snapshot })),
     /** Create a directory without registering an actor. */
@@ -132,4 +140,72 @@ it("rejects stale tree targets and preserves the old workspace when native repla
   act(() => f.result.current.workspace.beginCreate(old, true));
   expect(f.result.current.workspace.newFileOpen).toBe(false);
   expect(f.notify).toHaveBeenCalled();
+});
+
+it("renames UTF-8 text through the existing actor with its captured revision", async () => {
+  const f = fixture();
+  await act(async () => f.result.current.workspace.openWorkspaceFolder("C:/a"));
+  await act(async () => f.result.current.workspace.beginRename(f.result.current.workspace.targetFor("notes/code.ts", false, "text")));
+  act(() => f.result.current.workspace.setRenamePath("notes/renamed.ts"));
+  await act(async () => f.result.current.workspace.renameFile());
+  expect(f.gateway.openTextFile).toHaveBeenCalledExactlyOnceWith("notes/code.ts", { rootId: "fixture-root", generation: "1" });
+  expect(f.gateway.openMarkdown).not.toHaveBeenCalled();
+  expect(f.gateway.renameMarkdown).toHaveBeenCalledExactlyOnceWith({ documentId: "owned", baseRevision: 17 }, "notes/renamed.ts");
+  expect(f.result.current.session.docs.owned).toMatchObject({ text: f.snapshot.text, dirty: true });
+});
+
+it("uses the captured native image fingerprint and maps its active tab without opening an actor", async () => {
+  const f = fixture();
+  await act(async () => f.result.current.workspace.openWorkspaceFolder("C:/a"));
+  await act(async () => f.result.current.session.openFile("notes/a.png"));
+  await act(async () => f.result.current.workspace.beginRename(f.result.current.workspace.targetFor("notes/a.png", false, "image")));
+  act(() => f.result.current.workspace.setRenamePath("notes/b.png"));
+  await act(async () => f.result.current.workspace.renameFile());
+  expect(f.gateway.renameImage).toHaveBeenCalledExactlyOnceWith("notes/a.png", "notes/b.png", "a".repeat(64), { rootId: "fixture-root", generation: "1" });
+  expect(f.result.current.session.imageTabs).toEqual({ "image:notes/b.png": "notes/b.png" });
+  expect(f.result.current.session.tabs).toEqual(["image:notes/b.png"]);
+  expect(f.result.current.session.activeId).toBe("image:notes/b.png");
+  expect(f.result.current.workspace.createdTarget).toMatchObject({ path: "notes/b.png", kind: "image" });
+  expect(f.gateway.openMarkdown).not.toHaveBeenCalled();
+  expect(f.gateway.openTextFile).not.toHaveBeenCalled();
+});
+
+it("fails closed without a native fingerprint and performs no rename after cancellation", async () => {
+  const f = fixture();
+  await act(async () => f.result.current.workspace.openWorkspaceFolder("C:/a"));
+  f.gateway.loadWorkspaceImage.mockResolvedValueOnce({ mime: "image/png", bytes: [], fingerprint: "" });
+  await act(async () => f.result.current.workspace.beginRename(f.result.current.workspace.targetFor("a.png", false, "image")));
+  expect(f.result.current.workspace.renameDoc).toBeNull();
+  expect(f.notify).toHaveBeenCalled();
+  await act(async () => f.result.current.workspace.beginRename(f.result.current.workspace.targetFor("a.png", false, "image")));
+  act(() => f.result.current.workspace.setRenameDoc(null));
+  await act(async () => f.result.current.workspace.renameFile());
+  expect(f.gateway.renameImage).not.toHaveBeenCalled();
+});
+
+it("maps nested image tabs on folder rename while preserving unrelated paths", async () => {
+  const f = fixture();
+  await act(async () => f.result.current.workspace.openWorkspaceFolder("C:/a"));
+  await act(async () => f.result.current.session.openFile("notes/child/a.png"));
+  await act(async () => f.result.current.session.openFile("notes-other/a.png"));
+  act(() => f.result.current.session.setActiveId("image:notes/child/a.png"));
+  await act(async () => f.result.current.workspace.beginRename(f.result.current.workspace.targetFor("notes", true)));
+  act(() => f.result.current.workspace.setRenamePath("renamed"));
+  await act(async () => f.result.current.workspace.renameFile());
+  expect(f.gateway.renameFolder).toHaveBeenCalledExactlyOnceWith("notes", "renamed", { rootId: "fixture-root", generation: "1" });
+  expect(f.result.current.session.imageTabs).toEqual({ "image:renamed/child/a.png": "renamed/child/a.png", "image:notes-other/a.png": "notes-other/a.png" });
+  expect(f.result.current.session.tabs).toEqual(["image:renamed/child/a.png", "image:notes-other/a.png"]);
+  expect(f.result.current.session.activeId).toBe("image:renamed/child/a.png");
+});
+
+it("refuses roots and folders with open dirty text descendants without closing documents", async () => {
+  const f = fixture();
+  await act(async () => f.result.current.workspace.openWorkspaceFolder("C:/a"));
+  await act(async () => f.result.current.session.openFile("notes/a.ts"));
+  await act(async () => f.result.current.workspace.beginRename(f.result.current.workspace.targetFor("notes", true)));
+  expect(f.result.current.workspace.renameDoc).toBeNull();
+  expect(f.result.current.session.docs.owned).toMatchObject({ text: f.snapshot.text, dirty: true });
+  await act(async () => f.result.current.workspace.beginRename(f.result.current.workspace.targetFor()));
+  expect(f.result.current.workspace.renameDoc).toBeNull();
+  expect(f.gateway.renameFolder).not.toHaveBeenCalled();
 });

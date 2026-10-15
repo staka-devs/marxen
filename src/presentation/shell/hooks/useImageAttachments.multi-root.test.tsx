@@ -30,7 +30,7 @@ function fixture() {
     isSelectionGenCurrent: vi.fn(() => true),
     mergeSnapshot: vi.fn(), sayStale: vi.fn(),
   } as unknown as DocumentSession;
-  const gateway = { loadWorkspaceImage: vi.fn().mockResolvedValue({ mime: "image/png", bytes: [2, 3, 4] }) } as unknown as WorkspaceGateway;
+  const gateway = { loadWorkspaceImage: vi.fn().mockResolvedValue({ mime: "image/png", bytes: [2, 3, 4], fingerprint: "a".repeat(64) }) } as unknown as WorkspaceGateway;
   const vim = { pendingPasteRef: { current: null } } as unknown as VimEditing;
   const loadEntries = vi.fn().mockResolvedValue([]);
   const hook = renderHook(({ roots }) => useImageAttachments({ desktop: true, roots, session, vim, workspaceGateway: gateway, notify: vi.fn(), loadEntries }), { initialProps: { roots: [a, b] } });
@@ -61,7 +61,7 @@ it("discards delayed foreign image bytes when their source root has been removed
   vi.mocked(f.gateway.loadWorkspaceImage).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
   act(() => f.result.current.handleImageDrop({ kind: "workspace", scope: b.scope, path: "same.png" }, { start: 0, end: 0 }));
   f.rerender({ roots: [a] });
-  await act(async () => { resolve({ mime: "image/png", bytes: [2] }); });
+  await act(async () => { resolve({ mime: "image/png", bytes: [2], fingerprint: "a".repeat(64) }); });
   expect(f.registry.pasteImage).not.toHaveBeenCalled();
   expect(f.session.mergeSnapshot).not.toHaveBeenCalled();
 });

@@ -48,7 +48,7 @@ const gateway: WorkspaceGateway = {
   openMarkdown: openFile,
   openTextFile: openFile,
   /** Supply valid local PNG bytes while recording the requested owner. */
-  loadWorkspaceImage: async (path, scope) => { calls.push(`image:${scope?.rootId}:${path}`); return { mime: "image/png", bytes: [...new Uint8Array(await (await fetch(pixel)).arrayBuffer())] }; },
+  loadWorkspaceImage: async (path, scope) => { calls.push(`image:${scope?.rootId}:${path}`); return { mime: "image/png", bytes: [...new Uint8Array(await (await fetch(pixel)).arrayBuffer())], fingerprint: "a".repeat(64) }; },
   /** This navigation fixture contains no crash-recovery records. */
   listRecovery: async () => [],
   /** No simulated external filesystem events. */

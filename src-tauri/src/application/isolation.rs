@@ -163,6 +163,22 @@ impl IsolationManager {
             .ok_or(WorkspaceError::NotFound)
     }
 
+    /// Report whether an active copy of this root touches a workspace folder.
+    ///
+    /// Used to refuse folder renames that would invalidate an AI working
+    /// copy; the caller rejects with a reason instead of moving the folder.
+    pub fn has_active_copy_under(&self, scope: &crate::contracts::RootScope, folder: &str) -> bool {
+        self.copies.values().any(|copy| {
+            copy.status == CopyStatus::Active
+                && copy.scope == *scope
+                && copy.bases.iter().any(|base| {
+                    base.relative_path
+                        .as_ref()
+                        .is_some_and(|rel| std::path::Path::new(rel).starts_with(folder))
+                })
+        })
+    }
+
     /// Allocate a process-local copy identifier without exposing a live document path.
     fn new_copy_id(&mut self) -> IsolatedCopyId {
         let nanos = self.clock.nanos();

@@ -2228,6 +2228,7 @@ dependencies = [
  "clipboard-win",
  "futures",
  "keyring",
+ "libc",
  "objc2-app-kit",
  "objc2-foundation",
  "regex",

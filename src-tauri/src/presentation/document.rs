@@ -276,6 +276,41 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Rename a workspace image without a document actor, verifying its captured fingerprint.
+    pub fn rename_image(
+        state: tauri::State<'_, ActorState>,
+        scope: RootScope,
+        source: String,
+        dest: String,
+        fingerprint: String,
+    ) -> Result<WorkspaceEntry, WorkspaceError> {
+        use crate::domain::storage::Fingerprint;
+        with_workspace(&state, &scope, |w| {
+            w.rename_image(&source, &dest, Fingerprint(fingerprint))
+        })
+    }
+    #[tauri::command(async)]
+    /// Rename a workspace folder without moving open descendants or AI working copies.
+    pub fn rename_folder(
+        state: tauri::State<'_, ActorState>,
+        isolation: tauri::State<'_, crate::presentation::isolation::IsolationState>,
+        scope: RootScope,
+        source: String,
+        dest: String,
+    ) -> Result<WorkspaceEntry, WorkspaceError> {
+        let mut wguard = state.workspace.lock().map_err(|_| WorkspaceError::Io {
+            detail: "workspace lock poisoned".into(),
+        })?;
+        let workspace = wguard.workspace_mut(&scope)?;
+        let mguard = isolation.manager.lock().map_err(|_| WorkspaceError::Io {
+            detail: "isolation lock poisoned".into(),
+        })?;
+        if mguard.has_active_copy_under(&scope, &source) {
+            return Err(WorkspaceError::FolderWorkingCopy);
+        }
+        workspace.rename_folder(&source, &dest)
+    }
+    #[tauri::command(async)]
     /// Register an untitled authoritative buffer through the active workspace.
     pub fn open_document(
         state: tauri::State<'_, ActorState>,

@@ -46,7 +46,7 @@ function fixture(metadataStore?: WorkspaceMetadataStore) {
     /** No external mutations during this deterministic fixture. */
     pollEvents: vi.fn(async () => []),
     /** Distinguish same-name image bytes by the supplied root. */
-    loadWorkspaceImage: vi.fn(async (_path, scope) => ({ mime: "image/png", bytes: [scope?.rootId === a.scope.rootId ? 1 : 2] })),
+    loadWorkspaceImage: vi.fn(async (_path, scope) => ({ mime: "image/png", bytes: [scope?.rootId === a.scope.rootId ? 1 : 2], fingerprint: "a".repeat(64) })),
     /** Capture folder creation ownership without creating an actor. */
     createFolder: vi.fn(async (path) => ({ path, name: path, directory: true, markdown: false })),
   };
@@ -181,4 +181,29 @@ it("does not overwrite unreadable or newer metadata with the initial empty works
   await waitFor(() => expect(f.result.current.workspace.busy).toBe(false));
   await act(async () => f.result.current.workspace.openWorkspaceFolder(a.root));
   expect(store.save).not.toHaveBeenCalled();
+});
+
+it("renames same-name images only in their owning root", async () => {
+  const f = fixture();
+  await act(async () => f.result.current.workspace.openWorkspaceFolder(a.root));
+  await act(async () => f.result.current.workspace.addWorkspaceFolder(b.root));
+  await act(async () => f.result.current.session.openFile("same.png", a.scope));
+  await act(async () => f.result.current.session.openFile("same.png", b.scope));
+  const ownerA = imageTabId(a.scope.rootId, "same.png");
+  const ownerB = imageTabId(b.scope.rootId, "same.png");
+  expect(f.result.current.session.tabs).toContain(ownerA);
+  expect(f.result.current.session.tabs).toContain(ownerB);
+  const fingerprint = "b".repeat(64);
+  vi.mocked(f.gateway.loadWorkspaceImage).mockResolvedValue({ mime: "image/png", bytes: [1], fingerprint });
+  const gateway = f.gateway as unknown as Record<string, ReturnType<typeof vi.fn>>;
+  gateway.renameImage = vi.fn(async (_source: string, dest: string) => ({ path: dest, name: dest.split("/").at(-1)!, directory: false, markdown: false, kind: "image" as const }));
+  await act(async () => f.result.current.workspace.beginRename(f.result.current.workspace.targetFor("same.png", false, "image", a.scope)));
+  act(() => f.result.current.workspace.setRenamePath("renamed.png"));
+  await act(async () => f.result.current.workspace.renameFile());
+  expect(gateway.renameImage).toHaveBeenCalledExactlyOnceWith("same.png", "renamed.png", fingerprint, a.scope);
+  const renamedA = imageTabId(a.scope.rootId, "renamed.png");
+  expect(f.result.current.session.tabs).toContain(renamedA);
+  expect(f.result.current.session.tabs).toContain(ownerB);
+  expect(f.result.current.session.tabs).not.toContain(ownerA);
+  expect(f.result.current.session.imageTabs[ownerB]).toBe("same.png");
 });

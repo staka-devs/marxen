@@ -149,6 +149,8 @@ pub fn run() {
             presentation::document::create_markdown,
             presentation::document::create_folder,
             presentation::document::rename_markdown,
+            presentation::document::rename_image,
+            presentation::document::rename_folder,
             presentation::document::reload_document,
             presentation::document::close_document,
             presentation::document::search_workspace,

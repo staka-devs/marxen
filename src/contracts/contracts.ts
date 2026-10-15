@@ -37,7 +37,7 @@ export type DocumentEvent = { "type": "snapshot", "payload": DocumentSnapshot } 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 export type RuntimeStatus = { contractVersion: number, connection: ConnectionState, detail: string, };
 export type ContractError = { "code": "invalid_document_id" } | { "code": "wrong_document" } | { "code": "stale_revision", expected: Revision, received: Revision, } | { "code": "revision_exhausted" } | { "code": "offset_out_of_bounds" } | { "code": "split_surrogate_pair" } | { "code": "not_utf8_boundary" } | { "code": "reversed_range" } | { "code": "overlapping_edits" } | { "code": "empty_edits" };
-export type WorkspaceError = { "code": "unknown_root" } | { "code": "stale_root" } | { "code": "wrong_owner" } | { "code": "stale_location" } | { "code": "invalid_path" } | { "code": "outside_workspace" } | { "code": "not_markdown" } | { "code": "not_text" } | { "code": "invalid_utf8" } | { "code": "already_exists" } | { "code": "not_found" } | { "code": "no_workspace" } | { "code": "unknown_document" } | { "code": "unsaved_changes", snapshot: DocumentSnapshot, } | { "code": "conflict", path: string, } | { "code": "io", detail: string, } | { "code": "neovim", detail: string, } | { "code": "contract", error: ContractError, } | { "code": "invalid_image" } | { "code": "search_pattern" } | { "code": "stale_search" } | { "code": "search_incomplete" };
+export type WorkspaceError = { "code": "unknown_root" } | { "code": "stale_root" } | { "code": "wrong_owner" } | { "code": "stale_location" } | { "code": "invalid_path" } | { "code": "outside_workspace" } | { "code": "not_markdown" } | { "code": "not_text" } | { "code": "folder_open_documents" } | { "code": "folder_working_copy" } | { "code": "invalid_utf8" } | { "code": "already_exists" } | { "code": "not_found" } | { "code": "no_workspace" } | { "code": "unknown_document" } | { "code": "unsaved_changes", snapshot: DocumentSnapshot, } | { "code": "conflict", path: string, } | { "code": "io", detail: string, } | { "code": "neovim", detail: string, } | { "code": "contract", error: ContractError, } | { "code": "invalid_image" } | { "code": "search_pattern" } | { "code": "stale_search" } | { "code": "search_incomplete" };
 export type WorkspaceInfo = { scope: RootScope, root: string, };
 export type WorkspaceFileKind = "markdown" | "text" | "image";
 export type WorkspaceEntry = { path: string, name: string, directory: boolean, markdown: boolean, kind?: WorkspaceFileKind, };
@@ -63,7 +63,7 @@ export type SearchReplacePlan = { document: OpenDocument, edits: Array<TextEdit>
 export type CloseAction = "save" | "discard" | "cancel";
 export type RecoveryEntry = { location: DocumentLocation, documentId: DocumentId, path: string | null, revision: Revision, conflict: boolean, };
 export type WorkspaceEvent = { "type": "external_change", "payload": { documentId: DocumentId, path: string, dirty: boolean, deleted: boolean, } } | { "type": "snapshot", "payload": DocumentSnapshot } | { "type": "saved", "payload": SaveResult } | { "type": "error", "payload": { documentId: DocumentId, error: WorkspaceError, } };
-export type ImageData = { mime: string, bytes: Array<number>, };
+export type ImageData = { mime: string, bytes: Array<number>, fingerprint: string, };
 export type PasteResult = { path: string, snapshot: DocumentSnapshot, };
 export type NvimConfig = { path: string | null, errors: Array<string>,
 /**

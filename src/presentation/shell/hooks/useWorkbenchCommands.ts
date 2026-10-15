@@ -105,7 +105,15 @@ export function useWorkbenchCommands(args: Args) {
       enabled = native && workspace.isTargetCurrent(location);
       reason = "フォルダーを開いてください。";
       if (id === "tree-open") enabled = enabled && !location.directory;
-      if (id === "file-rename") { enabled = enabled && !location.directory && location.kind === "markdown"; reason = "名前変更はMarkdownファイルのみ対応しています。"; }
+      if (id === "file-rename") {
+        if (location.directory) {
+          enabled = enabled && location.path !== "";
+          reason = "ルートフォルダーの名前は変更できません。";
+        } else {
+          enabled = enabled && (location.kind === "markdown" || location.kind === "text" || location.kind === "image");
+          reason = "対応するテキスト・画像・フォルダーのみ名前を変更できます。";
+        }
+      }
     }
     if (["file-save", "file-reload", "palette-raw-refresh", "inline-chat"].includes(id)) enabled = native && !!doc;
     if (id === "palette-raw") enabled = !!doc && (!desktop || native);

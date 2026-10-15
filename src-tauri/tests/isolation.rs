@@ -12,7 +12,9 @@ use marxen_lib::contracts::ai::{
     AiStreamEvent, AnthropicConfig, IsolatedCopyId, OpenAiConfig, PromptContext, PromptMode,
     ProposalText,
 };
-use marxen_lib::contracts::{DocumentSnapshot, Revision, Utf16Offset, Utf16Range, WorkspaceError};
+use marxen_lib::contracts::{
+    CloseAction, DocumentSnapshot, Revision, SaveRequest, Utf16Offset, Utf16Range, WorkspaceError,
+};
 use marxen_lib::infrastructure::ai::{acp::*, credentials::*};
 use marxen_lib::infrastructure::staging::guard_staging_path;
 use std::fs;
@@ -598,6 +600,39 @@ fn pinned_copies_refuse_mutation_until_settlement() {
     manager.unpin_for_run(&copy.copy_id);
     let result = manager.approve(&workspace, &copy.copy_id).unwrap();
     assert!(result.outcomes[0].applied);
+}
+
+#[test]
+/// Keep closed-document AI copies visible to folder rename guards until their actual cancellation.
+fn folder_guard_retains_closed_descendants_and_pinned_copies() {
+    let (root, _recovery, _staging, mut workspace, mut manager) = setup();
+    fs::create_dir(root.path().join("notes")).unwrap();
+    let doc = workspace.create("notes/a.md", "hello").unwrap();
+    let copy = manager
+        .create_copy(&workspace, &[ctx(&doc.snapshot, &[(0, 5)])])
+        .unwrap();
+    workspace
+        .close(
+            SaveRequest {
+                document_id: doc.snapshot.document_id.clone(),
+                base_revision: doc.snapshot.revision,
+                location: None,
+            },
+            CloseAction::Discard,
+        )
+        .unwrap();
+    assert!(manager.has_active_copy_under(workspace.scope(), "notes"));
+    assert!(manager.has_active_copy_under(workspace.scope(), "notes//"));
+    assert!(!manager.has_active_copy_under(workspace.scope(), "note"));
+    let mut other = workspace.scope().clone();
+    other.generation.push('x');
+    assert!(!manager.has_active_copy_under(&other, "notes"));
+    manager.pin_for_run(&copy.copy_id).unwrap();
+    assert!(manager.cancel(&copy.copy_id).is_err());
+    assert!(manager.has_active_copy_under(workspace.scope(), "notes"));
+    manager.unpin_for_run(&copy.copy_id);
+    manager.cancel(&copy.copy_id).unwrap();
+    assert!(!manager.has_active_copy_under(workspace.scope(), "notes"));
 }
 
 #[test]
