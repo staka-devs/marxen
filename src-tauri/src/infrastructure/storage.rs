@@ -341,67 +341,6 @@ use crate::application::ports::{
 pub struct NativeStorage;
 pub struct SystemClock;
 
-#[cfg(test)]
-mod rename_tests {
-    use super::*;
-    use std::sync::{Arc, Barrier};
-
-    #[test]
-    /// Reject an existing empty directory at the OS commit rather than replacing it on Unix.
-    fn no_replace_rejects_empty_directory_at_commit() {
-        let root = tempfile::tempdir().unwrap();
-        let source = root.path().join("source");
-        let target = root.path().join("target");
-        fs::create_dir(&source).unwrap();
-        fs::create_dir(&target).unwrap();
-        fs::write(source.join("original"), "kept").unwrap();
-        assert_eq!(
-            rename_no_replace(&source, &target).unwrap_err().kind(),
-            std::io::ErrorKind::AlreadyExists
-        );
-        assert!(source.join("original").is_file());
-        assert!(fs::read_dir(target).unwrap().next().is_none());
-    }
-
-    #[test]
-    /// Let exactly one concurrent directory move win without deleting either contender's contents.
-    fn concurrent_directory_renames_never_replace_the_winner() {
-        let root = tempfile::tempdir().unwrap();
-        let barrier = Arc::new(Barrier::new(2));
-        let target = root.path().join("target");
-        let workers: Vec<_> = (0..2)
-            .map(|index| {
-                let source = root.path().join(format!("source{index}"));
-                fs::create_dir(&source).unwrap();
-                fs::write(source.join("content"), index.to_string()).unwrap();
-                let target = target.clone();
-                let barrier = barrier.clone();
-                std::thread::spawn(move || {
-                    barrier.wait();
-                    rename_dir(&source, &target)
-                })
-            })
-            .collect();
-        let results: Vec<_> = workers
-            .into_iter()
-            .map(|worker| worker.join().unwrap())
-            .collect();
-        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
-        assert_eq!(
-            results
-                .iter()
-                .filter(|result| matches!(result, Err(WorkspaceError::AlreadyExists)))
-                .count(),
-            1
-        );
-        let winner = fs::read_to_string(target.join("content")).unwrap();
-        let loser = if winner == "0" { "1" } else { "0" };
-        assert_eq!(
-            fs::read_to_string(root.path().join(format!("source{loser}/content"))).unwrap(),
-            loser
-        );
-    }
-}
 impl Clock for SystemClock {
     /// Supply the native clock component of process-local document and copy identifiers.
     fn nanos(&self) -> u128 {
@@ -605,5 +544,67 @@ impl StagingStorage for NativeStorage {
         }
         out.sort();
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod rename_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    /// Reject an existing empty directory at the OS commit rather than replacing it on Unix.
+    fn no_replace_rejects_empty_directory_at_commit() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let target = root.path().join("target");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::write(source.join("original"), "kept").unwrap();
+        assert_eq!(
+            rename_no_replace(&source, &target).unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        assert!(source.join("original").is_file());
+        assert!(fs::read_dir(target).unwrap().next().is_none());
+    }
+
+    #[test]
+    /// Let exactly one concurrent directory move win without deleting either contender's contents.
+    fn concurrent_directory_renames_never_replace_the_winner() {
+        let root = tempfile::tempdir().unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let target = root.path().join("target");
+        let workers: Vec<_> = (0..2)
+            .map(|index| {
+                let source = root.path().join(format!("source{index}"));
+                fs::create_dir(&source).unwrap();
+                fs::write(source.join("content"), index.to_string()).unwrap();
+                let target = target.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    rename_dir(&source, &target)
+                })
+            })
+            .collect();
+        let results: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(WorkspaceError::AlreadyExists)))
+                .count(),
+            1
+        );
+        let winner = fs::read_to_string(target.join("content")).unwrap();
+        let loser = if winner == "0" { "1" } else { "0" };
+        assert_eq!(
+            fs::read_to_string(root.path().join(format!("source{loser}/content"))).unwrap(),
+            loser
+        );
     }
 }
