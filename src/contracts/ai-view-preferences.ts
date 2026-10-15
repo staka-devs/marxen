@@ -1,4 +1,4 @@
-import type { AcpConfigOption } from "./ai-contracts";
+import type { AcpConfigOption, ApiConnectionId } from "./ai-contracts";
 
 /** Supported connection choices; these identifiers never assert connection health. */
 export type AiProviderId = "codex" | "opencode" | "copilot" | "custom" | "openai_compatible" | "anthropic";
@@ -21,6 +21,8 @@ export interface AiViewPreferences {
   showProviderSelector: boolean;
   showModelSelector: boolean;
   hiddenProviders: AiProviderId[];
+  /** Hidden named API profiles by stable ID; absent in legacy view preferences. */
+  hiddenConnectionIds?: ApiConnectionId[];
   hiddenModels: HiddenAiModel[];
   chatPaneWidth: number;
 }

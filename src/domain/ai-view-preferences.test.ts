@@ -1,7 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { clampAiChatWidth, defaultAiViewPreferences, isAiModelVisible, normalizeAiViewPreferences, setAiModelVisible, setAiProviderVisible } from "./ai-view-preferences";
+import { clampAiChatWidth, defaultAiViewPreferences, isAiModelVisible, isAiProviderVisible, normalizeAiViewPreferences, setAiConnectionVisible, setAiModelVisible, setAiProviderVisible } from "./ai-view-preferences";
 
 describe("AI view preference rules", () => {
+  it("keeps named connection visibility independent of legacy kinds and model scopes", () => {
+    const original = { ...defaultAiViewPreferences(), hiddenProviders: ["openai_compatible" as const, "codex" as const], hiddenModels: [{ provider: "openai_compatible" as const, connectionId: "api-a", optionId: "model", value: "same-model" }] };
+    const hidden = setAiConnectionVisible(original, "api-a", false);
+    expect(isAiProviderVisible(hidden, "openai_compatible", "api-a")).toBe(false);
+    expect(isAiProviderVisible(hidden, "openai_compatible", "api-b")).toBe(true);
+    expect(isAiProviderVisible(hidden, "anthropic", "api-a")).toBe(false);
+    expect(isAiProviderVisible(hidden, "openai_compatible")).toBe(false);
+    expect(isAiProviderVisible(hidden, "codex")).toBe(false);
+    expect(isAiProviderVisible(hidden, "opencode")).toBe(true);
+    expect(setAiConnectionVisible(hidden, "api-a", false).hiddenConnectionIds).toEqual(["api-a"]);
+    const shown = setAiConnectionVisible(hidden, "api-a", true);
+    expect(shown).toEqual(original);
+    expect(isAiModelVisible(shown, "openai_compatible", "model", "same-model", "api-a")).toBe(false);
+    expect(isAiModelVisible(shown, "openai_compatible", "model", "same-model", "api-b")).toBe(true);
+    expect(original.hiddenConnectionIds).toEqual([]);
+  });
+  it("restores legacy preferences and sanitizes only stable connection IDs", () => {
+    const legacy = { hiddenProviders: ["anthropic"], hiddenModels: [], showProviderSelector: false, chatPaneWidth: 450 };
+    expect(normalizeAiViewPreferences(legacy)).toMatchObject({ ...legacy, hiddenConnectionIds: [] });
+    expect(normalizeAiViewPreferences({ hiddenConnectionIds: ["api-a", "api-a", null, 7, "", "bad id", "a".repeat(129), "api-b"] }).hiddenConnectionIds).toEqual(["api-a", "api-b"]);
+    expect(normalizeAiViewPreferences({ hiddenConnectionIds: "api-a" }).hiddenConnectionIds).toEqual([]);
+    const { hiddenConnectionIds: _omitted, ...oldPreferences } = defaultAiViewPreferences();
+    expect(isAiProviderVisible(oldPreferences, "anthropic", "api-new")).toBe(true);
+    expect(setAiConnectionVisible(oldPreferences, "api-new", false).hiddenConnectionIds).toEqual(["api-new"]);
+  });
   it("keeps visibility scoped by provider, option ID and actual value", () => {
     const original = defaultAiViewPreferences();
     const hidden = setAiModelVisible(setAiProviderVisible(original, "codex", false), { provider: "codex", optionId: "actual.model", value: "reported-id" }, false);

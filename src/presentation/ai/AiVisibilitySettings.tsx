@@ -1,18 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { AdvertisedAiProvider, AiViewPreferences } from "../../contracts/ai-view-preferences";
+import type { ApiConnection } from "../../contracts/ai-contracts";
 import type { LabelKey } from "../../contracts/localization";
-import { AI_PROVIDER_IDS, AI_CHAT_WIDTH, isAiModelVisible, setAiModelVisible, setAiProviderVisible } from "../../domain/ai-view-preferences";
+import { AI_PROVIDER_IDS, AI_CHAT_WIDTH, isAiModelVisible, isAiProviderVisible, setAiConnectionVisible, setAiModelVisible, setAiProviderVisible } from "../../domain/ai-view-preferences";
 import { PRESET_LABELS } from "../../domain/ai-config";
 import { useI18n } from "../i18n/I18nProvider";
 import { trapDialogTab } from "../workspace/dialogFocus";
 import { ProviderIcon } from "./provider-icon";
+import { describeApiConnection } from "./ApiConnections";
 
 export interface AiVisibilitySettingsProps {
   preferences: AiViewPreferences;
   /** Apply only view preferences, never the active provider or model configuration. */
   onPreferences: (next: AiViewPreferences) => void;
   advertisedProviders: readonly AdvertisedAiProvider[];
+  /** Registered named API profiles; when non-empty they replace the single direct-API kinds. */
+  connections?: readonly ApiConnection[];
   saveFailed?: boolean;
   showHeading?: boolean;
 }
@@ -23,16 +27,19 @@ interface DialogProps extends AiVisibilitySettingsProps {
 }
 
 /** Searchable provider groups expose only actual advertised model IDs and independent visibility switches. */
-export function AiVisibilitySettings({ preferences, onPreferences, advertisedProviders, saveFailed, showHeading = true }: AiVisibilitySettingsProps) {
+export function AiVisibilitySettings({ preferences, onPreferences, advertisedProviders, connections = [], saveFailed, showHeading = true }: AiVisibilitySettingsProps) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
   const search = query.trim().toLocaleLowerCase();
-  const groups = AI_PROVIDER_IDS.map((id) => {
+  const providers = AI_PROVIDER_IDS.filter((id) => connections.length === 0 || (id !== "openai_compatible" && id !== "anthropic")).map((id) => {
     const label = id === "openai_compatible" ? t("OpenAI 互換 API") : id === "anthropic" ? "Anthropic API" : t(PRESET_LABELS[id] as LabelKey);
-    const discovery = advertisedProviders.find((entry) => entry.provider === id);
-    const matchProvider = `${label} ${id}`.toLocaleLowerCase().includes(search);
+    return { id, label, connectionId: undefined, detail: "" };
+  });
+  const groups = [...providers, ...connections.map((connection) => ({ id: connection.protocol, label: describeApiConnection(connection, t), connectionId: connection.id, detail: connection.model === "" ? connection.endpoint : `${connection.model} • ${connection.endpoint}` }))].map(({ id, label, connectionId, detail }) => {
+    const discovery = connectionId ? undefined : advertisedProviders.find((entry) => entry.provider === id);
+    const matchProvider = `${label} ${id} ${detail}`.toLocaleLowerCase().includes(search);
     const models = (discovery?.options ?? []).filter((option) => option.category === "model").flatMap((option) => option.options.map((model) => ({ ...model, optionId: option.id }))).filter((model) => matchProvider || `${model.name} ${model.value} ${model.optionId}`.toLocaleLowerCase().includes(search));
-    return { id, label, discovery, models, matches: matchProvider || models.length > 0 };
+    return { id, label, connectionId, detail, discovery, models, matches: matchProvider || models.length > 0 };
   }).filter((group) => group.matches);
   return <section aria-label={t("AI の表示設定")} className="space-y-3 text-xs">
     {showHeading && <h3 className="text-[13px] font-semibold">{t("AI の表示設定")}</h3>}
@@ -43,9 +50,10 @@ export function AiVisibilitySettings({ preferences, onPreferences, advertisedPro
     </div>
     <input type="search" aria-label={t("接続先とモデルを検索")} placeholder={t("接続先とモデルを検索")} value={query} onChange={(event) => setQuery(event.target.value)} className="w-full rounded-sm border border-border bg-card px-2 py-1.5 text-xs outline-none focus:border-primary" />
     <div className="max-h-80 space-y-2 overflow-y-auto">
-      {groups.map(({ id, label, discovery, models }) => {
-        return <fieldset key={id} className="min-w-0 rounded-sm border border-border p-2">
-          <legend className="px-1"><label className="flex items-center gap-2 font-medium"><input type="checkbox" aria-label={t("{{provider}} の候補を表示", { provider: label })} checked={!preferences.hiddenProviders.includes(id)} onChange={(event) => onPreferences(setAiProviderVisible(preferences, id, event.target.checked))} /><ProviderIcon provider={id} />{label}</label></legend>
+      {groups.map(({ id, label, connectionId, detail, discovery, models }) => {
+        return <fieldset key={connectionId ? `connection:${connectionId}` : `provider:${id}`} className="min-w-0 rounded-sm border border-border p-2">
+          <legend className="max-w-full px-1"><label className="flex items-start gap-2 break-words font-medium"><input type="checkbox" className="mt-0.5 shrink-0" aria-label={t("{{provider}} の候補を表示", { provider: label })} checked={isAiProviderVisible(preferences, id, connectionId)} onChange={(event) => onPreferences(connectionId ? setAiConnectionVisible(preferences, connectionId, event.target.checked) : setAiProviderVisible(preferences, id, event.target.checked))} /><ProviderIcon provider={id} /><span className="min-w-0 break-all">{label}</span></label></legend>
+          {connectionId && <p className="break-all px-1 py-1 text-[11px] text-muted-foreground">{detail}</p>}
           {models.map((model) => <label key={JSON.stringify([model.optionId, model.value])} className="flex min-w-0 items-start gap-2 rounded-sm px-1 py-1.5 hover:bg-muted">
             <input type="checkbox" className="mt-0.5 shrink-0" aria-label={t("{{model}} を表示", { model: model.name })} checked={isAiModelVisible(preferences, id, model.optionId, model.value)} onChange={(event) => onPreferences(setAiModelVisible(preferences, { provider: id, optionId: model.optionId, value: model.value }, event.target.checked))} />
             <span className="min-w-0"><span className="block break-words">{model.name}</span><span className="block break-all text-[11px] text-muted-foreground">{model.value}</span></span>

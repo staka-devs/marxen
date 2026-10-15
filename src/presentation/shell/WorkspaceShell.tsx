@@ -1387,7 +1387,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             preferences={preferences}
             onPreferences={updatePreferences}
             aiSettings={<AiProviderSettings embedded provider={aiProvider} onProvider={setAiProvider} gateway={aiGateway} profileStore={aiProfileStore} connectionControls={connectionControls} />}
-            aiVisibilitySettings={<AiVisibilitySettings preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} saveFailed={aiView.saveFailed} />}
+            aiVisibilitySettings={<AiVisibilitySettings preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} connections={apiConnections.connections} saveFailed={aiView.saveFailed} />}
             vimSettings={desktop && vimSettingsGateway ? <VimSettingsHost gateway={vimSettingsGateway} initialPath={workspace.configPath} onSaved={workspace.setConfigPath} dialogGateway={dialogGateway} /> : undefined}
             configPath={workspace.configPath}
             configError={workspace.configError}
@@ -1477,7 +1477,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           )}
         </ResizableAiPane>
       )}
-      {aiVisibilityOpen && <AiVisibilityDialog preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} saveFailed={aiView.saveFailed} onClose={closeAiVisibility} />}
+      {aiVisibilityOpen && <AiVisibilityDialog preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} connections={apiConnections.connections} saveFailed={aiView.saveFailed} onClose={closeAiVisibility} />}
       </div>
     </div>
   );
