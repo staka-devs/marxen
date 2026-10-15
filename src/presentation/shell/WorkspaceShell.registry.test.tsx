@@ -113,7 +113,7 @@ const scenario = {
     const a = (args ?? {}) as Record<string, unknown>;
     switch (command) {
       case "open_workspace":
-        return Promise.resolve({ root: a.path });
+        return Promise.resolve({ root: a.path, scope: { rootId: "fixture-root", generation: "1" } });
       case "list_workspace": {
         const dir = a.path as string;
         if (dir === "") {
@@ -330,6 +330,7 @@ it("binds native search options and localized errors through the composed App sh
   fireEvent.click(panel.getByRole("button", { name: "単語単位で検索" }));
   fireEvent.click(panel.getByRole("button", { name: "正規表現で検索" }));
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("search_workspace", {
+    scope: { rootId: "fixture-root", generation: "1" },
     query: "cat", root: "/ws", options: { caseSensitive: true, wholeWord: true, regex: true },
   }));
   expect(panel.getByRole("button", { name: "正規表現で検索" })).toHaveAttribute("aria-pressed", "true");
@@ -486,7 +487,7 @@ it("uses the persisted anchor for save and external recovery toasts through App 
   expect(toast).toHaveClass("top-8", "left-1/2", "-translate-x-1/2");
   const subscription = vi.mocked(listen).mock.calls.find(([event]) => event === "marxen:workspace");
   expect(subscription).toBeDefined();
-  act(() => subscription![1]({ event: "marxen:workspace", id: 1, payload: [{ type: "external_change", payload: { documentId: "doc_a", path: "メモ/a.md", dirty: false, deleted: false } }] }));
+  act(() => subscription![1]({ event: "marxen:workspace", id: 1, payload: [{ scope: { rootId: "fixture-root", generation: "1" }, event: { type: "external_change", payload: { documentId: "doc_a", path: "メモ/a.md", dirty: false, deleted: false } } }] }));
   const external = await screen.findByTestId("external-banner");
   expect(external).toHaveTextContent("ファイルが外部で変更されました。");
   expect(external).toHaveClass("top-32", "left-1/2", "-translate-x-1/2");

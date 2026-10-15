@@ -47,6 +47,7 @@ mod regression {
     /// is deliberately not a snapshot-authorized slice of the `[1, 3)` source range.
     fn context() -> PromptContext {
         PromptContext {
+            location: None,
             document_id: DocumentId("doc_01".into()),
             revision: Revision(7),
             ranges: vec![Utf16Range {
@@ -60,6 +61,7 @@ mod regression {
     /// Build a Codex ACP ask request with one context, `copy_01`, and no session/history.
     fn acp_request() -> AiPromptRequest {
         AiPromptRequest {
+            conversation_id: None,
             provider: AiProviderConfig {
                 kind: AiProviderKind::Acp,
                 acp: Some(AcpConfig {

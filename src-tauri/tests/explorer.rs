@@ -21,6 +21,7 @@ fn range(start: u32, end: u32) -> Utf16Range {
 /// Capture the document identifier and exact revision for a guarded workspace operation.
 fn request(s: &DocumentSnapshot) -> SaveRequest {
     SaveRequest {
+        location: None,
         document_id: s.document_id.clone(),
         base_revision: s.revision,
     }

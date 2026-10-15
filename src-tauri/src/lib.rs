@@ -106,10 +106,7 @@ pub fn run() {
                     let Ok(mut guard) = workspace.lock() else {
                         break;
                     };
-                    let Some(workspace) = guard.as_mut() else {
-                        continue;
-                    };
-                    let events = workspace.poll();
+                    let events = guard.poll();
                     if !events.is_empty() {
                         let _ = handle.emit("marxen:workspace", &events);
                         if let Ok(mut queue) = pending.lock() {

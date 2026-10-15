@@ -1,3 +1,4 @@
+import type { RootScope } from "../contracts/contracts";
 // Search hit item shared by search use cases and the panel (domain).
 //
 // Global UTF-16 offsets for jumps and replace; registry matches carry
@@ -5,6 +6,7 @@
 
 /** Panel hit with exact UTF-16 offsets for jump and replace. */
 export interface SearchHitItem {
+  scope?: RootScope;
   path: string;
   line: number;
   col: number;

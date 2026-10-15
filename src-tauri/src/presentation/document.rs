@@ -1,14 +1,16 @@
 //! Folder-scoped IPC. Commands share the ID registry and actor locks.
+use crate::application::root_registry::RootRegistry;
+#[cfg(feature = "desktop")]
 use crate::application::workspace::Workspace;
-use crate::contracts::WorkspaceEvent;
+use crate::contracts::RootEvent;
 use std::sync::{Arc, Mutex};
 
 pub struct ActorState {
     pub services: crate::application::ports::DocumentServices,
     pub files: Arc<dyn crate::application::ports::WorkspaceStorage>,
     pub clock: Arc<dyn crate::application::ports::Clock>,
-    pub workspace: Arc<Mutex<Option<Workspace>>>,
-    pub pending: Arc<Mutex<Vec<WorkspaceEvent>>>,
+    pub workspace: Arc<Mutex<RootRegistry>>,
+    pub pending: Arc<Mutex<Vec<RootEvent>>>,
 }
 impl ActorState {
     /// Retain injected native dependencies alongside the workspace/event locks.
@@ -21,7 +23,7 @@ impl ActorState {
             services,
             files,
             clock,
-            workspace: Arc::new(Mutex::new(None)),
+            workspace: Arc::new(Mutex::new(RootRegistry::default())),
             pending: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -36,16 +38,42 @@ mod desktop {
     /// Serialize a workspace use case under the shared registry lock.
     fn with_workspace<T>(
         state: &ActorState,
+        scope: &RootScope,
         call: impl FnOnce(&mut Workspace) -> Result<T, WorkspaceError>,
     ) -> Result<T, WorkspaceError> {
         let mut guard = state.workspace.lock().map_err(|_| WorkspaceError::Io {
             detail: "workspace lock poisoned".into(),
         })?;
-        call(guard.as_mut().ok_or(WorkspaceError::NoWorkspace)?)
+        call(guard.workspace_mut(scope)?)
+    }
+    /// Authorize a captured document location while holding the registry mutation lock.
+    fn with_document<T>(
+        state: &ActorState,
+        id: String,
+        location: &DocumentLocation,
+        call: impl FnOnce(&mut Workspace) -> Result<T, WorkspaceError>,
+    ) -> Result<T, WorkspaceError> {
+        let mut guard = state.workspace.lock().map_err(|_| WorkspaceError::Io {
+            detail: "workspace lock poisoned".into(),
+        })?;
+        call(guard.document_mut(&id, location)?)
+    }
+    /// Validate a captured recovery descriptor before restoring or removing its bytes.
+    fn with_recovery<T>(
+        state: &ActorState,
+        id: String,
+        location: &DocumentLocation,
+        call: impl FnOnce(&mut Workspace) -> Result<T, WorkspaceError>,
+    ) -> Result<T, WorkspaceError> {
+        let mut guard = state.workspace.lock().map_err(|_| WorkspaceError::Io {
+            detail: "workspace lock poisoned".into(),
+        })?;
+        call(guard.recovery_mut(&id, location)?)
     }
     /// Construct the typed document ID and revision boundary for a command.
     fn request(document_id: String, base_revision: u32) -> SaveRequest {
         SaveRequest {
+            location: None,
             document_id: DocumentId(document_id),
             base_revision: Revision(base_revision),
         }
@@ -67,9 +95,7 @@ mod desktop {
         let mut guard = state.workspace.lock().map_err(|_| WorkspaceError::Io {
             detail: "workspace lock poisoned".into(),
         })?;
-        if let Some(workspace) = guard.as_ref() {
-            workspace.ensure_clean()?;
-        }
+        guard.ensure_clean()?;
         let workspace = Workspace::open(
             std::path::Path::new(&path),
             &recovery,
@@ -77,8 +103,7 @@ mod desktop {
             state.files.clone(),
             state.clock.clone(),
         )?;
-        let info = workspace.info();
-        *guard = Some(workspace);
+        let info = guard.replace(workspace)?;
         state
             .pending
             .lock()
@@ -92,51 +117,57 @@ mod desktop {
     /// Return supported direct workspace children through the registry use case.
     pub fn list_workspace(
         state: tauri::State<'_, ActorState>,
+        scope: RootScope,
         path: String,
     ) -> Result<Vec<WorkspaceEntry>, WorkspaceError> {
-        with_workspace(&state, |w| w.list(&path))
+        with_workspace(&state, &scope, |w| w.list(&path))
     }
     #[tauri::command(async)]
     /// Return authoritative descriptors for all registered documents.
     pub fn list_documents(
         state: tauri::State<'_, ActorState>,
+        scope: RootScope,
     ) -> Result<Vec<OpenDocument>, WorkspaceError> {
-        with_workspace(&state, |w| w.documents())
+        with_workspace(&state, &scope, |w| w.documents())
     }
     #[tauri::command(async)]
     /// Open a contained Markdown document through the shared registry.
     pub fn open_markdown(
         state: tauri::State<'_, ActorState>,
+        scope: RootScope,
         path: String,
     ) -> Result<OpenDocument, WorkspaceError> {
-        with_workspace(&state, |w| w.open_markdown(&path))
+        with_workspace(&state, &scope, |w| w.open_markdown(&path))
     }
     #[tauri::command(async)]
     /// Open a supported contained text document through the shared registry.
     pub fn open_text_file(
         state: tauri::State<'_, ActorState>,
+        scope: RootScope,
         path: String,
     ) -> Result<OpenDocument, WorkspaceError> {
-        with_workspace(&state, |w| w.open_text_file(&path))
+        with_workspace(&state, &scope, |w| w.open_text_file(&path))
     }
     #[tauri::command(async)]
     /// Return bounded workspace image bytes for the explorer viewer.
     pub fn load_workspace_image(
         state: tauri::State<'_, ActorState>,
+        scope: RootScope,
         path: String,
     ) -> Result<ImageData, WorkspaceError> {
-        with_workspace(&state, |w| w.load_workspace_image(&path))
+        with_workspace(&state, &scope, |w| w.load_workspace_image(&path))
     }
     #[tauri::command(async)]
     /// Insert a workspace image reference at the caller's exact revision and UTF-16 range.
     pub fn insert_workspace_image(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         base_revision: u32,
         path: String,
         range: Utf16Range,
     ) -> Result<DocumentSnapshot, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             w.insert_workspace_image(request(document_id, base_revision), &path, range)
         })
     }
@@ -144,12 +175,13 @@ mod desktop {
     /// Import an external image and insert its reference through the revision-checked use case.
     pub fn import_external_image(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         base_revision: u32,
         path: String,
         range: Utf16Range,
     ) -> Result<PasteResult, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             w.import_external_image(
                 request(document_id, base_revision),
                 std::path::Path::new(&path),
@@ -161,28 +193,31 @@ mod desktop {
     /// Create a new contained Markdown document through the workspace registry.
     pub fn create_markdown(
         state: tauri::State<'_, ActorState>,
+        scope: RootScope,
         path: String,
         text: String,
     ) -> Result<OpenDocument, WorkspaceError> {
-        with_workspace(&state, |w| w.create(&path, &text))
+        with_workspace(&state, &scope, |w| w.create(&path, &text))
     }
     #[tauri::command(async)]
     /// Create a new folder inside the active workspace without opening a document.
     pub fn create_folder(
         state: tauri::State<'_, ActorState>,
+        scope: RootScope,
         path: String,
     ) -> Result<WorkspaceEntry, WorkspaceError> {
-        with_workspace(&state, |w| w.create_folder(&path))
+        with_workspace(&state, &scope, |w| w.create_folder(&path))
     }
     #[tauri::command(async)]
     /// Rename a document only at the supplied revision and a safe workspace destination.
     pub fn rename_markdown(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         base_revision: u32,
         path: String,
     ) -> Result<OpenDocument, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             w.rename(request(document_id, base_revision), &path)
         })
     }
@@ -190,36 +225,40 @@ mod desktop {
     /// Register an untitled authoritative buffer through the active workspace.
     pub fn open_document(
         state: tauri::State<'_, ActorState>,
-        document_id: String,
+        scope: RootScope,
         text: String,
         path: Option<String>,
     ) -> Result<DocumentSnapshot, WorkspaceError> {
         if path.is_some() {
             return Err(WorkspaceError::InvalidPath);
         }
-        with_workspace(&state, |w| {
-            w.open_untitled(DocumentId(document_id), text)
-                .map(|d| d.snapshot)
+        with_workspace(&state, &scope, |w| {
+            let id = DocumentId(w.new_id());
+            w.open_untitled(id, text).map(|d| d.snapshot)
         })
     }
     #[tauri::command(async)]
     /// Return the authoritative document snapshot from the registry actor.
     pub fn fetch_snapshot(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
     ) -> Result<DocumentSnapshot, WorkspaceError> {
-        with_workspace(&state, |w| Ok(w.actor(&document_id)?.sync_from_nvim()?))
+        with_document(&state, document_id.clone(), &location, |w| {
+            Ok(w.actor(&document_id)?.sync_from_nvim()?)
+        })
     }
     #[tauri::command(async)]
     /// Validate and apply revision-tagged GUI ranges through the authoritative actor.
     pub fn apply_gui_edits(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         base_revision: u32,
         edits: Vec<TextEdit>,
         expected_cursor: Option<CursorUpdate>,
     ) -> Result<DocumentSnapshot, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             let actor = w.actor(&document_id)?;
             let request = EditRequest {
                 document_id: DocumentId(document_id),
@@ -237,10 +276,11 @@ mod desktop {
     /// Save the requested document through the actor's disk conflict contract.
     pub fn save_document(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         base_revision: u32,
     ) -> Result<SaveResult, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             Ok(w.actor(&document_id)?
                 .save(request(document_id, base_revision))?)
         })
@@ -249,10 +289,11 @@ mod desktop {
     /// Reload disk text through the requested revision-aware actor operation.
     pub fn reload_document(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         base_revision: u32,
     ) -> Result<DocumentSnapshot, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             Ok(w.actor(&document_id)?
                 .reload(request(document_id, base_revision))?)
         })
@@ -261,11 +302,12 @@ mod desktop {
     /// Apply the explicit close decision before removing the registered actor.
     pub fn close_document(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         base_revision: u32,
         action: CloseAction,
     ) -> Result<bool, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             w.close(request(document_id, base_revision), action)
         })
     }
@@ -273,31 +315,42 @@ mod desktop {
     /// Return supported workspace text matches through the registry search use case.
     pub fn search_workspace(
         state: tauri::State<'_, ActorState>,
+        scope: RootScope,
         query: String,
         options: SearchOptions,
         root: String,
     ) -> Result<SearchResults, WorkspaceError> {
-        with_workspace(&state, |w| w.search_with_options(&query, &options, &root))
+        with_workspace(&state, &scope, |w| {
+            w.search_with_options(&query, &options, &root)
+        })
     }
     #[tauri::command(async)]
     /// Prepare native search edits without saving or bypassing the document revision queue.
     pub fn plan_search_replacement(
         state: tauri::State<'_, ActorState>,
+        scope: RootScope,
         request: SearchReplaceRequest,
     ) -> Result<SearchReplacePlan, WorkspaceError> {
-        with_workspace(&state, |w| w.plan_search_replacement(request))
+        with_workspace(&state, &scope, |w| w.plan_search_replacement(request))
     }
     #[tauri::command(async)]
     /// Collect pending document, save and disk-change events in registry order.
     pub fn poll_workspace_events(
         state: tauri::State<'_, ActorState>,
-    ) -> Result<Vec<WorkspaceEvent>, WorkspaceError> {
-        with_workspace(&state, |w| {
+        scope: RootScope,
+    ) -> Result<Vec<RootEvent>, WorkspaceError> {
+        with_workspace(&state, &scope, |w| {
             let mut pending = state.pending.lock().map_err(|_| WorkspaceError::Io {
                 detail: "event lock poisoned".into(),
             })?;
-            let mut events = std::mem::take(&mut *pending);
-            events.extend(w.poll());
+            let queued = std::mem::take(&mut *pending);
+            let (mut events, retained): (Vec<_>, Vec<_>) =
+                queued.into_iter().partition(|event| event.scope == scope);
+            *pending = retained;
+            events.extend(w.poll().into_iter().map(|event| RootEvent {
+                scope: scope.clone(),
+                event,
+            }));
             Ok(events)
         })
     }
@@ -305,45 +358,56 @@ mod desktop {
     /// Return available workspace recovery descriptors.
     pub fn list_recovery(
         state: tauri::State<'_, ActorState>,
+        scope: RootScope,
     ) -> Result<Vec<RecoveryEntry>, WorkspaceError> {
-        with_workspace(&state, |w| w.recovery_entries())
+        with_workspace(&state, &scope, |w| w.recovery_entries())
     }
     #[tauri::command(async)]
     /// Restore the selected recovery entry through the registry's containment and conflict checks.
     pub fn restore_recovery(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
     ) -> Result<OpenDocument, WorkspaceError> {
-        with_workspace(&state, |w| w.restore(&document_id))
+        with_recovery(&state, document_id.clone(), &location, |w| {
+            w.restore(&document_id)
+        })
     }
     #[tauri::command(async)]
     /// Dismiss the selected recovery entry without changing live documents.
     pub fn discard_recovery(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
     ) -> Result<(), WorkspaceError> {
-        with_workspace(&state, |w| w.discard_recovery(&document_id))
+        with_recovery(&state, document_id.clone(), &location, |w| {
+            w.discard_recovery(&document_id)
+        })
     }
     #[tauri::command(async)]
     /// Resolve bounded document-relative image bytes through the workspace use case.
     pub fn load_relative_image(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         path: String,
     ) -> Result<ImageData, WorkspaceError> {
-        with_workspace(&state, |w| w.load_image(&document_id, &path))
+        with_document(&state, document_id.clone(), &location, |w| {
+            w.load_image(&document_id, &path)
+        })
     }
     #[tauri::command(async)]
     /// Import supplied image bytes and replace an exact revision-tagged UTF-16 range.
     pub fn paste_image(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         base_revision: u32,
         name: String,
         bytes: Vec<u8>,
         range: Utf16Range,
     ) -> Result<PasteResult, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             w.paste_image(request(document_id, base_revision), &name, &bytes, range)
         })
     }
@@ -351,19 +415,23 @@ mod desktop {
     /// Return the actor's native Vim mode and authoritative revision.
     pub fn fetch_mode(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
     ) -> Result<ModeUpdate, WorkspaceError> {
-        with_workspace(&state, |w| Ok(w.actor(&document_id)?.current_mode()?))
+        with_document(&state, document_id.clone(), &location, |w| {
+            Ok(w.actor(&document_id)?.current_mode()?)
+        })
     }
     #[tauri::command(async)]
     /// Route native keys and return post-yank clipboard side effects in revision order.
     pub fn nvim_input_with_copy(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         base_revision: u32,
         keys: String,
     ) -> Result<VimInputResult, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             Ok(w.actor(&document_id)?
                 .input_with_copy(request(document_id, base_revision), &keys)?)
         })
@@ -372,11 +440,12 @@ mod desktop {
     /// Query a native mode mapping prefix without interpreting it in presentation.
     pub fn has_nvim_mapping(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         mode: String,
         lhs: String,
     ) -> Result<bool, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             Ok(w.actor(&document_id)?.has_user_mapping(&mode, &lhs)?)
         })
     }
@@ -384,27 +453,34 @@ mod desktop {
     /// Undo through the requested actor's authoritative native history.
     pub fn undo_document(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
     ) -> Result<DocumentSnapshot, WorkspaceError> {
-        with_workspace(&state, |w| Ok(w.actor(&document_id)?.undo()?))
+        with_document(&state, document_id.clone(), &location, |w| {
+            Ok(w.actor(&document_id)?.undo()?)
+        })
     }
     #[tauri::command(async)]
     /// Redo through the requested actor's authoritative native history.
     pub fn redo_document(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
     ) -> Result<DocumentSnapshot, WorkspaceError> {
-        with_workspace(&state, |w| Ok(w.actor(&document_id)?.redo()?))
+        with_document(&state, document_id.clone(), &location, |w| {
+            Ok(w.actor(&document_id)?.redo()?)
+        })
     }
     #[tauri::command(async)]
     /// Feed native Vim key notation at the supplied document revision.
     pub fn nvim_input(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         base_revision: u32,
         keys: String,
     ) -> Result<DocumentSnapshot, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             Ok(w.actor(&document_id)?
                 .input_checked(request(document_id, base_revision), &keys)?)
         })
@@ -413,18 +489,22 @@ mod desktop {
     /// Return the actor's current native selection in global UTF-16 coordinates.
     pub fn fetch_cursor(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
     ) -> Result<CursorUpdate, WorkspaceError> {
-        with_workspace(&state, |w| Ok(w.actor(&document_id)?.cursor()?))
+        with_document(&state, document_id.clone(), &location, |w| {
+            Ok(w.actor(&document_id)?.cursor()?)
+        })
     }
     #[tauri::command(async)]
     /// Capture revision-bound native selection and effective editor configuration.
     pub fn fetch_editor_context(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         base_revision: u32,
     ) -> Result<EditorContext, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             Ok(w.actor(&document_id)?
                 .editor_context(request(document_id, base_revision))?)
         })
@@ -433,11 +513,12 @@ mod desktop {
     /// Traverse native history only after the actor validates the menu's captured revision.
     pub fn editor_history(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         base_revision: u32,
         redo: bool,
     ) -> Result<DocumentSnapshot, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             Ok(w.actor(&document_id)?
                 .editor_history(request(document_id, base_revision), redo)?)
         })
@@ -446,11 +527,12 @@ mod desktop {
     /// Perform explicit clipboard actions through actor-owned selection and the injected clipboard.
     pub fn editor_clipboard(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         clipboard: tauri::State<'_, crate::presentation::clipboard::ClipboardState>,
         expected: CursorUpdate,
         action: String,
     ) -> Result<DocumentSnapshot, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, expected.document_id.0.clone(), &location, |w| {
             Ok(w.actor(&expected.document_id.0)?.editor_clipboard(
                 expected.clone(),
                 &action,
@@ -462,12 +544,13 @@ mod desktop {
     /// Validate and install a GUI selection through the actor's native cursor operation.
     pub fn report_cursor(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         revision: u32,
         anchor: u32,
         head: u32,
     ) -> Result<CursorUpdate, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             Ok(w.actor(&document_id)?.set_cursor(CursorUpdate {
                 document_id: DocumentId(document_id),
                 revision: Revision(revision),
@@ -480,11 +563,12 @@ mod desktop {
     /// Return a resized native grid snapshot for the selected document.
     pub fn fetch_grid(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         width: u32,
         height: u32,
     ) -> Result<GridUpdate, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             Ok(w.actor(&document_id)?.grid(width, height)?)
         })
     }
@@ -492,11 +576,12 @@ mod desktop {
     /// Apply explicitly selected native configuration through the revision-aware actor.
     pub fn configure_document(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
         base_revision: u32,
         path: Option<String>,
     ) -> Result<NvimConfig, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             Ok(w.actor(&document_id)?.configure(
                 request(document_id, base_revision),
                 path.map(std::path::PathBuf::from),
@@ -507,9 +592,10 @@ mod desktop {
     /// Return the active configuration source and captured boot errors.
     pub fn fetch_config(
         state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
         document_id: String,
     ) -> Result<NvimConfig, WorkspaceError> {
-        with_workspace(&state, |w| {
+        with_document(&state, document_id.clone(), &location, |w| {
             let actor = w.actor(&document_id)?;
             Ok(NvimConfig {
                 path: Some(actor.config_source()),

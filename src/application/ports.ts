@@ -11,6 +11,7 @@ import type {
   EditorContext,
   DocumentId,
   DocumentSnapshot,
+  DocumentLocation,
   GridUpdate,
   ImageData,
   ModeUpdate,
@@ -139,10 +140,12 @@ export interface DocumentGateway {
  * root injects it directly with no forwarding wrappers.
  */
 export interface DocumentTransport {
+  /** Retain native ownership received through imports or pushed snapshots. */
+  noteSnapshot?(snapshot: DocumentSnapshot): void;
   /** Read native selection, active mappings and the explicit popup opt-in. */
   fetchEditorContext(request: SaveRequest): Promise<EditorContext>;
   /** Copy/cut/paste a native selection guarded against cursor or revision drift. */
-  editorClipboard(cursor: CursorUpdate, action: "copy" | "cut" | "paste"): Promise<DocumentSnapshot>;
+  editorClipboard(cursor: CursorUpdate, action: "copy" | "cut" | "paste", location?: DocumentLocation): Promise<DocumentSnapshot>;
   /** Undo/redo native history after atomically validating the requested revision. */
   editorHistory(request: SaveRequest, redo: boolean): Promise<DocumentSnapshot>;
   /** Apply GUI range edits at the given base revision. */
@@ -152,19 +155,19 @@ export interface DocumentTransport {
   /** Feed keys natively and report yank/copy side effects. */
   inputWithCopy(request: SaveRequest, keys: string): Promise<VimInputResult>;
   /** Fetch the current Neovim mode for a document. */
-  fetchMode(documentId: DocumentId): Promise<ModeUpdate>;
+  fetchMode(documentId: DocumentId, location?: DocumentLocation): Promise<ModeUpdate>;
   /** Check whether an Insert-mode mapping prefix exists. */
-  hasMapping(documentId: DocumentId, mode: string, lhs: string): Promise<boolean>;
+  hasMapping(documentId: DocumentId, mode: string, lhs: string, location?: DocumentLocation): Promise<boolean>;
   /** Fetch the authoritative snapshot for a document ID. */
-  fetchSnapshot(documentId: DocumentId): Promise<DocumentSnapshot>;
+  fetchSnapshot(documentId: DocumentId, location?: DocumentLocation): Promise<DocumentSnapshot>;
   /** Report a GUI selection to the native cursor tracker. */
-  reportCursor(update: CursorUpdate): Promise<CursorUpdate>;
+  reportCursor(update: CursorUpdate, location?: DocumentLocation): Promise<CursorUpdate>;
   /** Fetch the last known native cursor for a document. */
-  fetchCursor(documentId: DocumentId): Promise<CursorUpdate>;
+  fetchCursor(documentId: DocumentId, location?: DocumentLocation): Promise<CursorUpdate>;
   /** Undo through the native undo stack. */
-  undo(documentId: DocumentId): Promise<DocumentSnapshot>;
+  undo(documentId: DocumentId, location?: DocumentLocation): Promise<DocumentSnapshot>;
   /** Redo through the native undo stack. */
-  redo(documentId: DocumentId): Promise<DocumentSnapshot>;
+  redo(documentId: DocumentId, location?: DocumentLocation): Promise<DocumentSnapshot>;
   /** Save the document at the given base revision. */
   saveDocument(request: SaveRequest): Promise<SaveResult>;
   /** Reload the document from disk at the given base revision. */
@@ -182,7 +185,7 @@ export interface DocumentTransport {
   /** Fetch a Neovim grid screen batch. */
   fetchGrid(documentId: DocumentId, width?: number, height?: number): Promise<GridUpdate>;
   /** Fetch the current Neovim config state for a document. */
-  fetchConfig(documentId: DocumentId): Promise<NvimConfig>;
+  fetchConfig(documentId: DocumentId, location?: DocumentLocation): Promise<NvimConfig>;
 }
 /** Explicit native editor-menu actions; no browser history or clipboard state. */
 export type EditorAction = "copy" | "cut" | "paste" | "undo" | "redo";

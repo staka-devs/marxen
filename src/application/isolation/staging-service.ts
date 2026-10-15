@@ -1,3 +1,4 @@
+import { sameLocation } from "../../domain/document-location";
 import type { Translator } from "../../contracts/localization";
 import { japaneseTranslator } from "../../domain/localization";
 import { localizedMessage, localizedParts, renderLocalizedText } from "../../domain/localization";
@@ -225,6 +226,7 @@ export function contextsEqualShallow(left: PromptContext[], right: PromptContext
   return left.every((context, index) => {
     const other = right[index];
     return (
+      sameLocation(context.location, other.location) &&
       context.documentId === other.documentId &&
       context.revision === other.revision &&
       context.text === other.text &&

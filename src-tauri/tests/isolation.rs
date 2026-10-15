@@ -54,6 +54,7 @@ fn ctx(snapshot: &DocumentSnapshot, ranges: &[(u32, u32)]) -> PromptContext {
         .map(|(s, e)| slice(&snapshot.text, *s, *e))
         .collect();
     PromptContext {
+        location: None,
         document_id: snapshot.document_id.clone(),
         revision: snapshot.revision,
         ranges: ranges
@@ -91,6 +92,7 @@ fn acp_request(
     contexts: Vec<PromptContext>,
 ) -> AiPromptRequest {
     AiPromptRequest {
+        conversation_id: None,
         provider: AiProviderConfig {
             kind: AiProviderKind::Acp,
             acp: Some(AcpConfig {
@@ -608,6 +610,7 @@ fn stale_revision_and_disk_conflict_refuse_until_resync() {
         .unwrap();
     // Authorize a forged wider scope: outside registered selection.
     let wide = AiPromptRequest {
+        conversation_id: None,
         provider: AiProviderConfig {
             kind: AiProviderKind::Acp,
             acp: Some(AcpConfig {
@@ -870,6 +873,7 @@ fn authorize_rejects_unknown_copy_and_scope_widening() {
     // Nonzero offset beyond any excerpt length is a source offset: structural
     // validation passes, authority decides against the snapshot.
     let far = PromptContext {
+        location: None,
         document_id: doc.snapshot.document_id.clone(),
         revision: doc.snapshot.revision,
         ranges: vec![Utf16Range {
@@ -1295,6 +1299,7 @@ async fn http_delayed_terminal_settles_once_then_releases() {
         connection_id: None,
     };
     let request = AiPromptRequest {
+        conversation_id: None,
         provider,
         mode: PromptMode::Rewrite,
         prompt: "書き換えてください".into(),

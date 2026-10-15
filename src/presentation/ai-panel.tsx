@@ -1,3 +1,4 @@
+import { sameRoot } from "../domain/document-location";
 import type { LabelKey } from "../contracts/localization";
 import type { Translator } from "../contracts/localization";
 import { japaneseTranslator } from "../domain/localization";
@@ -439,11 +440,17 @@ export default function AiPanel({
       setStreamError(claudeRefusalError(blockedCommand));
       return;
     }
+    const rootScope = promptContexts[0]?.location?.scope;
+    if (!promptContexts.every((context) => sameRoot(context.location?.scope, rootScope)) || (conversation?.rootScope && !sameRoot(conversation.rootScope, rootScope))) {
+      setStreamError({ code: "invalid_config", detail: t("既存の会話は元のフォルダーに属しています。新しいチャットを開始してください。") });
+      return;
+    }
     const token = run.beginRun();
     const capturedMode = promptMode;
     const capturedContexts = promptContexts.map((context) => ({ ...context, ranges: [...context.ranges] }));
     const capturedProvider = provider;
     const targetConversationId = conversationId;
+    if (rootScope) applyToConversation(targetConversationId, (previous) => ({ ...previous, rootScope }));
     const userMessage = createUserMessage(trimmed, capturedMode, capturedContexts);
     const assistant = { ...createStreamingAssistant(), mode: capturedMode };
     setStreamError(null);
@@ -475,10 +482,12 @@ export default function AiPanel({
     }
     applyToConversation(targetConversationId, (prev) => ({
       ...prev,
+      ...(rootScope ? { rootScope } : {}),
       messages: [...prev.messages, userMessage, assistant],
     }));
     setResolving(false);
     const request: AiPromptRequest = {
+      conversationId: targetConversationId,
       provider: capturedProvider,
       mode: capturedMode,
       prompt: trimmed,

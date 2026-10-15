@@ -177,6 +177,7 @@ export default function InlineChat({
       return;
     }
     const request: AiPromptRequest = {
+      conversationId: `inline_${resolved.copyId}`,
       provider: capturedProvider,
       mode: "rewrite",
       prompt: trimmed,

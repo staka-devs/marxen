@@ -1,3 +1,4 @@
+import type { RootScope } from "../../contracts/contracts";
 import type { Translator } from "../../contracts/localization";
 import { japaneseTranslator } from "../localization";
 // Agent / inline conversation state. UI-only: history sent to Rust is the
@@ -66,6 +67,7 @@ export interface ChatMessage {
 }
 
 export interface ChatConversation {
+  rootScope?: RootScope;
   id: string;
   messages: ChatMessage[];
   providerKey?: string;

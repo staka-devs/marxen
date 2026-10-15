@@ -3,6 +3,7 @@ use marxen_lib::{contracts::*, domain::validation::*};
 /// Build the fixed Unicode snapshot used to compare JSON wire data and range validation.
 fn snapshot() -> DocumentSnapshot {
     DocumentSnapshot {
+        location: None,
         document_id: DocumentId("doc_01".into()),
         revision: Revision(7),
         text: "a😀日本語\r\ne\u{301}".into(),
@@ -158,6 +159,7 @@ fn validates_save_cursor_and_mode_against_exact_snapshot() {
     assert!(validate_save(
         &doc,
         &SaveRequest {
+            location: None,
             document_id: doc.document_id.clone(),
             base_revision: doc.revision
         }

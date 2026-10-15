@@ -199,7 +199,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     const collapsed = sel.anchor === sel.head;
     const start = collapsed ? 0 : Math.min(sel.anchor, sel.head, active.text.length);
     const end = collapsed ? active.text.length : Math.min(Math.max(sel.anchor, sel.head), active.text.length);
-    return [{ documentId: active.documentId, revision: active.revision, ranges: [{ start, end }], text: active.text.slice(start, end) }];
+    return [{ ...(active.location ? { location: active.location } : {}), documentId: active.documentId, revision: active.revision, ranges: [{ start, end }], text: active.text.slice(start, end) }];
   }, [desktop, active, selections, aiDismissed]);
 
   const stagingRef = useRef<string | null>(null);
@@ -360,6 +360,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     const sel = selections[doc.documentId] ?? { anchor: 0, head: 0 };
     const target = resolveInlineTarget(doc.text, sel.anchor, sel.head);
     setInlineSnapshot({
+      ...(doc.location ? { location: doc.location } : {}),
       documentId: doc.documentId,
       revision: doc.revision,
       ranges: [{ start: target.start, end: target.end }],

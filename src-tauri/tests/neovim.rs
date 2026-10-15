@@ -345,6 +345,7 @@ fn w_delegates_to_rust_save_path() {
 
     let result = actor
         .save(SaveRequest {
+            location: None,
             document_id: edited.document_id.clone(),
             base_revision: edited.revision,
         })

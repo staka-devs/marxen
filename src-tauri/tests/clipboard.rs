@@ -9,6 +9,7 @@ fn key(actor: &DocumentActor, keys: &str) -> VimInputResult {
     let result = actor
         .input_with_copy(
             SaveRequest {
+                location: None,
                 document_id: snapshot.document_id,
                 base_revision: snapshot.revision,
             },

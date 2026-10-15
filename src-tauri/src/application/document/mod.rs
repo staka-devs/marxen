@@ -146,6 +146,7 @@ impl DocumentActor {
             .buffers
             .open(config, &initial_text, path.as_deref(), true)?;
         let snapshot = DocumentSnapshot {
+            location: None,
             document_id,
             revision: Revision(0),
             text: nvim.get_text()?,
@@ -209,6 +210,7 @@ impl DocumentActor {
             validate_save(
                 &state.snapshot,
                 &SaveRequest {
+                    location: None,
                     document_id: request.document_id.clone(),
                     base_revision: request.base_revision,
                 },
@@ -255,6 +257,7 @@ impl DocumentActor {
         let revision = next_revision(state.snapshot.revision)?;
         let dirty = state.baseline.as_ref() != Some(&storage::fingerprint(text.as_bytes()));
         state.snapshot = DocumentSnapshot {
+            location: state.snapshot.location.clone(),
             document_id: state.snapshot.document_id.clone(),
             revision,
             text,
@@ -535,7 +538,12 @@ impl DocumentActor {
     }
 
     /// Workspace attaches a contained path and durable checkpoint location.
-    pub fn attach_storage(&self, root: PathBuf, recovery: PathBuf) -> Result<(), ActorError> {
+    pub fn attach_storage(
+        &self,
+        root: PathBuf,
+        recovery: PathBuf,
+        scope: crate::contracts::RootScope,
+    ) -> Result<(), ActorError> {
         let mut state = self
             .state
             .lock()
@@ -543,6 +551,15 @@ impl DocumentActor {
         if let Some(path) = &state.path {
             state.services.storage.check_target(Some(&root), path)?;
         }
+        state.snapshot.location = Some(crate::contracts::DocumentLocation {
+            scope,
+            position: 0,
+            path: state
+                .path
+                .as_ref()
+                .map(|path| storage::relative(&root, path))
+                .transpose()?,
+        });
         state.root = Some(root);
         state.recovery = Some(recovery);
         Self::checkpoint_locked(&state)
@@ -582,7 +599,9 @@ impl DocumentActor {
             .state
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        let location = state.snapshot.location.clone();
         state.snapshot = record.snapshot.clone();
+        state.snapshot.location = location;
         state.snapshot.dirty = true;
         state.baseline = record.baseline.clone();
         Self::checkpoint_locked(&state)
@@ -611,7 +630,7 @@ impl DocumentActor {
         validate_save(&state.snapshot, &request)?;
         if state.snapshot.dirty {
             return Err(WorkspaceError::UnsavedChanges {
-                snapshot: state.snapshot.clone(),
+                snapshot: Box::new(state.snapshot.clone()),
             }
             .into());
         }
@@ -648,6 +667,17 @@ impl DocumentActor {
         if source == target {
             return Ok(());
         }
+        let next_position = state
+            .snapshot
+            .location
+            .as_ref()
+            .map(|location| {
+                location
+                    .position
+                    .checked_add(1)
+                    .ok_or(ContractError::RevisionExhausted)
+            })
+            .transpose()?;
         state
             .services
             .storage
@@ -674,6 +704,17 @@ impl DocumentActor {
             return Err(error.into());
         }
         state.path = Some(target);
+        if let Some(root) = &state.root {
+            let path = state
+                .path
+                .as_ref()
+                .map(|path| storage::relative(root, path))
+                .transpose()?;
+            if let Some(location) = state.snapshot.location.as_mut() {
+                location.path = path;
+                location.position = next_position.ok_or(WorkspaceError::WrongOwner)?;
+            }
+        }
         Self::checkpoint_locked(&state)?;
         Ok(())
     }
@@ -1065,7 +1106,12 @@ impl DocumentActor {
             state.services.storage.checkpoint(
                 recovery,
                 &RecoveryRecord {
-                    version: 1,
+                    version: 2,
+                    root_id: state
+                        .snapshot
+                        .location
+                        .as_ref()
+                        .map(|location| location.scope.root_id.clone()),
                     root: root.clone(),
                     path: state
                         .path
@@ -1100,6 +1146,7 @@ impl DocumentActor {
         state.ready_yank = None;
         let dirty = state.baseline.as_ref() != Some(&storage::fingerprint(text.as_bytes()));
         state.snapshot = DocumentSnapshot {
+            location: state.snapshot.location.clone(),
             document_id: state.snapshot.document_id.clone(),
             revision,
             text,

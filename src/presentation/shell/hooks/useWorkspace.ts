@@ -10,7 +10,7 @@ import { useI18n } from "../../i18n/I18nProvider";
 // session, so this hook never imports infrastructure directly.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { RecoveryEntry, RuntimeStatus, SearchOptions, SearchLimit, WorkspaceEntry, WorkspaceEvent } from "../../../contracts/contracts";
+import type { SaveRequest, RecoveryEntry, RuntimeStatus, SearchOptions, SearchLimit, WorkspaceEntry, WorkspaceEvent } from "../../../contracts/contracts";
 import type { ExplorerTarget } from "../../../contracts/workbench";
 import type { SearchHitItem } from "../../../domain/search-hit";
 import { docFromOpen, type OpenDoc } from "../../../application/document/document-helpers";
@@ -211,7 +211,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   const [entryKind, setEntryKind] = useState<"file" | "folder">("file");
   const creationTarget = useRef<ExplorerTarget | null>(null);
   const [createdTarget, setCreatedTarget] = useState<ExplorerTarget | null>(null);
-  const renameRequest = useRef<{ documentId: string; baseRevision: number; generation: number } | null>(null);
+  const renameRequest = useRef<(SaveRequest & { generation: number }) | null>(null);
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
   const [recovery, setRecovery] = useState<RecoveryEntry[]>([]);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
@@ -300,7 +300,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         setDocs((previous) => ({ ...previous, [doc!.documentId]: doc! }));
         setTabs((previous) => previous.includes(doc!.documentId) ? previous : [...previous, doc!.documentId]);
       }
-      renameRequest.current = { documentId: doc.documentId, baseRevision: doc.revision, generation: epoch };
+      renameRequest.current = { ...(doc.location ? { location: doc.location } : {}), documentId: doc.documentId, baseRevision: doc.revision, generation: epoch };
       setRenamePath(doc.path ?? target.path); setRenameDoc(doc.documentId);
     } catch (cause) { if (epoch === generation.current) setNotice(localizedFailure(cause, workspaceErrorText)); }
     finally { busyRef.current = false; setBusy(false); }
@@ -427,7 +427,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     }
     busyRef.current = true; setBusy(true);
     try {
-      const open = await registry.rename({ documentId: expected.documentId, baseRevision: expected.baseRevision }, path);
+      const open = await registry.rename({ ...(expected.location ? { location: expected.location } : {}), documentId: expected.documentId, baseRevision: expected.baseRevision }, path);
       registry.noteSnapshot(open.snapshot);
       const doc = docFromOpen(open);
       setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
@@ -449,6 +449,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
           await workspaceGateway!.discardRecovery(documentId);
         } else {
           const open = await workspaceGateway!.restoreRecovery(documentId);
+          registry.noteSnapshot(open.snapshot);
           const doc = docFromOpen(open);
           setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
           setTabs((prev) => (prev.includes(doc.documentId) ? prev : [...prev, doc.documentId]));
@@ -599,7 +600,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     if (!current) return;
     setApplyingConfig(true);
     try {
-      const result = await registry.configure({ documentId: id, baseRevision: current.revision }, trimmed === "" ? null : trimmed);
+      const result = await registry.configure({ ...(current.location ? { location: current.location } : {}), documentId: id, baseRevision: current.revision }, trimmed === "" ? null : trimmed);
       setConfigError(result.errors.length > 0 ? result.errors.join("\n") : null);
       setCurrentConfig(result.path);
       setCopyKeys(result.copyKeys ?? { markdown: "<F6>", text: "<F7>", rich: "<F8>", html: "<F9>" });

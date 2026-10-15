@@ -179,7 +179,7 @@ export function useWorkspaceSearch({ desktop, root, gateway, session, notify }: 
     const state = lifecycle.current;
     const epoch = state.epoch;
     try {
-      const plan = await gateway.planSearchReplacement({ root, path: hit.path, query, options,
+      const plan = await gateway.planSearchReplacement({ ...(captured.location ? { location: captured.location } : {}), ...(captured.documentId ? { documentId: captured.documentId } : {}), ...(captured.scope ? { scope: captured.scope } : {}), root, path: hit.path, query, options,
         replacement: "", contentToken: captured.contentToken, revision: captured.revision, range: captured.range });
       if (!state.mounted || state.epoch !== epoch || state.locked || state.suspended) return;
       const doc = docFromOpen(plan.document);

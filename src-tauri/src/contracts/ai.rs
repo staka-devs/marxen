@@ -162,6 +162,9 @@ pub enum PromptMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PromptContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub location: Option<crate::contracts::DocumentLocation>,
     pub document_id: DocumentId,
     pub revision: Revision,
     pub ranges: Vec<Utf16Range>,
@@ -213,12 +216,16 @@ pub struct AiPromptRequest {
     pub prompt: String,
     pub contexts: Vec<PromptContext>,
     pub staging: StagingTarget,
-    /// Resume an existing ACP session. Required to be absent for HTTP backends.
+    /// Unproven resume handles are rejected before provider launch.
     pub session_id: Option<AcpSessionId>,
     /// Explicit multi-turn history (oldest first). Only completed turns;
     /// bounded and validated by Rust before any side effect.
     #[serde(default)]
     pub history: Vec<ChatHistoryMessage>,
+    // Stable conversation handle keeps subsequent turns bound to the original root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub conversation_id: Option<String>,
 }
 
 /// Which snapshot a proposal was derived from. The editor owner (#8) applies
@@ -767,7 +774,7 @@ pub fn typescript() -> String {
     let mut output = format!(
         "// Generated from src-tauri/src/contracts/ai.rs. Run npm run ai-contracts:generate.\n// Do not edit by hand. AI IPC schema version {AI_CONTRACT_VERSION}.\n"
     );
-    output.push_str("import type { DocumentId, Revision, Utf16Range } from \"./contracts\";\n");
+    output.push_str("import type { DocumentId, Revision, Utf16Range, DocumentLocation } from \"./contracts\";\n");
     for declaration in declarations {
         output.push_str("export ");
         output.push_str(&declaration);

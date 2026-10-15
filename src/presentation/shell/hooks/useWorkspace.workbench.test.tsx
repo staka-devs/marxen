@@ -13,7 +13,7 @@ function fixture() {
   const gateway = {
     ...workspaceApi,
     /** Simulate one canonical native root. */
-    openWorkspace: vi.fn(async (path: string) => ({ root: path })),
+    openWorkspace: vi.fn(async (path: string) => ({ root: path, scope: { rootId: "fixture-root", generation: "1" } })),
     /** Supply direct tree children without opening any document. */
     listWorkspace: vi.fn(async (path = "") => path === "" ? entries : []),
     /** Seed no documents on root replacement. */
@@ -68,6 +68,17 @@ it("captures a file's parent for creation and registers the returned snapshot", 
   expect(f.gateway.createMarkdown).toHaveBeenCalledExactlyOnceWith("notes/new.md", "");
   expect(f.result.current.session.docs.owned).toMatchObject({ path: "notes/new.md", revision: 17, dirty: true });
   expect(f.result.current.workspace.createdTarget).toMatchObject({ rootId: "C:/a", path: "notes/new.md", kind: "markdown" });
+});
+
+it("registers a restored native owner before the first GUI edit of its recovered ID", async () => {
+  const f = fixture();
+  await act(async () => f.result.current.workspace.openWorkspaceFolder("C:/a"));
+  const restored = { ...f.snapshot, documentId: "recovered-native-id", location: { scope: { rootId: "fixture-root", generation: "1" }, path: "recovered.md", position: 0 } };
+  f.gateway.restoreRecovery = vi.fn(async () => ({ path: "recovered.md", snapshot: restored }));
+  f.gateway.applyEdits = vi.fn(async () => ({ ...restored, revision: 18, text: `!${restored.text}` }));
+  await act(async () => f.result.current.workspace.restoreEntry("legacy-id", false));
+  await f.registry.applyGuiEdits({ documentId: restored.documentId, baseRevision: restored.revision, location: restored.location }, restored.text, [{ range: { start: 0, end: 0 }, text: "!" }]);
+  expect(f.gateway.applyEdits).toHaveBeenCalledExactlyOnceWith({ documentId: restored.documentId, baseRevision: restored.revision, location: restored.location }, [{ range: { start: 0, end: 0 }, text: "!" }]);
 });
 
 it("creates one captured child folder without document-open commands", async () => {

@@ -14,11 +14,11 @@ pub fn disconnected_status() -> contracts::RuntimeStatus {
 pub fn get_runtime_status(
     state: tauri::State<super::document::ActorState>,
 ) -> contracts::RuntimeStatus {
-    let has_document = state.workspace.lock().ok().is_some_and(|guard| {
-        guard
-            .as_ref()
-            .is_some_and(|workspace| workspace.has_live_documents())
-    });
+    let has_document = state
+        .workspace
+        .lock()
+        .ok()
+        .is_some_and(|guard| guard.has_live_documents());
     // A retained document is not evidence that its process is still running.
     if has_document {
         contracts::RuntimeStatus {

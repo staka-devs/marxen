@@ -1,5 +1,7 @@
 /** Complete Japanese catalog; its literal templates define the interpolation contract. */
 export const japaneseMessages = {
+  "フォルダーまたは文書の位置が変わりました。操作し直してください。": "フォルダーまたは文書の位置が変わりました。操作し直してください。",
+  "既存の会話は元のフォルダーに属しています。新しいチャットを開始してください。": "既存の会話は元のフォルダーに属しています。新しいチャットを開始してください。",
   "検索オプション": "検索オプション",
   "大文字と小文字を区別": "大文字と小文字を区別",
   "単語単位で検索": "単語単位で検索",
@@ -805,6 +807,8 @@ export const japaneseMessages = {
 
 /** Complete English catalog checked against every Japanese key. */
 export const englishMessages = {
+  "フォルダーまたは文書の位置が変わりました。操作し直してください。": "The folder or document location changed. Try the action again.",
+  "既存の会話は元のフォルダーに属しています。新しいチャットを開始してください。": "This conversation belongs to its original folder. Start a new chat.",
   "検索オプション": "Search options",
   "大文字と小文字を区別": "Match case",
   "単語単位で検索": "Match whole word",
