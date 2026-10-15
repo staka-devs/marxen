@@ -10,6 +10,7 @@ import type { WorkspaceEventSource } from "../../application/ports";
 import type {
   CloseAction,
   CursorUpdate,
+  EditorContext,
   DocumentId,
   DocumentSnapshot,
   GridUpdate,
@@ -32,6 +33,12 @@ import type {
 
 /** Native commands never read/write files in JS; ranges count UTF-16 units. */
 export const workspaceApi = {
+  /** Read native editor-menu data at the supplied revision. */
+  fetchEditorContext: (request: SaveRequest) => invoke<EditorContext>("fetch_editor_context", { ...request }),
+  /** Apply clipboard actions using actor-owned cursor and text. */
+  editorClipboard: (expected: CursorUpdate, action: "copy" | "cut" | "paste") => invoke<DocumentSnapshot>("editor_clipboard", { expected, action }),
+  /** Undo/redo authoritative history guarded by revision. */
+  editorHistory: (request: SaveRequest, redo: boolean) => invoke<DocumentSnapshot>("editor_history", { ...request, redo }),
   /** Open a workspace root and return its info. */
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
   /** List direct children of a workspace-relative directory. */
@@ -52,12 +59,14 @@ export const workspaceApi = {
     invoke<PasteResult>("import_external_image", { ...request, path, range }),
   /** Create a new Markdown document with optional initial text. */
   createMarkdown: (path: string, text = "") => invoke<OpenDocument>("create_markdown", { path, text }),
+  /** Create a contained directory using the existing Rust workspace owner. */
+  createFolder: (path: string) => invoke<WorkspaceEntry>("create_folder", { path }),
   /** Rename a Markdown document, keeping its document ID. */
   renameMarkdown: (request: SaveRequest, path: string) => invoke<OpenDocument>("rename_markdown", { ...request, path }),
   /** Fetch the authoritative snapshot for a document ID. */
   fetchSnapshot: (documentId: DocumentId) => invoke<DocumentSnapshot>("fetch_snapshot", { documentId }),
   /** Apply GUI range edits at the given base revision. */
-  applyEdits: (request: SaveRequest, edits: TextEdit[]) => invoke<DocumentSnapshot>("apply_gui_edits", { ...request, edits }),
+  applyEdits: (request: SaveRequest, edits: TextEdit[], expectedCursor?: CursorUpdate) => invoke<DocumentSnapshot>("apply_gui_edits", { ...request, edits, ...(expectedCursor ? { expectedCursor } : {}) }),
   /** Save the document at the given base revision. */
   saveDocument: (request: SaveRequest) => invoke<SaveResult>("save_document", { ...request }),
   /** Reload the document from disk at the given base revision. */

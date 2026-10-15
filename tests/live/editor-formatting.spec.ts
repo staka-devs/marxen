@@ -1,0 +1,142 @@
+import { expect, test, type Page } from "@playwright/test";
+
+/** Open the real shell against an explicitly simulated browser transport. */
+async function openFixture(page: Page, options: Parameters<Window["__editorFixture"]["load"]>[0] = {}) {
+  await page.goto("/tests/live/harness/editor.html");
+  await page.waitForFunction(() => Boolean(window.__editorFixture));
+  await page.evaluate((next) => window.__editorFixture.load(next), options);
+  await page.getByRole("menuitem", { name: "ファイル", exact: true }).click();
+  await page.getByRole("menuitem", { name: "フォルダーを開く", exact: true }).click();
+  await expect(page.getByTestId("editor-primary")).toBeVisible();
+  await expect(page.locator(".cm-content")).toBeVisible();
+}
+
+test("persistent toolbar, saved Enter preference and narrow-width controls", async ({ page }) => {
+  await openFixture(page, { text: "日本😀の文章" });
+  await expect(page.getByRole("button", { name: "太字にする" })).toBeVisible();
+  const toggle = page.getByRole("button", { name: "EnterでMarkdown改行" });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await page.evaluate(() => { const end = window.__editorFixture.getText().length; window.__editorFixture.select(end, end); });
+  await page.keyboard.press("Enter");
+  await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toBe("日本😀の文章  \n");
+  const calls = await page.evaluate(() => window.__editorFixture.getCalls());
+  expect(calls).toContain("cursor:9@1");
+  expect(calls.indexOf("cursor:9@1")).toBeLessThan(calls.indexOf("input:<CR>@1"));
+  await page.screenshot({ path: ".local/issue58-toolbar-normal.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 780 });
+  await page.getByRole("button", { name: "エクスプローラー", exact: true }).click();
+  await expect(page.getByTestId("gui-toolbar")).toBeVisible();
+  await expect(page.getByRole("button", { name: "太字にする" })).toBeVisible();
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: ".local/issue58-toolbar-narrow.png", fullPage: true });
+  await page.reload();
+  await page.getByRole("menuitem", { name: "ファイル", exact: true }).click();
+  await page.getByRole("menuitem", { name: "フォルダーを開く", exact: true }).click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.evaluate(() => window.__editorFixture.load({ text: "", mode: "insert" }));
+  await page.getByRole("menuitem", { name: "ファイル", exact: true }).click();
+  await page.getByRole("menuitem", { name: "フォルダーを開く", exact: true }).click();
+  await page.locator(".cm-content").focus();
+  await page.getByRole("button", { name: "太字にする" }).click();
+  await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toBe("****");
+  await expect.poll(() => page.evaluate(() => window.__editorFixture.getCalls())).toContain("cursor:2@1");
+  await page.keyboard.type("a");
+  await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toBe("**a**");
+});
+
+test("selected-cell controls preserve escaped pipes and code while changing structure and alignment", async ({ page }) => {
+  const text = "| A | B |\n| --- | --- |\n| A\\|B | `x|y` |\n| a | b |";
+  await openFixture(page, { text });
+  await page.evaluate((at) => window.__editorFixture.select(at, at), text.indexOf("`x"));
+  await expect(page.getByRole("toolbar", { name: "表のセル操作" })).toBeVisible();
+  await page.evaluate((at) => window.__editorFixture.select(at, at), text.indexOf(" A |") + 1);
+  await page.keyboard.press("Tab");
+  expect(await page.evaluate(() => window.__editorFixture.getCalls())).toContain(`cursor:${text.indexOf("B")}@0`);
+  await page.evaluate((at) => window.__editorFixture.select(at, at), text.indexOf("`x"));
+  await page.getByRole("button", { name: "左に列を追加" }).click();
+  await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toContain("| A\\|B |  | `x|y` |");
+  await page.getByRole("combobox", { name: "列の配置" }).selectOption("center");
+  await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toContain(":---:");
+  await page.getByRole("button", { name: "上に行を追加" }).click();
+  await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toContain("|  |  |  |");
+  await page.getByRole("button", { name: "行を削除" }).click();
+  await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).not.toContain("A\\|B");
+  await page.getByRole("button", { name: "列を削除" }).click();
+  await page.screenshot({ path: ".local/issue58-table-controls.png", fullPage: true });
+});
+
+test("right click and keyboard menus use native ports, restore focus and keep popup opt-in explicit", async ({ page }) => {
+  await openFixture(page, { text: "日本😀 abc", mode: "normal" });
+  await page.evaluate(() => window.__editorFixture.select(0, 4, "normal"));
+  const content = page.locator(".cm-content");
+  await expect(page.getByRole("toolbar", { name: "選択時の書式ポップアップ" })).toHaveCount(0);
+  await content.click({ button: "right" });
+  const menu = page.getByRole("menu", { name: "エディターの操作" });
+  await expect(menu).toBeVisible();
+  await menu.getByText(/現在のVimマッピング/).click();
+  await expect(menu.getByText("Q", { exact: true })).toBeVisible();
+  await expect(menu.getByText(/actual fixture mapping/)).toBeVisible();
+  await menu.getByRole("menuitem", { name: "選択範囲を切り取る" }).click();
+  await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toBe(" abc");
+  await expect(content).toBeFocused();
+  await page.keyboard.press("Shift+F10");
+  await expect(menu.getByRole("menuitem", { name: "元に戻す" })).toBeFocused();
+  await menu.getByRole("menuitem", { name: "元に戻す" }).click();
+  await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toBe("日本😀 abc");
+  await expect(content).toBeFocused();
+  await page.keyboard.press("ContextMenu");
+  await expect(menu).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(content).toBeFocused();
+  await page.evaluate(() => window.__editorFixture.load({ text: "日本😀 abc", mode: "normal", popup: true }));
+  await page.getByRole("menuitem", { name: "ファイル", exact: true }).click();
+  await page.getByRole("menuitem", { name: "フォルダーを開く", exact: true }).click();
+  await page.evaluate(() => window.__editorFixture.select(0, 4, "normal"));
+  await expect(page.getByRole("toolbar", { name: "選択時の書式ポップアップ" })).toBeVisible();
+  await expect(content).toBeFocused();
+});
+
+test("plain-text and Normal Enter plus browser IME/read-only menu guards remain intact", async ({ page, context }) => {
+  await openFixture(page, { text: "plain", mode: "normal" });
+  await page.getByRole("button", { name: "EnterでMarkdown改行" }).click();
+  await page.evaluate(() => window.__editorFixture.select(5, 5));
+  await page.keyboard.press("Enter");
+  expect(await page.evaluate(() => window.__editorFixture.getText())).toBe("plain");
+  await page.evaluate(() => window.__editorFixture.load({ text: "plain", path: "note.txt", mode: "insert" }));
+  await page.getByRole("menuitem", { name: "ファイル", exact: true }).click();
+  await page.getByRole("menuitem", { name: "フォルダーを開く", exact: true }).click();
+  await expect(page.getByTestId("editor-primary")).toBeVisible();
+  await page.evaluate(() => window.__editorFixture.select(5, 5));
+  await page.keyboard.press("Enter");
+  await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toBe("plain\n");
+  await page.evaluate(() => window.__editorFixture.load({ text: "前😀後", mode: "insert" }));
+  await page.getByRole("menuitem", { name: "ファイル", exact: true }).click();
+  await page.getByRole("menuitem", { name: "フォルダーを開く", exact: true }).click();
+  await page.evaluate(() => window.__editorFixture.select(3, 3));
+  const input = await context.newCDPSession(page);
+  await input.send("Input.imeSetComposition", { text: "に", selectionStart: 1, selectionEnd: 1 });
+  await page.locator(".cm-content").evaluate((element) => element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, isComposing: true, bubbles: true, cancelable: true })));
+  expect(await page.evaluate(() => window.__editorFixture.getText())).toBe("前😀後");
+  await input.send("Input.insertText", { text: "日本" });
+  await expect.poll(() => page.evaluate(() => window.__editorFixture.getText())).toBe("前😀日本後");
+  await input.detach();
+  await page.evaluate(() => window.__editorFixture.load({ text: "readonly", readonly: true, mode: "normal" }));
+  await page.getByRole("menuitem", { name: "ファイル", exact: true }).click();
+  await page.getByRole("menuitem", { name: "フォルダーを開く", exact: true }).click();
+  await page.locator(".cm-content").click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "クリップボードから貼り付け" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "設定表示切替" }).click();
+  const field = page.getByRole("searchbox", { name: "設定を検索" });
+  await expect(field).toBeVisible();
+  const prevented = await field.evaluate((element) => {
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    element.dispatchEvent(event); return event.defaultPrevented;
+  });
+  expect(prevented).toBe(false);
+});

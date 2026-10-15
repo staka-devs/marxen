@@ -2,7 +2,7 @@
 use super::credentials::{AgentKeyring, ApiConnectionKeyring};
 use crate::contracts::ai::*;
 use crate::domain::ai::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -108,9 +108,42 @@ pub struct RunEntry {
     pub child: Mutex<Option<Box<dyn ManagedProcess>>>,
 }
 
+/// One agent permission request awaiting the chat user's explicit choice.
+///
+/// Registered when `session/request_permission` arrives during a prompt turn
+/// and removed once answered, cancelled, or timed out. Replies reference this
+/// record by exact run/request IDs, so stale or foreign IDs can never approve
+/// another run's tool call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPermission {
+    /// Session the agent claimed when requesting; bound to the owning run.
+    pub session_id: String,
+    /// User-choosable options in wire order.
+    pub options: Vec<PermissionOption>,
+}
+
+/// Key one pending permission reply slot by exact run and request IDs.
+fn permission_key(run_id: &AiRunId, request_id: &str) -> String {
+    format!("{}:{request_id}", run_id.0)
+}
+
 pub struct RunRegistry {
     next: AtomicU64,
     entries: Mutex<HashMap<String, RunEntry>>,
+    pending_permissions: Mutex<HashMap<String, PendingPermission>>,
+    permission_replies: Mutex<HashMap<String, String>>,
+    /// Accepted permission choices retained until cleanup.
+    ///
+    /// The driver consumes a reply via `take_permission_reply` (which removes
+    /// only the deliverable) and then drops the slot; a second reply arriving
+    /// in that gap must still be rejected as a duplicate. Cancelled runs keep
+    /// their registration until settlement, so cancellation is checked via
+    /// the run's cancel flag rather than registration alone.
+    /// Lock order is always entries, then pending, then replies, then
+    /// consumed: every method below acquires a subset in that order and holds
+    /// it for the whole check-and-record, so concurrent replies, takes,
+    /// drops, cancels, and removals never deadlock or double-accept.
+    consumed_permissions: Mutex<HashSet<String>>,
 }
 
 impl RunRegistry {
@@ -119,6 +152,9 @@ impl RunRegistry {
         Self {
             next: AtomicU64::new(1),
             entries: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            permission_replies: Mutex::new(HashMap::new()),
+            consumed_permissions: Mutex::new(HashSet::new()),
         }
     }
 
@@ -212,6 +248,171 @@ impl RunRegistry {
             .lock()
             .expect("run registry lock")
             .remove(&id.0);
+        self.remove_permissions_for_run(id);
+    }
+
+    /// Register one agent permission request awaiting an explicit user choice.
+    ///
+    /// Replaces any prior slot for the same run/request pair so retried agent
+    /// requests never deadlock on a stale record. Unknown runs are rejected
+    /// without recording, keeping foreign IDs out of every other run.
+    pub fn register_permission(
+        &self,
+        run_id: &AiRunId,
+        request_id: &str,
+        session_id: &str,
+        options: Vec<PermissionOption>,
+    ) -> Result<(), AiError> {
+        if request_id.is_empty() || request_id.len() > 128 {
+            return Err(AiError::InvalidConfig {
+                detail: "権限要求の ID が正しくありません".into(),
+            });
+        }
+        if session_id.is_empty() || session_id.len() > 256 {
+            return Err(AiError::InvalidConfig {
+                detail: "権限要求のセッションが正しくありません".into(),
+            });
+        }
+        if options.is_empty() || options.len() > 8 {
+            return Err(AiError::InvalidConfig {
+                detail: "権限の選択肢が正しくありません".into(),
+            });
+        }
+        // One scope holds entries, then pending, then replies, then consumed,
+        // matching every other permission method so concurrent calls never
+        // deadlock. Re-registering a key resets its answer state so a retried
+        // agent request never deadlocks on a stale record.
+        let entries = self.entries.lock().expect("run registry lock");
+        if !entries.contains_key(&run_id.0) {
+            return Err(AiError::UnknownSession);
+        }
+        let key = permission_key(run_id, request_id);
+        let mut pending = self.pending_permissions.lock().expect("permission lock");
+        let mut replies = self.permission_replies.lock().expect("permission lock");
+        let mut consumed = self.consumed_permissions.lock().expect("permission lock");
+        pending.insert(
+            key.clone(),
+            PendingPermission {
+                session_id: session_id.to_owned(),
+                options,
+            },
+        );
+        replies.remove(&key);
+        consumed.remove(&key);
+        Ok(())
+    }
+
+    /// Record the chat user's explicit choice for a pending permission request.
+    ///
+    /// Acceptance is atomic per exact pending request: the run must still be
+    /// registered and not cancelled, the request must still be pending for
+    /// that run, the option must be one the agent offered, and no choice may
+    /// have been accepted yet. The whole check-and-record runs under one lock
+    /// scope (entries, then pending, then replies, then consumed), so two
+    /// concurrent choices cannot both pass validation and a reply in the
+    /// take-before-drop gap is still rejected via the retained consumed
+    /// state. The first valid choice wins; duplicates, late replies after
+    /// cleanup, and cancelled-run replies fail without touching the agent.
+    pub fn reply_permission(
+        &self,
+        run_id: &AiRunId,
+        request_id: &str,
+        option_id: &str,
+    ) -> Result<(), AiError> {
+        validate_run_id(run_id)?;
+        if request_id.is_empty() || request_id.len() > 128 {
+            return Err(AiError::InvalidConfig {
+                detail: "権限要求の ID が正しくありません".into(),
+            });
+        }
+        if option_id.is_empty() || option_id.len() > 128 {
+            return Err(AiError::InvalidConfig {
+                detail: "権限の選択肢が正しくありません".into(),
+            });
+        }
+        // One lock scope for the whole check-and-record so two concurrent
+        // choices cannot both pass validation before either is stored, and so
+        // a cancel racing the reply is observed exactly once. Cancelled runs
+        // stay registered until settlement, so the cancel flag (not mere
+        // registration) decides replyability. Lock order stays
+        // entries-then-pending-then-replies-then-consumed, matching every
+        // other permission method, so concurrent calls never deadlock.
+        let entries = self.entries.lock().expect("run registry lock");
+        let Some(entry) = entries.get(&run_id.0) else {
+            return Err(AiError::UnknownSession);
+        };
+        if entry.cancel.load(Ordering::SeqCst) {
+            return Err(AiError::RequestCancelled);
+        }
+        let pending = self.pending_permissions.lock().expect("permission lock");
+        let mut replies = self.permission_replies.lock().expect("permission lock");
+        let mut consumed = self.consumed_permissions.lock().expect("permission lock");
+        let key = permission_key(run_id, request_id);
+        let Some(record) = pending.get(&key) else {
+            return Err(AiError::UnknownSession);
+        };
+        if !record
+            .options
+            .iter()
+            .any(|option| option.option_id == option_id)
+        {
+            return Err(AiError::InvalidConfig {
+                detail: "存在しない権限の選択肢です".into(),
+            });
+        }
+        if consumed.contains(&key) || replies.contains_key(&key) {
+            return Err(AiError::InvalidConfig {
+                detail: "権限の回答は既に受け付けています".into(),
+            });
+        }
+        replies.insert(key.clone(), option_id.to_owned());
+        consumed.insert(key);
+        Ok(())
+    }
+
+    /// Take a recorded permission choice exactly once for driver delivery.
+    ///
+    /// Removes only the deliverable reply: the pending slot and the retained
+    /// consumed state stay until `drop_permission`, so a second reply in the
+    /// gap is still rejected as a duplicate. Returns `None` while the chat
+    /// user has not answered. Consuming the reply guarantees the agent
+    /// receives each choice a single time.
+    pub fn take_permission_reply(&self, run_id: &AiRunId, request_id: &str) -> Option<String> {
+        self.permission_replies
+            .lock()
+            .expect("permission lock")
+            .remove(&permission_key(run_id, request_id))
+    }
+
+    /// Drop one pending permission slot without answering the agent.
+    ///
+    /// Clears the pending slot, any undelivered reply, and the retained
+    /// consumed state together, so a later request reusing the same ID starts
+    /// unanswered. Used after the driver answers via timeout or cancellation
+    /// so late replies cannot leak into a later request reusing the same ID.
+    /// Lock order stays pending-then-replies-then-consumed.
+    pub fn drop_permission(&self, run_id: &AiRunId, request_id: &str) {
+        let key = permission_key(run_id, request_id);
+        let mut pending = self.pending_permissions.lock().expect("permission lock");
+        let mut replies = self.permission_replies.lock().expect("permission lock");
+        let mut consumed = self.consumed_permissions.lock().expect("permission lock");
+        pending.remove(&key);
+        replies.remove(&key);
+        consumed.remove(&key);
+    }
+
+    /// Discard every permission slot owned by a settled run.
+    ///
+    /// Clears pending slots, undelivered replies, and retained consumed state
+    /// together. Lock order stays pending-then-replies-then-consumed.
+    pub fn remove_permissions_for_run(&self, run_id: &AiRunId) {
+        let prefix = format!("{}:", run_id.0);
+        let mut pending = self.pending_permissions.lock().expect("permission lock");
+        let mut replies = self.permission_replies.lock().expect("permission lock");
+        let mut consumed = self.consumed_permissions.lock().expect("permission lock");
+        pending.retain(|key, _| !key.starts_with(&prefix));
+        replies.retain(|key, _| !key.starts_with(&prefix));
+        consumed.retain(|key| !key.starts_with(&prefix));
     }
 }
 

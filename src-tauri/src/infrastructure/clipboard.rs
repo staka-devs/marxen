@@ -7,6 +7,25 @@ use std::sync::Mutex;
 pub struct NativeClipboard(Mutex<Option<arboard::Clipboard>>);
 
 impl crate::application::clipboard::Clipboard for NativeClipboard {
+    /// Read plain text with the same retained clipboard mutex and bounded payload limit.
+    fn read_text(&self) -> Result<String, String> {
+        let mut guard = self
+            .0
+            .lock()
+            .map_err(|_| "clipboard lock poisoned".to_owned())?;
+        if guard.is_none() {
+            *guard = Some(arboard::Clipboard::new().map_err(|error| error.to_string())?);
+        }
+        let text = guard
+            .as_mut()
+            .expect("clipboard initialized")
+            .get_text()
+            .map_err(|error| error.to_string())?;
+        if text.len() > 20 * 1024 * 1024 {
+            return Err("clipboard text exceeds 20 MiB".into());
+        }
+        Ok(text)
+    }
     /// Publish supported native clipboard formats through one platform-specific adapter.
     fn write(&self, text: String, html: Option<String>, rtf: Option<String>) -> Result<(), String> {
         if text

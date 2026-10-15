@@ -1,6 +1,6 @@
 //! Isolation IPC data, independent of runtime adapters.
 use crate::contracts::ai::IsolatedCopyId;
-use crate::contracts::{DocumentId, Revision, Utf16Range};
+use crate::contracts::{DocumentId, DocumentSnapshot, Revision, Utf16Range};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 /// One document captured into an isolated copy, with its registered scopes.
@@ -69,6 +69,39 @@ pub struct StagedProposal {
     pub chars: u32,
 }
 
+/// One new Markdown file created by the agent inside the staging copy.
+///
+/// Only relative contained `.md` paths are reported; forbidden names
+/// (`.git`/`.env`/credentials) and non-Markdown files are never importable.
+/// The content is staged text, not yet applied to any live document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StagedNewFile {
+    pub rel: String,
+    pub chars: u32,
+    pub content: String,
+}
+
+/// One staged new file offered for import into its original workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportFileRequest {
+    pub rel: String,
+    pub content: String,
+}
+
+/// Per-file outcome of importing staged new files into the copy's workspace.
+///
+/// Successes carry the opened snapshot for session registration; failures
+/// carry the refusal detail with no file created or modified.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StagedImportOutcome {
+    pub rel: String,
+    pub snapshot: Option<DocumentSnapshot>,
+    pub error: Option<String>,
+}
+
 /// Return exported isolation IPC TypeScript declarations with document/AI imports.
 /// Trim trailing whitespace from each line and finish with one LF; no files are written.
 pub fn typescript() -> String {
@@ -80,9 +113,12 @@ pub fn typescript() -> String {
         ApproveDocOutcome::decl(&cfg),
         ApproveResult::decl(&cfg),
         StagedProposal::decl(&cfg),
+        StagedNewFile::decl(&cfg),
+        ImportFileRequest::decl(&cfg),
+        StagedImportOutcome::decl(&cfg),
     ];
-    let mut output = "// Generated from src-tauri/src/contracts/isolation.rs. Run npm run isolation-contracts:generate.\n// Do not edit by hand. Isolation IPC schema version 2.\n".to_owned();
-    output.push_str("import type { DocumentId, Revision, Utf16Range } from \"./contracts\";\n");
+    let mut output = "// Generated from src-tauri/src/contracts/isolation.rs. Run npm run isolation-contracts:generate.\n// Do not edit by hand. Isolation IPC schema version 4.\n".to_owned();
+    output.push_str("import type { DocumentId, DocumentSnapshot, Revision, Utf16Range } from \"./contracts\";\n");
     output.push_str("import type { IsolatedCopyId } from \"./ai-contracts\";\n");
     for declaration in declarations {
         output.push_str("export ");

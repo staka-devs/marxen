@@ -334,6 +334,21 @@ impl AiService {
         Ok(self.runs.cancel(&run_id))
     }
 
+    /// Record the chat user's explicit permission choice by exact run/request/option IDs.
+    ///
+    /// Rejects stale or foreign run/request IDs and unoffered option IDs
+    /// without touching the agent; the waiting driver delivers a validated
+    /// choice exactly once or answers cancellation on its own path.
+    pub fn reply_permission(
+        &self,
+        run_id: AiRunId,
+        request_id: String,
+        option_id: String,
+    ) -> Result<(), AiError> {
+        validate_run_id(&run_id)?;
+        self.runs.reply_permission(&run_id, &request_id, &option_id)
+    }
+
     /// Return the latest reported ACP usage for popup refresh.
     /// This is read-only: it never sends a prompt or starts inference.
     pub fn usage_snapshot(&self) -> Vec<ReportedUsage> {

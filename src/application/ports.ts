@@ -8,6 +8,7 @@
 import type {
   CloseAction,
   CursorUpdate,
+  EditorContext,
   DocumentId,
   DocumentSnapshot,
   GridUpdate,
@@ -42,6 +43,7 @@ import type {
   ApproveResult,
   IsolationDiff,
   IsolatedCopyInfo,
+  StagedImportOutcome,
   StagedProposal,
 } from "../contracts/isolation-contracts";
 import type { PromptContext, PromptMode, ProposalText, IsolatedCopyId } from "../contracts/ai-contracts";
@@ -49,6 +51,14 @@ import type { ImageResolver } from "../domain/image-sources";
 
 /** Revision-aware document gateway owned by the registry transport. */
 export interface DocumentGateway {
+  /** Select the authoritative whole buffer only while captured native context remains current. */
+  selectAll(context: EditorContext): Promise<CursorUpdate>;
+  /** Format only a captured native selection at its exact source and revision. */
+  formatEditorSelection(cursor: CursorUpdate, beforeText: string, kind: import("../domain/markdown-gui").FormatKind): Promise<DocumentSnapshot>;
+  /** Capture authoritative menu data at queue execution. */
+  fetchEditorContext(documentId: DocumentId): Promise<EditorContext>;
+  /** Run one guarded menu action against the captured native cursor/revision. */
+  editorAction(cursor: CursorUpdate, action: EditorAction): Promise<DocumentSnapshot>;
   /** Record an authoritative snapshot (newer-or-equal wins). */
   noteSnapshot(snapshot: DocumentSnapshot): void;
   /** Apply GUI edits serially, resyncing once on stale. */
@@ -61,6 +71,10 @@ export interface DocumentGateway {
   vimInput(documentId: DocumentId, keys: string): Promise<DocumentSnapshot>;
   /** Feed keys natively with copy side effects in queue order. */
   vimInputWithCopy(documentId: DocumentId, keys: string, onCopy: (copy: YankCopy) => Promise<void>): Promise<VimInputResult>;
+  /** Route Enter with an optional Markdown hard break at the queued native cursor. */
+  routeEditorEnter(documentId: DocumentId, hardBreak: boolean, hasSelection: boolean, onCopy: (copy: YankCopy) => Promise<void>): Promise<VimInputResult>;
+  /** Navigate source table cells in Insert mode while preserving actual Tab mappings. */
+  routeTableTab(documentId: DocumentId, backwards: boolean, offset: number, beforeText: string, onCopy?: (copy: YankCopy) => Promise<void>): Promise<VimInputResult | { cursor: CursorUpdate }>;
   /** Route one printable char using native mode and optional captured GUI source. */
   routeCharKey(
     documentId: DocumentId,
@@ -122,8 +136,14 @@ export interface DocumentGateway {
  * root injects it directly with no forwarding wrappers.
  */
 export interface DocumentTransport {
+  /** Read native selection, active mappings and the explicit popup opt-in. */
+  fetchEditorContext(request: SaveRequest): Promise<EditorContext>;
+  /** Copy/cut/paste a native selection guarded against cursor or revision drift. */
+  editorClipboard(cursor: CursorUpdate, action: "copy" | "cut" | "paste"): Promise<DocumentSnapshot>;
+  /** Undo/redo native history after atomically validating the requested revision. */
+  editorHistory(request: SaveRequest, redo: boolean): Promise<DocumentSnapshot>;
   /** Apply GUI range edits at the given base revision. */
-  applyEdits(request: SaveRequest, edits: TextEdit[]): Promise<DocumentSnapshot>;
+  applyEdits(request: SaveRequest, edits: TextEdit[], expectedCursor?: CursorUpdate): Promise<DocumentSnapshot>;
   /** Feed raw keys through real Neovim. */
   input(request: SaveRequest, keys: string): Promise<DocumentSnapshot>;
   /** Feed keys natively and report yank/copy side effects. */
@@ -161,6 +181,8 @@ export interface DocumentTransport {
   /** Fetch the current Neovim config state for a document. */
   fetchConfig(documentId: DocumentId): Promise<NvimConfig>;
 }
+/** Explicit native editor-menu actions; no browser history or clipboard state. */
+export type EditorAction = "copy" | "cut" | "paste" | "undo" | "redo";
 
 /** Workspace file and recovery gateway over native IPC. */
 export interface WorkspaceGateway {
@@ -176,6 +198,8 @@ export interface WorkspaceGateway {
   openTextFile(path: string): Promise<OpenDocument>;
   /** Create a Markdown document. */
   createMarkdown(path: string, text?: string): Promise<OpenDocument>;
+  /** Create one contained folder under an existing parent without opening a document. */
+  createFolder(path: string): Promise<WorkspaceEntry>;
   /** Rename a Markdown document. */
   renameMarkdown(request: SaveRequest, path: string): Promise<OpenDocument>;
   /** Close a document with an explicit decision. */
@@ -219,6 +243,8 @@ export interface AiGateway {
   startPrompt(request: AiPromptRequest, onEvent: (event: AiStreamEvent) => void): Promise<AiPromptSession>;
   /** Best-effort cancel without surfacing cancel errors. */
   cancelPromptSafe(stop: () => Promise<void>): Promise<void>;
+  /** Answer a pending permission request with the exact chosen option ID. */
+  replyPermission(runId: AiRunId, requestId: string, optionId: string): Promise<void>;
   /** Read credential presence for a provider. */
   getCredentialState(kind: AiProviderKind): Promise<CredentialRef>;
   /** Store a secret in the OS store. */
@@ -235,6 +261,10 @@ export interface IsolationGateway {
   createCopy(contexts: PromptContext[]): Promise<IsolatedCopyInfo>;
   /** Fetch diffs with drift detection for a copy. */
   fetchDiff(copyId: IsolatedCopyId): Promise<IsolationDiff[]>;
+  /** List new agent-created Markdown files for import. */
+  fetchNewFiles(copyId: IsolatedCopyId): Promise<import("../contracts/isolation-contracts").StagedNewFile[]>;
+  /** Import staged files into the approved copy's original workspace. */
+  importNewFiles(copyId: IsolatedCopyId, files: Array<{ rel: string; content: string }>): Promise<StagedImportOutcome[]>;
   /** Stage a validated proposal into the copy. */
   stageProposal(copyId: IsolatedCopyId, proposal: ProposalText, mode: PromptMode): Promise<StagedProposal>;
   /** Approve and apply the staged copy with scoped rollback. */

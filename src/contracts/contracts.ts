@@ -12,6 +12,13 @@ export type EditRequest = { documentId: DocumentId, baseRevision: Revision, sour
 export type SaveRequest = { documentId: DocumentId, baseRevision: Revision, };
 export type SaveResult = { documentId: DocumentId, revision: Revision, dirty: boolean, };
 export type CursorUpdate = { documentId: DocumentId, revision: Revision, anchor: Utf16Offset, head: Utf16Offset, };
+export type EditorMapping = { lhs: string, rhs: string, };
+export type EditorPresentation = { 
+/**
+ * True only when Neovim permits modification and the buffer is not marked read-only.
+ */
+editable: boolean, selectionToolbar: boolean, mappings: Array<EditorMapping>, };
+export type EditorContext = { cursor: CursorUpdate, mode: VimMode, presentation: EditorPresentation, };
 export type VimMode = "normal" | "insert" | "replace" | "visual" | "visual_line" | "visual_block" | "command_line" | "terminal";
 export type ModeUpdate = { documentId: DocumentId, revision: Revision, mode: VimMode, };
 export type DocumentEvent = { "type": "snapshot", "payload": DocumentSnapshot } | { "type": "saved", "payload": SaveResult } | { "type": "cursor", "payload": CursorUpdate } | { "type": "mode", "payload": ModeUpdate };

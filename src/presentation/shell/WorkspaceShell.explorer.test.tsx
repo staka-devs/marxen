@@ -55,6 +55,7 @@ beforeEach(() => {
         { path: "binary.exe", name: "binary.exe", directory: false, markdown: false },
       ]);
       case "list_documents": case "list_recovery": case "poll_workspace_events": return Promise.resolve([]);
+      case "create_folder": return Promise.resolve({ path: a.path, name: String(a.path).split("/").at(-1), directory: true, markdown: false });
       case "open_markdown": return Promise.resolve({ path: "a.md", snapshot: { documentId: "doc_a", revision, text, dirty: revision > 0 } });
       case "open_text_file": return Promise.resolve({ path: "notes.txt", snapshot: { documentId: "doc_text", revision: 0, text: "# literal **text**", dirty: false } });
       case "load_workspace_image": return Promise.resolve(image);
@@ -77,11 +78,23 @@ beforeEach(() => {
 /** Open the fake workspace through the manual folder input. */
 async function openWorkspace() {
   render(<App />);
-  fireEvent.click(screen.getByRole("button", { name: "パスを入力する" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "ファイル" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "パスを入力する" }));
   fireEvent.change(screen.getByLabelText("開くフォルダーの絶対パス"), { target: { value: "C:/workspace" } });
   fireEvent.click(screen.getByRole("button", { name: "開く" }));
   await screen.findByRole("button", { name: "notes.txt" });
 }
+it("moves folder opening to File and invokes native folder creation once without a document", async () => {
+  await openWorkspace();
+  expect(within(screen.getByRole("menubar")).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["ファイル", "編集", "選択", "表示", "移動", "ヘルプ"]);
+  expect(within(screen.getByTestId("file-tree")).queryByRole("button", { name: "フォルダーを開く" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "新規フォルダー" }));
+  fireEvent.change(screen.getByLabelText("新規フォルダーのパス"), { target: { value: "今日" } });
+  fireEvent.click(screen.getByRole("button", { name: "作成する" }));
+  await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("create_folder", { path: "今日" }));
+  expect(mockInvoke.mock.calls.filter(([name]) => name === "create_folder")).toHaveLength(1);
+  expect(mockInvoke.mock.calls.some(([name]) => name === "open_markdown" || name === "create_markdown" || name === "open_text_file")).toBe(false);
+});
 it("opens UTF-8 text in a source editor, keeps Markdown literal and saves the native document", async () => {
   await openWorkspace();
   fireEvent.click(screen.getByRole("button", { name: "a.md" }));

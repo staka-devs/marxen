@@ -160,6 +160,8 @@ export function VimSettingsPanel({ model, onBrowseConfig }: VimSettingsPanelProp
 
       <fieldset disabled={busy || structuredBlocked} className="space-y-3 disabled:opacity-60">
         <legend className="mb-1 text-[13px]">{t("コピー形式キー")}</legend>
+        <label className="marxen-setting-row"><span className="marxen-setting-label">{t("選択時の書式ポップアップ")}</span><input type="checkbox" aria-label={t("選択時の書式ポップアップ")} checked={settings.selectionToolbar} onChange={(event) => setSettings({ ...settings, selectionToolbar: event.target.checked })} /></label>
+        <p className="text-xs text-muted-foreground">{t("Vim設定で明示的に有効にした場合のみ表示します。キーのマッピングとフォーカスを保持します。")}</p>
         <p className="text-xs leading-5 text-muted-foreground">{t("空で無効。既存のVimマッピングと重複できません。")}</p>
         {VIM_COPY_FORMATS.map((name) => (
           <label key={name} className="marxen-setting-row">

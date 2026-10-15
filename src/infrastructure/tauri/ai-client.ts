@@ -116,6 +116,17 @@ export async function migrateConnectionCredential(connectionId: ApiConnectionId,
   return invoke<ConnectionCredentialRef>("ai_migrate_connection_credential", { connectionId, kind });
 }
 
+/**
+ * Answer a pending permission request with the exact chosen option ID.
+ *
+ * Stale, foreign, or unoffered IDs surface as invoke errors; the waiting
+ * driver delivers a validated choice exactly once.
+ */
+export async function replyPermission(runId: AiRunId, requestId: string, optionId: string): Promise<void> {
+  requireDesktop();
+  await invoke("ai_permission_reply", { runId, requestId, optionId });
+}
+
 /** Owned prompt run with its cancellation handle. */
 export interface PromptSession {
   runId: AiRunId;
@@ -204,6 +215,8 @@ export const aiGateway: AiGateway = {
   startPrompt,
   /** Best-effort cancel without surfacing cancel errors. */
   cancelPromptSafe,
+  /** Answer a pending permission request with the exact chosen option ID. */
+  replyPermission,
   /** Read credential presence for a provider. */
   getCredentialState,
   /** Store a secret in the OS store. */

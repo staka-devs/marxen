@@ -31,6 +31,7 @@ pub fn default_settings() -> VimSettings {
         expandtab: true,
         ignorecase: true,
         smartcase: true,
+        selection_toolbar: false,
         leader: " ".into(),
         mappings: Vec::new(),
         copy_keys: VimCopyKeys {
@@ -273,6 +274,10 @@ pub fn render_managed(settings: &VimSettings) -> Vec<String> {
         })
         .to_owned(),
         format!("let mapleader=\"{}\"", escape_leader(&settings.leader)),
+        format!(
+            "let g:marxen_selection_toolbar={}",
+            u8::from(settings.selection_toolbar)
+        ),
     ];
     for (name, value) in [
         ("markdown", settings.copy_keys.markdown.as_str()),
@@ -374,6 +379,14 @@ fn parse_block_line(line: &str, settings: &mut VimSettings, line_no: usize) -> R
     }
     if trimmed.starts_with("let ") {
         let body = trimmed.strip_prefix("let ").unwrap_or("").trim();
+        if let Some(value) = body.strip_prefix("g:marxen_selection_toolbar=") {
+            settings.selection_toolbar = match value.trim() {
+                "0" => false,
+                "1" => true,
+                _ => return Err(format!("管理ブロック{line_no}行目: marxen_selection_toolbar は0または1で指定してください。")),
+            };
+            return Ok(());
+        }
         if let Some(value) = body.strip_prefix("mapleader=") {
             let leader = unescape_leader(value.trim()).ok_or_else(|| {
                 format!("管理ブロック{line_no}行目: mapleader の引用が正しくありません。")

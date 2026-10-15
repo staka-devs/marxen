@@ -2,7 +2,11 @@
 // Do not edit by hand. Vim-settings IPC schema version 1.
 export type VimMapping = { mode: string, lhs: string, rhs: string, };
 export type VimCopyKeys = { markdown: string, text: string, rich: string, html: string, };
-export type VimSettings = { tabstop: number, shiftwidth: number, expandtab: boolean, ignorecase: boolean, smartcase: boolean, leader: string, mappings: Array<VimMapping>, copyKeys: VimCopyKeys, };
+export type VimSettings = { tabstop: number, shiftwidth: number, expandtab: boolean, ignorecase: boolean, smartcase: boolean, 
+/**
+ * Explicit opt-in for the non-focusing selection formatting popup.
+ */
+selectionToolbar: boolean, leader: string, mappings: Array<VimMapping>, copyKeys: VimCopyKeys, };
 export type VimConfigRead = { path: string, 
 /**
  * Hex SHA-256 of the exact file bytes, absent when the file is missing.

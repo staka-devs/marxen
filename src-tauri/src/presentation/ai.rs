@@ -101,6 +101,20 @@ pub fn ai_prompt_cancel(
     service.cancel(run_id)
 }
 #[tauri::command]
+/// Record the chat user's explicit permission choice by exact run/request/option IDs.
+///
+/// Rejects stale, foreign, or unoffered IDs without touching the agent. The
+/// waiting ACP driver delivers a validated choice exactly once; cancellation
+/// travels through `ai_prompt_cancel` instead of this command.
+pub fn ai_permission_reply(
+    service: tauri::State<'_, AiService>,
+    run_id: AiRunId,
+    request_id: String,
+    option_id: String,
+) -> Result<(), AiError> {
+    service.reply_permission(run_id, request_id, option_id)
+}
+#[tauri::command]
 /// Return the latest reported ACP usage for popup refresh.
 /// This is read-only: it never sends a prompt or starts inference.
 pub fn ai_usage_snapshot(service: tauri::State<'_, AiService>) -> Vec<ReportedUsage> {

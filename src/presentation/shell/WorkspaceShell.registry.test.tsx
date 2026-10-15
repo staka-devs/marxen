@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, expect, it, vi } from "vitest";
 import App from "../../App";
 import { readRuntimeStatus } from "../../infrastructure/tauri/runtime-client";
+import { clearImageCache } from "../../infrastructure/images/image-loader";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { EditorView } from "@codemirror/view";
@@ -54,6 +55,8 @@ const scenario = {
   cursorResponses: [] as Array<{ anchor: number; head: number }>,
   deferNextMode: false,
   deferredModeReleases: [] as Array<() => void>,
+  deferNextOpen: false,
+  deferredOpenReleases: [] as Array<() => void>,
   imageBytes: new Map<string, { mime: string; bytes: number[] }>(),
   pasteImageStaleOnce: false,
   pastedImages: [] as Array<{ documentId: string; name: string; range: { start: number; end: number } }>,
@@ -78,6 +81,8 @@ const scenario = {
   scenario.cursorResponses = [];
   scenario.deferNextMode = false;
   scenario.deferredModeReleases = [];
+  scenario.deferNextOpen = false;
+  scenario.deferredOpenReleases = [];
   scenario.imageBytes = new Map();
   scenario.pasteImageStaleOnce = false;
   scenario.pastedImages = [];
@@ -130,6 +135,11 @@ const scenario = {
       case "open_markdown": {
         const doc = scenario.files.get(a.path as string);
         if (!doc) throw { code: "not_found" };
+        if (scenario.deferNextOpen) {
+          scenario.deferNextOpen = false;
+          const answer = { path: doc.path, snapshot: snapshotOf(doc) };
+          return new Promise((resolve) => scenario.deferredOpenReleases.push(() => resolve(answer)));
+        }
         return Promise.resolve({ path: doc.path, snapshot: snapshotOf(doc) });
       }
       case "fetch_snapshot": {
@@ -180,6 +190,17 @@ const scenario = {
           doc.revision += 1;
           doc.dirty = true;
         }
+        return Promise.resolve(snapshotOf(doc));
+      }
+      case "fetch_editor_context": {
+        const doc = docById(a.documentId as string);
+        if (a.baseRevision !== doc.revision) throw { code: "contract", error: { code: "stale_revision", expected: doc.revision, received: a.baseRevision } };
+        return Promise.resolve({ cursor: { documentId: doc.id, revision: doc.revision, anchor: 0, head: 0 }, mode: scenario.mode, presentation: { editable: true, selectionToolbar: false, mappings: [] } });
+      }
+      case "editor_history": {
+        const doc = docById(a.documentId as string);
+        if (a.baseRevision !== doc.revision) throw { code: "contract", error: { code: "stale_revision", expected: doc.revision, received: a.baseRevision } };
+        if (!a.redo && doc.history.length > 1) { doc.history.pop(); doc.text = doc.history[doc.history.length - 1]; doc.revision += 1; doc.dirty = true; }
         return Promise.resolve(snapshotOf(doc));
       }
       case "redo_document": {
@@ -286,6 +307,7 @@ const scenario = {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  clearImageCache();
   resetBackend();
   installBackend();
   vi.mocked(readRuntimeStatus).mockResolvedValue({ contractVersion: 1, connection: "connected", detail: "connected" });
@@ -294,7 +316,8 @@ beforeEach(() => {
 /** Open the fake workspace through the manual folder input. */
 async function openWorkspace() {
   render(<App />);
-  fireEvent.click(screen.getByRole("button", { name: "パスを入力する" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "ファイル" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "パスを入力する" }));
   fireEvent.change(screen.getByLabelText("開くフォルダーの絶対パス"), { target: { value: "/ws" } });
   fireEvent.click(screen.getByRole("button", { name: "開く" }));
   await screen.findByRole("button", { name: "メモ/a.md" });
@@ -466,10 +489,11 @@ it("opens the natively picked folder instead of a typed prompt", async () => {
   const { open } = await import("@tauri-apps/plugin-dialog");
   vi.mocked(open).mockResolvedValueOnce("/picked/ws");
   render(<App />);
-  fireEvent.click(screen.getAllByRole("button", { name: "フォルダーを開く" })[0]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "ファイル" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "フォルダーを開く" }));
   await screen.findByRole("button", { name: "メモ/a.md" });
   expect(mockedInvoke).toHaveBeenCalledWith("open_workspace", { path: "/picked/ws" });
-  expect(screen.getByRole("button", { name: "ワークスペースのフォルダー" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "ws" })).toBeVisible();
   expect(screen.getByTitle("/picked/ws")).toHaveTextContent("ws");
 });
 
@@ -504,7 +528,8 @@ it("refreshes the runtime status when documents open", async () => {
   render(<App />);
   releaseFirst({ contractVersion: 1, connection: "disconnected", detail: "empty" });
   expect(await screen.findByText("Neovim 未接続")).toBeVisible();
-  fireEvent.click(screen.getByRole("button", { name: "パスを入力する" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "ファイル" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "パスを入力する" }));
   fireEvent.change(screen.getByLabelText("開くフォルダーの絶対パス"), { target: { value: "/ws" } });
   fireEvent.click(screen.getByRole("button", { name: "開く" }));
   await screen.findByRole("button", { name: "メモ/a.md" });
@@ -1048,15 +1073,32 @@ it("feeds an immediate key natively when Visual installed before the mode refres
   expect(scenario.files.get("メモ/a.md")!.text).toBe("# A\n\n- [ ] task\n");
 });
 
-it("binds read image hydration to the document and never reuses another doc bytes", async () => {
+it.each([false, true])("binds read image hydration to the document and never reuses another doc bytes (delayed open: %s)", async (delayedOpen) => {
+  /** Release a parked native open, then observe this document's active editor. */
+  async function activateDocument(path: string) {
+    const previousLabel = screen.queryByTestId("editor-primary")?.getAttribute("aria-label");
+    const previousSrc = screen.queryByTestId("preview")?.querySelector("img")?.getAttribute("src");
+    scenario.deferNextOpen = delayedOpen;
+    fireEvent.click(screen.getByRole("button", { name: path }));
+    if (delayedOpen) {
+      await waitFor(() => expect(scenario.deferredOpenReleases).toHaveLength(1));
+      expect(screen.queryByTestId("editor-primary")?.getAttribute("aria-label")).toBe(previousLabel);
+      expect(screen.queryByTestId("preview")?.querySelector("img")?.getAttribute("src")).toBe(previousSrc);
+      act(() => scenario.deferredOpenReleases.shift()!());
+    }
+    await waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveAttribute("aria-label", `${path}のMarkdownエディタ`));
+  }
+
   const identical = "![alt](img.png)\n";
   scenario.files.set("メモ/a.md", { id: "doc_a", path: "メモ/a.md", text: identical, revision: 0, dirty: false, history: [identical] });
   scenario.files.set("メモ/b.md", { id: "doc_b", path: "メモ/b.md", text: identical, revision: 0, dirty: false, history: [identical] });
   scenario.imageBytes.set("doc_a:img.png", { mime: "image/png", bytes: [1, 2, 3, 4] });
   scenario.imageBytes.set("doc_b:img.png", { mime: "image/png", bytes: [9, 8, 7, 6, 5] });
   await openWorkspace();
-  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
-  fireEvent.change(await screen.findByLabelText("表示モード"), { target: { value: "read" } });
+  await activateDocument("メモ/a.md");
+  expect(screen.getByLabelText("表示モード")).toBeEnabled();
+  fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "read" } });
+  await waitFor(() => expect(screen.getByTestId("preview").querySelector("img")).not.toBeNull());
   await waitFor(() =>
     expect(mockedInvoke).toHaveBeenCalledWith("load_relative_image", { documentId: "doc_a", path: "img.png" }),
   );
@@ -1066,9 +1108,11 @@ it("binds read image hydration to the document and never reuses another doc byte
   });
   const srcA = screen.getByTestId("preview").querySelector("img")?.getAttribute("src") ?? "";
   // Identical Markdown and filename in doc B must resolve B's own bytes.
-  // Wait for B's own Rust fetch before reading the remounted preview, since
-  // identical content cannot distinguish the old node from the new one.
-  fireEvent.click(screen.getByRole("button", { name: "メモ/b.md" }));
+  // Observe B's activation and rendered image before waiting for hydration:
+  // identical content cannot distinguish A's old preview from B's new one.
+  await activateDocument("メモ/b.md");
+  expect(screen.getByLabelText("表示モード")).toHaveValue("read");
+  await waitFor(() => expect(screen.getByTestId("preview").querySelector("img")).not.toBeNull());
   await waitFor(() =>
     expect(mockedInvoke).toHaveBeenCalledWith("load_relative_image", { documentId: "doc_b", path: "img.png" }),
   );
@@ -1080,7 +1124,7 @@ it("binds read image hydration to the document and never reuses another doc byte
   const srcB = screen.getByTestId("preview").querySelector("img")?.getAttribute("src") ?? "";
   expect(srcB).not.toBe(srcA);
   // Switching back restores A's bytes, not a stale reuse of B.
-  fireEvent.click(screen.getByRole("button", { name: "メモ/a.md" }));
+  await activateDocument("メモ/a.md");
   await waitFor(() => {
     expect(screen.getByTestId("preview").querySelector("img")?.getAttribute("src")).toBe(srcA);
   });

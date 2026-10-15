@@ -74,6 +74,8 @@ pub trait Buffer: Send {
     fn config_report(&self) -> &ConfigReport;
     /// Determine whether the selected mode has a mapping for the supplied prefix.
     fn has_mapping(&self, mode: &str, lhs: &str) -> Result<bool, BufferError>;
+    /// Read the selection-toolbar opt-in and actual effective mappings for one native mode.
+    fn editor_presentation(&self, mode: &str) -> Result<EditorPresentation, BufferError>;
     /// Apply validated row/byte edits as one native undo entry, from tail to head.
     fn apply_ranges(&self, edits: &[PositionedEdit]) -> Result<(), BufferError>;
     /// Read whether the native selection excludes its final character.
@@ -228,4 +230,9 @@ pub trait StagingStorage: FileReader + DirectoryStorage {
     fn guard_staging_path(&self, root: &Path, candidate: &Path) -> Result<PathBuf, WorkspaceError>;
     /// Reject links in a path between the candidate and its staging root.
     fn check_no_symlink(&self, path: &Path, root: &Path) -> Result<(), WorkspaceError>;
+    /// List all regular files under a staging directory for new-file import.
+    ///
+    /// Returns absolute paths; symlinks and directories are omitted by the
+    /// adapter so use cases never follow escapes.
+    fn list_staging_files(&self, dir: &Path) -> Result<Vec<PathBuf>, WorkspaceError>;
 }

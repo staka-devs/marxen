@@ -14,6 +14,7 @@ import { useCallback, useRef } from "react";
 import type { DocumentSnapshot, TextEdit, YankCopy } from "../../../contracts/contracts";
 import { StaleResync, workspaceErrorText } from "../../../domain/document-errors";
 import { serializeVimKey } from "../../../domain/vim-keys";
+import { isMarkdownPath } from "../../../domain/workspace-files";
 import { correspondSource as correspondSnapshotSource, resolveEditRange } from "../../../domain/coordinates/selection-range";
 import type { EditorSelection } from "../../editor/CodeMirrorEditor";
 import type { NavBasis } from "../shellView";
@@ -25,6 +26,8 @@ export interface VimEditingArgs {
   desktop: boolean;
   /** Cursor motion basis for display-basis arrow handling. */
   navBasis: NavBasis;
+  /** Persistent Markdown prose Enter preference; native mappings retain priority. */
+  hardBreakOnEnter?: boolean;
   /** Surface a notice without importing shell state. */
   notify: (message: LocalizedText | null, kind?: import("../../workspace/Notifications").NoticeKind) => void;
   /** Document session owning docs, selections, cursors, and mutations. */
@@ -69,7 +72,7 @@ export interface VimEditing {
   /** Shell key router preserving IME, mappings, and display motion. */
   onEditorKeyDown: (event: React.KeyboardEvent) => void;
   /** Apply a range helper at the active selection as one edit. */
-  guiAtSelection: (fn: (text: string, anchor: number, head: number) => TextEdit[]) => void;
+  guiAtSelection: (fn: (text: string, anchor: number, head: number) => TextEdit[], emptyCaretInset?: number) => void;
 }
 
 /**
@@ -105,6 +108,8 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
   } = session;
   const navRef = useRef(navBasis);
   navRef.current = navBasis;
+  const hardBreakRef = useRef(args.hardBreakOnEnter ?? false);
+  hardBreakRef.current = args.hardBreakOnEnter ?? false;
   // Insert-mode keyboard Ctrl+V is recorded here WITHOUT preventing default:
   // the follow-up paste event carries the bytes synchronously (OS image
   // pastes emit no readable text via readText, and readText can fail in a
@@ -273,7 +278,22 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
       try {
         // Revision binds at queue execution inside the client, so bursts
         // order against successive acknowledgements.
-        const result = await registry.vimInputWithCopy(id, keys, (copy: YankCopy) => writeYankToClipboard(copy, id));
+        const range = takeRange(id).range;
+        if ((keys === "<Tab>" || keys === "<S-Tab>") && isMarkdownPath(docsRef.current[id].path)) {
+          const result = await registry.routeTableTab(id, keys === "<S-Tab>", range.end, takeRange(id).fullText, (copy) => writeYankToClipboard(copy, id));
+          if ("cursor" in result) {
+            if (isSelectionGenCurrent(id, gen)) {
+              setCopyReady(null);
+              caretRef.current[id] = result.cursor.head;
+              setSelections((previous) => ({ ...previous, [id]: { anchor: result.cursor.anchor, head: result.cursor.head } }));
+              echoCursor(id, result.cursor.anchor, result.cursor.head);
+            }
+          } else { mergeSnapshot(result.snapshot); if (activeRef.current === id && isSelectionGenCurrent(id, gen)) setCopyReady(result.copyReady ? id : null); await refreshModeCursor(id, gen); }
+          return;
+        }
+        const result = keys === "<CR>" && hardBreakRef.current && isMarkdownPath(docsRef.current[id].path)
+          ? await registry.routeEditorEnter(id, true, range.start !== range.end, (copy: YankCopy) => writeYankToClipboard(copy, id))
+          : await registry.vimInputWithCopy(id, keys, (copy: YankCopy) => writeYankToClipboard(copy, id));
         mergeSnapshot(result.snapshot);
         if (activeRef.current === id && isSelectionGenCurrent(id, gen)) setCopyReady(result.copyReady ? id : null);
         await refreshModeCursor(id, gen);
@@ -284,7 +304,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
         pendingNativeInput.current[id] -= 1;
       }
     },
-    [registry, mergeSnapshot, refreshModeCursor, sayStale, bumpSelectionGen, isSelectionGenCurrent, writeYankToClipboard, docsRef, activeRef, setVimKeys, session, notify],
+    [registry, mergeSnapshot, refreshModeCursor, sayStale, bumpSelectionGen, isSelectionGenCurrent, writeYankToClipboard, docsRef, activeRef, setVimKeys, session, notify, takeRange],
   );
 
   /** Shell key router preserving IME, mappings, and display motion. */
@@ -297,6 +317,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
       // GUI change here; composition commits flow through the editor once.
       if (native.isComposing || event.key === "Process" || native.keyCode === 229) return;
       const target = event.target as HTMLElement | null;
+      if (target?.closest(".cm-content") && (event.key === "ContextMenu" || event.key === "Menu" || (event.key === "F10" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey))) return;
       if (target?.closest("input,textarea,select,[role=\"dialog\"]")) return;
       const mod = event.ctrlKey || event.metaKey;
       const lower = event.key.toLowerCase();
@@ -363,7 +384,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
 
   /** Apply a range helper at the active selection as one edit. */
   const guiAtSelection = useCallback(
-    (fn: (text: string, anchor: number, head: number) => TextEdit[]) => {
+    (fn: (text: string, anchor: number, head: number) => TextEdit[], emptyCaretInset = 0) => {
       const id = activeRef.current;
       if (!id) return;
       if (!registry) {
@@ -375,9 +396,23 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
       const sel = selections[id] ?? { anchor: 0, head: 0 };
       const anchor = Math.min(sel.anchor, current.text.length);
       const head = Math.min(sel.head, current.text.length);
-      void applyEdits(id, fn(current.text, Math.min(anchor, head), Math.max(anchor, head)));
+      try {
+        const edits = fn(current.text, Math.min(anchor, head), Math.max(anchor, head));
+        let next = head;
+        let delta = 0;
+        for (const change of edits) {
+          if (head < change.range.start) break;
+          if (head <= change.range.end) { next = change.range.start + delta + change.text.length; break; }
+          delta += change.text.length - (change.range.end - change.range.start);
+          next = head + delta;
+        }
+        if (anchor === head && edits.length === 1) next -= emptyCaretInset;
+        const commit = applyEdits(id, edits, current.text, { anchor: next, head: next });
+        const generation = currentSelectionGen(id);
+        void commit.then(() => refreshModeCursor(id, generation));
+      } catch (cause) { setNotice(localizedFailure(cause, workspaceErrorText), "error"); }
     },
-    [applyEdits, registry, selections, docsRef, activeRef, notify],
+    [applyEdits, registry, selections, docsRef, activeRef, notify, currentSelectionGen, refreshModeCursor],
   );
 
   return {

@@ -38,6 +38,9 @@ pub struct VimSettings {
     pub expandtab: bool,
     pub ignorecase: bool,
     pub smartcase: bool,
+    /// Explicit opt-in for the non-focusing selection formatting popup.
+    #[serde(default)]
+    pub selection_toolbar: bool,
     pub leader: String,
     pub mappings: Vec<VimMapping>,
     pub copy_keys: VimCopyKeys,

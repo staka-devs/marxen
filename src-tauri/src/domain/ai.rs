@@ -846,7 +846,12 @@ pub fn method_not_found(id: &Value, method: &str) -> Value {
     })
 }
 
-/// Build an ACP v1 initialize request with client identity and no advertised capabilities.
+/// Build an ACP v1 initialize request with staged file capabilities.
+///
+/// Advertises `fs.readTextFile`/`fs.writeTextFile` so agents use the
+/// authorized staging directory through the client instead of escaping it.
+/// Terminals, elicitation, and session notices/compaction stay unadvertised:
+/// no external terminal window is ever created.
 pub fn acp_initialize(id: u64) -> serde_json::Value {
     serde_json::json!({
         "jsonrpc": "2.0",
@@ -854,7 +859,7 @@ pub fn acp_initialize(id: u64) -> serde_json::Value {
         "method": "initialize",
         "params": {
             "protocolVersion": ACP_PROTOCOL_VERSION,
-            "clientCapabilities": {},
+            "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true } },
             "clientInfo": client_info(),
         }
     })
@@ -944,6 +949,443 @@ pub fn acp_update_text(message: &serde_json::Value) -> Option<String> {
             .and_then(|text| text.as_str())
             .map(str::to_owned),
         _ => None,
+    }
+}
+
+/// Map an official wire tool kind to the contract, defaulting unknown values to `Other`.
+/// Omission and null both mean `Other` so display never fails on new agent kinds.
+pub fn parse_tool_kind(value: Option<&Value>) -> AcpToolKind {
+    match value.and_then(|kind| kind.as_str()) {
+        Some("read") => AcpToolKind::Read,
+        Some("edit") => AcpToolKind::Edit,
+        Some("delete") => AcpToolKind::Delete,
+        Some("move") => AcpToolKind::Move,
+        Some("search") => AcpToolKind::Search,
+        Some("execute") => AcpToolKind::Execute,
+        Some("think") => AcpToolKind::Think,
+        Some("fetch") => AcpToolKind::Fetch,
+        Some("switch_mode") => AcpToolKind::SwitchMode,
+        _ => AcpToolKind::Other,
+    }
+}
+
+/// Map an official wire tool status to the contract.
+/// Unknown or absent statuses yield `None` so callers drop the malformed update
+/// instead of recording a dishonest lifecycle step.
+pub fn parse_tool_status(value: Option<&Value>) -> Option<AcpToolStatus> {
+    match value.and_then(|status| status.as_str()) {
+        Some("pending") => Some(AcpToolStatus::Pending),
+        Some("in_progress") => Some(AcpToolStatus::InProgress),
+        Some("completed") => Some(AcpToolStatus::Completed),
+        Some("failed") => Some(AcpToolStatus::Failed),
+        _ => None,
+    }
+}
+
+/// Validate one tool-call handle as a 1–128-byte ASCII alphanumeric/hyphen/underscore/dot token.
+/// Dots are accepted for agent-generated call IDs such as `call_001`.
+/// Invalid handles yield `None` so callers drop the update.
+pub fn validate_tool_call_id(id: &str) -> Option<String> {
+    if id.is_empty()
+        || id.len() > 128
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
+    {
+        return None;
+    }
+    Some(id.to_owned())
+}
+
+/// Parse one `ToolCallContent` item from a tool-call content array.
+/// Text blocks surface their text; diff blocks surface validated paths with
+/// old/new text; terminal blocks are ignored (no external terminal window)
+/// and unknown shapes yield `None`.
+fn parse_tool_content_item(item: &Value) -> Option<ToolCallContent> {
+    match item.get("type").and_then(|kind| kind.as_str()) {
+        Some("content") => {
+            let text = item
+                .pointer("/content/text")
+                .and_then(|text| text.as_str())?;
+            if text.chars().count() > MAX_PROMPT_CHARS {
+                return None;
+            }
+            Some(ToolCallContent::Content {
+                text: text.to_owned(),
+            })
+        }
+        Some("diff") => {
+            let path = item.get("path").and_then(|path| path.as_str())?;
+            if path.is_empty() || path.len() > 1024 {
+                return None;
+            }
+            let old_text = item
+                .get("oldText")
+                .and_then(|text| text.as_str())
+                .map(str::to_owned);
+            let new_text = item
+                .get("newText")
+                .and_then(|text| text.as_str())?
+                .to_owned();
+            if new_text.chars().count() > MAX_EXCERPT_BYTES {
+                return None;
+            }
+            Some(ToolCallContent::Diff {
+                path: path.to_owned(),
+                old_text,
+                new_text,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Parse an optional content array, dropping terminal/unknown items.
+/// Returns `None` when the field is absent; an empty vector when present but
+/// every item was terminal/unknown so callers still record the lifecycle step.
+fn parse_tool_content_list(update: &Value) -> Option<Vec<ToolCallContent>> {
+    let items = update.get("content")?.as_array()?;
+    if items.len() > 32 {
+        return None;
+    }
+    let mut out = Vec::new();
+    for item in items {
+        if let Some(content) = parse_tool_content_item(item) {
+            out.push(content);
+        }
+    }
+    Some(out)
+}
+
+/// Parse optional follow-along locations, keeping at most 16 entries.
+/// Paths must be non-empty absolute display strings; line numbers must fit u32.
+/// Malformed lists yield `None` so callers drop the update.
+fn parse_tool_locations(update: &Value) -> Option<Vec<ToolCallLocation>> {
+    let items = update.get("locations")?.as_array()?;
+    if items.len() > 16 {
+        return None;
+    }
+    let mut out = Vec::new();
+    for item in items {
+        let path = item.get("path").and_then(|path| path.as_str())?;
+        if path.is_empty() || path.len() > 1024 {
+            return None;
+        }
+        let line = match item.get("line") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(value.as_u64().and_then(|n| u32::try_from(n).ok())?),
+        };
+        out.push(ToolCallLocation {
+            path: path.to_owned(),
+            line,
+        });
+    }
+    Some(out)
+}
+
+/// Shorten an absolute wire path to a staging-relative display name.
+/// Returns the file name when the path sits inside `staging_dir`; otherwise
+/// returns the full path truncated to 128 chars so outside paths stay visible
+/// but never expose live directory structure beyond the file name when contained.
+pub fn display_path_for_staging(abs_path: &str, staging_dir: &Path) -> String {
+    let candidate = Path::new(abs_path);
+    if let Ok(rel) = candidate.strip_prefix(staging_dir) {
+        let display = rel.to_string_lossy().replace('\\', "/");
+        if !display.is_empty() {
+            return display;
+        }
+    }
+    if let Some(name) = candidate.file_name().and_then(|name| name.to_str()) {
+        if candidate.starts_with(staging_dir) {
+            return name.to_owned();
+        }
+    }
+    abs_path.chars().take(128).collect()
+}
+
+/// Rewrite absolute wire locations into staging-relative display names.
+/// Leaves the update unchanged when no locations are present.
+pub fn relativize_tool_locations(
+    locations: Vec<ToolCallLocation>,
+    staging_dir: &Path,
+) -> Vec<ToolCallLocation> {
+    locations
+        .into_iter()
+        .map(|location| ToolCallLocation {
+            path: display_path_for_staging(&location.path, staging_dir),
+            line: location.line,
+        })
+        .collect()
+}
+
+/// Parse one official `session/update` with `sessionUpdate == "tool_call"`.
+/// The wire `sessionId` must equal `expected_session`; foreign sessions yield
+/// `None`. Requires a valid `toolCallId` and non-empty title; kind defaults to
+/// `Other` and status defaults to `Pending`. At most 32 content items and 16
+/// locations are kept; malformed lists reject the update.
+pub fn parse_tool_call_notification(
+    note: &Value,
+    expected_session: &str,
+    staging_dir: &Path,
+) -> Option<AcpToolCall> {
+    if note.get("method")?.as_str()? != "session/update" {
+        return None;
+    }
+    let params = note.get("params")?;
+    if params.get("sessionId")?.as_str()? != expected_session {
+        return None;
+    }
+    let update = params.get("update")?;
+    if update.get("sessionUpdate")?.as_str()? != "tool_call" {
+        return None;
+    }
+    let tool_call_id = validate_tool_call_id(update.get("toolCallId")?.as_str()?)?;
+    let title = update.get("title").and_then(|title| title.as_str())?;
+    if title.is_empty() || title.chars().count() > 512 {
+        return None;
+    }
+    let kind = parse_tool_kind(update.get("kind"));
+    let status = parse_tool_status(update.get("status")).unwrap_or(AcpToolStatus::Pending);
+    let content = match update.get("content") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(parse_tool_content_list(update)?),
+    };
+    let locations = match update.get("locations") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(relativize_tool_locations(
+            parse_tool_locations(update)?,
+            staging_dir,
+        )),
+    };
+    Some(AcpToolCall {
+        tool_call_id,
+        title: title.to_owned(),
+        kind,
+        status,
+        content,
+        locations,
+    })
+}
+
+/// Parse one official `session/update` with `sessionUpdate == "tool_call_update"`.
+/// Foreign sessions yield `None`. Requires a valid `toolCallId`; all other
+/// fields are optional patches. Malformed present lists reject the update.
+pub fn parse_tool_call_update_notification(
+    note: &Value,
+    expected_session: &str,
+    staging_dir: &Path,
+) -> Option<AcpToolCallUpdate> {
+    if note.get("method")?.as_str()? != "session/update" {
+        return None;
+    }
+    let params = note.get("params")?;
+    if params.get("sessionId")?.as_str()? != expected_session {
+        return None;
+    }
+    let update = params.get("update")?;
+    if update.get("sessionUpdate")?.as_str()? != "tool_call_update" {
+        return None;
+    }
+    let tool_call_id = validate_tool_call_id(update.get("toolCallId")?.as_str()?)?;
+    let title = match update.get("title") {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let text = value.as_str()?;
+            if text.is_empty() || text.chars().count() > 512 {
+                return None;
+            }
+            Some(text.to_owned())
+        }
+    };
+    let kind = match update.get("kind") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(parse_tool_kind(update.get("kind"))),
+    };
+    let status = match update.get("status") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(parse_tool_status(update.get("status"))?),
+    };
+    let content = match update.get("content") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(parse_tool_content_list(update)?),
+    };
+    let locations = match update.get("locations") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(relativize_tool_locations(
+            parse_tool_locations(update)?,
+            staging_dir,
+        )),
+    };
+    Some(AcpToolCallUpdate {
+        tool_call_id,
+        title,
+        kind,
+        status,
+        content,
+        locations,
+    })
+}
+
+/// Parse one official `session/update` with `sessionUpdate == "plan"`.
+/// Foreign sessions yield `None`. Requires 1–16 entries with non-empty content
+/// (at most 512 chars) and valid priority/status; the payload always carries
+/// the complete list for replacement.
+pub fn parse_plan_notification(note: &Value, expected_session: &str) -> Option<Vec<PlanEntry>> {
+    if note.get("method")?.as_str()? != "session/update" {
+        return None;
+    }
+    let params = note.get("params")?;
+    if params.get("sessionId")?.as_str()? != expected_session {
+        return None;
+    }
+    let update = params.get("update")?;
+    if update.get("sessionUpdate")?.as_str()? != "plan" {
+        return None;
+    }
+    let entries = update.get("entries")?.as_array()?;
+    if entries.is_empty() || entries.len() > 16 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let content = entry.get("content").and_then(|content| content.as_str())?;
+        if content.is_empty() || content.chars().count() > 512 {
+            return None;
+        }
+        let priority = match entry.get("priority").and_then(|priority| priority.as_str()) {
+            Some("high") => PlanEntryPriority::High,
+            Some("medium") => PlanEntryPriority::Medium,
+            Some("low") => PlanEntryPriority::Low,
+            _ => return None,
+        };
+        let status = match entry.get("status").and_then(|status| status.as_str()) {
+            Some("pending") => PlanEntryStatus::Pending,
+            Some("in_progress") => PlanEntryStatus::InProgress,
+            Some("completed") => PlanEntryStatus::Completed,
+            _ => return None,
+        };
+        out.push(PlanEntry {
+            content: content.to_owned(),
+            priority,
+            status,
+        });
+    }
+    Some(out)
+}
+
+/// Parsed `session/request_permission` awaiting a user choice in chat.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedPermission {
+    /// Stringified JSON-RPC request ID for the reply envelope.
+    pub request_id: String,
+    /// Session the request claims; callers verify it equals the active session.
+    pub session_id: String,
+    /// Tool call the request refers to, when supplied.
+    pub tool_call_id: Option<String>,
+    /// Human-readable tool title for the permission card.
+    pub title: String,
+    /// User-choosable options in wire order.
+    pub options: Vec<PermissionOption>,
+}
+
+/// Stringify a JSON-RPC request ID (number or string) for permission bookkeeping.
+/// Other shapes yield `None` so callers answer with a protocol error.
+pub fn stringify_request_id(id: &Value) -> Option<String> {
+    match id {
+        Value::String(text) if !text.is_empty() && text.len() <= 128 => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    }
+}
+
+/// Parse one official `session/request_permission` agent request.
+/// Requires a usable request ID, a session ID, and 1–8 options with valid
+/// IDs/names/kinds. Wrong shapes yield `None` so callers answer with a
+/// protocol error instead of recording a dishonest choice.
+pub fn parse_permission_request(id: &Value, params: &Value) -> Option<ParsedPermission> {
+    let request_id = stringify_request_id(id)?;
+    let session_id = params
+        .get("sessionId")
+        .and_then(|id| id.as_str())?
+        .to_owned();
+    if session_id.is_empty() || session_id.len() > 256 {
+        return None;
+    }
+    let options = params.get("options")?.as_array()?;
+    if options.is_empty() || options.len() > 8 {
+        return None;
+    }
+    let mut parsed = Vec::with_capacity(options.len());
+    for option in options {
+        let option_id = option.get("optionId").and_then(|id| id.as_str())?;
+        let name = option.get("name").and_then(|name| name.as_str())?;
+        let kind = match option.get("kind").and_then(|kind| kind.as_str()) {
+            Some("allow_once") => PermissionOptionKind::AllowOnce,
+            Some("allow_always") => PermissionOptionKind::AllowAlways,
+            Some("reject_once") => PermissionOptionKind::RejectOnce,
+            Some("reject_always") => PermissionOptionKind::RejectAlways,
+            _ => return None,
+        };
+        if option_id.is_empty()
+            || option_id.len() > 128
+            || name.is_empty()
+            || name.chars().count() > 128
+        {
+            return None;
+        }
+        parsed.push(PermissionOption {
+            option_id: option_id.to_owned(),
+            name: name.to_owned(),
+            kind,
+        });
+    }
+    let tool_call = params.get("toolCall");
+    let tool_call_id = tool_call
+        .and_then(|call| call.get("toolCallId"))
+        .and_then(|id| id.as_str())
+        .and_then(validate_tool_call_id);
+    let title = tool_call
+        .and_then(|call| call.get("title"))
+        .and_then(|title| title.as_str())
+        .unwrap_or("ツール実行の許可")
+        .chars()
+        .take(512)
+        .collect();
+    Some(ParsedPermission {
+        request_id,
+        session_id,
+        tool_call_id,
+        title,
+        options: parsed,
+    })
+}
+
+/// Build the `result` payload answering `session/request_permission` with an explicit user choice.
+/// The `option_id` must be one of the offered options; callers validate before
+/// invoking. Cancellation uses the spec's `cancelled` outcome.
+pub fn answer_permission_by_id(option_id: &str, cancelled: bool) -> Value {
+    if cancelled {
+        return serde_json::json!({ "outcome": { "outcome": "cancelled" } });
+    }
+    serde_json::json!({
+        "outcome": { "outcome": "selected", "optionId": option_id }
+    })
+}
+
+/// Check whether an absolute wire path is lexically contained in the staging directory.
+///
+/// Pure path rules with no filesystem access: the candidate must be absolute,
+/// strip to a non-empty relative path under the staging root. Existence,
+/// canonicalization, and symlink escapes are checked by the infrastructure
+/// file handlers, never here.
+pub fn staging_path_is_contained(staging_dir: &Path, abs_path: &str) -> bool {
+    let candidate = Path::new(abs_path);
+    if !candidate.is_absolute() {
+        return false;
+    }
+    match candidate.strip_prefix(staging_dir) {
+        Ok(rel) => rel.components().count() != 0,
+        Err(_) => false,
     }
 }
 

@@ -584,6 +584,14 @@ mod regression {
         assert_eq!(init["method"], "initialize");
         assert_eq!(init["params"]["protocolVersion"], 1);
         assert_eq!(init["params"]["clientInfo"]["name"], "marxen");
+        assert_eq!(
+            init["params"]["clientCapabilities"]["fs"]["readTextFile"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            init["params"]["clientCapabilities"]["fs"]["writeTextFile"],
+            serde_json::json!(true)
+        );
         let dir = Path::new("/tmp/staging-copy");
         let new = acp_session_new(2, dir);
         assert_eq!(new["params"]["cwd"], "/tmp/staging-copy");
@@ -616,6 +624,728 @@ mod regression {
             "params": { "update": { "sessionUpdate": "tool_call" } }
         });
         assert_eq!(acp_update_text(&tool_call), None);
+    }
+
+    /// Parse real tool-call lifecycles in order without fabricating timelines.
+    ///
+    /// Pending announces, in-progress patches, and completed settlement keep
+    /// their IDs; foreign sessions and malformed lists are dropped.
+    #[test]
+    fn agentic_tool_lifecycle_orders_pending_to_completed() {
+        use std::path::Path;
+        let staging = Path::new("/tmp/staging-copy");
+        let announced = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "sess_1",
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "call_1",
+                    "title": "Reading file",
+                    "kind": "read",
+                    "status": "pending",
+                    "locations": [{ "path": "/tmp/staging-copy/a.md" }]
+                }
+            }
+        });
+        let call = parse_tool_call_notification(&announced, "sess_1", staging).expect("tool call");
+        assert_eq!(call.tool_call_id, "call_1");
+        assert_eq!(call.kind, AcpToolKind::Read);
+        assert_eq!(call.status, AcpToolStatus::Pending);
+        assert_eq!(call.locations.expect("locations")[0].path, "a.md");
+        let foreign = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "sess_other",
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "call_1",
+                    "title": "Reading file",
+                    "kind": "read",
+                    "status": "pending"
+                }
+            }
+        });
+        assert!(parse_tool_call_notification(&foreign, "sess_1", staging).is_none());
+        let progress = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "sess_1",
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "call_1",
+                    "status": "in_progress"
+                }
+            }
+        });
+        let update =
+            parse_tool_call_update_notification(&progress, "sess_1", staging).expect("update");
+        assert_eq!(update.status, Some(AcpToolStatus::InProgress));
+        let done = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "sess_1",
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "call_1",
+                    "status": "completed",
+                    "content": [{ "type": "diff", "path": "/tmp/staging-copy/a.md", "oldText": "a", "newText": "b" }]
+                }
+            }
+        });
+        let finished = parse_tool_call_update_notification(&done, "sess_1", staging).expect("done");
+        assert_eq!(finished.status, Some(AcpToolStatus::Completed));
+        match finished.content.expect("diff").first().expect("item") {
+            ToolCallContent::Diff { path, new_text, .. } => {
+                assert_eq!(path, "/tmp/staging-copy/a.md");
+                assert_eq!(new_text, "b");
+            }
+            other => panic!("expected diff, got {other:?}"),
+        }
+    }
+
+    /// Replace execution plans completely and surface permission by actual IDs.
+    ///
+    /// Plans require every entry; permissions require real option IDs and
+    /// answer with the selected ID (deny) or the cancelled outcome.
+    #[test]
+    fn agentic_plan_and_permission_use_actual_ids() {
+        let plan = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "sess_1",
+                "update": {
+                    "sessionUpdate": "plan",
+                    "entries": [
+                        { "content": "Read", "priority": "high", "status": "pending" },
+                        { "content": "Edit", "priority": "medium", "status": "in_progress" }
+                    ]
+                }
+            }
+        });
+        let entries = parse_plan_notification(&plan, "sess_1").expect("plan");
+        assert_eq!(entries.len(), 2);
+        assert!(parse_plan_notification(&plan, "sess_other").is_none());
+        let params = serde_json::json!({
+            "sessionId": "sess_1",
+            "toolCall": { "toolCallId": "call_1", "title": "mock tool" },
+            "options": [
+                { "optionId": "mock_allow", "name": "allow", "kind": "allow_once" },
+                { "optionId": "mock_reject", "name": "deny", "kind": "reject_once" }
+            ]
+        });
+        let parsed =
+            parse_permission_request(&serde_json::json!(900), &params).expect("permission");
+        assert_eq!(parsed.request_id, "900");
+        assert_eq!(parsed.options.len(), 2);
+        assert_eq!(
+            answer_permission_by_id("mock_reject", false),
+            serde_json::json!({ "outcome": { "outcome": "selected", "optionId": "mock_reject" } })
+        );
+        assert_eq!(
+            answer_permission_by_id("mock_reject", true),
+            serde_json::json!({ "outcome": { "outcome": "cancelled" } })
+        );
+        assert_eq!(
+            stringify_request_id(&serde_json::json!(900)),
+            Some("900".to_owned())
+        );
+        assert!(stringify_request_id(&serde_json::json!(null)).is_none());
+    }
+
+    /// Contain file access to the authorized staging directory.
+    ///
+    /// Absolute outside paths, relative paths, and symlink escapes are
+    /// rejected; contained absolute paths are allowed for fs methods.
+    /// Domain rules stay pure lexical; the infrastructure check adds the
+    /// canonical filesystem read for existing files.
+    #[test]
+    fn agentic_staging_paths_reject_outside_access() {
+        use std::path::Path;
+        let scratch = tempfile::tempdir().expect("scratch dir");
+        let staging = scratch.path().join("staging");
+        std::fs::create_dir_all(&staging).expect("staging dir");
+        let inside = staging.join("a.md").to_string_lossy().replace('\\', "/");
+        let outside = scratch
+            .path()
+            .join("other-a.md")
+            .to_string_lossy()
+            .replace('\\', "/");
+        // On Windows the lossy slash form stays absolute via the temp root.
+        let staging_abs = staging.to_string_lossy().replace('\\', "/");
+        for check in [staging_path_is_contained, staging_path_allowed] {
+            assert!(check(&staging, &inside));
+            assert!(!check(&staging, &outside));
+            assert!(!check(&staging, "relative/a.md"));
+            assert!(!check(&staging, &staging_abs));
+        }
+        assert_eq!(display_path_for_staging(&inside, &staging), "a.md");
+        let _ = Path::new("/tmp");
+    }
+
+    /// Accept staging paths that differ lexically but resolve canonically.
+    ///
+    /// macOS reports the agent `current_dir` as `/private/var/...` while the
+    /// test `temp_dir` keeps `/var/...`; Windows canonicalizes to UNC
+    /// `\\?\...` versus the drive-letter form. The domain rule stays purely
+    /// lexical, but the infrastructure gate must fall back to canonical
+    /// comparison for absolute existing paths so the mock's
+    /// `fs/read_text_file` round-trip succeeds. Traversal (`..`) is rejected
+    /// before either acceptance even when it resolves inside, and outside,
+    /// relative, and symlink-escape paths stay rejected through every alias
+    /// form. The scratch directory is uniquely owned: nothing shared is
+    /// created or deleted.
+    #[test]
+    fn agentic_staging_paths_accept_canonical_aliases() {
+        let scratch = tempfile::tempdir().expect("scratch dir");
+        let staging = scratch.path().join("staging");
+        std::fs::create_dir_all(staging.join("subdir")).expect("staging dir");
+        std::fs::write(staging.join("a.md"), "# Seed\n").expect("seed file");
+        std::fs::write(scratch.path().join("other.md"), "other\n").expect("outside file");
+        let lexical_inside = staging.join("a.md").to_string_lossy().into_owned();
+        // Traversal is never authorized even when it resolves inside staging.
+        let inner_traversal = staging
+            .join("subdir")
+            .join("..")
+            .join("a.md")
+            .to_string_lossy()
+            .into_owned();
+        assert!(!staging_path_allowed(&staging, &inner_traversal));
+        let escaping_traversal = staging
+            .join("..")
+            .join("other.md")
+            .to_string_lossy()
+            .into_owned();
+        assert!(!staging_path_allowed(&staging, &escaping_traversal));
+        // The exact IPC read refuses traversal with the outside-path error.
+        let params = serde_json::json!({"sessionId": "sess_1", "path": inner_traversal});
+        assert!(serve_fs_read(&staging, "sess_1", &params).is_err());
+        let canonical_root = staging.canonicalize().expect("canonical staging");
+        let alias_inside = canonical_root.join("a.md");
+        let alias_str = alias_inside.to_string_lossy().into_owned();
+        if alias_str != lexical_inside {
+            // Lexically different alias: the domain rule stays strict while
+            // the infrastructure gate resolves the identical file.
+            assert!(
+                !staging_path_is_contained(&staging, &alias_str),
+                "alias must differ lexically, got {alias_str}"
+            );
+            assert!(staging_path_allowed(&staging, &alias_str));
+            // The exact IPC read succeeds through the alias with verbatim bytes.
+            let params = serde_json::json!({"sessionId": "sess_1", "path": alias_str});
+            let reply = serve_fs_read(&staging, "sess_1", &params).expect("alias read");
+            assert_eq!(
+                reply.get("content").and_then(|content| content.as_str()),
+                Some("# Seed\n")
+            );
+            // Canonical escapes through the alias stay rejected.
+            let alias_outside = canonical_root
+                .join("..")
+                .join("other.md")
+                .to_string_lossy()
+                .into_owned();
+            assert!(!staging_path_allowed(&staging, &alias_outside));
+        }
+        // Symlink aliases resolve the same way on Unix; the link lives in the
+        // owned scratch directory so nothing shared is touched.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let link = scratch.path().join("link");
+            symlink(&staging, &link).expect("staging symlink");
+            let linked = link.join("a.md").to_string_lossy().into_owned();
+            assert!(staging_path_allowed(&staging, &linked));
+            let params = serde_json::json!({"sessionId": "sess_1", "path": linked});
+            let reply = serve_fs_read(&staging, "sess_1", &params).expect("link read");
+            assert_eq!(
+                reply.get("content").and_then(|content| content.as_str()),
+                Some("# Seed\n")
+            );
+            let link_outside = link
+                .join("..")
+                .join("other.md")
+                .to_string_lossy()
+                .into_owned();
+            assert!(!staging_path_allowed(&staging, &link_outside));
+        }
+        // The plain lexical path keeps working and guards stay intact.
+        assert!(staging_path_allowed(&staging, &lexical_inside));
+    }
+
+    /// Bind permission replies to exact run/request IDs and offered options.
+    ///
+    /// Unknown runs, stale requests, and unoffered options fail without
+    /// recording; a validated choice is delivered exactly once and run
+    /// cleanup drops every remaining slot.
+    #[test]
+    fn agentic_permission_replies_require_exact_ids_and_options() {
+        let registry = RunRegistry::new();
+        let (run_id, _) = registry.register();
+        let options = vec![
+            PermissionOption {
+                option_id: "mock_allow".into(),
+                name: "allow".into(),
+                kind: PermissionOptionKind::AllowOnce,
+            },
+            PermissionOption {
+                option_id: "mock_reject".into(),
+                name: "deny".into(),
+                kind: PermissionOptionKind::RejectOnce,
+            },
+        ];
+        registry
+            .register_permission(&run_id, "900", "sess_1", options)
+            .unwrap();
+        // Foreign request IDs and invented options never record a choice.
+        assert!(matches!(
+            registry.reply_permission(&run_id, "901", "mock_reject"),
+            Err(AiError::UnknownSession)
+        ));
+        assert!(matches!(
+            registry.reply_permission(&run_id, "900", "mock_other"),
+            Err(AiError::InvalidConfig { .. })
+        ));
+        let unknown_run = AiRunId("run_9999".into());
+        assert!(matches!(
+            registry.reply_permission(&unknown_run, "900", "mock_reject"),
+            Err(AiError::UnknownSession)
+        ));
+        registry
+            .reply_permission(&run_id, "900", "mock_reject")
+            .unwrap();
+        assert_eq!(
+            registry.take_permission_reply(&run_id, "900"),
+            Some("mock_reject".to_owned())
+        );
+        // Each choice delivers a single time.
+        assert_eq!(registry.take_permission_reply(&run_id, "900"), None);
+        // Settlement cleanup drops remaining slots for the run.
+        registry
+            .register_permission(
+                &run_id,
+                "901",
+                "sess_1",
+                vec![PermissionOption {
+                    option_id: "mock_reject".into(),
+                    name: "deny".into(),
+                    kind: PermissionOptionKind::RejectOnce,
+                }],
+            )
+            .unwrap();
+        registry.remove(&run_id);
+        assert!(matches!(
+            registry.reply_permission(&run_id, "901", "mock_reject"),
+            Err(AiError::UnknownSession)
+        ));
+    }
+
+    /// Bound one permission wait to the remaining overall prompt budget.
+    ///
+    /// A late permission never restarts the full run deadline: a nearly spent
+    /// budget waits almost nothing, while a fresh long budget caps at the
+    /// interactive 120-second ceiling.
+    #[test]
+    fn agentic_permission_wait_uses_remaining_prompt_budget() {
+        use std::time::{Duration, Instant};
+        let started = Instant::now();
+        // Nearly spent overall budget: the wait ends with the run deadline.
+        let late = started + Duration::from_secs(29);
+        let until = permission_wait_until(started, Duration::from_secs(30), late);
+        assert!(until >= late);
+        assert!(until <= started + Duration::from_secs(30) + Duration::from_millis(10));
+        // Fresh long budget: capped at the interactive ceiling, not restarted.
+        let fresh = permission_wait_until(started, Duration::from_secs(300), started);
+        assert!(fresh <= started + Duration::from_secs(120) + Duration::from_millis(10));
+        assert!(fresh > started + Duration::from_secs(100));
+    }
+
+    /// Accept exactly one choice per pending request across concurrent replies.
+    ///
+    /// The first valid choice wins; duplicates, late replies after delivery,
+    /// and replies after run settlement all fail without touching the agent.
+    #[test]
+    fn agentic_permission_accepts_at_most_one_concurrent_choice() {
+        use std::sync::Arc;
+        let registry = Arc::new(RunRegistry::new());
+        let (run_id, _) = registry.register();
+        let options = || {
+            vec![
+                PermissionOption {
+                    option_id: "mock_allow".into(),
+                    name: "allow".into(),
+                    kind: PermissionOptionKind::AllowOnce,
+                },
+                PermissionOption {
+                    option_id: "mock_reject".into(),
+                    name: "deny".into(),
+                    kind: PermissionOptionKind::RejectOnce,
+                },
+            ]
+        };
+        registry
+            .register_permission(&run_id, "900", "sess_1", options())
+            .unwrap();
+        let first = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let handles: Vec<_> = ["mock_allow", "mock_reject"]
+            .into_iter()
+            .map(|choice| {
+                let registry = Arc::clone(&registry);
+                let run_id = run_id.clone();
+                let first = Arc::clone(&first);
+                std::thread::spawn(move || {
+                    let outcome = registry.reply_permission(&run_id, "900", choice);
+                    first
+                        .lock()
+                        .expect("result lock")
+                        .push((choice, outcome.is_ok()));
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("reply thread");
+        }
+        let outcomes = first.lock().expect("result lock");
+        assert_eq!(
+            outcomes.iter().filter(|(_, ok)| *ok).count(),
+            1,
+            "exactly one concurrent choice wins, got {outcomes:?}"
+        );
+        // A second choice before delivery is a duplicate and fails.
+        assert!(matches!(
+            registry.reply_permission(&run_id, "900", "mock_reject"),
+            Err(AiError::InvalidConfig { .. })
+        ));
+        // The recorded choice delivers exactly once.
+        assert!(registry.take_permission_reply(&run_id, "900").is_some());
+        assert_eq!(registry.take_permission_reply(&run_id, "900"), None);
+        // Late replies after driver cleanup fail as stale.
+        registry.drop_permission(&run_id, "900");
+        assert!(matches!(
+            registry.reply_permission(&run_id, "900", "mock_allow"),
+            Err(AiError::UnknownSession)
+        ));
+    }
+
+    /// Build the two mock permission options shared by reply-race tests.
+    fn mock_permission_options() -> Vec<PermissionOption> {
+        vec![
+            PermissionOption {
+                option_id: "mock_allow".into(),
+                name: "allow".into(),
+                kind: PermissionOptionKind::AllowOnce,
+            },
+            PermissionOption {
+                option_id: "mock_reject".into(),
+                name: "deny".into(),
+                kind: PermissionOptionKind::RejectOnce,
+            },
+        ]
+    }
+
+    /// Reject a second reply arriving after take but before driver drop.
+    ///
+    /// The driver consumes the deliverable first and drops the slot second;
+    /// the retained consumed state keeps the gap from accepting the same
+    /// request twice. Cleanup still resets the slot so a retried agent
+    /// request with the same ID answers again.
+    #[test]
+    fn agentic_permission_reply_rejected_after_take_before_drop() {
+        let registry = RunRegistry::new();
+        let (run_id, _) = registry.register();
+        registry
+            .register_permission(&run_id, "900", "sess_1", mock_permission_options())
+            .unwrap();
+        registry
+            .reply_permission(&run_id, "900", "mock_allow")
+            .unwrap();
+        // Driver consumes the deliverable before dropping the slot.
+        assert_eq!(
+            registry.take_permission_reply(&run_id, "900"),
+            Some("mock_allow".to_owned())
+        );
+        // A reply in the take-before-drop gap is a duplicate, not a new vote.
+        assert!(matches!(
+            registry.reply_permission(&run_id, "900", "mock_reject"),
+            Err(AiError::InvalidConfig { .. })
+        ));
+        assert_eq!(registry.take_permission_reply(&run_id, "900"), None);
+        // Driver cleanup drops the slot; late replies fail as stale.
+        registry.drop_permission(&run_id, "900");
+        assert!(matches!(
+            registry.reply_permission(&run_id, "900", "mock_reject"),
+            Err(AiError::UnknownSession)
+        ));
+        // A retried agent request reusing the same ID starts unanswered.
+        registry
+            .register_permission(&run_id, "900", "sess_1", mock_permission_options())
+            .unwrap();
+        registry
+            .reply_permission(&run_id, "900", "mock_reject")
+            .unwrap();
+        assert_eq!(
+            registry.take_permission_reply(&run_id, "900"),
+            Some("mock_reject".to_owned())
+        );
+    }
+
+    /// Reject permission replies for a cancelled run that is still registered.
+    ///
+    /// Cancellation only flips the run flag; settlement removes the run
+    /// later. Registration alone therefore cannot decide replyability: the
+    /// cancel flag rejects the reply while the run entry still exists.
+    #[test]
+    fn agentic_permission_reply_rejected_for_cancelled_run() {
+        let registry = RunRegistry::new();
+        let (run_id, _) = registry.register();
+        registry
+            .register_permission(&run_id, "900", "sess_1", mock_permission_options())
+            .unwrap();
+        assert!(registry.cancel(&run_id));
+        // The run is still registered, but its cancelled flag refuses replies.
+        assert!(registry.cancel_flag(&run_id).is_some());
+        assert!(matches!(
+            registry.reply_permission(&run_id, "900", "mock_allow"),
+            Err(AiError::RequestCancelled)
+        ));
+        assert_eq!(registry.take_permission_reply(&run_id, "900"), None);
+        // Settlement removes the run; replies then fail as stale.
+        registry.remove(&run_id);
+        assert!(matches!(
+            registry.reply_permission(&run_id, "900", "mock_allow"),
+            Err(AiError::UnknownSession)
+        ));
+    }
+
+    /// Reject unauthorized staged file access without touching the filesystem.
+    ///
+    /// Wrong sessions, outside paths, and `ask`-mode writes fail; a contained
+    /// write/read roundtrip inside the staging directory succeeds.
+    #[test]
+    fn agentic_staged_file_access_rejects_wrong_session_and_path() {
+        let root = tempfile::tempdir().unwrap();
+        let staging = root.path().join("copy_1");
+        std::fs::create_dir_all(&staging).unwrap();
+        let inside = staging.join("a.md");
+        let inside_text = inside.to_string_lossy().into_owned();
+        let outside = root.path().join("outside.md");
+        let outside_text = outside.to_string_lossy().into_owned();
+        std::fs::write(&outside, "outside").unwrap();
+        // Wrong sessions never read, wherever the path points.
+        assert!(serve_fs_read(
+            &staging,
+            "sess_1",
+            &serde_json::json!({ "sessionId": "sess_other", "path": inside_text }),
+        )
+        .is_err());
+        // Outside paths never read, even with the right session.
+        assert!(serve_fs_read(
+            &staging,
+            "sess_1",
+            &serde_json::json!({ "sessionId": "sess_1", "path": outside_text }),
+        )
+        .is_err());
+        // `ask` turns never write, even inside their own staging copy.
+        assert!(serve_fs_write(
+            &staging,
+            "sess_1",
+            &serde_json::json!({ "sessionId": "sess_1", "path": inside_text, "content": "x" }),
+            PromptMode::Ask,
+        )
+        .is_err());
+        // A contained workspace write/read roundtrip succeeds verbatim.
+        serve_fs_write(
+            &staging,
+            "sess_1",
+            &serde_json::json!({ "sessionId": "sess_1", "path": inside_text, "content": "hello staging" }),
+            PromptMode::Workspace,
+        )
+        .unwrap();
+        let body = serve_fs_read(
+            &staging,
+            "sess_1",
+            &serde_json::json!({ "sessionId": "sess_1", "path": inside_text }),
+        )
+        .unwrap();
+        assert_eq!(body["content"], "hello staging");
+        assert_eq!(std::fs::read_to_string(&inside).unwrap(), "hello staging");
+    }
+
+    /// Reject absent destinations below outside-pointing symlinked parents.
+    ///
+    /// A symlinked staging parent resolving outside the owned root must refuse
+    /// creation with no outside file created or modified, while an ordinary
+    /// absent-file write and a permitted internal alias succeed verbatim. The
+    /// scratch directory is uniquely owned. Symlink creation needs privilege
+    /// on Windows, so those branches only execute on Unix; public macOS/Linux
+    /// CI verifies them and Windows reports them as unexecuted.
+    #[test]
+    fn agentic_write_rejects_absent_file_below_outside_symlink() {
+        let scratch = tempfile::tempdir().expect("scratch dir");
+        let staging = scratch.path().join("staging");
+        std::fs::create_dir_all(staging.join("sub")).expect("staging dir");
+        let outside = scratch.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        std::fs::write(outside.join("keep.md"), "keep\n").expect("sentinel");
+        // An ordinary absent-file write succeeds verbatim, nested or not.
+        for rel in ["new.md", "sub/nested.md"] {
+            let dest = staging.join(rel).to_string_lossy().into_owned();
+            serve_fs_write(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": dest, "content": "hello staging"}),
+                PromptMode::Workspace,
+            )
+            .unwrap_or_else(|_| panic!("ordinary write for {rel}"));
+            assert_eq!(
+                std::fs::read_to_string(staging.join(rel)).unwrap(),
+                "hello staging"
+            );
+        }
+        // Symlink branches need link privilege: Unix-only execution.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            // An outside-pointing parent refuses creation and modifies nothing.
+            let link = staging.join("link");
+            symlink(&outside, &link).expect("outside symlink");
+            let evil = link.join("evil.md").to_string_lossy().into_owned();
+            assert!(serve_fs_write(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": evil, "content": "pwned"}),
+                PromptMode::Workspace,
+            )
+            .is_err());
+            assert!(!outside.join("evil.md").exists());
+            assert_eq!(
+                std::fs::read_to_string(outside.join("keep.md")).unwrap(),
+                "keep\n"
+            );
+            // A permitted internal alias writes inside verbatim.
+            let inner = staging.join("inner");
+            symlink(staging.join("sub"), &inner).expect("internal symlink");
+            let note = inner.join("note.md").to_string_lossy().into_owned();
+            serve_fs_write(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": note, "content": "inside"}),
+                PromptMode::Workspace,
+            )
+            .expect("internal alias write");
+            assert_eq!(
+                std::fs::read_to_string(staging.join("sub").join("note.md")).unwrap(),
+                "inside"
+            );
+        }
+    }
+
+    /// Authorize absent destinations through valid canonical aliases.
+    ///
+    /// A previously absent destination reached through a canonical alias of
+    /// the owned root (platform alias or Unix root symlink) resolves inside
+    /// staging and must succeed, while dangling links and missing staging
+    /// roots fail closed with nothing created. The scratch directory is
+    /// uniquely owned. Symlink branches only execute on Unix; public
+    /// macOS/Linux CI verifies them and Windows reports them as unexecuted.
+    #[test]
+    fn agentic_staging_allows_absent_destinations_through_valid_aliases() {
+        let scratch = tempfile::tempdir().expect("scratch dir");
+        let staging = scratch.path().join("staging");
+        std::fs::create_dir_all(&staging).expect("staging dir");
+        // Platform-alias branch when the canonical root differs lexically
+        // (macOS /private/var, Windows UNC): the absent destination succeeds.
+        let canonical_root = staging.canonicalize().expect("canonical staging");
+        let canonical_dest = canonical_root
+            .join("fresh.md")
+            .to_string_lossy()
+            .into_owned();
+        let lexical_dest = staging.join("fresh.md").to_string_lossy().into_owned();
+        if canonical_dest != lexical_dest {
+            assert!(staging_path_allowed(&staging, &canonical_dest));
+            serve_fs_write(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": canonical_dest, "content": "fresh alias"}),
+                PromptMode::Workspace,
+            )
+            .expect("alias absent-file write");
+            assert_eq!(
+                std::fs::read_to_string(staging.join("fresh.md")).unwrap(),
+                "fresh alias"
+            );
+        }
+        // A missing staging root fails closed for gate, read, and write alike.
+        let ghost = scratch.path().join("ghost");
+        let ghost_dest = ghost.join("a.md").to_string_lossy().into_owned();
+        assert!(!staging_path_allowed(&ghost, &ghost_dest));
+        assert!(serve_fs_read(
+            &ghost,
+            "sess_1",
+            &serde_json::json!({"sessionId": "sess_1", "path": ghost_dest}),
+        )
+        .is_err());
+        assert!(serve_fs_write(
+            &ghost,
+            "sess_1",
+            &serde_json::json!({"sessionId": "sess_1", "path": ghost_dest, "content": "x"}),
+            PromptMode::Workspace,
+        )
+        .is_err());
+        assert!(!ghost.exists());
+        // Symlink branches need link privilege: Unix-only execution.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            // A root symlink is a valid alias: the absent destination succeeds.
+            let root_link = scratch.path().join("root-link");
+            symlink(&staging, &root_link).expect("root symlink");
+            let via_link = root_link.join("via-link.md").to_string_lossy().into_owned();
+            assert!(staging_path_allowed(&staging, &via_link));
+            serve_fs_write(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": via_link, "content": "via link"}),
+                PromptMode::Workspace,
+            )
+            .expect("root-link absent-file write");
+            assert_eq!(
+                std::fs::read_to_string(staging.join("via-link.md")).unwrap(),
+                "via link"
+            );
+            // A dangling link is an entry that cannot resolve: gate, read,
+            // and write all fail and the link itself is left untouched.
+            let missing_target = scratch.path().join("no-such-target");
+            let dangling = staging.join("dangling.md");
+            symlink(&missing_target, &dangling).expect("dangling symlink");
+            let dangling_text = dangling.to_string_lossy().into_owned();
+            assert!(!staging_path_allowed(&staging, &dangling_text));
+            assert!(serve_fs_read(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": dangling_text}),
+            )
+            .is_err());
+            let refusal = serve_fs_write(
+                &staging,
+                "sess_1",
+                &serde_json::json!({"sessionId": "sess_1", "path": dangling_text, "content": "x"}),
+                PromptMode::Workspace,
+            )
+            .expect_err("dangling write refuses");
+            assert_eq!(
+                refusal
+                    .pointer("/error/message")
+                    .and_then(|message| message.as_str()),
+                Some("path is outside the authorized staging copy")
+            );
+            assert!(!missing_target.exists());
+            assert!(std::fs::symlink_metadata(&dangling).is_ok());
+        }
     }
 
     /// Refuse prompts before a session opens, concurrent prompts, and foreign

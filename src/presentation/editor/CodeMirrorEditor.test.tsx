@@ -1,6 +1,42 @@
-import { describe, expect, it } from "vitest";
-import { singleEditFromDiff } from "./CodeMirrorEditor";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render } from "@testing-library/react";
+import { CodeMirrorEditor, singleEditFromDiff } from "./CodeMirrorEditor";
 import { applyTextEdits } from "../../domain/coordinates/utf16";
+
+afterEach(cleanup);
+
+it("handles right click and keyboard menu gestures only in an explicitly wired editor", () => {
+  const menu = vi.fn();
+  const view = render(<CodeMirrorEditor value="abc" ariaLabel="editor" onEditorMenu={menu} />);
+  const content = view.container.querySelector<HTMLElement>(".cm-content")!;
+  const rightClick = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+  content.dispatchEvent(rightClick);
+  expect(rightClick.defaultPrevented).toBe(true);
+  expect(menu).toHaveBeenCalledOnce();
+  fireEvent.keyDown(content, { key: "ContextMenu" });
+  fireEvent.keyDown(content, { key: "F10", shiftKey: true });
+  expect(menu).toHaveBeenCalledTimes(3);
+  menu.mock.calls[2][0].restoreFocus();
+  expect(content).toHaveFocus();
+  view.rerender(<CodeMirrorEditor value="abc" ariaLabel="editor" />);
+  const native = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+  content.dispatchEvent(native);
+  expect(native.defaultPrevented).toBe(false);
+});
+
+it("keeps menu gestures from consuming or replacing IME preedit", () => {
+  const menu = vi.fn();
+  const edits = vi.fn();
+  const view = render(<CodeMirrorEditor value="日本😀" ariaLabel="editor" onEditorMenu={menu} onGuiEdits={edits} />);
+  const content = view.container.querySelector<HTMLElement>(".cm-content")!;
+  fireEvent.compositionStart(content);
+  fireEvent.contextMenu(content);
+  fireEvent.keyDown(content, { key: "F10", shiftKey: true, isComposing: true });
+  fireEvent.keyDown(content, { key: "Enter", isComposing: true, keyCode: 229 });
+  expect(menu).not.toHaveBeenCalled();
+  expect(edits).not.toHaveBeenCalled();
+  fireEvent.compositionEnd(content);
+});
 
 describe("composition commit", () => {
   it("commits IME text as one range edit", () => {

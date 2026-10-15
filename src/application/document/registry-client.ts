@@ -14,6 +14,7 @@ import { LocalizedError } from "../../domain/localized-error";
 
 import type {
   CursorUpdate,
+  EditorContext,
   DocumentId,
   DocumentSnapshot,
   GridUpdate,
@@ -29,7 +30,9 @@ import type {
 } from "../../contracts/contracts";
 import { isStaleError, READONLY_MESSAGE, StaleResync } from "../../domain/document-errors";
 import { applyTextEdits } from "../../domain/coordinates/utf16";
-import type { DocumentTransport } from "../ports";
+import { adjacentTableCell, formatRange, hardBreakSpaces, type FormatKind } from "../../domain/markdown-gui";
+import type { DocumentTransport, EditorAction } from "../ports";
+import { supportsEditorSelection } from "../../domain/editor-menu";
 
 /** Paste-image arguments pairing a save request with bytes and a range. */
 export interface PasteImageArgs {
@@ -62,6 +65,61 @@ export class RegistryClient {
    * serialization, execution-time revision binding, and stale resync.
    */
   constructor(private transport: DocumentTransport) {}
+
+  /** Select the complete native source in queue order without replaying a stale gesture. */
+  selectAll(expected: EditorContext): Promise<CursorUpdate> {
+    const cursor = expected.cursor;
+    return this.enqueue(cursor.documentId, async () => {
+      if (this.rev.get(cursor.documentId) !== cursor.revision) return this.resync(cursor.documentId);
+      try {
+        const context = await this.transport.fetchEditorContext({ documentId: cursor.documentId, baseRevision: cursor.revision });
+        if (context.cursor.revision !== cursor.revision || context.cursor.anchor !== cursor.anchor || context.cursor.head !== cursor.head || context.mode !== expected.mode || !supportsEditorSelection(context.mode)) throw new LocalizedError("選択またはVimモードが変わりました。操作し直してください。");
+        const text = this.source.get(cursor.documentId);
+        if (text === undefined) return this.resync(cursor.documentId);
+        return await this.transport.reportCursor({ documentId: cursor.documentId, revision: cursor.revision, anchor: 0, head: text.length });
+      } catch (cause) { if (isStaleError(cause)) return this.resync(cursor.documentId); throw cause; }
+    });
+  }
+
+  /** Format a captured native selection with actor-side selection guards and an ordered caret report. */
+  formatEditorSelection(cursor: CursorUpdate, beforeText: string, kind: FormatKind): Promise<DocumentSnapshot> {
+    return this.enqueue(cursor.documentId, async () => {
+      if (this.rev.get(cursor.documentId) !== cursor.revision || this.source.get(cursor.documentId) !== beforeText) return this.resync(cursor.documentId);
+      try {
+        const edits = formatRange(beforeText, Math.min(cursor.anchor, cursor.head), Math.max(cursor.anchor, cursor.head), kind);
+        const snapshot = this.bump(await this.transport.applyEdits({ documentId: cursor.documentId, baseRevision: cursor.revision }, edits, cursor));
+        if (snapshot.text !== applyTextEdits(beforeText, edits)) throw new StaleResync(snapshot);
+        const head = edits[0].range.start + edits[0].text.length;
+        await this.transport.reportCursor({ documentId: cursor.documentId, revision: snapshot.revision, anchor: head, head });
+        return snapshot;
+      } catch (cause) { if (isStaleError(cause)) return this.resync(cursor.documentId); throw cause; }
+    });
+  }
+
+  /** Capture native menu data after earlier edits and cursor reports finish. */
+  fetchEditorContext(documentId: DocumentId): Promise<EditorContext> {
+    return this.enqueue(documentId, async () => {
+      try {
+        const revision = this.rev.get(documentId) ?? 0;
+        const context = await this.transport.fetchEditorContext({ documentId, baseRevision: revision });
+        if (context.cursor.revision !== revision) return this.resync(documentId);
+        return context;
+      } catch (cause) { if (isStaleError(cause)) return this.resync(documentId); throw cause; }
+    });
+  }
+
+  /** Reject stale menu actions and execute native history or guarded clipboard operations. */
+  editorAction(cursor: CursorUpdate, action: EditorAction): Promise<DocumentSnapshot> {
+    return this.enqueue(cursor.documentId, async () => {
+      if (this.rev.get(cursor.documentId) !== cursor.revision) return this.resync(cursor.documentId);
+      try {
+        const snapshot = action === "undo" || action === "redo"
+          ? await this.transport.editorHistory({ documentId: cursor.documentId, baseRevision: cursor.revision }, action === "redo")
+          : await this.transport.editorClipboard(cursor, action);
+        return this.bump(snapshot);
+      } catch (cause) { if (isStaleError(cause)) return this.resync(cursor.documentId); throw cause; }
+    });
+  }
 
   /**
    * Record an authoritative snapshot, keeping only newer-or-equal revisions.
@@ -246,6 +304,68 @@ export class RegistryClient {
         if (isStaleError(cause)) await this.resync(documentId);
         throw cause;
       }
+    });
+  }
+
+  /** Execute Enter after prior GUI cursor reports; preserve mappings and non-Insert modes. */
+  routeEditorEnter(documentId: DocumentId, hardBreak: boolean, hasSelection: boolean, onCopy: (copy: YankCopy) => Promise<void>): Promise<VimInputResult> {
+    return this.enqueue(documentId, async () => {
+      let revision = this.rev.get(documentId) ?? 0;
+      try {
+        if (hardBreak && !hasSelection && !this.pendingPrefix.get(documentId)) {
+          const mode = await this.transport.fetchMode(documentId);
+          if (mode.revision !== revision) return this.resync(documentId);
+          if (mode.mode === "insert" && !await this.transport.hasMapping(documentId, "i", "<CR>")) {
+            const cursor = await this.transport.fetchCursor(documentId);
+            if (cursor.revision !== revision) return this.resync(documentId);
+            const source = this.source.get(documentId);
+            if (source === undefined) return this.resync(documentId);
+            const spaces = hardBreakSpaces(source, cursor.anchor, cursor.head);
+            if (spaces) {
+              const snapshot = await this.replaceGuiRange(documentId, revision, { start: cursor.head, end: cursor.head }, spaces, source);
+              revision = snapshot.revision;
+            }
+          }
+        }
+        this.pendingPrefix.delete(documentId);
+        const result = await this.transport.inputWithCopy({ documentId, baseRevision: revision }, "<CR>");
+        this.bump(result.snapshot);
+        if (result.copy) await onCopy(result.copy);
+        return result;
+      } catch (cause) {
+        if (isStaleError(cause)) return this.resync(documentId);
+        throw cause;
+      }
+    });
+  }
+
+  /** Move to the next source cell in the same queue, yielding to user mappings and other modes. */
+  routeTableTab(documentId: DocumentId, backwards: boolean, offset: number, beforeText: string, onCopy?: (copy: YankCopy) => Promise<void>): Promise<VimInputResult | { cursor: CursorUpdate }> {
+    return this.enqueue(documentId, async () => {
+      const revision = this.rev.get(documentId) ?? 0;
+      const key = backwards ? "<S-Tab>" : "<Tab>";
+      try {
+        const mode = await this.transport.fetchMode(documentId);
+        if (mode.revision !== revision) return this.resync(documentId);
+        if (mode.mode === "insert" && !this.pendingPrefix.get(documentId) && !await this.transport.hasMapping(documentId, "i", key)) {
+          const source = this.source.get(documentId);
+          if (source === undefined) return this.resync(documentId);
+          let at = offset;
+          if (source !== beforeText) {
+            // A preceding queued GUI commit owns the new cursor; never reuse the old display offset.
+            const cursor = await this.transport.fetchCursor(documentId);
+            if (cursor.revision !== revision) return this.resync(documentId);
+            at = cursor.head;
+          }
+          const next = adjacentTableCell(source, at, backwards);
+          if (next) return { cursor: await this.transport.reportCursor({ documentId, revision, anchor: next.anchor, head: next.anchor }) };
+        }
+        this.pendingPrefix.delete(documentId);
+        const result = await this.transport.inputWithCopy({ documentId, baseRevision: revision }, key);
+        this.bump(result.snapshot);
+        if (result.copy && onCopy) await onCopy(result.copy);
+        return result;
+      } catch (cause) { if (isStaleError(cause)) return this.resync(documentId); throw cause; }
     });
   }
 
@@ -584,6 +704,18 @@ export class RegistryClient {
  * tracked and no save is ever simulated.
  */
 export class ReadonlyRegistry {
+  /** Reject native whole-buffer selection in the read-only browser demo. */
+  selectAll(): Promise<never> { return this.reject(); }
+  /** Reject native-selection formatting in the read-only browser demo. */
+  formatEditorSelection(): Promise<never> { return this.reject(); }
+  /** Reject table navigation without native document ownership. */
+  routeTableTab(): Promise<never> { return this.reject(); }
+  /** Reject native editor-context reads without a desktop owner. */
+  fetchEditorContext(): Promise<never> { return this.reject(); }
+  /** Reject every editor action in the read-only browser demo. */
+  editorAction(): Promise<never> { return this.reject(); }
+  /** Reject editor Enter without modifying read-only documents. */
+  routeEditorEnter(): Promise<never> { return this.reject(); }
   /** Reject without tracking, preserving the read-only contract. */
   private reject(): Promise<never> {
     return Promise.reject(new LocalizedError(READONLY_MESSAGE));

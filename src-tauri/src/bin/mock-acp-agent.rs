@@ -220,6 +220,358 @@ fn permission_request(session_id: &str) -> serde_json::Value {
     })
 }
 
+/// Send a `session/update` tool-call announcement for the agentic demo.
+/// `status` uses official values; titles and kinds mirror real agents.
+fn agentic_tool_call(
+    agent: &mut Agent,
+    session_id: &str,
+    tool_call_id: &str,
+    title: &str,
+    kind: &str,
+    status: &str,
+) {
+    agent.send(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": tool_call_id,
+                "title": title,
+                "kind": kind,
+                "status": status
+            }
+        }
+    }));
+}
+
+/// Send a `session/update` tool-call progress update for the agentic demo.
+/// Only the supplied patch fields are included, per the official schema.
+fn agentic_tool_update(
+    agent: &mut Agent,
+    session_id: &str,
+    tool_call_id: &str,
+    status: &str,
+    content: Option<serde_json::Value>,
+) {
+    let mut update = serde_json::json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": tool_call_id,
+        "status": status
+    });
+    if let Some(content) = content {
+        update["content"] = content;
+    }
+    agent.send(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": { "sessionId": session_id, "update": update }
+    }));
+}
+
+/// Send a complete `session/update` plan snapshot for the agentic demo.
+/// Each payload carries all entries; clients replace the plan.
+fn agentic_plan(agent: &mut Agent, session_id: &str, entries: &serde_json::Value) {
+    agent.send(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": { "sessionUpdate": "plan", "entries": entries }
+        }
+    }));
+}
+
+/// Find the first regular file in the staging cwd for the agentic demo.
+/// Returns its absolute path and UTF-8 content, or `None` when empty.
+fn agentic_first_staged_file() -> Option<(std::path::PathBuf, String)> {
+    let cwd = std::env::current_dir().ok()?;
+    let mut candidates = Vec::new();
+    let mut stack = vec![cwd.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).ok()?.flatten() {
+            let path = entry.path();
+            if entry.file_type().ok()?.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if entry.file_type().ok()?.is_symlink() {
+                continue;
+            }
+            candidates.push(path);
+        }
+    }
+    candidates.sort();
+    for path in candidates {
+        if let Ok(bytes) = std::fs::read(&path) {
+            if let Ok(text) = String::from_utf8(bytes) {
+                return Some((path, text));
+            }
+        }
+    }
+    None
+}
+
+/// Run the reproducible agentic demo: real multi-step read/edit/create with
+/// visible tool/plan events and a permission choice.
+///
+/// Steps: plan (3 pending) → read tool (direct FS read) → fs/read_text_file
+/// via client → edit tool (fs/write_text_file via client with diff) → create
+/// tool (direct FS new `.md` with diff) → permission (denied skips privileged
+/// write) → plan completed → text chunks → `end_turn`. All writes stay inside
+/// the staging cwd; wrong paths are never attempted. Returns `false` when the
+/// client disconnects mid-demo.
+fn run_agentic_demo(
+    agent: &mut Agent,
+    reader: &mut BufReader<std::io::StdinLock<'_>>,
+    id: &serde_json::Value,
+    session_id: &str,
+) -> bool {
+    // 1. Plan with three pending steps.
+    agentic_plan(
+        agent,
+        session_id,
+        &serde_json::json!([
+            {"content": "Read the staged document", "priority": "high", "status": "pending"},
+            {"content": "Edit the staged document", "priority": "high", "status": "pending"},
+            {"content": "Create a new note", "priority": "medium", "status": "pending"}
+        ]),
+    );
+    agent.flush();
+
+    // 2. Read tool via direct filesystem.
+    agentic_tool_call(
+        agent,
+        session_id,
+        "call_read_1",
+        "Reading staged document",
+        "read",
+        "pending",
+    );
+    agent.flush();
+    let Some((first_path, first_text)) = agentic_first_staged_file() else {
+        agent.respond_error(id, "agentic demo found no staged file");
+        agent.flush();
+        return true;
+    };
+    let first_abs = first_path.to_string_lossy().replace('\\', "/");
+    agentic_tool_update(
+        agent,
+        session_id,
+        "call_read_1",
+        "in_progress",
+        Some(serde_json::json!([
+            {"type": "content", "content": {"type": "text", "text": "Reading staged file..."}}
+        ])),
+    );
+    agent.flush();
+    // Real read already happened above; report completion with a location.
+    agent.send(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "call_read_1",
+                "status": "completed",
+                "locations": [{"path": first_abs}]
+            }
+        }
+    }));
+    agent.flush();
+    agentic_plan(
+        agent,
+        session_id,
+        &serde_json::json!([
+            {"content": "Read the staged document", "priority": "high", "status": "completed"},
+            {"content": "Edit the staged document", "priority": "high", "status": "in_progress"},
+            {"content": "Create a new note", "priority": "medium", "status": "pending"}
+        ]),
+    );
+    agent.flush();
+
+    // 3. Authorized read via client fs/read_text_file (proves IPC path).
+    let fs_read_id = 1001;
+    agent.send(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": fs_read_id,
+        "method": "fs/read_text_file",
+        "params": {"sessionId": session_id, "path": first_path.to_string_lossy()}
+    }));
+    agent.flush();
+    let fs_content = match read_message(reader) {
+        Some(reply) => reply
+            .pointer("/result/content")
+            .and_then(|content| content.as_str())
+            .unwrap_or("")
+            .to_owned(),
+        None => return false,
+    };
+    if fs_content != first_text {
+        agent.respond_error(id, "fs/read_text_file content mismatch");
+        agent.flush();
+        return true;
+    }
+
+    // 4. Edit tool via client fs/write_text_file with a real diff.
+    agentic_tool_call(
+        agent,
+        session_id,
+        "call_edit_1",
+        "Editing staged document",
+        "edit",
+        "pending",
+    );
+    agent.flush();
+    agentic_tool_update(agent, session_id, "call_edit_1", "in_progress", None);
+    agent.flush();
+    let edited = format!("{first_text}\n\nAgentic edit.\n");
+    agent.send(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1002,
+        "method": "fs/write_text_file",
+        "params": {
+            "sessionId": session_id,
+            "path": first_path.to_string_lossy(),
+            "content": edited
+        }
+    }));
+    agent.flush();
+    match read_message(reader) {
+        Some(reply) if reply.get("result").is_some() => {}
+        _ => {
+            agent.respond_error(id, "fs/write_text_file was rejected");
+            agent.flush();
+            return true;
+        }
+    }
+    agentic_tool_update(
+        agent,
+        session_id,
+        "call_edit_1",
+        "completed",
+        Some(serde_json::json!([
+            {"type": "diff", "path": first_path.to_string_lossy(), "oldText": first_text, "newText": edited}
+        ])),
+    );
+    agent.flush();
+    agentic_plan(
+        agent,
+        session_id,
+        &serde_json::json!([
+            {"content": "Read the staged document", "priority": "high", "status": "completed"},
+            {"content": "Edit the staged document", "priority": "high", "status": "completed"},
+            {"content": "Create a new note", "priority": "medium", "status": "in_progress"}
+        ]),
+    );
+    agent.flush();
+
+    // 5. Create tool via direct filesystem with a real new Markdown file.
+    agentic_tool_call(
+        agent,
+        session_id,
+        "call_create_1",
+        "Creating agentic note",
+        "edit",
+        "pending",
+    );
+    agent.flush();
+    agentic_tool_update(agent, session_id, "call_create_1", "in_progress", None);
+    agent.flush();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let new_rel = "agentic-note.md";
+    let new_target = match guarded_staging_target(&cwd, new_rel) {
+        Ok(target) => target,
+        Err(detail) => {
+            agent.respond_error(id, &format!("staging rejected: {detail}"));
+            agent.flush();
+            return true;
+        }
+    };
+    let new_text = "# Agentic note\n\nCreated by the reproducible mock agent.\n";
+    if std::fs::write(&new_target, new_text.as_bytes()).is_err() {
+        agent.respond_error(id, "staging write failed");
+        agent.flush();
+        return true;
+    }
+    agentic_tool_update(
+        agent,
+        session_id,
+        "call_create_1",
+        "completed",
+        Some(serde_json::json!([
+            {"type": "diff", "path": new_target.to_string_lossy(), "oldText": null, "newText": new_text}
+        ])),
+    );
+    agent.flush();
+
+    // 6. Permission choice: the test's reply decides the privileged write.
+    // With `--agentic-allow` an allow answer writes the privileged file;
+    // otherwise only a deny answer continues and the write is skipped.
+    // Either way the choice has a real filesystem effect.
+    agent.send(&permission_request(session_id));
+    agent.flush();
+    let answer = match read_message(reader) {
+        Some(answer) => {
+            if let Some(dir) = flag_dir() {
+                let _ = std::fs::write(
+                    dir.join("permission.json"),
+                    serde_json::to_vec(&answer).unwrap_or_default(),
+                );
+            }
+            answer
+        }
+        None => return false,
+    };
+    if has_flag("--agentic-allow") {
+        if !permission_allowed(&answer) {
+            agent.respond_error(id, "permission outcome was not allowed");
+            agent.flush();
+            return true;
+        }
+        let cwd = std::env::current_dir().unwrap_or_default();
+        match guarded_staging_target(&cwd, "agentic-privileged.md") {
+            Ok(target) => {
+                if std::fs::write(&target, "# Privileged\n\nWritten after allow.\n").is_err() {
+                    agent.respond_error(id, "staging write failed");
+                    agent.flush();
+                    return true;
+                }
+            }
+            Err(detail) => {
+                agent.respond_error(id, &format!("staging rejected: {detail}"));
+                agent.flush();
+                return true;
+            }
+        }
+    } else {
+        if !permission_denied(&answer) {
+            agent.respond_error(id, "permission outcome was not denied");
+            agent.flush();
+            return true;
+        }
+    }
+
+    // 7. Final plan, text, and terminal.
+    agentic_plan(
+        agent,
+        session_id,
+        &serde_json::json!([
+            {"content": "Read the staged document", "priority": "high", "status": "completed"},
+            {"content": "Edit the staged document", "priority": "high", "status": "completed"},
+            {"content": "Create a new note", "priority": "medium", "status": "completed"}
+        ]),
+    );
+    agent.flush();
+    agent.notify_update(session_id, "Agentic work complete.");
+    agent.flush();
+    agent.respond(id, serde_json::json!({ "stopReason": "end_turn" }));
+    agent.flush();
+    true
+}
+
 /// Recognize only a selected `mock_reject` permission outcome, not cancellation or approval.
 fn permission_denied(answer: &serde_json::Value) -> bool {
     answer
@@ -230,6 +582,18 @@ fn permission_denied(answer: &serde_json::Value) -> bool {
             .pointer("/result/outcome/optionId")
             .and_then(|id| id.as_str())
             == Some("mock_reject")
+}
+
+/// Recognize only a selected `mock_allow` permission outcome for the allow-path demo.
+fn permission_allowed(answer: &serde_json::Value) -> bool {
+    answer
+        .pointer("/result/outcome/outcome")
+        .and_then(|outcome| outcome.as_str())
+        == Some("selected")
+        && answer
+            .pointer("/result/outcome/optionId")
+            .and_then(|id| id.as_str())
+            == Some("mock_allow")
 }
 
 /// Publish independent fixture model and reasoning controls; production parsers are never reused.
@@ -410,6 +774,12 @@ fn main() {
                     .and_then(|id| id.as_str())
                     .unwrap_or("mock-sess-1")
                     .to_owned();
+                if has_flag("--agentic-demo") {
+                    if !run_agentic_demo(&mut agent, &mut reader, &id, &session_id) {
+                        return;
+                    }
+                    continue;
+                }
                 if cancel_graceful {
                     agent.notify_update(&session_id, "こんにちは");
                     agent.flush();

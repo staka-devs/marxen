@@ -30,7 +30,7 @@ use crate::contracts::{
 };
 use crate::domain::storage::{self, Fingerprint};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::application::ports::*;
 use std::path::{Path, PathBuf};
@@ -69,6 +69,10 @@ struct IsolatedCopy {
 /// records its own workspace root and is validated against it on every call.
 /// `pins` counts live runs (ACP process or HTTP stream) per copy; pinned
 /// copies refuse approve/reject/cancel until the run settles and releases.
+/// `retired_imports` remembers approved copies with their original workspace
+/// root and not-yet-imported staged files, so staged new-file imports stay
+/// bound to the approving workspace even after the copy is consumed; records
+/// clear only once every pending file imports on a fully successful request.
 pub struct IsolationManager {
     storage: Arc<dyn StagingStorage>,
     clock: Arc<dyn Clock>,
@@ -76,11 +80,25 @@ pub struct IsolationManager {
     next: u64,
     copies: HashMap<String, IsolatedCopy>,
     pins: HashMap<String, u32>,
+    retired_imports: HashMap<String, RetiredCopy>,
     /// Explicit test-support configuration: when set, that document's apply
     /// fails deterministically AFTER native preflight and any earlier
     /// applies, so tests exercise partial outcomes and rollback. Production
     /// IPC paths never set this; it exists so tests need no global env var.
     apply_fault_for_tests: Option<String>,
+}
+
+/// Original workspace binding of one approved copy with its pending imports.
+///
+/// `root` is the workspace the copy was approved from; `pending` maps each
+/// not-yet-imported staged new file to its authoritative content captured at
+/// approval. Both are captured before the staging directory is consumed, so
+/// later import requests are validated against Rust-owned state instead of
+/// trusting caller-supplied paths and content.
+#[derive(Debug, Clone)]
+struct RetiredCopy {
+    root: PathBuf,
+    pending: HashMap<String, String>,
 }
 
 impl IsolationManager {
@@ -113,6 +131,7 @@ impl IsolationManager {
             next: 1,
             copies: HashMap::new(),
             pins: HashMap::new(),
+            retired_imports: HashMap::new(),
             apply_fault_for_tests: None,
         })
     }
@@ -595,6 +614,83 @@ impl IsolationManager {
         Ok(diffs)
     }
 
+    /// List importable agent-created files as (relative path, content) pairs.
+    ///
+    /// Shared by review display (`staged_new_files`) and the approval-time
+    /// pending capture, so the retired import record always matches what
+    /// review offered: contained Markdown outside registered bases,
+    /// size-capped, at most 16 entries, sorted for stable display.
+    fn importable_staged_files(
+        &self,
+        copy: &IsolatedCopy,
+    ) -> Result<Vec<(String, String)>, WorkspaceError> {
+        let known: HashSet<String> = copy
+            .bases
+            .iter()
+            .map(|base| base.staging_rel.clone())
+            .collect();
+        let mut out = Vec::new();
+        for path in self.storage.list_staging_files(&copy.staging_dir)? {
+            if !path.starts_with(&copy.staging_dir) {
+                continue;
+            }
+            self.storage.check_no_symlink(&path, &self.staging_root)?;
+            let Ok(rel) = path.strip_prefix(&copy.staging_dir) else {
+                continue;
+            };
+            let rel_text = rel.to_string_lossy().replace('\\', "/");
+            if rel_text.is_empty() || known.contains(&rel_text) {
+                continue;
+            }
+            // Only importable Markdown survives; forbidden names are skipped
+            // silently so agents cannot smuggle credentials or VCS data.
+            if crate::domain::isolation::reject_forbidden_relative(&rel_text).is_err() {
+                continue;
+            }
+            let bytes = self
+                .storage
+                .read_disk(&path)?
+                .ok_or(WorkspaceError::NotFound)?;
+            let content = String::from_utf8(bytes).map_err(|_| WorkspaceError::InvalidUtf8)?;
+            if content.len() > crate::domain::ai::MAX_EXCERPT_BYTES {
+                continue;
+            }
+            out.push((rel_text, content));
+            if out.len() >= 16 {
+                break;
+            }
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(out)
+    }
+
+    /// List new Markdown files the agent created inside the staging copy.
+    ///
+    /// Only relative contained `.md` paths not covered by registered bases are
+    /// reported; `.git`/`.env`/credential names and non-Markdown files are
+    /// never importable. Content is staged text, not yet applied. Allowed
+    /// while a run is active but may go stale; re-fetch after settlement
+    /// before importing. Rejects unknown/inactive copies and workspace
+    /// mismatches without touching live buffers or disk.
+    pub fn staged_new_files(
+        &self,
+        workspace: &Workspace,
+        copy_id: &IsolatedCopyId,
+    ) -> Result<Vec<crate::contracts::isolation::StagedNewFile>, WorkspaceError> {
+        use crate::contracts::isolation::StagedNewFile;
+        let copy = self.get_active(copy_id)?;
+        self.check_workspace(copy, workspace)?;
+        Ok(self
+            .importable_staged_files(copy)?
+            .into_iter()
+            .map(|(rel, content)| StagedNewFile {
+                rel,
+                chars: content.chars().count() as u32,
+                content,
+            })
+            .collect())
+    }
+
     /// Stage a validated text proposal into the copy. Questions only display
     /// and are refused here. Single-scope rewrite/generate replaces that one
     /// scope exactly; workspace proposals carry unambiguous structured range
@@ -852,6 +948,13 @@ impl IsolationManager {
             }
             staged
         };
+        // Capture importable new files with their authoritative content before
+        // any mutation: a listing failure refuses approval here with its detail,
+        // never silently approving while losing the new-file capture.
+        let pending_imports: HashMap<String, String> = {
+            let copy = self.get_active(copy_id)?;
+            self.importable_staged_files(copy)?.into_iter().collect()
+        };
 
         struct Plan {
             index: usize,
@@ -1015,6 +1118,19 @@ impl IsolationManager {
             }
             self.consume(copy_id, CopyStatus::Failed);
         } else {
+            // Remember the original workspace root with the new files captured
+            // before any mutation above, so staged new-file imports stay bound
+            // to the approving workspace even after the copy is gone; a later
+            // folder switch cannot redirect them elsewhere.
+            if let Some(copy) = self.copies.get(&copy_id.0) {
+                self.retired_imports.insert(
+                    copy_id.0.clone(),
+                    RetiredCopy {
+                        root: copy.workspace_root.clone(),
+                        pending: pending_imports,
+                    },
+                );
+            }
             self.consume(copy_id, CopyStatus::Approved);
         }
         // Order outcomes by document for stable review display.
@@ -1023,6 +1139,117 @@ impl IsolationManager {
             copy_id: copy_id.clone(),
             outcomes,
         })
+    }
+
+    /// Import staged new files into the approved copy's original workspace.
+    ///
+    /// Imports run only after approval: an active copy is refused with
+    /// `InvalidPath` before any file is created, even when the workspace
+    /// still matches. The approved copy's recorded workspace root is checked
+    /// under the caller's workspace lock, so a folder switch since approval
+    /// fails with `OutsideWorkspace` before any file is created. Each file
+    /// must name a still-pending staged path with content exactly equal to
+    /// the authoritative capture: unknown, already-imported, forbidden, and
+    /// content-drifted requests are refused per file without touching live
+    /// files, so callers can neither invent unstaged paths nor alter approved
+    /// content. Successes carry the opened snapshot for session registration
+    /// and drain the pending set. Continues per file so one refusal never
+    /// hides the rest. Empty requests retain the record; the record clears
+    /// only once a non-empty request drains every pending file with all
+    /// outcomes successful, so unfinished imports stay retryable and retries
+    /// never reapply document edits. Unknown copies never import.
+    pub fn import_new_files(
+        &mut self,
+        workspace: &mut Workspace,
+        copy_id: &IsolatedCopyId,
+        files: &[crate::contracts::isolation::ImportFileRequest],
+    ) -> Result<Vec<crate::contracts::isolation::StagedImportOutcome>, WorkspaceError> {
+        use crate::contracts::isolation::StagedImportOutcome;
+        validate_copy_id_string(&copy_id.0)?;
+        if files.len() > 16 {
+            return Err(WorkspaceError::InvalidPath);
+        }
+        // Active copies must approve first: refuse before any file mutation.
+        if self.copies.contains_key(&copy_id.0) {
+            return Err(WorkspaceError::InvalidPath);
+        }
+        let root = self
+            .retired_imports
+            .get(&copy_id.0)
+            .map(|record| record.root.clone())
+            .ok_or(WorkspaceError::NotFound)?;
+        if workspace.root() != root.as_path() {
+            return Err(WorkspaceError::OutsideWorkspace);
+        }
+        if files.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut outcomes = Vec::with_capacity(files.len());
+        let mut succeeded = Vec::new();
+        for file in files {
+            if crate::domain::isolation::reject_forbidden_relative(&file.rel).is_err() {
+                outcomes.push(StagedImportOutcome {
+                    rel: file.rel.clone(),
+                    snapshot: None,
+                    error: Some(format!("{:?}", WorkspaceError::NotMarkdown)),
+                });
+                continue;
+            }
+            // Validate against the Rust-owned capture before any mutation:
+            // only still-pending staged paths with unaltered content import.
+            let approved = self
+                .retired_imports
+                .get(&copy_id.0)
+                .and_then(|record| record.pending.get(&file.rel))
+                .cloned();
+            let Some(approved) = approved else {
+                outcomes.push(StagedImportOutcome {
+                    rel: file.rel.clone(),
+                    snapshot: None,
+                    error: Some(format!("{:?}", WorkspaceError::InvalidPath)),
+                });
+                continue;
+            };
+            if approved != file.content {
+                outcomes.push(StagedImportOutcome {
+                    rel: file.rel.clone(),
+                    snapshot: None,
+                    error: Some("staged content differs from the approved copy".into()),
+                });
+                continue;
+            }
+            match workspace.create(&file.rel, &file.content) {
+                Ok(opened) => {
+                    succeeded.push(file.rel.clone());
+                    outcomes.push(StagedImportOutcome {
+                        rel: file.rel.clone(),
+                        snapshot: Some(opened.snapshot),
+                        error: None,
+                    });
+                }
+                Err(error) => outcomes.push(StagedImportOutcome {
+                    rel: file.rel.clone(),
+                    snapshot: None,
+                    error: Some(format!("{error:?}")),
+                }),
+            }
+        }
+        // Drain only the pending files this request imported.
+        if let Some(record) = self.retired_imports.get_mut(&copy_id.0) {
+            for rel in &succeeded {
+                record.pending.remove(rel);
+            }
+        }
+        // Clear only once every pending file drained on a fully successful
+        // request: empty calls and successful subsets retain the record.
+        let drained = self
+            .retired_imports
+            .get(&copy_id.0)
+            .is_some_and(|record| record.pending.is_empty());
+        if drained && outcomes.iter().all(|outcome| outcome.error.is_none()) {
+            self.retired_imports.remove(&copy_id.0);
+        }
+        Ok(outcomes)
     }
 
     /// Remove a settled copy and its staging directory after recording the review outcome.

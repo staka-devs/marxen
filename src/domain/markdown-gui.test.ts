@@ -27,7 +27,7 @@ describe("markdown GUI range patches", () => {
   });
 
   it("inserts tables and edits rows/columns", () => {
-    const table = applyTextEdits("", insertTable(0, 1, 2));
+    const table = applyTextEdits("", insertTable(0, 1, 2, "見出し"));
     expect(table).toContain("| 見出し | 見出し |");
     const withRow = applyTextEdits(table, tableAddRow(table, 0));
     expect(withRow.split("\n").filter((line) => line.startsWith("|")).length).toBe(4);
