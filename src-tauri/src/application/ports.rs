@@ -206,6 +206,8 @@ pub trait DirectoryStorage: Send + Sync {
     fn create_dir_all(&self, path: &Path) -> Result<(), WorkspaceError>;
     /// Create one new directory without silently accepting an existing file.
     fn create_dir(&self, path: &Path) -> Result<(), WorkspaceError>;
+    /// Move one directory without overwriting an existing destination.
+    fn rename_dir(&self, source: &Path, target: &Path) -> Result<(), WorkspaceError>;
     /// Inspect the entry itself, retaining link information for containment checks.
     fn metadata(&self, path: &Path) -> Result<FileInfo, WorkspaceError>;
     /// Check whether a path exists without leaking filesystem access into use cases.

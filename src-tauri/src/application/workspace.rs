@@ -316,19 +316,121 @@ impl Workspace {
         })
     }
 
-    /// Rename a Markdown document only at the acknowledged revision and a safe destination.
+    /// Rename a Markdown or supported UTF-8 text document at the acknowledged revision.
+    ///
+    /// Reuses the existing actor rename so the stable document ID, revision,
+    /// unsaved content, and native Undo history are preserved.
     pub fn rename(
         &mut self,
         request: SaveRequest,
         path: &str,
     ) -> Result<OpenDocument, WorkspaceError> {
         let target = self.storage.resolve(&self.root, path)?;
-        if !storage::markdown(&target) {
-            return Err(WorkspaceError::NotMarkdown);
+        if !storage::markdown(&target) && !storage::text_family(&target) {
+            return Err(WorkspaceError::NotText);
         }
         let actor = self.actor(&request.document_id.0)?;
         actor.rename(request, target)?;
         self.description(actor)
+    }
+
+    /// Rename a workspace image without creating a text actor.
+    ///
+    /// Requires the captured native fingerprint so a changed file
+    /// refuses with a conflict instead of renaming stale bytes. Never
+    /// overwrites an existing destination and never escapes the workspace.
+    pub fn rename_image(
+        &self,
+        source: &str,
+        dest: &str,
+        expected: Fingerprint,
+    ) -> Result<WorkspaceEntry, WorkspaceError> {
+        let source_abs = self.storage.resolve(&self.root, source)?;
+        let target_abs = self.storage.resolve(&self.root, dest)?;
+        if source_abs == self.root || target_abs == self.root {
+            return Err(WorkspaceError::InvalidPath);
+        }
+        if !storage::image_family(&source_abs) || !storage::image_family(&target_abs) {
+            return Err(WorkspaceError::InvalidImage);
+        }
+        let bytes = self.storage.read_image_bytes(&source_abs)?;
+        image_mime(&source_abs, &bytes)?;
+        image_mime(&target_abs, &bytes)?;
+        if storage::fingerprint(&bytes) != expected {
+            return Err(WorkspaceError::Conflict {
+                path: source.into(),
+            });
+        }
+        if source_abs == target_abs {
+            return Err(WorkspaceError::AlreadyExists);
+        }
+        self.storage.hard_link(&source_abs, &target_abs)?;
+        if let Err(error) = self.storage.remove_file(&source_abs) {
+            let _ = self.storage.remove_file(&target_abs);
+            return Err(error);
+        }
+        Ok(WorkspaceEntry {
+            path: storage::relative(&self.root, &target_abs)?,
+            name: target_abs
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or(WorkspaceError::InvalidPath)?
+                .to_owned(),
+            directory: false,
+            markdown: false,
+            kind: Some(WorkspaceFileKind::Image),
+        })
+    }
+
+    /// Rename a workspace folder through the storage port without moving open descendants.
+    ///
+    /// Refuses the workspace root, existing destinations, link escapes, moves
+    /// into itself, and folders with open descendant documents. Unsaved
+    /// documents are never closed by this operation.
+    pub fn rename_folder(
+        &self,
+        source: &str,
+        dest: &str,
+    ) -> Result<WorkspaceEntry, WorkspaceError> {
+        let source_abs = self.storage.resolve(&self.root, source)?;
+        let target_abs = self.storage.resolve(&self.root, dest)?;
+        if source_abs == self.root || target_abs == self.root {
+            return Err(WorkspaceError::InvalidPath);
+        }
+        if source_abs == target_abs {
+            return Err(WorkspaceError::AlreadyExists);
+        }
+        if target_abs.starts_with(&source_abs) {
+            return Err(WorkspaceError::InvalidPath);
+        }
+        let meta = self.storage.metadata(&source_abs).map_err(|e| match e {
+            WorkspaceError::Io { .. } => WorkspaceError::NotFound,
+            other => other,
+        })?;
+        if !meta.is_dir() {
+            return Err(WorkspaceError::InvalidPath);
+        }
+        for actor in self.actors.values() {
+            if actor
+                .path()
+                .as_ref()
+                .is_some_and(|path| path.starts_with(&source_abs))
+            {
+                return Err(WorkspaceError::FolderOpenDocuments);
+            }
+        }
+        self.storage.rename_dir(&source_abs, &target_abs)?;
+        Ok(WorkspaceEntry {
+            path: storage::relative(&self.root, &target_abs)?,
+            name: target_abs
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or(WorkspaceError::InvalidPath)?
+                .to_owned(),
+            directory: true,
+            markdown: false,
+            kind: None,
+        })
     }
 
     /// Honor the caller's save, discard or cancel decision before removing the actor.
@@ -827,6 +929,7 @@ impl Workspace {
         let mime = image_mime(&target, &bytes)?;
         Ok(ImageData {
             mime: mime.into(),
+            fingerprint: storage::fingerprint(&bytes).0,
             bytes,
         })
     }
@@ -837,6 +940,7 @@ impl Workspace {
         let bytes = self.storage.read_image_bytes(&target)?;
         Ok(ImageData {
             mime: image_mime(&target, &bytes)?.into(),
+            fingerprint: storage::fingerprint(&bytes).0,
             bytes,
         })
     }

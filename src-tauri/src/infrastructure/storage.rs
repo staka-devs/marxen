@@ -149,6 +149,77 @@ pub fn sync_directory(path: &Path) -> Result<(), WorkspaceError> {
     Ok(())
 }
 
+/// Move one directory without overwriting, refusing links, files, and existing destinations.
+pub fn rename_dir(source: &Path, target: &Path) -> Result<(), WorkspaceError> {
+    match fs::symlink_metadata(source) {
+        Ok(meta) if meta.file_type().is_symlink() => return Err(WorkspaceError::OutsideWorkspace),
+        Ok(meta) if !meta.is_dir() => return Err(WorkspaceError::InvalidPath),
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(WorkspaceError::NotFound),
+        Err(e) => return Err(e.into()),
+    }
+    if let Err(e) = rename_no_replace(source, target) {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            return Err(WorkspaceError::AlreadyExists);
+        }
+        return Err(e.into());
+    }
+    if let Some(parent) = target.parent() {
+        sync_directory(parent)?;
+    }
+    Ok(())
+}
+
+/// Commit a same-volume move with the Windows default refusal to replace a destination.
+#[cfg(windows)]
+fn rename_no_replace(source: &Path, target: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let target: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: both pointers reference live NUL-terminated UTF-16 paths. No replace flag is set.
+    if unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Commit a Unix move with the platform's atomic no-replace flag, failing closed if unsupported.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn rename_no_replace(source: &Path, target: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let source = CString::new(source.as_os_str().as_bytes())?;
+    let target = CString::new(target.as_os_str().as_bytes())?;
+    // SAFETY: both pointers reference live NUL-terminated paths; flags prohibit replacement.
+    #[cfg(target_os = "linux")]
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            target.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    // SAFETY: both pointers reference live NUL-terminated paths; RENAME_EXCL prohibits replacement.
+    #[cfg(target_os = "macos")]
+    let result = unsafe { libc::renamex_np(source.as_ptr(), target.as_ptr(), libc::RENAME_EXCL) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Refuse platforms without an atomic no-replace directory operation.
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn rename_no_replace(_source: &Path, _target: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic no-replace rename unavailable",
+    ))
+}
+
 /// Atomically persist a serialized recovery record independently of the live file.
 pub fn checkpoint(path: &Path, record: &RecoveryRecord) -> Result<(), WorkspaceError> {
     let bytes = serde_json::to_vec(record).map_err(|e| WorkspaceError::Io {
@@ -269,6 +340,68 @@ use crate::application::ports::{
 };
 pub struct NativeStorage;
 pub struct SystemClock;
+
+#[cfg(test)]
+mod rename_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    /// Reject an existing empty directory at the OS commit rather than replacing it on Unix.
+    fn no_replace_rejects_empty_directory_at_commit() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let target = root.path().join("target");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::write(source.join("original"), "kept").unwrap();
+        assert_eq!(
+            rename_no_replace(&source, &target).unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        assert!(source.join("original").is_file());
+        assert!(fs::read_dir(target).unwrap().next().is_none());
+    }
+
+    #[test]
+    /// Let exactly one concurrent directory move win without deleting either contender's contents.
+    fn concurrent_directory_renames_never_replace_the_winner() {
+        let root = tempfile::tempdir().unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let target = root.path().join("target");
+        let workers: Vec<_> = (0..2)
+            .map(|index| {
+                let source = root.path().join(format!("source{index}"));
+                fs::create_dir(&source).unwrap();
+                fs::write(source.join("content"), index.to_string()).unwrap();
+                let target = target.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    rename_dir(&source, &target)
+                })
+            })
+            .collect();
+        let results: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(WorkspaceError::AlreadyExists)))
+                .count(),
+            1
+        );
+        let winner = fs::read_to_string(target.join("content")).unwrap();
+        let loser = if winner == "0" { "1" } else { "0" };
+        assert_eq!(
+            fs::read_to_string(root.path().join(format!("source{loser}/content"))).unwrap(),
+            loser
+        );
+    }
+}
 impl Clock for SystemClock {
     /// Supply the native clock component of process-local document and copy identifiers.
     fn nanos(&self) -> u128 {
@@ -340,6 +473,10 @@ impl DirectoryStorage for NativeStorage {
     /// Create one new directory and preserve native existing-entry failures.
     fn create_dir(&self, path: &Path) -> Result<(), WorkspaceError> {
         Ok(fs::create_dir(path)?)
+    }
+    /// Move one directory without overwriting, refusing links and missing sources.
+    fn rename_dir(&self, source: &Path, target: &Path) -> Result<(), WorkspaceError> {
+        rename_dir(source, target)
     }
     /// Read symlink-aware native entry metadata for containment decisions.
     fn metadata(&self, path: &Path) -> Result<FileInfo, WorkspaceError> {

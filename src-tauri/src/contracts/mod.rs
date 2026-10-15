@@ -214,6 +214,8 @@ pub enum WorkspaceError {
     OutsideWorkspace,
     NotMarkdown,
     NotText,
+    FolderOpenDocuments,
+    FolderWorkingCopy,
     InvalidUtf8,
     AlreadyExists,
     NotFound,
@@ -431,6 +433,7 @@ pub struct RootEvent {
 pub struct ImageData {
     pub mime: String,
     pub bytes: Vec<u8>,
+    pub fingerprint: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

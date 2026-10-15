@@ -10,7 +10,7 @@ import { useI18n } from "../../i18n/I18nProvider";
 // arrives via the session, Vim routing, and injected ports, so this hook
 // never imports infrastructure directly.
 
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { ImageResolver } from "../../../domain/image-sources";
 import { bytesToDataUrl } from "../../../domain/clipboard-text";
 import { isMarkdownPath } from "../../../domain/workspace-files";
@@ -57,6 +57,8 @@ export interface ImageAttachments {
   handleImageDrop: (drop: ImageDrop, range: { start: number; end: number }) => void;
   /** Current selection as a half-open range for drop positioning. */
   dropSelection: { start: number; end: number };
+  /** Clear hydrated preview URLs after an image or folder rename. */
+  invalidateCache: () => void;
 }
 
 /**
@@ -95,6 +97,8 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
   // document so identical Markdown with the same filename cannot reuse
   // another document's bytes from an already-hydrated node.
   const imageUrlCache = useRef(new Map<string, string>());
+  const imageGeneration = useRef(0);
+  const [cacheGeneration, setCacheGeneration] = useState(0);
   /**
    * Create an abort-aware resolver bound to one document ID.
    *
@@ -116,6 +120,7 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
         };
       }
       return async (src: string, signal: AbortSignal): Promise<string | null> => {
+        const epoch = imageGeneration.current;
         if (!desktop) return null;
         if (signal.aborted) return null;
         const key = `${documentId}:${src}`;
@@ -127,7 +132,7 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
         try {
           if (!workspaceGateway) return null;
           const data = await workspaceGateway.loadImage(documentId, src);
-          if (signal.aborted) return null;
+          if (signal.aborted || epoch !== imageGeneration.current) return null;
           // The user may have switched documents while the bytes were in
           // flight: only the resolver's own document may consume them.
           if (activeRef.current !== documentId) return null;
@@ -140,7 +145,7 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
         }
       };
     },
-    [desktop, imageLoader, workspaceGateway, activeRef],
+    [desktop, imageLoader, workspaceGateway, activeRef, cacheGeneration],
   );
   // Live, read, and split previews share one resolver for the active document:
   // the bodies were identical, and the preview keys already isolate documents.
@@ -307,6 +312,14 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
     end: Math.max(selections[active.documentId]?.anchor ?? 0, selections[active.documentId]?.head ?? 0),
   } : { start: 0, end: 0 };
 
+  /** Clear hydrated preview URLs after an image or folder rename. */
+  const invalidateCache = useCallback(() => {
+    imageGeneration.current++;
+    imageUrlCache.current.clear();
+    imageLoader?.invalidate();
+    setCacheGeneration((previous) => previous + 1);
+  }, [imageLoader]);
+
   return {
     makeImageResolver,
     previewResolver,
@@ -316,6 +329,7 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
     onPasteCapture,
     handleImageDrop,
     dropSelection,
+    invalidateCache,
   };
 }
 
