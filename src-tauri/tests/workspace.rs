@@ -216,6 +216,152 @@ fn listing_open_create_rename_and_tabs_are_safe() {
     );
     assert_eq!(w.list("").unwrap()[0].name, "notes");
 }
+
+#[test]
+/// Rename a dirty UTF-8 actor without saving its edits, replacing its identity, or resetting Undo.
+fn text_rename_preserves_revision_dirty_undo_and_save_destination() {
+    let (root, _recovery, mut w) = setup();
+    fs::write(root.path().join("notes.txt"), "original").unwrap();
+    let doc = w.open_text_file("notes.txt").unwrap();
+    let changed = edit(
+        w.actor(&doc.snapshot.document_id.0).unwrap(),
+        0,
+        8,
+        "日本😀",
+    );
+    let renamed = w.rename(request(&changed), "renamed.rs").unwrap();
+    assert_eq!(renamed.snapshot.document_id, changed.document_id);
+    assert_eq!(renamed.snapshot.revision, changed.revision);
+    assert_eq!(renamed.snapshot.text, changed.text);
+    assert!(renamed.snapshot.dirty);
+    assert!(!root.path().join("notes.txt").exists());
+    assert_eq!(
+        fs::read_to_string(root.path().join("renamed.rs")).unwrap(),
+        "original"
+    );
+    let actor = w.actor(&changed.document_id.0).unwrap();
+    let undone = actor.undo().unwrap();
+    assert_eq!(undone.text, "original");
+    let changed = edit(actor, 0, 8, "saved");
+    actor.save(request(&changed)).unwrap();
+    assert_eq!(
+        fs::read_to_string(root.path().join("renamed.rs")).unwrap(),
+        "saved"
+    );
+}
+
+#[test]
+/// Require a native image fingerprint and preserve both files when bytes or destinations conflict.
+fn image_rename_checks_bytes_kind_collision_and_does_not_open_actors() {
+    let (root, _recovery, w) = setup();
+    let bytes = b"\x89PNG\r\n\x1a\nimage";
+    fs::write(root.path().join("photo.png"), bytes).unwrap();
+    fs::write(root.path().join("occupied.png"), bytes).unwrap();
+    let captured = w.load_workspace_image("photo.png").unwrap();
+    let fingerprint = marxen_lib::domain::storage::Fingerprint(captured.fingerprint);
+    assert!(matches!(
+        w.rename_image("photo.png", "occupied.png", fingerprint.clone()),
+        Err(WorkspaceError::AlreadyExists)
+    ));
+    assert!(matches!(
+        w.rename_image("photo.png", "photo.jpg", fingerprint.clone()),
+        Err(WorkspaceError::InvalidImage)
+    ));
+    fs::write(root.path().join("photo.png"), b"\x89PNG\r\n\x1a\nchanged").unwrap();
+    assert!(matches!(
+        w.rename_image("photo.png", "new.png", fingerprint),
+        Err(WorkspaceError::Conflict { .. })
+    ));
+    assert!(!root.path().join("new.png").exists());
+    let captured = w.load_workspace_image("photo.png").unwrap();
+    let entry = w
+        .rename_image(
+            "photo.png",
+            "new.png",
+            marxen_lib::domain::storage::Fingerprint(captured.fingerprint),
+        )
+        .unwrap();
+    assert_eq!(entry.path, "new.png");
+    assert_eq!(entry.kind, Some(WorkspaceFileKind::Image));
+    assert!(!root.path().join("photo.png").exists());
+    assert_eq!(fs::read(root.path().join("occupied.png")).unwrap(), bytes);
+    assert!(w.documents().unwrap().is_empty());
+}
+
+#[test]
+/// Preserve nested files and refuse roots, collisions, self moves, missing sources and open dirty descendants.
+fn folder_rename_is_contained_and_never_closes_open_descendants() {
+    let (root, _recovery, mut w) = setup();
+    fs::create_dir_all(root.path().join("notes/child")).unwrap();
+    fs::create_dir(root.path().join("occupied")).unwrap();
+    fs::write(root.path().join("notes/child/a.txt"), "original").unwrap();
+    assert!(matches!(
+        w.rename_folder("", "new"),
+        Err(WorkspaceError::InvalidPath)
+    ));
+    assert!(matches!(
+        w.rename_folder("notes", "notes/child/new"),
+        Err(WorkspaceError::InvalidPath)
+    ));
+    assert!(matches!(
+        w.rename_folder("notes", "occupied"),
+        Err(WorkspaceError::AlreadyExists)
+    ));
+    assert!(w.rename_folder("gone", "new").is_err());
+    let doc = w.open_text_file("notes/child/a.txt").unwrap();
+    let changed = edit(
+        w.actor(&doc.snapshot.document_id.0).unwrap(),
+        0,
+        8,
+        "pending",
+    );
+    assert!(matches!(
+        w.rename_folder("notes", "new"),
+        Err(WorkspaceError::FolderOpenDocuments)
+    ));
+    assert_eq!(w.actor(&changed.document_id.0).unwrap().snapshot(), changed);
+    assert_eq!(
+        fs::read_to_string(root.path().join("notes/child/a.txt")).unwrap(),
+        "original"
+    );
+    assert!(w.close(request(&changed), CloseAction::Discard).unwrap());
+    assert_eq!(w.rename_folder("notes", "new").unwrap().path, "new");
+    assert!(root.path().join("new/child/a.txt").is_file());
+    assert!(!root.path().join("notes").exists());
+}
+
+#[test]
+/// Refuse image and folder operations through a link to another workspace.
+fn rename_refuses_link_escape_for_source_and_destination() {
+    let (root, _recovery, w) = setup();
+    let outside = tempfile::tempdir().unwrap();
+    make_link(outside.path(), &root.path().join("link"));
+    fs::write(outside.path().join("photo.png"), b"\x89PNG\r\n\x1a\nimage").unwrap();
+    fs::create_dir(outside.path().join("folder")).unwrap();
+    fs::create_dir(root.path().join("safe")).unwrap();
+    fs::write(root.path().join("photo.png"), b"\x89PNG\r\n\x1a\nimage").unwrap();
+    let fingerprint = marxen_lib::domain::storage::Fingerprint(
+        w.load_workspace_image("photo.png").unwrap().fingerprint,
+    );
+    assert!(matches!(
+        w.rename_image("link/photo.png", "new.png", fingerprint.clone()),
+        Err(WorkspaceError::OutsideWorkspace)
+    ));
+    assert!(matches!(
+        w.rename_image("photo.png", "link/new.png", fingerprint),
+        Err(WorkspaceError::OutsideWorkspace)
+    ));
+    assert!(matches!(
+        w.rename_folder("link/folder", "new"),
+        Err(WorkspaceError::OutsideWorkspace)
+    ));
+    assert!(matches!(
+        w.rename_folder("safe", "link/new"),
+        Err(WorkspaceError::OutsideWorkspace)
+    ));
+    assert!(outside.path().join("photo.png").exists());
+    assert!(outside.path().join("folder").is_dir());
+}
 #[test]
 /// Reject rooted and traversal paths, Windows alternate streams and reserved device names.
 fn traversal_absolute_ads_and_reserved_names_are_rejected() {

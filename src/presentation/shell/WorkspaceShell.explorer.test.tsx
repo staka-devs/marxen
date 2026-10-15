@@ -35,7 +35,7 @@ vi.mock("../../infrastructure/tauri/runtime-client", () => {
 });
 const mockInvoke = vi.mocked(invoke);
 let text = "😀Markdown"; let revision = 0;
-const image = { mime: "image/png", bytes: [137, 80, 78, 71] };
+const image = { mime: "image/png", bytes: [137, 80, 78, 71], fingerprint: "a".repeat(64) };
 beforeEach(() => {
   vi.clearAllMocks(); text = "😀Markdown"; revision = 0;
   vi.stubGlobal("URL", Object.assign(URL, {
@@ -131,6 +131,50 @@ it("opens an image tab with sizing controls and closes it without native documen
   expect(screen.queryByTestId("image-viewer")).toBeNull();
   expect(mockInvoke.mock.calls.some(([name]) => name === "close_document")).toBe(false);
   expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:test-image");
+});
+
+it("renames the focused image with F2, updates its tab, and restores focus to its renamed row", async () => {
+  const original = mockInvoke.getMockImplementation()!;
+  let path = "photo.png";
+  mockInvoke.mockImplementation((command, args) => {
+    if (command === "list_workspace") return Promise.resolve([{ path, name: path, directory: false, markdown: false, kind: "image" }]);
+    if (command === "rename_image") {
+      path = (args as { dest: string }).dest;
+      return Promise.resolve({ path, name: path, directory: false, markdown: false, kind: "image" });
+    }
+    return original(command, args);
+  });
+  render(<App />);
+  fireEvent.click(screen.getByRole("menuitem", { name: "ファイル" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "パスを入力する" }));
+  fireEvent.change(screen.getByLabelText("開くフォルダーの絶対パス"), { target: { value: "C:/workspace" } });
+  fireEvent.click(screen.getByRole("button", { name: "開く" }));
+  const row = await screen.findByRole("button", { name: "photo.png" });
+  fireEvent.click(row);
+  await screen.findByTestId("image-viewer");
+  row.focus();
+  fireEvent.keyDown(row, { key: "F2" });
+  const dialog = await screen.findByRole("dialog", { name: "名前の変更" });
+  fireEvent.change(within(dialog).getByLabelText("新しいパス"), { target: { value: "renamed.png" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "変更する" }));
+  await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("rename_image", expect.objectContaining({ source: "photo.png", dest: "renamed.png", fingerprint: image.fingerprint })));
+  await screen.findByRole("tab", { name: "renamed.png" });
+  const renamed = await within(screen.getByTestId("file-tree")).findByRole("button", { name: "renamed.png" });
+  await waitFor(() => expect(renamed).toHaveFocus());
+  expect(mockInvoke.mock.calls.some(([name]) => name === "open_markdown" || name === "open_text_file")).toBe(false);
+  expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:test-image");
+});
+
+it("cancels a contextual image rename with Escape and returns focus without native mutation", async () => {
+  await openWorkspace();
+  const row = screen.getByRole("button", { name: "photo.png" });
+  row.focus();
+  fireEvent.contextMenu(row);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "名前を変更" }));
+  const dialog = await screen.findByRole("dialog", { name: "名前の変更" });
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  await waitFor(() => expect(row).toHaveFocus());
+  expect(mockInvoke.mock.calls.some(([name]) => name === "rename_image")).toBe(false);
 });
 it("routes an explorer image drop to revision-guarded Rust insertion without a GUI duplicate", async () => {
   await openWorkspace();

@@ -787,6 +787,16 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   useEffect(() => { setExplorerTarget(null); }, [workspace.generation]);
   useEffect(() => { if (workspace.createdTarget) setExplorerTarget(workspace.createdTarget); }, [workspace.createdTarget]);
   useEffect(() => {
+    if (!workspace.createdTarget) return;
+    image.invalidateCache();
+    const path = workspace.createdTarget.path;
+    const timer = window.setTimeout(() => {
+      const row = document.querySelector(`[data-tree-path="${CSS.escape(path)}"]`);
+      if (row instanceof HTMLElement) row.focus();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [workspace.createdTarget, image.invalidateCache]);
+  useEffect(() => {
     /** Route only implemented workbench shortcuts, respecting IME, dialogs and form inputs. */
     const onKey = (event: KeyboardEvent) => {
       const mod = event.ctrlKey || event.metaKey;

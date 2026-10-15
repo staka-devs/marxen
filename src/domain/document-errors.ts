@@ -115,6 +115,10 @@ function describeWorkspaceError(cause: unknown, t: Translator = japaneseTranslat
       return t("Markdown ファイル（.md / .markdown）のみ開けます。");
     case "not_text":
       return t("対応する UTF-8 テキストファイルのみ開けます。");
+    case "folder_open_documents":
+      return t("フォルダー内に開いた文書があるため名前を変更できません。");
+    case "folder_working_copy":
+      return t("フォルダー内にAI作業コピーがあるため名前を変更できません。");
     case "invalid_utf8":
       return t("UTF-8 ではないため開けません。");
     case "invalid_path":

@@ -118,8 +118,12 @@ export const workspaceApi = {
   createMarkdown: (path: string, text = "") => rootInvoke<OpenDocument>("create_markdown", { path, text }),
   /** Create a contained directory using the existing Rust workspace owner. */
   createFolder: (path: string) => rootInvoke<WorkspaceEntry>("create_folder", { path }),
-  /** Rename a Markdown document, keeping its document ID. */
+  /** Rename a Markdown or supported UTF-8 text document, keeping its document ID. */
   renameMarkdown: (request: SaveRequest, path: string) => documentInvoke<OpenDocument>("rename_markdown", { ...request, path }),
+  /** Rename a workspace image without a document actor, verifying its captured fingerprint. */
+  renameImage: (source: string, dest: string, fingerprint: string) => rootInvoke<WorkspaceEntry>("rename_image", { source, dest, fingerprint }),
+  /** Rename a workspace folder without moving open descendants or AI working copies. */
+  renameFolder: (source: string, dest: string) => rootInvoke<WorkspaceEntry>("rename_folder", { source, dest }),
   /** Fetch the authoritative snapshot for a document ID. */
   fetchSnapshot: (documentId: DocumentId, location?: DocumentLocation) => documentInvoke<DocumentSnapshot>("fetch_snapshot", { documentId, location }),
   /** Apply GUI range edits at the given base revision. */

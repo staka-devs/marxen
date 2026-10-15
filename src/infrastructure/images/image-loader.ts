@@ -12,6 +12,7 @@ import type { ImageLoader } from "../../application/ports";
 
 /** In-memory data-URL cache keyed by `documentId:src`. */
 const cache = new Map<string, string>();
+let generation = 0;
 
 /**
  * Resolve one relative image source to a data URL for a document.
@@ -20,6 +21,7 @@ const cache = new Map<string, string>();
  * the loader fails; callers keep alt text instead of faking content.
  */
 export async function resolveImageForDocument(documentId: string, src: string, signal: AbortSignal): Promise<string | null> {
+  const epoch = generation;
   if (signal.aborted) return null;
   const key = `${documentId}:${src}`;
   const cached = cache.get(key);
@@ -29,7 +31,7 @@ export async function resolveImageForDocument(documentId: string, src: string, s
   }
   try {
     const data = await workspaceApi.loadImage(documentId, decodeImageSrc(src));
-    if (signal.aborted) return null;
+    if (signal.aborted || epoch !== generation) return null;
     if (!/^image\/(png|jpeg|gif|webp)$/.test(data.mime)) return null;
     const url = bytesToDataUrl(data.mime, data.bytes);
     cache.set(key, url);
@@ -42,9 +44,10 @@ export async function resolveImageForDocument(documentId: string, src: string, s
 /**
  * Clear cached image URLs, e.g. for tests or workspace switches.
  *
- * Production keeps the cache for the session; tests reset between cases.
+ * Pending reads from the old generation cannot repopulate the cache.
  */
 export function clearImageCache(): void {
+  generation++;
   cache.clear();
 }
 
@@ -70,6 +73,8 @@ export function makeImageResolver(
 
 /** Image loader adapter satisfying the application port with caching. */
 export const imageLoader: ImageLoader = {
+  /** Invalidate URLs and pending reads when workspace paths change. */
+  invalidate: clearImageCache,
   /** Resolve a relative source to a displayable URL or null. */
   resolve: resolveImageForDocument,
   /** Shared resolver factory for the active document. */
