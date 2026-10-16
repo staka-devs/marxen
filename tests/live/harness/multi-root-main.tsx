@@ -10,6 +10,7 @@ import { RegistryClient } from "../../../src/application/document/registry-clien
 import type { CursorUpdate, OpenDocument, RootScope, WorkspaceInfo } from "../../../src/contracts/contracts";
 import type { Language } from "../../../src/contracts/language";
 import type { WorkspaceGateway } from "../../../src/application/ports";
+import pixelInline from "../../fixtures/pixel.png?inline";
 import "../../../src/styles.css";
 
 const alpha: WorkspaceInfo = { root: "/fixture/alpha", scope: { rootId: "root-alpha", generation: "1" } };
@@ -19,13 +20,18 @@ const documents = new Map<string, OpenDocument>();
 const calls: string[] = [];
 
 /**
- * Valid 1x1 PNG bytes served from memory for the image-ownership path.
+ * Valid 1x1 PNG bytes decoded once from the single fixture source.
  *
- * Matches tests/fixtures/pixel.png byte-for-byte so the viewer decodes the
- * same fixture without a dev-server fetch; ownership stays in the recorded
- * `image:rootId:path` call and the root-qualified tab, never in the transport.
+ * Vite `?inline` embeds tests/fixtures/pixel.png as a data URL at transform
+ * time (see `inlineRE`/`fileToDevUrl` in the installed Vite source), so this
+ * stays byte-identical without a second copy or a dev-server fetch; ownership
+ * stays in the recorded `image:rootId:path` call and the root-qualified tab.
  */
-const PIXEL_BYTES: readonly number[] = [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4, 0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 252, 255, 31, 0, 3, 3, 2, 0, 239, 163, 89, 153, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130];
+const PIXEL_BYTES: readonly number[] = (() => {
+  const base64 = pixelInline.slice(pixelInline.indexOf(",") + 1);
+  const binary = atob(base64);
+  return [...binary].map((character) => character.charCodeAt(0));
+})();
 
 /** Open an independently owned simulated text actor. */
 async function openFile(path: string, scope?: RootScope): Promise<OpenDocument> {

@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("multi-root keyboard navigation, image ownership, cancellation and restart in the simulated browser fixture", async ({ page }, testInfo) => {
+  await page.route("**/tests/fixtures/pixel.png", (route) => route.abort());
   await page.goto("/tests/live/harness/multi-root.html");
   await page.getByRole("menuitem", { name: "ファイル", exact: true }).click();
   await page.getByRole("menuitem", { name: "フォルダーを開く", exact: true }).click();
