@@ -82,6 +82,10 @@ export interface AiPanelProps {
   onBusyChange?: (busy: boolean) => void;
   /** Drop one document from the send scope. */
   onRemoveContext?: (documentId: string) => void;
+  /** True when the empty scope comes from user dismissal rather than no document. */
+  contextsDismissed?: boolean;
+  /** Restore a dismissed send scope without touching the document. */
+  onRestoreContexts?: () => void;
   /**
    * Called once per completed run with the proposal text and the mode it was
    * sent with. The proposal never edits the document: review/apply belongs
@@ -175,6 +179,8 @@ export default function AiPanel({
   onBusyChange,
   onClose,
   onRemoveContext,
+  contextsDismissed,
+  onRestoreContexts,
   onProposal,
   startPrompt: startPromptProp,
   profileStore,
@@ -424,26 +430,26 @@ export default function AiPanel({
     }
   }
 
-  /** Send with staging, fencing, and late-handle settlement. */ async function sendWith(
+  /** Send with staging, fencing, and late-handle settlement, reporting whether a turn was recorded. */ async function sendWith(
     promptText: string,
     promptMode: PromptMode,
     promptContexts: PromptContext[],
     history: { role: "user" | "assistant"; text: string }[],
-  ) {
+  ): Promise<boolean> {
     const trimmed = truncatePrompt(promptText).trim();
     if (trimmed === "" || promptContexts.length === 0) {
       setStreamError({ code: "staging_unresolved", copy_id: t("(未解決)") });
-      return;
+      return false;
     }
     const blockedCommand = isClaudeBlockedProvider(provider);
     if (blockedCommand !== null) {
       setStreamError(claudeRefusalError(blockedCommand));
-      return;
+      return false;
     }
     const rootScope = promptContexts[0]?.location?.scope;
     if (!promptContexts.every((context) => sameRoot(context.location?.scope, rootScope)) || (conversation?.rootScope && !sameRoot(conversation.rootScope, rootScope))) {
       setStreamError({ code: "invalid_config", detail: t("既存の会話は元のフォルダーに属しています。新しいチャットを開始してください。") });
-      return;
+      return false;
     }
     const token = run.beginRun();
     const capturedMode = promptMode;
@@ -460,16 +466,16 @@ export default function AiPanel({
     try {
       resolved = await resolveStaging(capturedContexts);
     } catch (cause) {
-      if (!run.isCurrent(token)) { setBusy(false, token); return; }
+      if (!run.isCurrent(token)) { setBusy(false, token); return false; }
       const failure: AiError = normalizeAiError(cause, t);
       setStreamError(failure);
       setResolving(false);
       setBusy(false);
-      return;
+      return false;
     }
     // Cancel arrived while staging was pending: record the cancelled turn
     // locally and never start the run.
-    if (!run.isCurrent(token)) { setBusy(false, token); return; }
+    if (!run.isCurrent(token)) { setBusy(false, token); return false; }
     if (run.isCancelRequested()) {
       const cancelledAssistant = { ...assistant, state: "cancelled" as const };
       applyToConversation(targetConversationId, (prev) => ({
@@ -478,7 +484,7 @@ export default function AiPanel({
       }));
       setResolving(false);
       setBusy(false);
-      return;
+      return true;
     }
     applyToConversation(targetConversationId, (prev) => ({
       ...prev,
@@ -502,9 +508,9 @@ export default function AiPanel({
       );
       // Done arrived before startPrompt returned: cancel the late handle and
       // never publish a stop for a settled run, so no spinner leaks.
-      if (!(await keepStartedSession(run, token, session.stop))) return;
+      if (!(await keepStartedSession(run, token, session.stop))) return true;
     } catch (cause) {
-      if (!run.isCurrent(token)) { setBusy(false, token); return; }
+      if (!run.isCurrent(token)) { setBusy(false, token); return false; }
       run.markSettled(token);
       const failure = normalizeAiError(cause, t);
       applyToConversation(targetConversationId, (prev) => ({
@@ -514,15 +520,23 @@ export default function AiPanel({
       setStreamError(failure);
       setBusy(false);
     }
+    return true;
   }
 
-  /** Send the composer prompt with history when enabled. */ async function handleSend() {
+  /** Send the composer prompt with history when enabled, keeping the draft when nothing was recorded. */ async function handleSend() {
     if (running || disabled || differentProvider) return;
     if (!conversation) return;
+    if (prompt.trim() === "" || contexts.length === 0) {
+      setStreamError({ code: "staging_unresolved", copy_id: t("(未解決)") });
+      return;
+    }
     const history = toHistoryPayload(conversation.messages);
     const sentPrompt = prompt;
     setPrompt("");
-    await sendWith(sentPrompt, mode, contexts, history);
+    const recorded = await sendWith(sentPrompt, mode, contexts, history);
+    if (!recorded) {
+      setPrompt((previous) => (previous === "" ? sentPrompt : previous));
+    }
   }
 
   /** Request cancellation; pending paths settle as cancelled. */ async function handleCancel() {
@@ -744,6 +758,16 @@ export default function AiPanel({
         {disabled && <p className="mt-1 text-[11px] text-muted-foreground">{t("他の応答を生成しています。")}</p>}
         {differentProvider && <p className="mt-1 text-[11px] text-muted-foreground">{t("接続先が異なる会話です。続けるには新しい会話を作成してください。")}</p>}
         {anthropicBlocked && <p className="mt-1 text-[11px] text-muted-foreground">{t("Anthropic を有効化すると送信できます。")}</p>}
+        {contexts.length === 0 && !running && !disabled && !differentProvider && !anthropicBlocked && (
+          <p data-testid="ai-composer-empty-hint" className="mt-1 text-[11px] text-muted-foreground">
+            {t("送信対象がありません。")}
+            {contextsDismissed && onRestoreContexts && (
+              <button type="button" onClick={onRestoreContexts} className="ml-1 underline hover:text-foreground">
+                {t("現在の選択を送る")}
+              </button>
+            )}
+          </p>
+        )}
       </div>
       </>}
     </div>

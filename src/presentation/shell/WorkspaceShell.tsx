@@ -1381,6 +1381,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             disabled={staging.inlineBusy}
             onBusyChange={staging.setAgentChatBusy}
             onRemoveContext={() => staging.setAiDismissed(true)}
+            contextsDismissed={staging.aiDismissed}
+            onRestoreContexts={() => staging.setAiDismissed(false)}
             onProposal={staging.handleProposal}
             startPrompt={aiGateway?.startPrompt}
             profileStore={aiProfileStore}
