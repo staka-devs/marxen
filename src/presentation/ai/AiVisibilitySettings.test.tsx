@@ -39,7 +39,7 @@ describe("AI visibility management", () => {
   it("distinguishes empty and unknown catalogs, reports no matches and persistence failure", () => {
     render(<Harness save={() => false} />);
     expect(screen.getByText("モデル候補なし（接続先の設定を使用）")).toBeVisible();
-    expect(screen.getAllByText("モデル候補を取得するには接続を確認してください。")).toHaveLength(3);
+    expect(screen.getAllByText("モデル候補を取得するには接続を確認してください。")).toHaveLength(4);
     expect(screen.queryByRole("checkbox", { name: "OpenAI Chat Completions の候補を表示" })).toBeNull();
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "no-such-advertised-id" } });
     expect(screen.getByText("一致する接続先やモデルがありません。")).toHaveAttribute("role", "status");

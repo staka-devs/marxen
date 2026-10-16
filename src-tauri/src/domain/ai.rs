@@ -169,6 +169,9 @@ pub fn missing_binary_hint(command: &str) -> String {
         "opencode v2 を導入し PATH を通してください（例: npm の @opencode/cli、https://opencode.ai）".into()
     } else if base.contains("claude-agent-acp") {
         "npm install -g @agentclientprotocol/claude-agent-acp で導入し、利用するホストで Claude Code にログインしてください".into()
+    } else if base == "devin" || base == "devin.exe" {
+        "Devin CLI を導入し、devin auth login でログインしてください（https://docs.devin.ai/cli）"
+            .into()
     } else if base.contains("copilot") {
         "GitHub Copilot CLI を導入し PATH を通してください".into()
     } else if base.contains("node") {
@@ -201,6 +204,10 @@ pub fn preset_argv(preset: AcpPreset) -> AcpArgv {
         AcpPreset::ClaudeCode => AcpArgv {
             command: "claude-agent-acp".into(),
             args: vec![],
+        },
+        AcpPreset::Devin => AcpArgv {
+            command: "devin".into(),
+            args: vec!["acp".into()],
         },
         AcpPreset::Custom => AcpArgv {
             command: String::new(),
@@ -1765,6 +1772,14 @@ pub struct HttpTarget {
     pub backend: HttpBackend,
 }
 
+/// Build a protocol URL while preserving query parameters on both the API base and target.
+pub fn http_endpoints(endpoint: &str, suffix: &str) -> (String, String) {
+    let (path, query) = endpoint.split_at(endpoint.find('?').unwrap_or(endpoint.len()));
+    let path = path.trim_end_matches('/');
+    let base = path.strip_suffix(suffix).unwrap_or(path);
+    (format!("{base}{query}"), format!("{base}{suffix}{query}"))
+}
+
 /// Validate the selected HTTP backend's endpoint/model and append `/chat/completions`
 /// or `/messages`; reject ACP and Anthropic without opt-in as invalid configuration.
 pub fn http_target(config: &AiProviderConfig) -> Result<HttpTarget, AiError> {
@@ -1780,13 +1795,10 @@ pub fn http_target(config: &AiProviderConfig) -> Result<HttpTarget, AiError> {
             } else {
                 "/chat/completions"
             };
-            let base = endpoint
-                .strip_suffix(suffix)
-                .unwrap_or(&endpoint)
-                .to_owned();
+            let (base, url) = http_endpoints(&endpoint, suffix);
             validate_model(&openai.model)?;
             Ok(HttpTarget {
-                url: format!("{base}{suffix}"),
+                url,
                 base,
                 model: openai.model.clone(),
                 backend: if config.kind == AiProviderKind::OpenaiResponses {
@@ -1805,13 +1817,10 @@ pub fn http_target(config: &AiProviderConfig) -> Result<HttpTarget, AiError> {
                 return Err(invalid("Anthropic は opt-in です。有効化してから使います"));
             }
             let endpoint = validate_endpoint(&anthropic.endpoint)?;
-            let base = endpoint
-                .strip_suffix("/messages")
-                .unwrap_or(&endpoint)
-                .to_owned();
+            let (base, url) = http_endpoints(&endpoint, "/messages");
             validate_model(&anthropic.model)?;
             Ok(HttpTarget {
-                url: format!("{base}/messages"),
+                url,
                 base,
                 model: anthropic.model.clone(),
                 backend: HttpBackend::Anthropic,

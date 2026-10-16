@@ -54,7 +54,7 @@ GFM の表・task list・Alerts・脚注、highlight、数式、Mermaid、saniti
 
 ## AI 接続と変更の承認
 
-Agent チャットの接続設定で、Codex ACP (`codex-acp`)、OpenCode ACP (`opencode acp`)、GitHub Copilot ACP (`copilot --acp --stdio`)、Claude Codeアダプター (`claude-agent-acp`)、任意コマンドを選べます。「API を追加」からOpenAI Chat Completions、OpenAI Responses、Anthropic Messagesの通信形式とエンドポイント・モデルを指定し、名前付き接続先として登録します。未登録のAPI形式はチャットの候補に表示しません。 旧形式のAPI設定は自動移行せず、「API を追加」から登録し直します。ACP adapter は利用者が導入します。Anthropic は利用者の明示設定で有効にします。API 資格情報は OS ストアに保存します。
+Agent チャットの接続設定で、Codex ACP (`codex-acp`)、OpenCode ACP (`opencode acp`)、GitHub Copilot ACP (`copilot --acp --stdio`)、Claude Codeアダプター (`claude-agent-acp`)、Devin ACP (`devin acp`)、任意コマンドを選べます。「API を追加」からOpenAI Chat Completions、OpenAI Responses、Anthropic Messagesの通信形式とエンドポイント・モデルを指定し、名前付き接続先として登録します。未登録のAPI形式はチャットの候補に表示しません。 旧形式のAPI設定は自動移行せず、「API を追加」から登録し直します。ACP adapter は利用者が導入します。Anthropic は利用者の明示設定で有効にします。API 資格情報は OS ストアに保存します。
 
 Agent・インライン両チャットの入力欄で接続先とモデルを選びます。「モデルを選ぶ」は ACP エージェントに接続して公開されたモデル・推論強度の候補を取得します。送信前に選択値を設定し、エージェントの応答が一致することを確認します。候補を公開しないエージェントは CLI の設定を使います。直接APIは登録した接続先名で選択し、設定画面でモデルとエンドポイントを変更できます。接続設定はテーマを継承するダイアログで開き、Escape で閉じて元の操作へ戻れます。Windows の ACP プロセスは別のコンソール窓を表示せず、回答をチャットへ表示します。
 

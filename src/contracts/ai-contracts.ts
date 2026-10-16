@@ -2,7 +2,7 @@
 // Do not edit by hand. AI IPC schema version 7.
 import type { DocumentId, Revision, Utf16Range, DocumentLocation } from "./contracts";
 export type AiProviderKind = "acp" | "openai_chat_completions" | "openai_responses" | "anthropic";
-export type AcpPreset = "codex" | "opencode" | "copilot" | "claude_code" | "custom";
+export type AcpPreset = "codex" | "opencode" | "copilot" | "claude_code" | "devin" | "custom";
 export type AcpArgv = { command: string, args: Array<string>, };
 export type AcpConfig = { preset: AcpPreset, 
 /**

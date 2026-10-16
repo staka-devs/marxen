@@ -23,7 +23,7 @@ export interface AiProfile {
 const KINDS: AiProviderKind[] = ["acp", "openai_chat_completions", "openai_responses", "anthropic"];
 
 /** Valid ACP presets accepted from stored JSON. */
-const PRESETS: AcpPreset[] = ["codex", "opencode", "copilot", "claude_code", "custom"];
+const PRESETS: AcpPreset[] = ["codex", "opencode", "copilot", "claude_code", "devin", "custom"];
 
 /**
  * Create the default Codex profile for first-run settings.

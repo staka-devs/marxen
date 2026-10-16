@@ -8,6 +8,7 @@ export function aiAccountScope(provider: AiProviderConfig, snapshot: AccountSnap
   const command = (provider.acp?.argv?.command.split(/[/\\]/).pop() ?? "").toLowerCase().replace(/\.(exe|cmd|ps1)$/, "");
   const accountProvider: AccountProvider | undefined = preset === "codex" || (preset === "custom" && command === "codex-acp") ? "codex"
     : preset === "opencode" || (preset === "custom" && command === "opencode") ? "opencode"
+    : preset === "devin" || (preset === "custom" && command === "devin") ? "devin"
     : preset === "claude_code" || (preset === "custom" && command === "claude-agent-acp") ? "claude" : undefined;
   if (!accountProvider) return null;
   const selection = snapshot.selections.find(item => item.provider === accountProvider && item.host.kind === "local");

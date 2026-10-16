@@ -39,6 +39,7 @@ pub enum AcpPreset {
     Opencode,
     Copilot,
     ClaudeCode,
+    Devin,
     Custom,
 }
 

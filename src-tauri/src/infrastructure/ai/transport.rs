@@ -31,6 +31,7 @@ impl NativeAiTransport {
             "codex-acp" => AccountProvider::Codex,
             "claude-agent-acp" => AccountProvider::Claude,
             "opencode" => AccountProvider::Opencode,
+            "devin" => AccountProvider::Devin,
             _ => return Ok(Default::default()),
         };
         match &self.accounts {

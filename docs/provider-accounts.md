@@ -11,7 +11,7 @@
 | Codex | `auth.json` JSON (`tokens.access_token` または `OPENAI_API_KEY`) | 既存の公式 `account/rateLimits/read` RPC。実測 quota window のみ | Unix / Windows 私有 `CODEX_HOME`、file credential store |
 | Claude Code | `.credentials.json` JSON (`claudeAiOauth.accessToken`) | 固定 OAuth usage endpoint、five_hour / seven_day の utilization | Linux / Windows 私有 `CLAUDE_CONFIG_DIR`。macOS Keychain 未対応 |
 | OpenCode | `auth.json` JSON | サービス横断のアカウント利用枠 API は未対応 | Unix / Windows 私有 HOME / XDG data/config/state/cache |
-| Devin | 認証設定 JSON を保存可能 | CLI 利用枠 API は未対応 | 独立した CLI 認証 adapter 未対応 |
+| Devin | 公式 `credentials.toml` の内容 | CLI 利用枠 API は未対応 | 私有 HOME / XDG data、Windows は私有 APPDATA |
 | Gemini CLI legacy | `oauth_creds.json` JSON (`access_token` / `refresh_token`)、任意 project ID | Google Code Assist の model 別 `remainingFraction` | この設定からの CLI 起動は未対応 |
 | Antigravity | 認証設定 JSON を保存可能 | 安全な adapter 未対応。CLI に `/usage` prompt を送らない | 未対応 |
 | OpenCode Go | Go API key | 固定 Go endpoint の rolling / weekly / monthly percent | 使用量設定のみ |
@@ -20,7 +20,7 @@
 | Cursor | `WorkosCursorSessionToken=...` を含む Cookie header 値 | 固定 usage-summary endpoint の plan / onDemand | 使用量設定のみ |
 | GLM Coding Plan | Coding Plan API key | 固定 monitor endpoint の reported limits | 使用量設定のみ |
 
-システム既定の資格情報 reader は Codex、Claude のファイル方式、OpenCode、OpenCode Go、Gemini legacy の既知のファイルを対象にする。その他の方式・macOS の Claude Keychain を「認証なし」と断定しない。対応する保存先に資格情報がなければ、他方式は未確認であると表示する。CLI の通常のシステム既定起動は環境を変更しない。Devin のシステム既定起動は可能だが、この設定画面からの独立した認証・使用量確認は未対応である。
+システム既定の資格情報 reader は Codex、Claude のファイル方式、OpenCode、OpenCode Go、Gemini legacy の既知のファイルを対象にする。その他の方式・macOS の Claude Keychain を「認証なし」と断定しない。対応する保存先に資格情報がなければ、他方式は未確認であると表示する。CLI の通常のシステム既定起動は環境を変更しない。Devin は公式の既定 credentials.toml の存在を確認でき、管理ファイルも独立した子プロセスで使用する。使用量取得は未対応である。
 
 WSL は distribution ごとに metadata・選択を分ける。現在は WSL bridge がないため認証確認・使用量取得・起動は拒否し、ローカル OS の資格情報を流用しない。Windows の管理 CLI 私有ファイル起動も未対応である。資格情報の保存と HTTP adapter は、この起動制約とは別である。
 
@@ -74,3 +74,5 @@ IPC は `provider_accounts_snapshot/save/select/delete/credential_present/usage/
 - account contract generator の `--check`: 成功。
 - no-desktop 全体テストは既存 `tests/contracts.rs:228` が desktop-gated `presentation::runtime` を参照してコンパイルできず、上記の対象を個別指定した。
 - desktop `cargo check` は環境に `glib-2.0.pc` がないため未完了。実 WebView / ネイティブブラウザー・OS ストア / 実接続の成功を示すものではない。
+
+Devin は公式の [認証ファイル配置](https://docs.devin.ai/cli/enterprise/devin-auth) と [ACP サブコマンド](https://docs.devin.ai/cli/acp/zed) を使用する。TOML は原文で保存し、意味の解釈は CLI に委ねる。

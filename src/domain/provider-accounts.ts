@@ -6,7 +6,7 @@ export const ACCOUNT_PROVIDERS: { id: AccountProvider; label: string; endpoints:
   { id: "codex", label: "Codex", endpoints: ["https://chatgpt.com"], docs: "https://developers.openai.com/codex/auth/", credential: "Codex の auth.json", usage: true, launch: true },
   { id: "claude", label: "Claude Code", endpoints: ["https://api.anthropic.com"], docs: "https://code.claude.com/docs/en/authentication", credential: "Claude の .credentials.json", usage: true, launch: true },
   { id: "opencode", label: "OpenCode", endpoints: ["https://opencode.ai"], docs: "https://opencode.ai/docs/providers/", credential: "OpenCode の auth.json", usage: false, launch: true },
-  { id: "devin", label: "Devin", endpoints: ["https://api.devin.ai"], docs: "https://docs.devin.ai/work-with-devin/devin-cli", credential: "認証設定 JSON", usage: false, launch: false },
+  { id: "devin", label: "Devin", endpoints: ["https://api.devin.ai"], docs: "https://docs.devin.ai/cli/enterprise/devin-auth", credential: "Devin の credentials.toml", usage: false, launch: true },
   { id: "gemini", label: "Gemini CLI (legacy)", endpoints: ["https://cloudcode-pa.googleapis.com"], docs: "https://geminicli.com/docs/get-started/authentication/", credential: "Gemini の oauth_creds.json", usage: true, launch: false },
   { id: "antigravity", label: "Antigravity", endpoints: ["https://antigravity.google"], docs: "https://antigravity.google/docs/home", credential: "認証設定 JSON", usage: false, launch: false },
   { id: "opencode_go", label: "OpenCode Go", endpoints: ["https://opencode.ai"], docs: "https://opencode.ai/docs/go/", credential: "OpenCode Go の API キー", usage: true, launch: false },

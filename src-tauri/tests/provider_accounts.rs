@@ -118,9 +118,8 @@ fn credential(provider: AccountProvider) -> String {
         AccountProvider::Grok => {
             json!({"accessToken":"fixture-grok-secret","userId":"fixture-user"}).to_string()
         }
-        AccountProvider::Devin | AccountProvider::Antigravity => {
-            json!({"token":"fixture-secret"}).to_string()
-        }
+        AccountProvider::Devin => "token = \"fixture-devin-secret\"\n".into(),
+        AccountProvider::Antigravity => json!({"token":"fixture-secret"}).to_string(),
         _ => "fixture-secret".into(),
     }
 }
@@ -697,4 +696,38 @@ fn native_acp_probe_uses_selected_private_account() {
         Err(AiError::InvalidConfig { .. })
     ));
     assert!(std::fs::read_dir(temp.path().join("host-home")).is_err());
+}
+
+/// Import the official Devin credential file verbatim into a private CLI data directory.
+#[test]
+fn devin_credentials_are_scoped_without_modifying_the_default_login() {
+    let (temp, service, _, _) = fixture();
+    let secret = "[auth]\ntoken = \"fixture-devin-secret\"\n";
+    service
+        .save(
+            account(AccountProvider::Devin, AccountHost::Local),
+            Some(secret.into()),
+        )
+        .unwrap();
+    let saved = service.snapshot().unwrap().accounts[0].account.clone();
+    service
+        .select(AccountSelection {
+            provider: saved.provider,
+            host: saved.host.clone(),
+            account_id: Some(saved.id.clone()),
+        })
+        .unwrap();
+    let environment = service
+        .launch_environment(saved.provider, &saved.host)
+        .unwrap();
+    let data = std::path::Path::new(&environment.set["XDG_DATA_HOME"]);
+    assert_eq!(
+        std::fs::read_to_string(data.join("devin/credentials.toml")).unwrap(),
+        secret
+    );
+    assert!(environment
+        .remove
+        .iter()
+        .any(|name| name == "DEVIN_API_KEY"));
+    assert!(!temp.path().join("host-home").exists());
 }

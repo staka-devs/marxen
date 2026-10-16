@@ -202,7 +202,7 @@ pub async fn test_openai_live(
 ) -> Result<AiTestResult, AiError> {
     let base = validate_endpoint(endpoint)?;
     let response = client
-        .get(format!("{base}/models"))
+        .get(http_endpoints(&base, "/models").1)
         .bearer_auth(secret)
         .send()
         .await
@@ -239,7 +239,7 @@ pub async fn test_anthropic_live(
     let base = validate_endpoint(endpoint)?;
     validate_model(model)?;
     let response = client
-        .post(format!("{base}/messages"))
+        .post(http_endpoints(&base, "/messages").1)
         .header("x-api-key", secret)
         .header("anthropic-version", "2023-06-01")
         .json(&serde_json::json!({

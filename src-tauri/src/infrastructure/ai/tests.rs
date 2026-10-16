@@ -1753,6 +1753,13 @@ mod regression {
     /// `request_cancelled` error tag.
     #[test]
     fn wire_accepts_claude_adapter_and_tags_cancellation() {
+        assert_eq!(
+            preset_argv(AcpPreset::Devin),
+            AcpArgv {
+                command: "devin".into(),
+                args: vec!["acp".into()]
+            }
+        );
         let rejected: Result<AcpPreset, _> = serde_json::from_str("\"claude_code\"");
         assert_eq!(rejected.unwrap(), AcpPreset::ClaudeCode);
         assert_eq!(

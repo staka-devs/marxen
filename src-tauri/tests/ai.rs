@@ -1670,3 +1670,15 @@ fn acp_startup_timeout_and_legacy_models() {
             .unwrap();
     assert_eq!(record["model"], "fixture-b");
 }
+
+/// Full URLs and API roots retain their query data when selecting a protocol endpoint.
+#[test]
+fn configured_http_endpoints_preserve_query_parameters() {
+    use marxen_lib::domain::ai::http_endpoints;
+    for suffix in ["/chat/completions", "/responses", "/messages"] {
+        let base = "https://example.com/custom/v1?api-version=fixture&tenant=work";
+        let full = format!("https://example.com/custom/v1{suffix}?api-version=fixture&tenant=work");
+        assert_eq!(http_endpoints(base, suffix), (base.into(), full.clone()));
+        assert_eq!(http_endpoints(&full, suffix), (base.into(), full));
+    }
+}

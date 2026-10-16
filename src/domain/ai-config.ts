@@ -37,6 +37,7 @@ export const PRESET_LABELS: Record<AcpPreset, string> = {
   opencode: "OpenCode",
   copilot: "GitHub Copilot",
   claude_code: "Claude Code",
+  devin: "Devin",
   custom: "カスタム",
 };
 

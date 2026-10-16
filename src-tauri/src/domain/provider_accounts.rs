@@ -45,7 +45,7 @@ pub fn setup_url(provider: AccountProvider) -> &'static str {
         AccountProvider::Codex => "https://developers.openai.com/codex/auth/",
         AccountProvider::Claude => "https://code.claude.com/docs/en/authentication",
         AccountProvider::Opencode => "https://opencode.ai/docs/providers/",
-        AccountProvider::Devin => "https://docs.devin.ai/work-with-devin/devin-cli",
+        AccountProvider::Devin => "https://docs.devin.ai/cli/enterprise/devin-auth",
         AccountProvider::Gemini => "https://geminicli.com/docs/get-started/authentication/",
         AccountProvider::Antigravity => "https://antigravity.google/docs/home",
         AccountProvider::OpencodeGo => "https://opencode.ai/docs/go/",
@@ -137,12 +137,19 @@ pub fn validate_credential(
     if secret.is_empty() || secret.len() > 32768 || secret.contains('\0') {
         return Err(ProviderAccountError::InvalidSettings);
     }
+    // The CLI owns TOML parsing; keep the bounded credentials file byte-for-byte.
+    if provider == AccountProvider::Devin {
+        return if secret.trim().is_empty() {
+            Err(ProviderAccountError::InvalidSettings)
+        } else {
+            Ok(())
+        };
+    }
     let json_required = matches!(
         provider,
         AccountProvider::Codex
             | AccountProvider::Claude
             | AccountProvider::Opencode
-            | AccountProvider::Devin
             | AccountProvider::Gemini
             | AccountProvider::Antigravity
             | AccountProvider::Grok

@@ -110,6 +110,17 @@ impl NativeAccountRuntime {
                     .unwrap_or_else(|| self.home.join(".local/share"))
                     .join("opencode/auth.json"),
             ),
+            AccountProvider::Devin => Some(if cfg!(windows) {
+                std::env::var_os("APPDATA")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| self.home.join("AppData/Roaming"))
+                    .join("devin/credentials.toml")
+            } else {
+                std::env::var_os("XDG_DATA_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| self.home.join(".local/share"))
+                    .join("devin/credentials.toml")
+            }),
             AccountProvider::Gemini => Some(self.home.join(".gemini/oauth_creds.json")),
             _ => None,
         }
@@ -123,6 +134,21 @@ impl NativeAccountRuntime {
         let Some(path) = self.system_file(provider) else {
             return Ok(None);
         };
+        if provider == AccountProvider::Devin {
+            use std::io::Read;
+            store::reject_link(&path)?;
+            let file = match fs::File::open(&path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(_) => return Err(ProviderAccountError::StoreFailed),
+            };
+            let mut secret = String::new();
+            file.take(32769)
+                .read_to_string(&mut secret)
+                .map_err(|_| ProviderAccountError::StoreFailed)?;
+            crate::domain::provider_accounts::validate_credential(provider, &secret)?;
+            return Ok(Some(secret));
+        }
         let value = store::read_json(&path)?;
         match (provider, value) {
             (AccountProvider::OpencodeGo, Some(value)) => Ok(value
@@ -204,7 +230,10 @@ impl ProviderAccountRuntime for NativeAccountRuntime {
         }
         if !matches!(
             account.provider,
-            AccountProvider::Codex | AccountProvider::Claude | AccountProvider::Opencode
+            AccountProvider::Codex
+                | AccountProvider::Claude
+                | AccountProvider::Opencode
+                | AccountProvider::Devin
         ) {
             return Err(ProviderAccountError::Unsupported {
                 reason: AccountReason::AdapterUnsupported,
@@ -264,6 +293,22 @@ impl ProviderAccountRuntime for NativeAccountRuntime {
                     ]
                     .map(str::to_owned),
                 );
+            }
+            AccountProvider::Devin => {
+                let data = if cfg!(windows) {
+                    root.join("AppData/Roaming")
+                } else {
+                    root.join("data")
+                };
+                private_file(&data.join("devin/credentials.toml"), credential.as_bytes())?;
+                store::directory(&root.join("config"))?;
+                env.set
+                    .insert("XDG_DATA_HOME".into(), data.to_string_lossy().into_owned());
+                env.set.insert(
+                    "XDG_CONFIG_HOME".into(),
+                    root.join("config").to_string_lossy().into_owned(),
+                );
+                env.remove.push("DEVIN_API_KEY".into());
             }
             AccountProvider::Claude => {
                 private_file(&root.join(".credentials.json"), credential.as_bytes())?;
@@ -361,20 +406,20 @@ mod browser_tests {
             time::{Duration, Instant},
         };
         assert!(wait_browser_launcher(
-            Command::new("/bin/true").spawn().unwrap(),
+            Command::new("true").spawn().unwrap(),
             Duration::from_secs(1)
         )
         .is_ok());
         assert_eq!(
             wait_browser_launcher(
-                Command::new("/bin/false").spawn().unwrap(),
+                Command::new("false").spawn().unwrap(),
                 Duration::from_secs(1)
             ),
             Err(ProviderAccountError::RequestFailed)
         );
         let started = Instant::now();
         assert!(wait_browser_launcher(
-            Command::new("/bin/sleep").arg("0.2").spawn().unwrap(),
+            Command::new("sleep").arg("0.2").spawn().unwrap(),
             Duration::from_millis(1)
         )
         .is_ok());

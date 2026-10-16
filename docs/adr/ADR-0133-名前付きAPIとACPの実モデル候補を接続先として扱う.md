@@ -11,12 +11,12 @@
 ## 決定と理由
 
 - チャットの接続先にはACPエージェントと登録済みの名前付きAPIだけを表示する。API形式は「APIを追加」の中で選択する。
-- OpenAI Chat Completions、OpenAI Responses、Anthropic Messagesを別の通信形式として扱う。APIルートまたは完全なエンドポイント、モデル、資格情報を接続先ごとに設定する。
+- OpenAI Chat Completions、OpenAI Responses、Anthropic Messagesを別の通信形式として扱う。APIルートまたは完全なエンドポイント、モデル、資格情報を接続先ごとに設定する。エンドポイントのクエリ文字列は送信先と接続確認で保持する。
 - 形式名は`openai_chat_completions`、`openai_responses`、`anthropic`とする。旧互換形式の別名や自動変換は設けない。名前付きAPIの保存領域をv2に分け、以前の領域は読み書きしない。
 - Responsesは`input`と型付きSSEを使い、`store: false`で必要な履歴だけを送信する。完了イベント前の切断・失敗・不完全な生成を成功扱いしない。
 - ACPのモデル取得は有界の初期化・セッション作成で行い、非同期ランタイムを同期処理で塞がない。同じ接続への同時取得をまとめ、一時的な失敗で最後に公開された候補を消さない。
 - `configOptions`を優先し、未提供の場合は旧`models`と`session/set_model`を扱う。送信時はそのセッションの候補と設定応答を再確認する。モデルを推測しない。
-- Claude Codeは利用者向けの`claude-agent-acp`アダプターとして選択できる。開発でのClaude Code起動・委任・実接続検証の禁止は維持する。
+- Devin は公式の `devin acp` を利用者向けプリセットとして扱う。Claude Codeは利用者向けの`claude-agent-acp`アダプターとして選択できる。開発でのClaude Code起動・委任・実接続検証の禁止は維持する。
 
 ## 制約と確認方法
 
