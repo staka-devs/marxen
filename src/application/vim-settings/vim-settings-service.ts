@@ -72,7 +72,7 @@ export async function saveManagedVimSettings(
     }, t);
   }
   if (path && isLuaConfigPath(path)) {
-    throw localizedException(t, "init.lua は原文編集のみです。管理ブロックを挿入しません。");
+    throw localizedException(t, "init.lua は設定コードで編集してください。");
   }
   return gateway.writeManaged(path, expectedFingerprint, settings);
 }

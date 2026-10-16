@@ -121,7 +121,7 @@ describe("chat model selection", () => {
     const onProvider = vi.fn();
     render(<AiModelControls provider={provider} onProvider={onProvider} options={[]} loading={false} discovered error={null} onRefresh={vi.fn()} />);
     expect(screen.queryByRole("combobox", { name: "チャットのモデル" })).toBeNull();
-    expect(screen.getByText("この接続先はモデル候補を公開していません。CLI の設定を使用します。")).toBeVisible();
+    expect(screen.getByText("モデル候補なし（接続先の設定を使用）")).toBeVisible();
     expect(onProvider).not.toHaveBeenCalled();
     expect(provider.acp!.selections).toEqual([{ id: "opaque.option", value: "retained-value" }]);
   });

@@ -56,7 +56,7 @@ it("keeps absent usage absent instead of displaying zero-filled bars or costs", 
   renderUsage(gateway, undefined, "en-US");
   fireEvent.click(screen.getByRole("button", { name: "Usage" }));
   const popup = await screen.findByRole("dialog", { name: "Usage" });
-  expect(await within(popup).findByText("No session usage has been reported yet.")).toBeVisible();
+  expect(await within(popup).findByText("No usage reported yet.")).toBeVisible();
   expect(within(popup).queryByRole("progressbar")).not.toBeInTheDocument();
   expect(within(popup).queryByText("Credit balance")).not.toBeInTheDocument();
   expect(within(popup).queryByText("Session cost")).not.toBeInTheDocument();

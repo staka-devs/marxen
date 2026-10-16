@@ -403,7 +403,7 @@ export default function InlineChat({
               {t("取消")}</Button>
           )}
           {proposal && (
-            <Button variant="outline" size="sm" aria-label={t("差分を確認")} title={t("提案を作業コピーに取り込み差分を確認します")} onClick={onReview} className="ai-chat-action shrink-0">
+            <Button variant="outline" size="sm" aria-label={t("差分を確認")} title={t("差分を確認")} onClick={onReview} className="ai-chat-action shrink-0">
               {t("差分を確認")}</Button>
           )}
         </div>
@@ -428,7 +428,7 @@ export default function InlineChat({
         )}
         {proposal && (
           <div className="py-0.5">
-            <p className="text-[11px] text-muted-foreground">{t("提案 • 差分確認のうえ取り込みます")}</p>
+            <p className="text-[11px] text-muted-foreground">{t("提案")}</p>
             <div className="marxen-chat-body mt-1 max-h-48 overflow-y-auto"><MarkdownPreview text={proposal.text} label={t("インラインの提案")} testId="inline-response" /></div>
           </div>
         )}

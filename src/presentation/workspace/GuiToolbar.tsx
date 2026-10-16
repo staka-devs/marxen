@@ -58,7 +58,7 @@ export function GuiToolbar(props: Props) {
       <button type="button" disabled={disabled} onClick={props.onImage} className={style} title={t("画像")} aria-label={t("画像を挿入する")}><Image size={14} /></button>
       <button type="button" disabled={disabled} onClick={() => setTableOpen((open) => !open)} className={style} aria-label={t("表を挿入する")} aria-expanded={tableOpen} title={t("表")}><Table2 size={14} /></button>
       <span className="mx-1 h-4 border-l border-border" />
-      <button type="button" disabled={disabled} onClick={() => props.onHardBreakOnEnter(!props.hardBreakOnEnter)} aria-pressed={props.hardBreakOnEnter} aria-label={t("EnterでMarkdown改行")} title={t("文章の行末でEnterを押すと空白2個のMarkdown改行を追加します")} className={`${style} gap-1 ${props.hardBreakOnEnter ? "bg-primary/10 text-primary" : ""}`}><CornerDownLeft size={14} /><span className="whitespace-nowrap text-[11px]">{t("Markdown改行")}</span></button>
+      <button type="button" disabled={disabled} onClick={() => props.onHardBreakOnEnter(!props.hardBreakOnEnter)} aria-pressed={props.hardBreakOnEnter} aria-label={t("EnterでMarkdown改行")} title={t("EnterでMarkdown改行")} className={`${style} gap-1 ${props.hardBreakOnEnter ? "bg-primary/10 text-primary" : ""}`}><CornerDownLeft size={14} /><span className="whitespace-nowrap text-[11px]">{t("Markdown改行")}</span></button>
       <span className="mx-1 h-4 border-l border-border" />
       <button type="button" disabled={disabled} onClick={props.onUndo} className={style} aria-label={t("元に戻す")} title={t("元に戻す")}><Undo2 size={14} /></button>
       <button type="button" disabled={disabled} onClick={props.onRedo} className={style} aria-label={t("やり直す")} title={t("やり直す")}><Redo2 size={14} /></button>

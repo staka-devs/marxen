@@ -47,7 +47,7 @@ describe("named API connection settings", () => {
   it("shows the empty state and the add entry point", () => {
     const owned = controls();
     render(<ApiConnectionSettings {...owned} />);
-    expect(screen.getByText("登録した API 接続先がありません。「API を追加」で登録します。")).toBeVisible();
+    expect(screen.getByText("API 接続先がありません。")).toBeVisible();
     expect(screen.getByRole("button", { name: "API を追加" })).toBeVisible();
   });
 
@@ -109,9 +109,9 @@ describe("named API connection settings", () => {
     const owned = controls({ version: 1, activeId: "api-1", initialized: true, connections: [saved()] });
     render(<ApiConnectionSettings {...owned} />);
     fireEvent.click(screen.getByRole("button", { name: "削除" }));
-    expect(screen.getByText("この接続先を削除します。OS ストアの資格情報も削除します。")).toBeVisible();
+    expect(screen.getByText("接続先と API キーを削除します。")).toBeVisible();
     expect(owned.calls.deleted).toEqual([]);
-    const confirm = screen.getByText("この接続先を削除します。OS ストアの資格情報も削除します。").closest("div")!;
+    const confirm = screen.getByText("接続先と API キーを削除します。").closest("div")!;
     fireEvent.click(confirm.querySelectorAll("button")[1]);
     expect(owned.calls.deleted).toEqual(["api-1"]);
   });
@@ -146,7 +146,7 @@ describe("named API connection settings", () => {
     render(<ApiConnectionSettings {...owned} />);
     fireEvent.click(screen.getByRole("button", { name: "API 接続先を編集" }));
     fireEvent.click(screen.getByRole("button", { name: "状態を確認" }));
-    await waitFor(() => expect(screen.getByText("保存済み。値は表示しません。")).toBeVisible());
+    await waitFor(() => expect(screen.getByText("保存済み")).toBeVisible());
     expect(owned.connectionGateway!.getConnectionCredentialState).toHaveBeenCalledWith("api-1");
   });
 
@@ -210,9 +210,9 @@ describe("named API connection settings", () => {
     owned.onDelete = () => false;
     render(<ApiConnectionSettings {...owned} />);
     fireEvent.click(screen.getByRole("button", { name: "削除" }));
-    const confirm = screen.getByText("この接続先を削除します。OS ストアの資格情報も削除します。").closest("div")!;
+    const confirm = screen.getByText("接続先と API キーを削除します。").closest("div")!;
     fireEvent.click(confirm.querySelectorAll("button")[1]);
-    expect(screen.getByText("この接続先を削除します。OS ストアの資格情報も削除します。")).toBeVisible();
+    expect(screen.getByText("接続先と API キーを削除します。")).toBeVisible();
   });
 
   it("mounts the add dialog inside the live dark theme scope", () => {

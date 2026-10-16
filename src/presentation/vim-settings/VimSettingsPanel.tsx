@@ -120,16 +120,16 @@ export function VimSettingsPanel({ model, onBrowseConfig }: VimSettingsPanelProp
       <fieldset disabled={busy || structuredBlocked} className="space-y-3 disabled:opacity-60">
         <legend className="mb-1 text-[13px]">{t("インデントと検索")}</legend>
         <label className="marxen-setting-row">
-          <span className="marxen-setting-label">{t("タブ幅（tabstop）")}</span><input aria-label={t("タブ幅")} type="number" min={1} max={32} value={settings.tabstop} onChange={(event) => setNumber("tabstop", event.currentTarget.valueAsNumber)} className={`${inputClass} w-20 shrink-0`} />
+          <span className="marxen-setting-label">{t("タブ幅")}</span><input aria-label={t("タブ幅")} type="number" min={1} max={32} value={settings.tabstop} onChange={(event) => setNumber("tabstop", event.currentTarget.valueAsNumber)} className={`${inputClass} w-20 shrink-0`} />
         </label>
         <label className="marxen-setting-row">
-          <span className="marxen-setting-label">{t("インデント幅（shiftwidth）")}</span><input aria-label={t("インデント幅")} type="number" min={1} max={32} value={settings.shiftwidth} onChange={(event) => setNumber("shiftwidth", event.currentTarget.valueAsNumber)} className={`${inputClass} w-20 shrink-0`} />
+          <span className="marxen-setting-label">{t("インデント幅")}</span><input aria-label={t("インデント幅")} type="number" min={1} max={32} value={settings.shiftwidth} onChange={(event) => setNumber("shiftwidth", event.currentTarget.valueAsNumber)} className={`${inputClass} w-20 shrink-0`} />
         </label>
         {(
           [
-            ["expandtab", t("スペースでインデントする（expandtab）")],
-            ["ignorecase", t("検索で大文字小文字を区別しない（ignorecase）")],
-            ["smartcase", t("大文字を含む検索のみ区別する（smartcase）")],
+            ["expandtab", t("スペースでインデントする")],
+            ["ignorecase", t("検索で大文字小文字を区別しない")],
+            ["smartcase", t("大文字を含む検索のみ区別する")],
           ] as const
         ).map(([key, text]) => (
           <label key={key} className="marxen-setting-row">
@@ -154,14 +154,13 @@ export function VimSettingsPanel({ model, onBrowseConfig }: VimSettingsPanelProp
           <label className="marxen-setting-row">
             <span className="marxen-setting-label">{t("リーダーキー")}</span><input ref={leaderInput} aria-label={t("リーダーキー")} aria-describedby="vim-leader-help" value={displayVimLeader(settings.leader)} onChange={(event) => setSettings({ ...settings, leader: parseVimLeaderInput(event.target.value) })} className={`${inputClass} w-52 font-mono`} />
           </label>
-          <p id="vim-leader-help" className="text-xs leading-5 text-muted-foreground">{t("1文字または <Space> を入力します。Space は空白キーとして保存されます。")}</p>
+          <p id="vim-leader-help" className="text-xs leading-5 text-muted-foreground">{t("1文字または <Space> を入力してください。")}</p>
         </div>
       </fieldset>
 
       <fieldset disabled={busy || structuredBlocked} className="space-y-3 disabled:opacity-60">
         <legend className="mb-1 text-[13px]">{t("コピー形式キー")}</legend>
         <label className="marxen-setting-row"><span className="marxen-setting-label">{t("選択時の書式ポップアップ")}</span><input type="checkbox" aria-label={t("選択時の書式ポップアップ")} checked={settings.selectionToolbar} onChange={(event) => setSettings({ ...settings, selectionToolbar: event.target.checked })} /></label>
-        <p className="text-xs text-muted-foreground">{t("Vim設定で明示的に有効にした場合のみ表示します。キーのマッピングとフォーカスを保持します。")}</p>
         <p className="text-xs leading-5 text-muted-foreground">{t("空で無効。既存のVimマッピングと重複できません。")}</p>
         {VIM_COPY_FORMATS.map((name) => (
           <label key={name} className="marxen-setting-row">
@@ -178,7 +177,7 @@ export function VimSettingsPanel({ model, onBrowseConfig }: VimSettingsPanelProp
 
       <fieldset disabled={busy || structuredBlocked} className="space-y-2 disabled:opacity-60">
         <legend className="mb-1 text-[13px]">{t("モード別マッピング")}</legend>
-        {settings.mappings.length === 0 && <p className="text-xs text-muted-foreground">{t("マッピングはありません。下のボタンで追加します。")}</p>}
+        {settings.mappings.length === 0 && <p className="text-xs text-muted-foreground">{t("マッピングはありません。")}</p>}
         {settings.mappings.map((mapping, index) => (
           <div key={index} className="marxen-vim-mapping rounded-sm border border-border p-3">
             <label className="min-w-0 space-y-1 text-xs"><span>{t("モード")}</span><select aria-label={t("マッピング{{value0}}のモード", { value0: (index + 1) })} value={mapping.mode} onChange={(event) => setMapping(index, { mode: event.target.value })} className={`${inputClass} w-full`}>
@@ -210,17 +209,16 @@ export function VimSettingsPanel({ model, onBrowseConfig }: VimSettingsPanelProp
         {!previewError && preview !== null && (
           <>
             <p data-testid="vim-settings-changed" className="text-xs text-muted-foreground">
-              {changed ? t("管理ブロックに変更があります。ブロック外の設定コードは保持します。") : t("変更はありません。")}
+              {changed ? t("変更があります。") : t("変更はありません。")}
             </p>
             <pre data-testid="vim-settings-preview" className="max-h-56 overflow-auto whitespace-pre-wrap rounded-sm bg-card p-3 font-mono text-xs leading-5">{preview}</pre>
           </>
         )}
-        {rawDirty && <p className="text-xs text-muted-foreground">{t("設定コードに未保存の編集があります。管理保存は読込時の設定コードに適用します。設定コードの変更は先に設定コード保存してください。")}</p>}
+        {rawDirty && <p className="text-xs text-muted-foreground">{t("設定コードに未保存の変更があります。先に設定コードを保存してください。")}</p>}
       </div>
 
       <div className="space-y-2">
         <p className="text-[13px]">{t("設定コードエディター")}</p>
-        <p className="text-xs leading-5 text-muted-foreground">{t("Vimscript や init.lua の Lua を直接編集できます。保存前に外部変更を確認します。")}</p>
         <textarea
           value={rawDraft}
           onChange={(event) => setRawDraft(event.target.value)}

@@ -164,7 +164,7 @@ describe("agentic chat", () => {
     expect(await screen.findByText("取り消しました。")).toBeVisible();
   });
 
-  it("shows ask readonly without fake file timeline", async () => {
+  it("shows an ask response without a file timeline", async () => {
     let handler: ((event: AiStreamEvent) => void) | null = null;
     mockStartPrompt.mockImplementation(async (_request, onEvent) => {
       handler = onEvent;
@@ -184,7 +184,7 @@ describe("agentic chat", () => {
         sent: [],
       },
     });
-    expect(await screen.findByText("質問は読み取りのみです。")).toBeVisible();
+    expect(await screen.findByText("回答")).toBeVisible();
     expect(screen.queryByTestId("plan-card")).not.toBeInTheDocument();
   });
 

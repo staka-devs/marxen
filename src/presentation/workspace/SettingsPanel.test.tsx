@@ -67,7 +67,7 @@ describe("settings panel categories", () => {
     const view = renderPanel();
     expect(document.activeElement).toBe(screen.getByLabelText("設定を検索"));
     const first = screen.getByRole("button", { name: "設定を閉じる" });
-    const last = screen.getByText("vimrc でキーを変更する");
+    const last = screen.getByRole("button", { name: "設定を適用して再起動する" });
     last.focus(); fireEvent.keyDown(last, { key: "Tab" });
     expect(document.activeElement).toBe(first);
     fireEvent.keyDown(first, { key: "Tab", shiftKey: true });

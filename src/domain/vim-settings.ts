@@ -395,7 +395,7 @@ export function parseManagedBlock(raw: string, t: Translator = japaneseTranslato
  * repeated calls with the same settings are idempotent.
  */
 export function rewriteManagedBlock(raw: string, settings: VimSettings, isLua: boolean, t: Translator = japaneseTranslator): string {
-  if (isLua) throw localizedException(t, "init.lua は設定コード編集のみです。管理ブロックを挿入しません。");
+  if (isLua) throw localizedException(t, "init.lua は設定コードで編集してください。");
   const failures = validateVimSettings(settings, t);
   if (failures.length > 0) throw new Error(failures[0]);
   // Reject an ambiguous existing block before discarding anything.

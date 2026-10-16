@@ -12,13 +12,9 @@ beforeEach(() => {
 
 describe("provider settings", () => {
   it.each([
-    ["ja-JP", "codex", "codex-acp アダプターを利用者が事前にインストールします。自動取得はしません。"],
-    ["ja-JP", "opencode", "OpenCode を opencode acp として起動します。"],
-    ["ja-JP", "copilot", "GitHub Copilot を copilot --acp --stdio として起動します。"],
-    ["en-US", "codex", "Install the codex-acp adapter beforehand. The app does not download it automatically."],
-    ["en-US", "opencode", "Launch OpenCode with opencode acp."],
-    ["en-US", "copilot", "Launch GitHub Copilot with copilot --acp --stdio."],
-  ] as const)("shows the matching %s launch description for %s", (language, preset, description) => {
+    ["ja-JP", "codex", "codex-acp のインストールが必要です。"],
+    ["en-US", "codex", "Install codex-acp to connect."],
+  ] as const)("shows the %s installation requirement for %s", (language, preset, description) => {
     const provider = defaultProviderConfig("acp");
     provider.acp!.preset = preset;
     render(<I18nProvider language={language} createTranslator={createTranslator}><AiProviderSettings embedded provider={provider} onProvider={vi.fn()} /></I18nProvider>);

@@ -43,7 +43,6 @@ export function AiVisibilitySettings({ preferences, onPreferences, advertisedPro
   }).filter((group) => group.matches);
   return <section aria-label={t("AI の表示設定")} className="space-y-3 text-xs">
     {showHeading && <h3 className="text-[13px] font-semibold">{t("AI の表示設定")}</h3>}
-    <p className="text-muted-foreground">{t("候補を非表示にしても、選択中の接続先とモデルは保持します。")}</p>
     <div className="flex flex-wrap gap-x-4 gap-y-2">
       <label className="flex items-center gap-2"><input type="checkbox" checked={preferences.showProviderSelector} onChange={(event) => onPreferences({ ...preferences, showProviderSelector: event.target.checked })} />{t("チャットに接続先の選択欄を表示")}</label>
       <label className="flex items-center gap-2"><input type="checkbox" checked={preferences.showModelSelector} onChange={(event) => onPreferences({ ...preferences, showModelSelector: event.target.checked })} />{t("チャットにモデルの選択欄を表示")}</label>
@@ -58,7 +57,7 @@ export function AiVisibilitySettings({ preferences, onPreferences, advertisedPro
             <input type="checkbox" className="mt-0.5 shrink-0" aria-label={t("{{model}} を表示", { model: model.name })} checked={isAiModelVisible(preferences, id, model.optionId, model.value)} onChange={(event) => onPreferences(setAiModelVisible(preferences, { provider: id, optionId: model.optionId, value: model.value }, event.target.checked))} />
             <span className="min-w-0"><span className="block break-words">{model.name}</span><span className="block break-all text-[11px] text-muted-foreground">{model.value}</span></span>
           </label>)}
-          {models.length === 0 && <p className="px-1 py-1 text-[11px] text-muted-foreground">{id === "openai_compatible" || id === "anthropic" ? t("直接 API のモデル名は接続設定で入力します。") : discovery?.discovered ? t("この接続先はモデル候補を公開していません。CLI の設定を使用します。") : t("この接続先のモデル候補は未取得です。チャットで接続を確認してください。")}</p>}
+          {models.length === 0 && <p className="px-1 py-1 text-[11px] text-muted-foreground">{id === "openai_compatible" || id === "anthropic" ? t("モデル名は接続設定で指定してください。") : discovery?.discovered ? t("モデル候補なし（接続先の設定を使用）") : t("モデル候補を取得するには接続を確認してください。")}</p>}
         </fieldset>;
       })}
       {groups.length === 0 && <p role="status" className="text-muted-foreground">{t("一致する接続先やモデルがありません。")}</p>}
