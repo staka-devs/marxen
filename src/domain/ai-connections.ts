@@ -23,7 +23,7 @@ export interface ApiConnectionList {
 }
 
 /** Protocols offered by the settings protocol dropdown. */
-export const API_PROTOCOLS: ApiProtocol[] = ["openai_compatible", "anthropic"];
+export const API_PROTOCOLS: ApiProtocol[] = ["openai_compatible", "openai_responses", "anthropic"];
 
 /** Storage key versioning the named-connection shape. */
 export const API_CONNECTIONS_STORAGE_KEY = "marxen.api-connections.v1";
@@ -68,7 +68,7 @@ export function isConnectionName(value: unknown): value is string {
  * Only direct-API protocols validate; ACP is never a connection protocol.
  */
 export function isApiProtocol(value: unknown): value is ApiProtocol {
-  return value === "openai_compatible" || value === "anthropic";
+  return value === "openai_compatible" || value === "openai_responses" || value === "anthropic";
 }
 
 /**
@@ -194,9 +194,9 @@ export function validateConnectionFields(input: { name: string; protocol: unknow
  * The connection ID is caller-minted so this stays pure and deterministic.
  */
 export function migrateLegacyProfile(profile: AiProfile, defaultName: string, id: string): { connections: ApiConnection[]; activeId: string } | null {
-  if (profile.kind !== "openai_compatible" && profile.kind !== "anthropic") return null;
+  if (profile.kind !== "openai_compatible" && profile.kind !== "openai_responses" && profile.kind !== "anthropic") return null;
   if (profile.kind === "anthropic" && !profile.anthropicEnabled) return null;
-  const fallback = profile.kind === "openai_compatible" ? DEFAULT_ENDPOINTS.openai_compatible : DEFAULT_ENDPOINTS.anthropic;
+  const fallback = profile.kind !== "anthropic" ? DEFAULT_ENDPOINTS.openai_compatible : DEFAULT_ENDPOINTS.anthropic;
   const customized = profile.endpoint.trim() !== "" && profile.endpoint.trim() !== fallback;
   if (!customized && profile.model.trim() === "") return null;
   const connection: ApiConnection = {
@@ -228,7 +228,7 @@ export function resolveProviderChange(
     if (list.activeId !== null) return { persist: { ...list, activeId: null }, provider: next, missing: false };
     return { persist: null, provider: next, missing: false };
   }
-  if (next.kind !== "openai_compatible" && next.kind !== "anthropic") {
+  if (next.kind !== "openai_compatible" && next.kind !== "openai_responses" && next.kind !== "anthropic") {
     return { persist: null, provider: next, missing: false };
   }
   const nextId = next.connectionId ?? null;
@@ -238,8 +238,8 @@ export function resolveProviderChange(
     if (target.id !== list.activeId || target.protocol !== next.kind) {
       return { persist: target.id === list.activeId ? null : { ...list, activeId: target.id }, provider: buildProviderConfigFromConnection(target), missing: false };
     }
-    const endpoint = next.kind === "openai_compatible" ? (next.openai?.endpoint ?? "") : (next.anthropic?.endpoint ?? "");
-    const model = next.kind === "openai_compatible" ? (next.openai?.model ?? "") : (next.anthropic?.model ?? "");
+    const endpoint = next.kind !== "anthropic" ? (next.openai?.endpoint ?? "") : (next.anthropic?.endpoint ?? "");
+    const model = next.kind !== "anthropic" ? (next.openai?.model ?? "") : (next.anthropic?.model ?? "");
     if (endpoint === target.endpoint && model === target.model) {
       return { persist: null, provider: buildProviderConfigFromConnection(target), missing: false };
     }
@@ -269,8 +269,8 @@ export function buildProviderConfigFromConnection(connection: ApiConnection): Ai
   const endpoint = connection.endpoint.trim();
   const model = connection.model.trim();
   const connectionId = connection.id;
-  if (connection.protocol === "openai_compatible") {
-    return { kind: "openai_compatible", acp: null, openai: { endpoint, model }, anthropic: null, connectionId };
+  if (connection.protocol !== "anthropic") {
+    return { kind: connection.protocol, acp: null, openai: { endpoint, model }, anthropic: null, connectionId };
   }
   return { kind: "anthropic", acp: null, openai: null, anthropic: { enabled: true, endpoint, model }, connectionId };
 }
@@ -282,8 +282,8 @@ export function buildProviderConfigFromConnection(connection: ApiConnection): Ai
  * switcher never highlights a foreign connection.
  */
 export function findConnectionForProvider(list: ApiConnectionList, provider: AiProviderConfig): ApiConnection | null {
-  if (provider.kind !== "openai_compatible" && provider.kind !== "anthropic") return null;
-  const endpoint = provider.kind === "openai_compatible" ? provider.openai?.endpoint.trim() : provider.anthropic?.endpoint.trim();
-  const model = provider.kind === "openai_compatible" ? provider.openai?.model.trim() : provider.anthropic?.model.trim();
+  if (provider.kind !== "openai_compatible" && provider.kind !== "openai_responses" && provider.kind !== "anthropic") return null;
+  const endpoint = provider.kind !== "anthropic" ? provider.openai?.endpoint.trim() : provider.anthropic?.endpoint.trim();
+  const model = provider.kind !== "anthropic" ? provider.openai?.model.trim() : provider.anthropic?.model.trim();
   return list.connections.find((item) => item.protocol === provider.kind && item.endpoint.trim() === endpoint && item.model.trim() === model) ?? null;
 }

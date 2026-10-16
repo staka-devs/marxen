@@ -81,6 +81,29 @@ jobs:
           MARXEN_E2E_PREBUILT: 1
       - name: Build unsigned native packages with complete Neovim runtime
         run: npm run tauri -- build --target ${{ matrix.target }} --config src-tauri/tauri.bundle.conf.json --config src-tauri/tauri.prebuilt.conf.json --bundles ${{ matrix.bundles }}
+      - name: Package Windows standalone executable and complete Neovim runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $release = 'src-tauri/target/${{ matrix.target }}/release'
+          $stage = Join-Path $env:RUNNER_TEMP 'marxen-portable'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Copy-Item "$release/marxen.exe" "$stage/Marxen.exe"
+          Copy-Item 'src-tauri/resources/neovim' "$stage/neovim" -Recurse
+          $required = @('Marxen.exe', 'neovim/bin/nvim.exe', 'neovim/share/nvim/runtime/doc/help.txt', 'neovim/marxen-bundle.json')
+          foreach ($file in $required) {
+            if (!(Test-Path "$stage/$file" -PathType Leaf)) { throw "Standalone resource missing: $file" }
+          }
+          New-Item -ItemType Directory -Path "$release/bundle/portable" -Force | Out-Null
+          $archive = "$release/bundle/portable/Marxen_${version}_x64-portable.zip"
+          Compress-Archive -Path "$stage/*" -DestinationPath $archive -Force
+          $verify = Join-Path $env:RUNNER_TEMP 'marxen-portable-verify'
+          Expand-Archive -Path $archive -DestinationPath $verify -Force
+          foreach ($file in $required) {
+            if ((Get-FileHash "$stage/$file").Hash -ne (Get-FileHash "$verify/$file").Hash) { throw "Standalone archive mismatch: $file" }
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: marxen-${{ matrix.target }}

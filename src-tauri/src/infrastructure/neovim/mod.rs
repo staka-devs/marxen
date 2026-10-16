@@ -132,6 +132,27 @@ impl NeovimSession {
             .map_err(|cause| format!("nvim_get_current_buf: {cause}"))?;
 
         let mut errors = Vec::new();
+        client
+            .call(
+                "nvim_exec_lua",
+                vec![
+                    rmpv::Value::from(
+                        r#"
+            local target
+            for _, channel in ipairs(vim.api.nvim_list_chans()) do
+                if channel.stream == 'stdio' then target = channel.id; break end
+            end
+            if not target then error('embedded stdio channel not found') end
+            vim.api.nvim_create_user_command('Marxen', function(opts)
+                vim.fn.rpcnotify(target, 'marxen:command', opts.args)
+            end, {nargs = 1})
+            vim.g.mapleader = ' '
+        "#,
+                    ),
+                    rmpv::Value::Array(vec![]),
+                ],
+            )
+            .map_err(|cause| format!("Marxen command: {cause}"))?;
         if let ConfigSource::UserFile(path) = &source {
             if !path.is_file() {
                 return Err(format!("config not found: {}", path.display()));
@@ -166,6 +187,24 @@ impl NeovimSession {
                 errors.push(trim_remote(cause.to_string()));
             }
         }
+        client.call("nvim_exec_lua", vec![rmpv::Value::from(r#"
+            local shortcuts = {
+                ['s'] = 'file-save', ['p'] = 'palette-quickopen',
+                ['S-p'] = 'palette-open', [','] = 'palette-settings',
+                ['S-i'] = 'inline-chat', ['M-i'] = 'palette-ai',
+            }
+            for _, modifier in ipairs({'C', 'D'}) do
+                for key, command in pairs(shortcuts) do
+                    local lhs = '<' .. modifier .. '-' .. key .. '>'
+                    for _, mode in ipairs({'n', 'x', 'i'}) do
+                        if vim.fn.mapcheck(lhs, mode) == '' then
+                            vim.keymap.set(mode, lhs, '<Cmd>Marxen ' .. command .. '<CR>', {silent = true})
+                        end
+                    end
+                end
+            end
+        "#), rmpv::Value::Array(vec![])])
+            .map_err(|cause| format!("Marxen shortcuts: {cause}"))?;
         let messages = client
             .call("nvim_command_output", vec![rmpv::Value::from("messages")])
             .ok()

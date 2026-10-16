@@ -77,7 +77,7 @@ describe("shell AI view composition", () => {
     fireEvent.keyDown(screen.getByRole("combobox", { name: "接続先を検索" }), { key: "Escape" });
     const manage = within(pane).getByRole("button", { name: "AI の表示設定" }); fireEvent.click(manage);
     const dialog = screen.getByRole("dialog", { name: "AI の表示設定" });
-    const toggles = within(dialog).getAllByRole("checkbox", { name: "Twin • OpenAI 互換 の候補を表示" });
+    const toggles = within(dialog).getAllByRole("checkbox", { name: "Twin • OpenAI Chat Completions の候補を表示" });
     expect(toggles).toHaveLength(2);
     expect(toggles[0]).not.toBeChecked();
     expect(toggles[1]).toBeChecked();

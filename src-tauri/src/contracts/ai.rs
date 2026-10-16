@@ -5,7 +5,7 @@
 //! snake_case. AI schema version is independent from the document contract.
 //!
 //! Rules enforced by these contracts and the AI use cases:
-//! - There is no Claude Code preset and no preset may launch it.
+//! - Claude Code is available only through its ACP adapter for end users.
 //! - Transports take argv arrays; no shell interpolation happens anywhere.
 //! - Agents only see isolated staging copies (see #8); live documents and
 //!   absolute paths never cross this boundary from JavaScript.
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// Independent version of the AI IPC schema.
-pub const AI_CONTRACT_VERSION: u32 = 6;
+pub const AI_CONTRACT_VERSION: u32 = 7;
 
 /// OS credential store layout. Secrets are addressed, never transferred.
 pub const SECRET_SERVICE: &str = "dev.staka.marxen";
@@ -27,16 +27,18 @@ pub const SECRET_SERVICE: &str = "dev.staka.marxen";
 pub enum AiProviderKind {
     Acp,
     OpenaiCompatible,
+    OpenaiResponses,
     Anthropic,
 }
 
-/// ACP agent presets. There is intentionally no Claude Code preset.
+/// User-facing ACP adapters. Development must never launch Claude Code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum AcpPreset {
     Codex,
     Opencode,
     Copilot,
+    ClaudeCode,
     Custom,
 }
 
@@ -112,11 +114,12 @@ pub struct AnthropicConfig {
 pub struct ApiConnectionId(pub String);
 
 /// Wire protocol of one named API connection. ACP presets stay separate;
-/// the settings dropdown offers exactly these two values.
+/// the API registration dialog offers these explicit protocols.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiProtocol {
     OpenaiCompatible,
+    OpenaiResponses,
     Anthropic,
 }
 

@@ -495,3 +495,29 @@ fn isolation_and_conversation_keep_their_captured_owner() {
         Err(WorkspaceError::StaleLocation)
     ));
 }
+
+#[test]
+/// Leave dirty roots without overwriting disk and restore their working copies under a fresh incarnation.
+fn folder_switch_checkpoints_unsaved_working_copies() {
+    let (first, second, recovery, mut registry, a, _) = roots();
+    let original = document(&mut registry, &a);
+    let dirty = edit(&mut registry, &original, "unsaved 日本😀");
+    registry
+        .replace(marxen_lib::open_workspace(second.path(), recovery.path()).unwrap())
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(first.path().join("same.md")).unwrap(),
+        "first"
+    );
+    let mut reopened = marxen_lib::open_workspace(first.path(), recovery.path()).unwrap();
+    let saved = reopened.recovery_entries().unwrap();
+    assert_eq!(saved.len(), 1);
+    let restored = reopened.restore(&saved[0].document_id.0).unwrap();
+    assert_eq!(restored.snapshot.text, dirty.text);
+    assert_eq!(restored.snapshot.revision, dirty.revision);
+    assert!(restored.snapshot.dirty);
+    assert_ne!(
+        restored.snapshot.location.unwrap().scope.generation,
+        a.scope.generation
+    );
+}

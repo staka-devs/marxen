@@ -3,7 +3,7 @@ import type { AiProviderId, AiViewPreferences, HiddenAiModel } from "../contract
 import { isConnectionId } from "./ai-connections";
 
 /** Supported adapters, without assumed model IDs. */
-export const AI_PROVIDER_IDS: readonly AiProviderId[] = ["codex", "opencode", "copilot", "custom", "openai_compatible", "anthropic"];
+export const AI_PROVIDER_IDS: readonly AiProviderId[] = ["codex", "opencode", "copilot", "claude_code", "custom", "openai_compatible", "openai_responses", "anthropic"];
 export const AI_CHAT_WIDTH = { min: 280, max: 720, default: 360, step: 16 } as const;
 
 /** Build independent first-run preferences. */

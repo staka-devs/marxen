@@ -89,6 +89,8 @@ struct ActorState {
     baseline: Option<Fingerprint>,
     recovery: Option<PathBuf>,
     grid: Vec<serde_json::Value>,
+    ui: crate::domain::vim_ui::VimUi,
+    commands: Vec<String>,
     saved: Vec<SaveResult>,
     save_requested: bool,
     last_cursor: (Utf16Offset, Utf16Offset),
@@ -163,6 +165,8 @@ impl DocumentActor {
                 baseline,
                 recovery: None,
                 grid: Vec::new(),
+                ui: Default::default(),
+                commands: Vec::new(),
                 saved: Vec::new(),
                 save_requested: false,
                 last_cursor: (Utf16Offset(0), Utf16Offset(0)),
@@ -428,15 +432,19 @@ impl DocumentActor {
 
     /// Current Vim mode paired with the latest revision.
     pub fn current_mode(&self) -> Result<ModeUpdate, ActorError> {
-        let state = self
+        let mut state = self
             .state
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         let mode: VimMode = state.nvim.mode()?;
+        Self::service_notifications(&mut state)?;
         Ok(ModeUpdate {
             document_id: state.snapshot.document_id.clone(),
             revision: state.snapshot.revision,
             mode,
+            command_line: state.ui.command_line(),
+            message: state.ui.message.clone(),
+            commands: Some(std::mem::take(&mut state.commands)),
         })
     }
 
@@ -1014,7 +1022,7 @@ impl DocumentActor {
         let config = path
             .clone()
             .map(ConfigSource::UserFile)
-            .unwrap_or(ConfigSource::Isolated);
+            .unwrap_or(ConfigSource::Standard);
         let nvim = state.services.buffers.open(
             config,
             &state.snapshot.text,
@@ -1022,6 +1030,7 @@ impl DocumentActor {
             false,
         )?;
         let (copy_keys, copy_errors) = nvim.copy_config()?;
+        state.services.buffers.select_config(path.as_deref())?;
         let result = NvimConfig {
             path: path.map(|p| p.display().to_string()),
             errors: nvim
@@ -1037,6 +1046,8 @@ impl DocumentActor {
         state.ready_yank = None;
         state.gui_virtualedit = None;
         state.grid.clear();
+        state.ui = Default::default();
+        state.commands.clear();
         Ok(result)
     }
 
@@ -1056,7 +1067,11 @@ impl DocumentActor {
                     state.ready_yank = Some((state.snapshot.revision, text))
                 }
                 BufferNotification::SaveRequested => state.save_requested = true,
-                BufferNotification::Redraw(value) => state.grid.push(value),
+                BufferNotification::Redraw(value) => {
+                    state.ui.redraw(&value);
+                    state.grid.push(value);
+                }
+                BufferNotification::Command(command) => state.commands.push(command),
             }
         }
         // Keep only a bounded backlog; grid() requests a full redraw.

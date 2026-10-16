@@ -168,3 +168,15 @@ describe("named API connection rules", () => {
     expect(resolveProviderChange(list, buildProviderConfigFromConnection(target))).toEqual({ persist: null, provider: buildProviderConfigFromConnection(target), missing: false });
   });
 });
+
+it("stores Responses as a separate named protocol while retaining Chat Completions connection IDs", () => {
+  const responses = connection({ id: "responses", protocol: "openai_responses", endpoint: "https://example.test/v1/responses" });
+  expect(sanitizeApiConnection(responses)).toEqual(responses);
+  const provider = buildProviderConfigFromConnection(responses);
+  expect(provider.kind).toBe("openai_responses");
+  expect(provider.openai?.endpoint).toBe(responses.endpoint);
+  expect(provider.connectionId).toBe("responses");
+  const legacy = connection({ id: "existing-chat" });
+  expect(buildProviderConfigFromConnection(legacy).kind).toBe("openai_compatible");
+  expect(findConnectionForProvider({ ...defaultConnectionList(), connections: [legacy, responses] }, provider)?.id).toBe("responses");
+});

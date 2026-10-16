@@ -39,7 +39,8 @@ describe("AI visibility management", () => {
   it("distinguishes empty and unknown catalogs, reports no matches and persistence failure", () => {
     render(<Harness save={() => false} />);
     expect(screen.getByText("モデル候補なし（接続先の設定を使用）")).toBeVisible();
-    expect(screen.getAllByText("モデル候補を取得するには接続を確認してください。")).toHaveLength(2);
+    expect(screen.getAllByText("モデル候補を取得するには接続を確認してください。")).toHaveLength(3);
+    expect(screen.queryByRole("checkbox", { name: "OpenAI Chat Completions の候補を表示" })).toBeNull();
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "no-such-advertised-id" } });
     expect(screen.getByText("一致する接続先やモデルがありません。")).toHaveAttribute("role", "status");
     fireEvent.click(screen.getByRole("checkbox", { name: "チャットに接続先の選択欄を表示" }));
@@ -64,9 +65,9 @@ describe("AI visibility management", () => {
     const connections = [first, second];
     const onPreferences = vi.fn();
     render(<AiVisibilitySettings preferences={defaultAiViewPreferences()} onPreferences={onPreferences} advertisedProviders={advertisedProviders} connections={connections} />);
-    expect(screen.queryByRole("checkbox", { name: "OpenAI 互換 API の候補を表示" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "OpenAI Chat Completions の候補を表示" })).toBeNull();
     expect(screen.getByRole("checkbox", { name: "Codex の候補を表示" })).toBeVisible();
-    const twins = screen.getAllByRole("checkbox", { name: "Twin • OpenAI 互換 の候補を表示" });
+    const twins = screen.getAllByRole("checkbox", { name: "Twin • OpenAI Chat Completions の候補を表示" });
     expect(twins).toHaveLength(2);
     expect(screen.getByText("model-a • https://a.example/v1")).toBeVisible();
     expect(screen.getByText("model-a • https://b.example/v1")).toBeVisible();
@@ -76,7 +77,7 @@ describe("AI visibility management", () => {
     cleanup();
     const onShow = vi.fn();
     render(<AiVisibilitySettings preferences={hidden} onPreferences={onShow} advertisedProviders={advertisedProviders} connections={connections} />);
-    const toggles = screen.getAllByRole("checkbox", { name: "Twin • OpenAI 互換 の候補を表示" });
+    const toggles = screen.getAllByRole("checkbox", { name: "Twin • OpenAI Chat Completions の候補を表示" });
     expect(toggles[0]).not.toBeChecked();
     expect(toggles[1]).toBeChecked();
     fireEvent.click(toggles[0]);

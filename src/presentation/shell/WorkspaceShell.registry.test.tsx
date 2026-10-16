@@ -729,7 +729,7 @@ it("types immediately after i without waiting for the mode echo", async () => {
   fireEvent.keyDown(editor, { key: "<" });
   await waitFor(() => {
     const inputs = mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input_with_copy");
-    expect(inputs.map(([, args]) => (args as { keys: string }).keys)).toEqual(["i", "é", "<"]);
+    expect(inputs.map(([, args]) => (args as { keys: string }).keys)).toEqual(["i", "é", "<LT>"]);
   });
   const bases = mockedInvoke.mock.calls
     .filter(([command]) => command === "nvim_input_with_copy")

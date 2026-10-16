@@ -41,8 +41,8 @@ function staleGateway(): VimSettingsGateway {
     writeManaged: async () => {
       throw new Error("設定ファイルが外部で変更されています。再読込してください。");
     },
-    /** Unused raw write for the stale fixture. */
-    writeRaw: async () => ({ path: "<standard>", fingerprint: "fp3", raw: "" }),
+    /** Refuse an externally changed raw file without overwriting it. */
+    writeRaw: async () => { throw new Error("設定ファイルが外部で変更されています。再読込してください。"); },
   };
 }
 
@@ -68,18 +68,6 @@ describe("useVimSettings", () => {
     expect(result.current.loaded?.path).toBe("/b/.vimrc");
     expect(result.current.rawDraft).toBe("set number");
     expect(result.current.busy).toBe(false);
-  });
-
-  it("preserves unsaved code instead of overwriting it with a managed save", async () => {
-    const gateway = staleGateway();
-    const writeManaged = vi.fn(); gateway.writeManaged = writeManaged;
-    const { result } = renderHook(() => useVimSettings({ gateway }));
-    await waitFor(() => expect(result.current.loaded).not.toBeNull());
-    act(() => result.current.setRawDraft("set number\nlet g:custom = 1\n"));
-    await act(async () => { await result.current.saveManaged(); });
-    expect(writeManaged).not.toHaveBeenCalled();
-    expect(result.current.error).toContain("未保存");
-    expect(result.current.rawDraft).toContain("g:custom");
   });
 
   it("prevents duplicate writes and keeps the selected path stable while writing", async () => {
@@ -117,10 +105,7 @@ describe("useVimSettings", () => {
     };
     const { result } = renderHook(() => useVimSettings({ gateway }));
     await waitFor(() => expect(result.current.loaded).not.toBeNull());
-    expect(result.current.settings.tabstop).toBe(8);
     expect(result.current.rawDraft).toBe("set number\n");
-    expect(result.current.changed).toBe(true);
-    expect(result.current.preview).toContain("set tabstop=8");
   });
 
   it("surfaces read failures without throwing", async () => {
@@ -129,11 +114,11 @@ describe("useVimSettings", () => {
     expect(result.current.loaded).toBeNull();
   });
 
-  it("surfaces stale write conflicts on managed saves", async () => {
+  it("surfaces stale write conflicts without replacing the raw draft", async () => {
     const { result } = renderHook(() => useVimSettings({ gateway: staleGateway() }));
     await waitFor(() => expect(result.current.loaded).not.toBeNull());
     await act(async () => {
-      await result.current.saveManaged();
+      await result.current.saveRaw();
     });
     expect(result.current.error).toContain("外部で変更");
   });

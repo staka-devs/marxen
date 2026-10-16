@@ -7,8 +7,8 @@ Vim の操作とライブプレビューを組み合わせた、Rust / Tauri 製
 1. 「フォルダーを開く」で作業フォルダーを選びます。エクスプローラーにはフォルダー、Markdown、テキスト、対応画像を表示し、種類ごとのアイコンを付けます。タブ、クイックオープン、検索・置換、アウトライン、コマンドパレットも使用できます。
 2. Markdown は「ライブ」「Markdown」「閲覧」「分割」で切り替えます。ライブでは編集中のブロックに記法とカーソルを表示し、それ以外を描画します。分割は Markdown 編集とプレビューを左右に並べ、幅をドラッグで調整できます。表示切替では本文・カーソル・Undo を保持します。
 3. 実 Neovim が `i` / `Esc`、移動、text object、macro、`u` / `Ctrl+r` を処理します。画面の折り返しに沿う移動も選べます。画面依存の plugin 操作にはメニューの「Neovim 画面」を使用します。
-4. 「保存」または Vim の `:w` で Rust の保存経路を使います。外部変更や保存競合は通知されます。「再読込（未保存を破棄）」は編集中の内容を破棄する操作です。未保存のタブを閉じると選択肢が表示され、次回起動時にはクラッシュ復元の候補を表示します。
-5. 設定は外観・エディター・Vim・コピー・AI に分かれています。テーマ、文字サイズ、行間、折り返し、行番号、編集中の行の強調を調整し、次回起動時も保持します。Neovim は専用設定を既定とし、`.vimrc` / `vimrc` / `_vimrc` / `init.vim` / `init.lua` も読み込めます。「設定を適用して再起動する」は本文・revision・未保存状態を保持し、Undo とモードを初期化します。設定のエラーは画面に表示します。
+4. 「保存」または Vim の `:w` で Rust の保存経路を使います。外部変更や保存競合は通知されます。「再読込（未保存を破棄）」は編集中の内容を破棄する操作です。未保存のタブを閉じると選択肢が表示され、次回起動・フォルダー再表示時には未保存の作業コピーを自動復元します。
+5. 設定は外観・エディター・Vim・コピー・AI に分かれています。テーマ、文字サイズ、行間、折り返し、行番号、編集中の行の強調を調整し、次回起動時も保持します。Neovim は専用設定を既定とし、`.vimrc` / `vimrc` / `_vimrc` / `init.vim` / `init.lua` も読み込めます。「設定を適用して再起動する」は本文・revision・未保存状態を保持し、Undo とモードを初期化します。Vim設定はテキストで編集し、保存したファイルは既存・新規文書と再起動後に使われます。Spaceが既定のLeaderで、`noremap`やVimscript関数は実Neovimが実行します。`:`や検索の入力とエラーを画面下部へ表示します。
 
 テキストファイルは記法を描画せずに編集します。画像は専用タブで閲覧し、フィット表示・実サイズ・拡大縮小を切り替えられます。エクスプローラーの画像を Markdown 本文へドラッグすると相対リンクを挿入し、外部の画像ファイルはワークスペースへコピーして挿入します。
 
@@ -54,13 +54,13 @@ GFM の表・task list・Alerts・脚注、highlight、数式、Mermaid、saniti
 
 ## AI 接続と変更の承認
 
-Agent チャットの接続設定で、Codex ACP (`codex-acp`)、OpenCode ACP (`opencode acp`)、GitHub Copilot ACP (`copilot --acp --stdio`)、任意コマンド、OpenAI 互換 Chat Completions、Anthropic Messages を登録します。ACP adapter は利用者が導入します。Anthropic は利用者の明示設定で有効にします。API 資格情報は OS ストアに保存します。
+Agent チャットの接続設定で、Codex ACP (`codex-acp`)、OpenCode ACP (`opencode acp`)、GitHub Copilot ACP (`copilot --acp --stdio`)、Claude Codeアダプター (`claude-agent-acp`)、任意コマンドを選べます。「API を追加」からOpenAI Chat Completions、OpenAI Responses、Anthropic Messagesの通信形式とエンドポイント・モデルを指定し、名前付き接続先として登録します。未登録のAPI形式はチャットの候補に表示しません。ACP adapter は利用者が導入します。Anthropic は利用者の明示設定で有効にします。API 資格情報は OS ストアに保存します。
 
-Agent・インライン両チャットの入力欄で接続先とモデルを選びます。「モデルを選ぶ」は ACP エージェントに接続して公開されたモデル・推論強度の候補を取得します。送信前に選択値を設定し、エージェントの応答が一致することを確認します。候補を公開しないエージェントは CLI の設定を使います。直接 API のモデル名は入力欄で指定できます。接続設定はテーマを継承するダイアログで開き、Escape で閉じて元の操作へ戻れます。Windows の ACP プロセスは別のコンソール窓を表示せず、回答をチャットへ表示します。
+Agent・インライン両チャットの入力欄で接続先とモデルを選びます。「モデルを選ぶ」は ACP エージェントに接続して公開されたモデル・推論強度の候補を取得します。送信前に選択値を設定し、エージェントの応答が一致することを確認します。候補を公開しないエージェントは CLI の設定を使います。直接APIは登録した接続先名で選択し、設定画面でモデルとエンドポイントを変更できます。接続設定はテーマを継承するダイアログで開き、Escape で閉じて元の操作へ戻れます。Windows の ACP プロセスは別のコンソール窓を表示せず、回答をチャットへ表示します。
 
 Agent チャットでは質問・生成・選択書き換え・ワークスペース編集を選び、会話を続けられます。選択があればその範囲、選択がなければ現在のファイルを参照します。会話一覧から以前の会話へ戻れ、パネルを閉じても履歴を保持します。履歴はアプリを終了すると消えます。接続先やモデルの変更では会話を分離し、以前の履歴を別の接続先へ送りません。
 
-`Ctrl+Shift+I`（macOS は `Cmd+Shift+I`）で、選択範囲または現在の段落を対象にインラインチャットを開きます。編集位置の近くで指示と提案を確認でき、`Escape` で閉じて本文へ戻ります。Vim の `Ctrl+I` はそのまま使えます。
+`Ctrl+Shift+I`（macOS は `Cmd+Shift+I`）で、選択範囲または現在の段落を対象にインラインチャットを開きます。編集位置の近くで指示と提案を確認でき、`Escape` で閉じて本文へ戻ります。Vim の `Ctrl+I` はそのまま使えます。エディターでは利用者のVimマッピングがアプリ既定より優先します。`.vimrc`から`nnoremap <Leader>a <Cmd>Marxen palette-ai<CR>`のようにアプリ操作を割り当てられます。
 
 AI の回答は Markdown として表示します。編集の提案は隔離コピーの差分を確認し、承認して文書へ反映します。承認後もファイル保存は別操作です。取消は処理の終了が確認されてから確定します。revision やディスクの競合がある場合は対象範囲を指定し直します。隔離コピーは同一マシンの作業領域であり、OS sandbox ではありません。
 
@@ -116,18 +116,20 @@ npm run desktop:build -- --bundles nsis
 
 公式 Neovim 0.11.5 archive を固定 SHA-256 で検証し、実行ファイル・DLL・runtime 全体を取り込みます。別 target の取得は `npm run bundle:neovim -- --target <Rust target>`、runtime smoke は対応 OS / CPU で実行します。package は `src-tauri/target/release/bundle/` に生成します。CI の明示 target build は `src-tauri/target/<Rust target>/release/bundle/` に生成します。
 
+Windowsのスタンドアローン版は`Marxen_0.1.1_x64-portable.zip`を展開し、`neovim/`を同じフォルダーに置いたまま`Marxen.exe`を起動します。インストール不要で、OSのWebView2 Runtimeを使用します。
+
 展開した package の Neovim 資源は `MARXEN_VERIFY_NVIM_ROOT` にその `neovim` ディレクトリを指定して `npm run verify:neovim` で検証できます。この検証先指定は同梱確認スクリプトだけに適用されます。
 
-CI は Windows x64 (NSIS)、macOS arm64 / x64 (app / DMG)、Linux x64 (deb / AppImage) の native build、3種類の IPC 契約、Rust / TypeScript / unit / E2E を設定します。配布版は未署名です。署名・公証は対応する資格情報のある環境で別途実施します。
+CI は Windows x64 (NSIS / スタンドアローンZIP)、macOS arm64 / x64 (app / DMG)、Linux x64 (deb / AppImage) の native build、3種類の IPC 契約、Rust / TypeScript / unit / E2E を設定します。配布版は未署名です。署名・公証は対応する資格情報のある環境で別途実施します。
 
 公開は版タグが起動する別の Release workflow が行います。版変更・main CI・`vX.Y.Z` タグ・CD の順にし、CD で再ビルドしません。
 
 ```sh
-git push origin v0.1.0
+git push origin v0.1.1
 # 一時的な失敗で草稿が残っていない場合のみ workflow_dispatch に tag を指定する
 ```
 
-タグ commit と同一 SHA の main push Integration 成功だけを使い、四つの `marxen-{target}` から最終 installer 5（Windows x64 NSIS、Linux x64 deb と AppImage、macOS arm64 と x64 DMG）と `SHA256SUMS` を公開します。草稿で検査してから公開し、既存の草稿や公開済みがある場合は失敗します。残った草稿は自動で削除しないため、中身を確認して手で削除してください。配布は未署名・未公証で、実 WebView・日本語 IME・導入は未検証です。macOS 実機の確認はありません。`SHA256SUMS` で検証してください。
+タグ commit と同一 SHA の main push Integration 成功だけを使い、四つの `marxen-{target}` から最終配布物6（Windows x64 NSISとスタンドアローンZIP、Linux x64 deb と AppImage、macOS arm64 と x64 DMG）と `SHA256SUMS` を公開します。草稿で検査してから公開し、既存の草稿や公開済みがある場合は失敗します。残った草稿は自動で削除しないため、中身を確認して手で削除してください。配布は未署名・未公証で、実 WebView・日本語 IME・導入は未検証です。macOS 実機の確認はありません。`SHA256SUMS` で検証してください。
 
 実施済みの回帰・Windows 配布確認と、未実施の OS・WebView・日本語 IME・署名の範囲は [Issue #9](https://github.com/staka-devs/marxen/issues/9) で報告します。他 OS の package 操作、実 WebView / IME、署名・公証をブラウザや Windows の成功から推定しません。devcontainer の GUI にはホストの表示サーバーが必要です。
 

@@ -319,9 +319,6 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
       const target = event.target as HTMLElement | null;
       if (target?.closest(".cm-content") && (event.key === "ContextMenu" || event.key === "Menu" || (event.key === "F10" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey))) return;
       if (target?.closest("input,textarea,select,[role=\"dialog\"]")) return;
-      const mod = event.ctrlKey || event.metaKey;
-      const lower = event.key.toLowerCase();
-      if (mod && (lower === "p" || lower === "s")) return;
       const id = activeRef.current;
       if (!id) return;
       if (event.key.toLowerCase() === "v" && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
@@ -355,7 +352,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
         event.stopPropagation();
         if (!docsRef.current[id]) return;
         if (!insertHint || (pendingNativeInput.current[id] ?? 0) > 0) {
-          void routeVimKeys(id, event.key);
+          void routeVimKeys(id, serializeVimKey(event) ?? event.key);
           return;
         }
         const { range, fullText } = takeRange(id);

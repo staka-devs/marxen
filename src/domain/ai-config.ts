@@ -21,12 +21,13 @@ import type {
 export const AI_STREAM_EVENT = "ai-stream";
 
 /** AI IPC schema version mirrored from the Rust side. */
-export const AI_CONTRACT_VERSION = 6;
+export const AI_CONTRACT_VERSION = 7;
 
 /** Japanese labels for provider kinds shown in settings. */
 export const KIND_LABELS: Record<AiProviderKind, string> = {
   acp: "ACP エージェント",
-  openai_compatible: "OpenAI 互換",
+  openai_compatible: "OpenAI Chat Completions",
+  openai_responses: "OpenAI Responses",
   anthropic: "Anthropic",
 };
 
@@ -35,6 +36,7 @@ export const PRESET_LABELS: Record<AcpPreset, string> = {
   codex: "Codex",
   opencode: "OpenCode",
   copilot: "GitHub Copilot",
+  claude_code: "Claude Code",
   custom: "カスタム",
 };
 
@@ -50,6 +52,7 @@ export const MODE_LABELS: Record<PromptMode, string> = {
 export const DEFAULT_ENDPOINTS: Record<AiProviderKind, string> = {
   acp: "",
   openai_compatible: "https://api.openai.com/v1",
+  openai_responses: "https://api.openai.com/v1",
   anthropic: "https://api.anthropic.com/v1",
 };
 
@@ -75,7 +78,7 @@ export function defaultProviderConfig(kind: AiProviderKind): AiProviderConfig {
   if (kind === "acp") {
     return { kind, acp: { preset: "codex", argv: null }, openai: null, anthropic: null };
   }
-  if (kind === "openai_compatible") {
+  if (kind === "openai_compatible" || kind === "openai_responses") {
     return {
       kind,
       acp: null,
@@ -125,9 +128,9 @@ export function buildProviderConfig(state: ProviderConfigState): AiProviderConfi
     }
     return { kind: "acp", acp: { preset: state.preset, argv: null, ...(state.acpSelections?.length ? { selections: state.acpSelections } : {}) }, openai: null, anthropic: null };
   }
-  if (state.kind === "openai_compatible") {
+  if (state.kind === "openai_compatible" || state.kind === "openai_responses") {
     return {
-      kind: "openai_compatible",
+      kind: state.kind,
       acp: null,
       openai: { endpoint: state.endpoint.trim(), model: state.model.trim() },
       anthropic: null,

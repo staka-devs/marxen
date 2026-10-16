@@ -15,7 +15,7 @@ use std::sync::Arc;
 pub fn document_services() -> DocumentServices {
     DocumentServices {
         storage: Arc::new(infrastructure::storage::NativeStorage),
-        buffers: Arc::new(infrastructure::neovim::buffer::NativeBufferFactory),
+        buffers: Arc::new(infrastructure::neovim::buffer::NativeBufferFactory::default()),
     }
 }
 /// Construct the native vim-settings file adapter for guarded config access.
@@ -63,11 +63,6 @@ pub fn run() {
     use tauri::{Emitter, Manager};
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(presentation::document::ActorState::new(
-            document_services(),
-            std::sync::Arc::new(infrastructure::storage::NativeStorage),
-            std::sync::Arc::new(infrastructure::storage::SystemClock),
-        ))
         .manage(presentation::clipboard::ClipboardState(
             std::sync::Arc::new(infrastructure::clipboard::NativeClipboard::default()),
         ))
@@ -91,6 +86,15 @@ pub fn run() {
         })
         .setup(|app| {
             infrastructure::neovim::configure_resource_dir(app.path().resource_dir()?);
+            let mut services = document_services();
+            services.buffers = Arc::new(infrastructure::neovim::buffer::NativeBufferFactory::new(
+                app.path().app_data_dir()?,
+            ));
+            app.manage(presentation::document::ActorState::new(
+                services,
+                Arc::new(infrastructure::storage::NativeStorage),
+                Arc::new(infrastructure::storage::SystemClock),
+            ));
             let state = app.state::<presentation::document::ActorState>();
             let workspace = std::sync::Arc::downgrade(&state.workspace);
             let pending = std::sync::Arc::downgrade(&state.pending);

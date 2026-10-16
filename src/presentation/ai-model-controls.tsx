@@ -24,7 +24,7 @@ interface AiModelControlsProps {
   preferences?: AiViewPreferences;
   /** Open visibility management while preserving the active connection and selections. */
   onManageVisibility?: () => void;
-  /** Named API connections replacing the single direct-API kinds when non-empty. */
+  /** Registered named API connections; protocols are chosen only when adding an API. */
   connectionSelection?: ApiConnectionSelection;
 }
 
@@ -32,20 +32,14 @@ interface AiModelControlsProps {
 export function AiModelControls({ provider, onProvider, options, loading, discovered, error, onRefresh, disabled = false, preferences = defaultAiViewPreferences(), onManageVisibility, connectionSelection }: AiModelControlsProps) {
   const { t } = useI18n();
   const selectedProvider = aiProviderId(provider);
-  /** Named connections replace the single direct-API kinds only when at least one is registered. */
-  const namedConnections = connectionSelection && connectionSelection.list.connections.length > 0 ? connectionSelection.list.connections : null;
+  const namedConnections = connectionSelection?.list.connections ?? [];
   const providerChoices = [
     ...Object.entries(PRESET_LABELS).filter(([value]) => isAiProviderVisible(preferences, value as typeof selectedProvider)).map(([value, label]) => ({ value, label: t(label as LabelKey), group: t("ACP エージェント"), icon: <ProviderIcon provider={value as typeof selectedProvider} /> })),
-    ...(namedConnections
-      ? namedConnections.filter((connection) => isAiProviderVisible(preferences, connection.protocol, connection.id)).map((connection) => ({ value: connection.id as string, label: connection.name, description: connection.model === "" ? connection.endpoint : `${connection.model} • ${connection.endpoint}`, group: t("直接 API"), icon: <ProviderIcon provider={connection.protocol} /> }))
-      : [
-          { value: "openai_compatible", label: t("OpenAI 互換 API"), group: t("直接 API"), icon: <ProviderIcon provider="openai_compatible" /> },
-          { value: "anthropic", label: "Anthropic API", group: t("直接 API"), icon: <ProviderIcon provider="anthropic" /> },
-        ].filter((choice) => isAiProviderVisible(preferences, choice.value as typeof selectedProvider))),
+    ...namedConnections.filter((connection) => isAiProviderVisible(preferences, connection.protocol, connection.id)).map((connection) => ({ value: connection.id as string, label: connection.name, description: connection.model === "" ? connection.endpoint : `${connection.model} • ${connection.endpoint}`, group: t("直接 API"), icon: <ProviderIcon provider={connection.protocol} /> })),
   ];
   /** Chat switcher value: the stable connection ID for named API use, else the provider ID. */
   const providerScopeId = provider.connectionId ?? null;
-  const switcherValue = namedConnections && provider.kind !== "acp" ? (providerScopeId && namedConnections.some((connection) => connection.id === providerScopeId) ? providerScopeId : "") : selectedProvider;
+  const switcherValue = provider.kind !== "acp" ? (providerScopeId && namedConnections.some((connection) => connection.id === providerScopeId) ? providerScopeId : "") : selectedProvider;
   /** Active named connection backing the label, or null for ACP and legacy providers. */
   const activeConnection = providerScopeId ? (namedConnections?.find((connection) => connection.id === providerScopeId) ?? null) : null;
   /**
@@ -55,24 +49,17 @@ export function AiModelControls({ provider, onProvider, options, loading, discov
    * never share hide state; same-protocol twins never share hide state either.
    */
   const scopedConnectionId = providerScopeId;
-  const switcherLabel = activeConnection?.name ?? (selectedProvider === "openai_compatible" ? t("OpenAI 互換 API") : selectedProvider === "anthropic" ? "Anthropic API" : t(PRESET_LABELS[selectedProvider] as LabelKey));
+  const switcherLabel = activeConnection?.name ?? (selectedProvider === "openai_responses" ? "OpenAI Responses" : selectedProvider === "openai_compatible" ? t("OpenAI Chat Completions") : selectedProvider === "anthropic" ? "Anthropic API" : t(PRESET_LABELS[selectedProvider] as LabelKey));
   const hiddenCurrent = !isAiProviderVisible(preferences, selectedProvider, provider.kind === "acp" ? null : providerScopeId) || options.some((option) => option.category === "model" && !isAiModelVisible(preferences, selectedProvider, option.id, provider.acp?.selections?.find((item) => item.id === option.id)?.value ?? option.currentValue, scopedConnectionId));
   /** Switch to a configured adapter or an API profile without starting or authenticating it. */
   function changeProvider(value: string) {
-    if (namedConnections) {
-      if (value === switcherValue) return;
-      if (value === "openai_compatible" || value === "anthropic" || (Object.keys(PRESET_LABELS) as string[]).includes(value)) {
-        if (value === selectedProvider) return;
-      } else {
-        connectionSelection?.onSelect(value as ApiConnectionId);
-        return;
-      }
-    } else if (value === selectedProvider) return;
-    if (value === "openai_compatible" || value === "anthropic") {
-      onProvider(provider.kind === value ? provider : defaultProviderConfig(value));
-    } else {
-      onProvider({ ...defaultProviderConfig("acp"), acp: { preset: value as NonNullable<AiProviderConfig["acp"]>["preset"], argv: value === "custom" ? provider.acp?.argv ?? { command: "", args: [] } : null } });
+    if (value === switcherValue) return;
+    if (namedConnections.some((connection) => connection.id === value)) {
+      connectionSelection?.onSelect(value as ApiConnectionId);
+      return;
     }
+    if (!(Object.keys(PRESET_LABELS) as string[]).includes(value)) return;
+    onProvider({ ...defaultProviderConfig("acp"), acp: { preset: value as NonNullable<AiProviderConfig["acp"]>["preset"], argv: value === "custom" ? provider.acp?.argv ?? { command: "", args: [] } : null } });
   }
   /** Store one advertised choice; native validation and acknowledgment precede every prompt. */
   function changeChoice(id: string, value: string) {

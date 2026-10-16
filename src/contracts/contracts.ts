@@ -32,7 +32,20 @@ export type EditorPresentation = {
 editable: boolean, selectionToolbar: boolean, mappings: Array<EditorMapping>, };
 export type EditorContext = { cursor: CursorUpdate, mode: VimMode, presentation: EditorPresentation, };
 export type VimMode = "normal" | "insert" | "replace" | "visual" | "visual_line" | "visual_block" | "command_line" | "terminal";
-export type ModeUpdate = { documentId: DocumentId, revision: Revision, mode: VimMode, };
+export type VimCommandLine = { text: string, cursor: number, };
+export type ModeUpdate = { documentId: DocumentId, revision: Revision, mode: VimMode,
+/**
+ * Native command line, including its prompt and UTF-16 cursor position.
+ */
+commandLine?: VimCommandLine,
+/**
+ * Last native Ex output or error, without interpreting Vimscript in the GUI.
+ */
+message?: string,
+/**
+ * Application commands requested by the user's Vim mappings.
+ */
+commands?: Array<string>, };
 export type DocumentEvent = { "type": "snapshot", "payload": DocumentSnapshot } | { "type": "saved", "payload": SaveResult } | { "type": "cursor", "payload": CursorUpdate } | { "type": "mode", "payload": ModeUpdate };
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 export type RuntimeStatus = { contractVersion: number, connection: ConnectionState, detail: string, };

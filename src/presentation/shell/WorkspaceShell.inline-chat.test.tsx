@@ -61,6 +61,7 @@ const backend = {
 }
 
 /** Install the fake Tauri backend answering workspace and isolation commands. */ function installBackend() {
+  let nativeCommands: string[] = [];
   mockedInvoke.mockImplementation((command: string, args?: unknown) => {
     const a = (args ?? {}) as Record<string, unknown>;
     switch (command) {
@@ -82,8 +83,15 @@ const backend = {
         const doc = [...backend.docs.values()].find((entry) => entry.id === a.documentId)!;
         return Promise.resolve({ documentId: doc.id, revision: doc.revision, text: doc.text, dirty: doc.dirty });
       }
-      case "fetch_mode":
-        return Promise.resolve({ documentId: a.documentId, revision: 0, mode: "normal" });
+      case "nvim_input_with_copy": {
+        if (a.keys === "<C-S-i>") nativeCommands.push("inline-chat");
+        const doc = [...backend.docs.values()].find((entry) => entry.id === a.documentId)!;
+        return Promise.resolve({ snapshot: { documentId: doc.id, revision: doc.revision, text: doc.text, dirty: doc.dirty }, copy: null, copyReady: false });
+      }
+      case "fetch_mode": {
+        const commands = nativeCommands; nativeCommands = [];
+        return Promise.resolve({ documentId: a.documentId, revision: 0, mode: "normal", commands });
+      }
       case "fetch_cursor":
         return Promise.resolve({ documentId: a.documentId, revision: 0, anchor: 0, head: 0 });
       case "report_cursor":
@@ -205,14 +213,14 @@ it("ignores plain Ctrl+I so native Vim input keeps the key", async () => {
   expect(screen.queryByTestId("inline-chat")).not.toBeInTheDocument();
 });
 
-it("captures the inline shortcut before the editor sends it to Neovim", async () => {
+it("opens inline chat through the native Vim shortcut without intercepting it", async () => {
   mockStream();
   await openDocAndAi();
   const editor = screen.getByTestId("editor-primary").querySelector(".cm-content")!;
   mockedInvoke.mockClear();
   fireEvent.keyDown(editor, { key: "i", ctrlKey: true, shiftKey: true });
   expect(await screen.findByTestId("inline-chat")).toBeVisible();
-  expect(mockedInvoke.mock.calls.some(([name]) => name === "input_with_copy" || name === "nvim_input")).toBe(false);
+  expect(mockedInvoke.mock.calls.some(([name, args]) => name === "nvim_input_with_copy" && (args as { keys: string }).keys === "<C-S-i>")).toBe(true);
 });
 
 it("preserves the Agent transcript across hide and show", async () => {

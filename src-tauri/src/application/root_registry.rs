@@ -104,9 +104,11 @@ impl RootRegistry {
         Ok(info)
     }
 
-    /// Preserve single-folder switching while refusing to drop unsaved authoritative buffers.
+    /// Preserve unsaved working copies in recovery before replacing the active workspace.
     pub fn replace(&mut self, workspace: Workspace) -> Result<WorkspaceInfo, WorkspaceError> {
-        self.ensure_clean()?;
+        for previous in self.roots.values() {
+            previous.checkpoint_all()?;
+        }
         if let Some(previous) = self.roots.get(&workspace.scope().root_id) {
             if previous.root() != workspace.root() {
                 return Err(WorkspaceError::WrongOwner);

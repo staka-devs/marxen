@@ -341,3 +341,75 @@ fn gui_line_selection_repositions_both_native_endpoints() {
     key(&actor, "u");
     assert_eq!(actor.snapshot().text, "abc\n日😀\nthird\nlast");
 }
+
+#[test]
+/// Show actual Ex/search input, native errors and commands raised by user mappings.
+fn native_command_line_and_application_commands_are_visible() {
+    let actor =
+        marxen_lib::open_document(DocumentId("visible-ex".into()), "first".into(), None).unwrap();
+    for typed in [":", "e", "c", "h", "o", " ", "'", "日", "'"] {
+        key(&actor, typed);
+    }
+    let command = actor.current_mode().unwrap().command_line.unwrap();
+    assert_eq!(command.text, ":echo '日'");
+    assert_eq!(command.cursor, command.text.encode_utf16().count() as u32);
+    key(&actor, "<CR>");
+    let mode = actor.current_mode().unwrap();
+    assert!(mode.command_line.is_none());
+    assert_eq!(mode.message.as_deref(), Some("日"));
+    actor.input_via_nvim(":NotAMarxenCommand<CR>").unwrap();
+    assert!(actor
+        .current_mode()
+        .unwrap()
+        .message
+        .unwrap()
+        .contains("E492"));
+    key(&actor, "<Esc>");
+    actor
+        .input_via_nvim(":Marxen palette-settings<CR>")
+        .unwrap();
+    assert_eq!(
+        actor.current_mode().unwrap().commands.unwrap(),
+        ["palette-settings"]
+    );
+    assert!(actor.current_mode().unwrap().commands.unwrap().is_empty());
+}
+
+#[test]
+/// Source complete Vimscript and retain the selected config across new documents and factory restarts.
+fn persisted_vimrc_supports_space_leader_noremap_and_functions() {
+    use marxen_lib::application::ports::{BufferFactory, DocumentServices};
+    use marxen_lib::infrastructure::neovim::buffer::NativeBufferFactory;
+    use std::sync::Arc;
+    let home = tempfile::tempdir().unwrap();
+    let config = home.path().join(".vimrc");
+    std::fs::write(&config, "let mapleader = \" \"\nfunction! Mark()\n  call setline(1, 'mapped😀')\nendfunction\nnoremap <Leader>f :call Mark()<CR>\nnnoremap <C-s> :call Mark()<CR>\n").unwrap();
+    NativeBufferFactory::new(home.path().to_owned())
+        .select_config(Some(&config))
+        .unwrap();
+    for id in ["first-config", "after-restart"] {
+        let defaults = marxen_lib::document_services();
+        let services = DocumentServices {
+            storage: defaults.storage,
+            buffers: Arc::new(NativeBufferFactory::new(home.path().to_owned())),
+        };
+        let actor =
+            DocumentActor::open(DocumentId(id.into()), "first".into(), None, services).unwrap();
+        assert!(
+            actor.config_errors().is_empty(),
+            "{:?}",
+            actor.config_errors()
+        );
+        assert!(actor.config_source().ends_with(".vimrc"));
+        key(&actor, " ");
+        key(&actor, "f");
+        assert_eq!(actor.snapshot().text, "mapped😀");
+        key(&actor, "u");
+        key(&actor, "<C-s>");
+        assert_eq!(
+            actor.snapshot().text,
+            "mapped😀",
+            "user mapping must beat app shortcut"
+        );
+    }
+}

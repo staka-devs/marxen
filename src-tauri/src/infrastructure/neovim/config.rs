@@ -25,7 +25,7 @@ pub fn is_supported_config_name(path: &Path) -> bool {
 /// Label an isolated startup or explicitly selected user config path for diagnostics.
 pub fn describe_source(source: &ConfigSource) -> String {
     match source {
-        ConfigSource::Isolated => "isolated(-u NONE)".into(),
+        ConfigSource::Isolated | ConfigSource::Standard => "isolated(-u NONE)".into(),
         ConfigSource::UserFile(path) => format!("user:{}", path.display()),
     }
 }
@@ -35,7 +35,7 @@ pub fn describe_source(source: &ConfigSource) -> String {
 /// existing supported config file and disables ShaDa/swap without disabling plugins.
 pub fn argv_for(source: &ConfigSource) -> Result<Vec<String>, String> {
     match source {
-        ConfigSource::Isolated => Ok(vec![
+        ConfigSource::Isolated | ConfigSource::Standard => Ok(vec![
             "-u".into(),
             "NONE".into(),
             "-i".into(),

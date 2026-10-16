@@ -171,3 +171,14 @@ describe("chat model selection", () => {
     await waitFor(() => expect(screen.getByTestId("scoped").textContent).toBe("true:0"));
   });
 });
+
+it("shows API connections only after registration and uses their names", () => {
+  const provider = defaultProviderConfig("acp");
+  const props = { provider, onProvider: vi.fn(), options: [], loading: false, discovered: false, error: null, onRefresh: vi.fn() };
+  render(<AiModelControls {...props} />);
+  fireEvent.click(screen.getByRole("combobox", { name: "チャットの接続先" }));
+  expect(screen.queryByRole("option", { name: "OpenAI Chat Completions" })).toBeNull();
+  expect(screen.queryByRole("option", { name: "OpenAI Responses" })).toBeNull();
+  expect(screen.queryByRole("option", { name: "Anthropic API" })).toBeNull();
+  expect(screen.getByRole("option", { name: "Claude Code" })).toBeVisible();
+});

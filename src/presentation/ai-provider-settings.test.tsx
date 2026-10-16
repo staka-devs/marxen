@@ -48,10 +48,10 @@ describe("provider settings", () => {
     expect(describeProviderSummary(defaultProviderConfig("acp"))).toBe("Codex");
     const openai = defaultProviderConfig("openai_compatible");
     openai.openai!.model = "local-model";
-    expect(describeProviderSummary(openai)).toBe("OpenAI互換 • local-model");
+    expect(describeProviderSummary(openai)).toBe("OpenAI Chat Completions • local-model");
     const onProvider = vi.fn();
     render(<AiProviderSettings provider={openai} onProvider={onProvider} openToken={1} />);
-    expect(screen.getByTestId("ai-provider-settings")).toHaveTextContent("OpenAI互換 • local-model");
+    expect(screen.getByTestId("ai-provider-settings")).toHaveTextContent("OpenAI Chat Completions • local-model");
     expect(screen.queryByText(/接続済み|接続成功/)).not.toBeInTheDocument();
   });
 

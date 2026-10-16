@@ -51,6 +51,7 @@ function successfulRun(overrides = {}) {
 /** Build five final installer entries with exact owners for version 0.1.0. */
 function installerFiles() {
   return [
+    { basename: "Marxen_0.1.0_x64-portable.zip", relativePath: "marxen-x86_64-pc-windows-msvc/portable/Marxen_0.1.0_x64-portable.zip", size: 60, isFile: true },
     { basename: "Marxen_0.1.0_x64-setup.exe", relativePath: "marxen-x86_64-pc-windows-msvc/nsis/Marxen_0.1.0_x64-setup.exe", size: 10, isFile: true },
     { basename: "Marxen_0.1.0_amd64.deb", relativePath: "marxen-x86_64-unknown-linux-gnu/deb/Marxen_0.1.0_amd64.deb", size: 20, isFile: true },
     { basename: "Marxen_0.1.0_amd64.AppImage", relativePath: "marxen-x86_64-unknown-linux-gnu/appimage/Marxen_0.1.0_amd64.AppImage", size: 30, isFile: true },
@@ -158,7 +159,7 @@ test("installers require exact names and owners, rejecting substrings and wrong 
     { basename: "bundle_dmg.sh", relativePath: "marxen-aarch64-apple-darwin/dmg/bundle_dmg.sh", size: 5, isFile: true },
     { basename: "Marxen.app", relativePath: "marxen-aarch64-apple-darwin/macos/Marxen.app", size: 5, isFile: false },
   ], "0.1.0");
-  assert.deepEqual(selected.map(item => item.slot), ["windows-nsis", "linux-deb", "linux-appimage", "mac-arm64-dmg", "mac-x64-dmg"]);
+  assert.deepEqual(selected.map(item => item.slot), ["windows-portable", "windows-nsis", "linux-deb", "linux-appimage", "mac-arm64-dmg", "mac-x64-dmg"]);
   assert.deepEqual(expectedReleaseFiles("0.1.0").map(item => item.basename), installerFiles().map(file => file.basename));
   const wrongVersion = installerFiles().map(file => ({
     ...file,
@@ -255,7 +256,7 @@ test("assembled output collects six publish files for draft validation", () => {
     const pairs = [...contents].map(([basename, data]) => ({ basename, sha256: createHash("sha256").update(data).digest("hex") }));
     writeFileSync(join(dist, "SHA256SUMS"), formatSha256Sums(pairs));
     const locals = collectVerifyLocals(dist);
-    assert.equal(locals.length, 6);
+    assert.equal(locals.length, 7);
     assertDraftAssets({
       tagName: "v0.1.0",
       isDraft: true,
@@ -263,7 +264,7 @@ test("assembled output collects six publish files for draft validation", () => {
       assets: locals.map(item => ({ name: item.basename, size: item.size, state: "uploaded", digest: `sha256:${item.sha256}` })),
     }, locals, { tag: "v0.1.0" });
     const fiveOnly = locals.filter(item => item.basename !== "SHA256SUMS");
-    assert.equal(fiveOnly.length, 5);
+    assert.equal(fiveOnly.length, 6);
     assert.throws(() => assertDraftAssets({
       tagName: "v0.1.0",
       isDraft: true,

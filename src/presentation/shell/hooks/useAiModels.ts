@@ -16,6 +16,7 @@ export function useAiModels(provider: AiProviderConfig, gateway?: AiGateway, sco
   const current = useRef(connection);
   current.current = connection;
   const attempt = useRef(0);
+  const inFlight = useRef(new Set<string>());
   const [results, setResults] = useState<Record<string, { provider: AiProviderId; options: AcpConfigOption[]; error: LocalizedText | null }>>({});
   const result = results[connection];
   const [pending, setPending] = useState<string | null>(null);
@@ -23,14 +24,15 @@ export function useAiModels(provider: AiProviderConfig, gateway?: AiGateway, sco
   function noteDiscovery(options: AcpConfigOption[], error: LocalizedText | null) {
     setResults((previous) => ({
       ...Object.fromEntries(Object.entries(previous).filter(([, entry]) => entry.provider !== providerId)),
-      [connection]: { provider: providerId, options, error },
+      [connection]: { provider: providerId, options: error === null ? options : previous[connection]?.options ?? [], error },
     }));
   }
   /** Start a user-requested, isolated handshake without sending document contents or a prompt. */
   async function refresh() {
-    if (!gateway || provider.kind !== "acp" || pending === connection) return;
+    if (!gateway || provider.kind !== "acp" || inFlight.current.has(connection)) return;
     const token = ++attempt.current;
     const requested = connection;
+    inFlight.current.add(requested);
     setPending(requested);
     try {
       const reply = await gateway.testConnection(provider, true);
@@ -41,6 +43,7 @@ export function useAiModels(provider: AiProviderConfig, gateway?: AiGateway, sco
         noteDiscovery([], localizedFailure(cause, describeInvokeError));
       }
     } finally {
+      inFlight.current.delete(requested);
       if (attempt.current === token) setPending(null);
     }
   }

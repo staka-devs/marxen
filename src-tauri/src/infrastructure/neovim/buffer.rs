@@ -4,9 +4,42 @@ use super::{rpc::RpcError, NeovimSession};
 use crate::application::ports::*;
 use crate::contracts::VimMode;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 pub struct NativeBuffer(pub NeovimSession);
-pub struct NativeBufferFactory;
+#[derive(Default)]
+pub struct NativeBufferFactory {
+    config_home: Option<PathBuf>,
+}
+
+impl NativeBufferFactory {
+    /// Keep app configuration separate from the user's global Vim configuration.
+    pub fn new(app_data: PathBuf) -> Self {
+        Self {
+            config_home: Some(app_data.join("marxen")),
+        }
+    }
+
+    /// Resolve the persisted selection or the dedicated vimrc, without creating user files.
+    fn default_source(&self) -> Result<ConfigSource, BufferError> {
+        let Some(home) = &self.config_home else {
+            return Ok(ConfigSource::Isolated);
+        };
+        let selection = match std::fs::read_to_string(home.join("vimrc-path")) {
+            Ok(path) if !path.is_empty() => Some(PathBuf::from(path)),
+            Ok(_) => None,
+            Err(cause) if cause.kind() == std::io::ErrorKind::NotFound => None,
+            Err(cause) => return Err(BufferError(cause.to_string())),
+        };
+        let path = selection.unwrap_or_else(|| home.join("vimrc"));
+        if path.is_file() {
+            Ok(ConfigSource::UserFile(path))
+        } else if path == home.join("vimrc") {
+            Ok(ConfigSource::Isolated)
+        } else {
+            Err(BufferError(format!("config not found: {}", path.display())))
+        }
+    }
+}
 impl From<RpcError> for BufferError {
     /// Convert transport diagnostics without exposing the RPC client to use cases.
     fn from(error: RpcError) -> Self {
@@ -14,6 +47,24 @@ impl From<RpcError> for BufferError {
     }
 }
 impl BufferFactory for NativeBufferFactory {
+    /// Store the chosen path atomically so new documents and restarts use the same file.
+    fn select_config(&self, path: Option<&Path>) -> Result<(), BufferError> {
+        let Some(home) = &self.config_home else {
+            return Ok(());
+        };
+        std::fs::create_dir_all(home).map_err(|cause| BufferError(cause.to_string()))?;
+        let target = home.join("vimrc-path");
+        let expected = crate::infrastructure::storage::disk_fingerprint(&target)
+            .map_err(|cause| BufferError(cause.to_string()))?;
+        crate::infrastructure::storage::atomic_write(
+            &target,
+            path.and_then(Path::to_str).unwrap_or("").as_bytes(),
+            expected.as_ref(),
+            None,
+        )
+        .map_err(|cause| BufferError(cause.to_string()))?;
+        Ok(())
+    }
     /// Start the real isolated buffer, install write/yank interception, and preserve native undo initialization.
     fn open(
         &self,
@@ -22,6 +73,17 @@ impl BufferFactory for NativeBufferFactory {
         path: Option<&Path>,
         clean: bool,
     ) -> Result<Box<dyn Buffer>, BufferError> {
+        let config = match config {
+            ConfigSource::Isolated => self.default_source()?,
+            ConfigSource::Standard => self
+                .config_home
+                .as_ref()
+                .map(|home| home.join("vimrc"))
+                .filter(|path| path.is_file())
+                .map(ConfigSource::UserFile)
+                .unwrap_or(ConfigSource::Isolated),
+            config => config,
+        };
         let nvim = NeovimSession::spawn_with_config(config).map_err(BufferError)?;
         super::grid::attach(nvim.client(), 80, 24)?;
         if clean {
@@ -261,6 +323,11 @@ impl Buffer for NativeBuffer {
                     .and_then(rmpv::Value::as_str)
                     .map(|t| BufferNotification::Yank(t.to_owned())),
                 "marxen:save-requested" => Some(BufferNotification::SaveRequested),
+                "marxen:command" => n
+                    .params
+                    .first()
+                    .and_then(rmpv::Value::as_str)
+                    .map(|command| BufferNotification::Command(command.to_owned())),
                 "redraw" => serde_json::to_value(n.params)
                     .ok()
                     .map(BufferNotification::Redraw),

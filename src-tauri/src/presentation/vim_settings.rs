@@ -71,17 +71,26 @@ mod desktop {
     pub fn vim_settings_write_raw(
         app: tauri::AppHandle,
         state: tauri::State<'_, VimSettingsState>,
+        documents: tauri::State<'_, crate::presentation::document::ActorState>,
         path: Option<String>,
         expected_fingerprint: Option<String>,
         raw: String,
     ) -> Result<VimConfigWrite, WorkspaceError> {
         let effective = vim_settings::resolve_settings_path(path.as_deref(), &app_data(&app)?)?;
-        vim_settings::write_raw_settings(
+        let written = vim_settings::write_raw_settings(
             state.files.as_ref(),
             &effective,
             expected_fingerprint.as_deref(),
             &raw,
-        )
+        )?;
+        documents
+            .services
+            .buffers
+            .select_config(Some(&effective))
+            .map_err(|cause| WorkspaceError::Neovim {
+                detail: cause.to_string(),
+            })?;
+        Ok(written)
     }
 }
 

@@ -61,7 +61,7 @@ describe("named API connection settings", () => {
     expect(screen.getByText("使用中")).toBeVisible();
     fireEvent.click(screen.getByText("検証"));
     expect(owned.calls.select).toEqual(["api-2"]);
-    expect(describeApiConnection(first)).toBe("本番 • OpenAI 互換");
+    expect(describeApiConnection(first)).toBe("本番 • OpenAI Chat Completions");
   });
 
   it("rejects empty names without persisting", () => {

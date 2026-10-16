@@ -207,3 +207,15 @@ it("renames same-name images only in their owning root", async () => {
   expect(f.result.current.session.tabs).not.toContain(ownerA);
   expect(f.result.current.session.imageTabs[ownerB]).toBe("same.png");
 });
+
+it("automatically restores named and untitled working copies when reopening a folder", async () => {
+  const f = fixture();
+  const saved = ["same.md", null].map((path, index): OpenDocument => ({ path, snapshot: { documentId: `recovered-${index}`, location: { scope: a.scope, path, position: 0 }, revision: 9, text: `unsaved 日本😀 ${index}`, dirty: true } }));
+  f.gateway.listRecovery = vi.fn(async () => saved.filter((doc) => !f.documents.has(doc.snapshot.documentId)).map((doc) => ({ documentId: doc.snapshot.documentId, location: doc.snapshot.location!, path: doc.path, revision: doc.snapshot.revision, conflict: false })));
+  f.gateway.restoreRecovery = vi.fn(async (id) => { const doc = saved.find((entry) => entry.snapshot.documentId === id)!; f.documents.set(id, doc); return doc; });
+  await act(async () => { await f.result.current.workspace.openWorkspaceFolder(a.root); });
+  expect(f.result.current.session.tabs).toEqual(saved.map((doc) => doc.snapshot.documentId));
+  expect(f.result.current.session.docs["recovered-1"].text).toBe("unsaved 日本😀 1");
+  expect(f.result.current.session.docs["recovered-1"].dirty).toBe(true);
+  expect(f.result.current.workspace.recovery).toEqual([]);
+});

@@ -823,6 +823,8 @@ pub struct AgentConn {
     stdin: ChildStdin,
     rx: mpsc::Receiver<Result<ConnLine, AiError>>,
     next_id: u64,
+    deadline: Instant,
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 impl AgentConn {
@@ -851,6 +853,8 @@ impl AgentConn {
             stdin,
             rx,
             next_id: 1,
+            deadline: Instant::now() + Duration::from_secs(60),
+            cancel: None,
         }
     }
 
@@ -940,7 +944,23 @@ impl AgentConn {
             .to_owned();
         self.write(&message)?;
         loop {
-            match self.read_next(None) {
+            if self
+                .cancel
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::SeqCst))
+            {
+                return Err(AiError::RequestCancelled);
+            }
+            if Instant::now() >= self.deadline {
+                return Err(AiError::StreamFailed {
+                    detail: format!("{method} の応答待ちがタイムアウトしました"),
+                });
+            }
+            match self.read_next(Some(
+                self.deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(ACP_POLL_INTERVAL),
+            )) {
                 Ok(ConnLine::Value(message)) => match classify_incoming(message)? {
                     AgentIncoming::Response { id: got, body } => {
                         if got == id {
@@ -969,11 +989,7 @@ impl AgentConn {
                         detail: "エージェントが標準出力を閉じました".into(),
                     });
                 }
-                Err(ReadFail::Timeout) => {
-                    return Err(AiError::StreamFailed {
-                        detail: "応答待ちがタイムアウトしました".into(),
-                    });
-                }
+                Err(ReadFail::Timeout) => continue,
                 Err(ReadFail::Stream(error)) => return Err(error),
             }
         }
@@ -1040,6 +1056,7 @@ pub fn agent_handshake(
         });
     }
     let mut conn = AgentConn::launch(stdin, stdout);
+    conn.deadline = Instant::now() + timeout;
     let notifications = std::cell::Cell::new(0usize);
     let mut sink = |_: serde_json::Value| {
         notifications.set(notifications.get() + 1);
@@ -1077,7 +1094,9 @@ pub fn agent_handshake(
     let child = shared.lock().expect("child lock").take();
     drop(conn);
     if let Some(mut child) = child {
-        wait_for_exit(&mut child, SHUTDOWN_GRACE);
+        if outcome.is_ok() {
+            wait_for_exit(&mut child, SHUTDOWN_GRACE);
+        }
         let _ = child.kill();
         let _ = child.wait();
     }
@@ -1229,6 +1248,8 @@ pub fn run_acp_prompt(
         detail: "エージェントの標準出力を開けません".into(),
     })?;
     let mut conn = AgentConn::launch(stdin, stdout);
+    conn.deadline = run_started + params.timeout;
+    conn.cancel = registry.cancel_flag(run_id);
     registry.set_child(run_id, Box::new(NativeProcess(child)));
 
     // Overall watchdog: kill through the registry so cancel stays uniform.
@@ -1545,7 +1566,7 @@ pub fn handshake_acp(argv: &AcpArgv) -> Result<AiTestResult, AiError> {
         .map_err(|error| AiError::ConnectionFailed {
             detail: format!("接続確認用フォルダーを作れません: {error}"),
         })?;
-    match agent_handshake(argv, staging.path(), HTTP_TEST_TIMEOUT) {
+    match agent_handshake(argv, staging.path(), Duration::from_secs(60)) {
         Ok(info) => Ok(AiTestResult {
             config_options: Some(info.config_options),
             ok: true,

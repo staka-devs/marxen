@@ -195,7 +195,7 @@ export interface Workspace {
   /** Refetch the Neovim grid screen resetting rows. */
   handleRawGridRefresh: () => void;
   /** Apply a Neovim config restarting the actor with Undo reset. */
-  applyConfig: () => Promise<void>;
+  applyConfig: (path?: string) => Promise<void>;
 }
 
 /**
@@ -417,6 +417,14 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         setWsRoot(rootRef.current);
         onWorkspaceOpened?.();
         await loadEntries();
+        const recovery = await workspaceGateway!.listRecovery(info.scope);
+        let recoveryError: unknown = null;
+        const existing = await workspaceGateway!.listDocuments(info.scope);
+        for (const entry of recovery) {
+          if (existing.some((doc) => doc.snapshot.documentId === entry.documentId || (entry.path !== null && doc.path === entry.path))) continue;
+          try { await workspaceGateway!.restoreRecovery(entry.documentId); }
+          catch (cause) { recoveryError = cause; }
+        }
         const open = await workspaceGateway!.listDocuments(info.scope);
         if (epoch !== generation.current) return null;
         const next: Record<string, OpenDoc> = {};
@@ -432,7 +440,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
           setExternalByDoc({});
         }
         await refreshRecovery();
-        setNotice(null);
+        setNotice(recoveryError === null ? null : localizedFailure(recoveryError, workspaceErrorText));
         return info;
       } catch (cause) {
         setNotice(localizedFailure(cause, workspaceErrorText));
@@ -515,6 +523,10 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         if (!info) missing.push(owner.root);
       }
       const restoredDocs: Record<string, OpenDoc> = { ...nativeDocs };
+      for (const root of rootsRef.current) for (const open of await workspaceGateway!.listDocuments(root.scope)) {
+        registry!.noteSnapshot(open.snapshot);
+        restoredDocs[open.snapshot.documentId] = docFromOpen(open);
+      }
       const restoredImages: Record<string, string> = {};
       const restoredTabs: string[] = [];
       let restoredActive: string | null = null;
@@ -545,7 +557,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
           if (metadata.active?.root === tab.root && metadata.active.path === tab.path && metadata.active.image === tab.image) restoredActive = id;
         } catch { unavailableTabs.current.push(tab); }
       }
-      for (const id of Object.keys(nativeDocs)) if (!restoredTabs.includes(id)) restoredTabs.push(id);
+      for (const id of Object.keys(restoredDocs)) if (!restoredTabs.includes(id)) restoredTabs.push(id);
       setDocs((previous) => ({ ...previous, ...restoredDocs }));
       session.setImageTabs(restoredImages); setTabs(restoredTabs); setActiveId(restoredActive ?? restoredTabs[0] ?? null);
       setMissingRoots(missing);
@@ -892,28 +904,28 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   // -- config -----------------------------------------------------------------
 
   /** Apply a Neovim config restarting the actor with Undo reset. */
-  const applyConfig = useCallback(async () => {
-    if (!registry || !activeRef.current) {
-      setNotice(message("ブラウザ表示では編集できません。デスクトップで開いてください。"));
-      return;
-    }
-    const trimmed = configPath.trim();
+  const applyConfig = useCallback(async (path?: string) => {
+    if (!registry) return;
+    const trimmed = (path ?? configPath).trim();
+    setConfigPath(trimmed);
     if (trimmed !== "" && !isSupportedConfigName(trimmed)) {
       setConfigError(message("対応する名前は vimrc / _vimrc / .vimrc / init.vim / init.lua です。"));
       return;
     }
-    const id = activeRef.current;
-    const current = docsRef.current[id];
-    if (!current) return;
+    const documents = Object.values(docsRef.current);
+    if (!documents.length) return;
     setApplyingConfig(true);
     try {
+      for (const current of documents) {
+      const id = current.documentId;
       const result = await registry.configure({ ...(current.location ? { location: current.location } : {}), documentId: id, baseRevision: current.revision }, trimmed === "" ? null : trimmed);
       setConfigError(result.errors.length > 0 ? result.errors.join("\n") : null);
       setCurrentConfig(result.path);
       setCopyKeys(result.copyKeys ?? { markdown: "<F6>", text: "<F7>", rich: "<F8>", html: "<F9>" });
       const snapshot = await registry.fetchSnapshot(id);
       mergeSnapshot(snapshot);
-      await refreshModeCursor(id);
+      if (activeRef.current === id) await refreshModeCursor(id);
+      }
       setNotice(message("設定を適用して再起動しました（Undo・モードは初期化）。"));
     } catch (cause) {
       if (cause instanceof StaleResync) sayStale(cause.snapshot);
@@ -929,6 +941,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
       .fetchConfig(activeId)
       .then((config) => {
         setCurrentConfig(config.path);
+        if (config.path?.startsWith("user:")) setConfigPath(config.path.slice(5));
         setConfigError(config.errors.length > 0 ? config.errors.join("\n") : null);
         setCopyKeys(config.copyKeys ?? { markdown: "<F6>", text: "<F7>", rich: "<F8>", html: "<F9>" });
       })

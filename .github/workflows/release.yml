@@ -54,7 +54,7 @@ jobs:
           github-token: ${{ github.token }}
           merge-multiple: false
 
-      - name: Assemble five installers and checksums
+      - name: Assemble six packages and checksums
         run: |
           set -euo pipefail
           node scripts/assemble-release.mjs \
@@ -83,6 +83,7 @@ jobs:
           set -euo pipefail
           gh release upload "$TAG" \
             dist-release/Marxen_*.exe \
+            dist-release/Marxen_*.zip \
             dist-release/Marxen_*.deb \
             dist-release/Marxen_*.AppImage \
             dist-release/Marxen_*.dmg \

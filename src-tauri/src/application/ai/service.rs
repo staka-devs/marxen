@@ -187,9 +187,17 @@ impl AiService {
             };
         }
         match config.kind {
-            AiProviderKind::Acp => self
-                .transport
-                .handshake(&resolve_acp_argv(config.acp.as_ref().expect("validated"))?),
+            AiProviderKind::Acp => {
+                let transport = self.transport.clone();
+                let argv = resolve_acp_argv(config.acp.as_ref().expect("validated"))?;
+                let (reply, result) = futures::channel::oneshot::channel();
+                self.spawner.spawn_blocking(Box::new(move || {
+                    let _ = reply.send(transport.handshake(&argv));
+                }));
+                result.await.map_err(|_| AiError::ConnectionFailed {
+                    detail: "接続テストが中断されました".into(),
+                })?
+            }
             kind => {
                 let target = http_target(&config)?;
                 let secret = match config.connection_id.as_ref() {
@@ -278,7 +286,9 @@ impl AiService {
                 }));
                 Ok(run_id)
             }
-            AiProviderKind::OpenaiCompatible | AiProviderKind::Anthropic => {
+            AiProviderKind::OpenaiCompatible
+            | AiProviderKind::OpenaiResponses
+            | AiProviderKind::Anthropic => {
                 // Credential and target readiness BEFORE any scope pin: a missing
                 // secret or keyring failure must return without pinning, so the
                 // copy stays usable for reject/cancel/approve. Scope

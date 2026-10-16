@@ -30,6 +30,8 @@ pub struct GridCell {
 pub fn attach(client: &EmbedClient, width: u64, height: u64) -> Result<Value, RpcError> {
     let options = Value::Map(vec![
         (Value::from("ext_linegrid"), Value::from(true)),
+        (Value::from("ext_cmdline"), Value::from(true)),
+        (Value::from("ext_messages"), Value::from(true)),
         (Value::from("rgb"), Value::from(true)),
     ]);
     client.call(

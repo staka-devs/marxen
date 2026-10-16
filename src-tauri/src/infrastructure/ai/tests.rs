@@ -1850,12 +1850,16 @@ mod regression {
         ));
     }
 
-    /// Reject a Claude Code preset on the wire and round-trip the exact
+    /// Accept the user-facing Claude ACP preset without launching it and round-trip the exact
     /// `request_cancelled` error tag.
     #[test]
-    fn wire_rejects_claude_presets_and_tags_cancellation() {
+    fn wire_accepts_claude_adapter_and_tags_cancellation() {
         let rejected: Result<AcpPreset, _> = serde_json::from_str("\"claude_code\"");
-        assert!(rejected.is_err());
+        assert_eq!(rejected.unwrap(), AcpPreset::ClaudeCode);
+        assert_eq!(
+            preset_argv(AcpPreset::ClaudeCode).command,
+            "claude-agent-acp"
+        );
         let value = serde_json::to_value(AiError::RequestCancelled).unwrap();
         assert_eq!(value, serde_json::json!({"code": "request_cancelled"}));
         let roundtrip: AiError = serde_json::from_value(value).unwrap();

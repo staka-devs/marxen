@@ -566,11 +566,11 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         return;
       }
       const legacy = aiProfileStore?.load() ?? defaultProfile();
-      if (legacy.kind !== "openai_compatible" && legacy.kind !== "anthropic") {
+      if (legacy.kind !== "openai_compatible" && legacy.kind !== "openai_responses" && legacy.kind !== "anthropic") {
         migratedOnce.current = true;
         return;
       }
-      const migrated = migrateLegacyProfile(legacy, t(legacy.kind === "anthropic" ? "Anthropic 1" : "OpenAI 互換 1"), mintConnectionId([]));
+      const migrated = migrateLegacyProfile(legacy, t(legacy.kind === "anthropic" ? "Anthropic 1" : "OpenAI Chat Completions 1"), mintConnectionId([]));
       if (!migrated) {
         migratedOnce.current = true;
         return;
@@ -641,7 +641,10 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   const [recoveryPromptOpen, setRecoveryPromptOpen] = useState(false);
   const [dismissedExternal, setDismissedExternal] = useState<{ path: string; deleted: boolean } | null>(null);
   /** Revision-aware document session: docs, tabs, selections, and mutations. */
-  const session = useDocumentSession({ desktop, documentGateway, workspaceGateway, clipboardGateway, notify: setNotice });
+  const vimCommand = useRef<(command: string) => void>(() => {});
+  /** Forward native Vim commands to the current workbench owner. */
+  const forwardVimCommand = useCallback((command: string) => vimCommand.current(command), []);
+  const session = useDocumentSession({ desktop, documentGateway, workspaceGateway, clipboardGateway, notify: setNotice, onVimCommand: forwardVimCommand });
   const editorMenu = useEditorMenu({ session, desktop, notify: setNotice });
   const [editorFocus, setEditorFocus] = useState<{ path: string; sequence: number } | null>(null);
   /** Open a file and request editor focus after React commits the active pane. */
@@ -709,6 +712,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   const cursorEcho = session.cursorEcho;
   /** Current Vim mode label for display. */
   const vimMode = session.vimMode;
+  const commandCursor = session.commandLine ? [...session.commandLine.text.slice(session.commandLine.cursor)][0] ?? " " : " ";
 
   const effectiveViewMode: ViewMode = active && !activeIsMarkdown ? "source" : viewMode;
 
@@ -796,6 +800,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   function treeTarget(node: TreeNode, scope?: RootScope) { return workspace.targetFor(node.path, node.directory, node.kind, scope); }
   /** Use the same invocation guards for captured tree contexts and the top menus. */
   function runTreeCommand(id: string, node: TreeNode, scope?: RootScope) { void workbench.run(id, treeTarget(node, scope)); }
+  vimCommand.current = (id) => { if (workbench.command(id)?.enabled) void workbench.run(id); };
   useEffect(() => { setExplorerTarget(null); }, [workspace.generation]);
   useEffect(() => { if (workspace.createdTarget) setExplorerTarget(workspace.createdTarget); }, [workspace.createdTarget]);
   useEffect(() => {
@@ -817,11 +822,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       const id = key === "p" ? (event.shiftKey ? "palette-open" : "palette-quickopen") : key === "s" ? "file-save" : key === "," ? "palette-settings" : key === "i" && event.shiftKey ? "inline-chat" : key === "i" && event.altKey ? "palette-ai" : null;
       if (id && workbench.command(id)?.enabled) { event.preventDefault(); if (id === "inline-chat") event.stopPropagation(); void workbench.run(id); }
     };
-    /** Capture only the workbench inline gesture before it can become a native Vim key. */
-    const onInlineKey = (event: KeyboardEvent) => { if (event.shiftKey && event.key.toLowerCase() === "i") onKey(event); };
     window.addEventListener("keydown", onKey);
-    window.addEventListener("keydown", onInlineKey, true);
-    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("keydown", onInlineKey, true); };
+    return () => { window.removeEventListener("keydown", onKey); };
   }, [workbench]);
 
   // -- derived view data --------------------------------------------------------
@@ -1358,6 +1360,11 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           </div>
         )}
 
+        {desktop && active && (session.commandLine || session.vimMessage) && (
+          <div data-testid="vim-command-line" role="status" className="max-h-40 shrink-0 overflow-auto whitespace-pre-wrap border-t border-border bg-card px-3 py-1 font-mono text-sm">
+            {session.commandLine ? <>{session.commandLine.text.slice(0, session.commandLine.cursor)}<span className="bg-foreground text-background">{commandCursor}</span>{session.commandLine.text.slice(session.commandLine.cursor + commandCursor.length)}</> : session.vimMessage}
+          </div>
+        )}
         <footer className="marxen-status flex h-6 shrink-0 items-center gap-3 whitespace-nowrap border-t border-border bg-card px-3 text-[11px] text-muted-foreground">
           {desktop && active && <span data-testid="vim-footer-mode" className="flex h-5 shrink-0 items-center rounded-sm bg-primary/10 px-1.5 font-medium text-primary">{MODE_JA[vimMode] ? t(MODE_JA[vimMode] as LabelKey) : vimMode}</span>}
           <span className="min-w-0 flex-1 truncate">{workspace.wsRoot?.split(/[\\/]/).filter(Boolean).at(-1) ?? ""}</span>
@@ -1434,7 +1441,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             onPreferences={updatePreferences}
             aiSettings={<AiProviderSettings embedded provider={aiProvider} onProvider={setAiProvider} gateway={aiGateway} profileStore={aiProfileStore} connectionControls={connectionControls} />}
             aiVisibilitySettings={<AiVisibilitySettings preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} connections={apiConnections.connections} saveFailed={aiView.saveFailed} />}
-            vimSettings={desktop && vimSettingsGateway ? <VimSettingsHost gateway={vimSettingsGateway} initialPath={workspace.configPath} onSaved={workspace.setConfigPath} dialogGateway={dialogGateway} /> : undefined}
+            vimSettings={desktop && vimSettingsGateway ? <VimSettingsHost gateway={vimSettingsGateway} initialPath={workspace.configPath} onPathChange={workspace.setConfigPath} onSaved={(path) => { workspace.setConfigPath(path); void workspace.applyConfig(path); }} dialogGateway={dialogGateway} /> : undefined}
             configPath={workspace.configPath}
             configError={workspace.configError}
             onConfigPath={workspace.setConfigPath}

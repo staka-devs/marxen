@@ -24,7 +24,7 @@ impl AiTransport for NativeAiTransport {
         Box::pin(async move {
             let client = super::http::http_client(HTTP_TEST_TIMEOUT)?;
             match target.backend {
-                HttpBackend::OpenAi => {
+                HttpBackend::OpenAi | HttpBackend::OpenAiResponses => {
                     super::http::test_openai_live(&client, &target.base, secret).await
                 }
                 HttpBackend::Anthropic => {

@@ -28,7 +28,6 @@ import type {
   TextEdit,
   Utf16Range,
   VimInputResult,
-  VimMode,
   WorkspaceEntry,
   WorkspaceEvent,
   WorkspaceInfo,
@@ -126,7 +125,7 @@ export interface DocumentGateway {
   /** Fetch the authoritative snapshot. */
   fetchSnapshot(documentId: DocumentId): Promise<DocumentSnapshot>;
   /** Fetch the native mode with revision. */
-  fetchMode(documentId: DocumentId): Promise<{ mode: VimMode; revision: number }>;
+  fetchMode(documentId: DocumentId): Promise<Omit<ModeUpdate, "documentId">>;
   /** Fetch the native cursor. */
   fetchCursor(documentId: DocumentId): Promise<CursorUpdate>;
   /** Stage a GUI selection, coalescing rapid gestures. */

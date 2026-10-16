@@ -18,7 +18,8 @@ import type { ApiConnectionGateway } from "../../application/ports";
 /** Protocol choices for the settings dropdown with user-facing labels. */
 function protocolChoices(t: Translator) {
   return [
-    { value: "openai_compatible", label: t("OpenAI 互換"), icon: <ProviderIcon provider="openai_compatible" size={14} /> },
+    { value: "openai_compatible", label: t("OpenAI Chat Completions"), icon: <ProviderIcon provider="openai_compatible" size={14} /> },
+    { value: "openai_responses", label: "OpenAI Responses", icon: <ProviderIcon provider="openai_responses" size={14} /> },
     { value: "anthropic", label: "Anthropic Messages", icon: <ProviderIcon provider="anthropic" size={14} /> },
   ];
 }
@@ -219,7 +220,7 @@ export function ApiConnectionDialog({ initial, isNew, connectionGateway, onSave,
               className="mt-1 block w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
               value={endpoint}
               onChange={(event) => { setEndpoint(event.target.value); setErrors([]); }}
-              placeholder={DEFAULT_ENDPOINTS[protocol === "openai_compatible" ? "openai_compatible" : "anthropic"]}
+              placeholder={DEFAULT_ENDPOINTS[protocol]}
             />
           </label>
           <label className="block text-xs">
@@ -451,7 +452,7 @@ export function ApiConnectionSettings({ list, activeId, onSelect, onAdd, onUpdat
  * Shows the name with its protocol label; liveness comes only from an
  * explicit connection test and is never invented here.
  */
-export function describeApiConnection(connection: ApiConnection, t: Translator = japaneseTranslator): string {
-  const protocol = connection.protocol === "openai_compatible" ? t("OpenAI 互換") : "Anthropic Messages";
+export function describeApiConnection(connection: ApiConnection, _t: Translator = japaneseTranslator): string {
+  const protocol = connection.protocol === "openai_responses" ? "OpenAI Responses" : connection.protocol === "openai_compatible" ? "OpenAI Chat Completions" : "Anthropic Messages";
   return `${connection.name} • ${protocol}`;
 }

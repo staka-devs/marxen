@@ -76,108 +76,27 @@ async function renderHost(gateway: VimSettingsGateway) {
 }
 
 describe("vim settings panel", () => {
-  // These tests verify the GUI-to-gateway contract with an in-memory adapter;
-  // they do not source a config in real Neovim or prove native fingerprint enforcement.
-  it.each([" ", "\\", ",", ";"])("saves the real common leader %j through the mocked fingerprint gateway", async (leader) => {
-    const gateway = fakeGateway({ ...defaultRead(), raw: '" unmanaged 日本語\r\nset number\r\n' });
-    await renderHost(gateway);
-    expect(screen.getByLabelText("リーダーキー")).toHaveValue("<Space>");
-    fireEvent.change(screen.getByLabelText("よく使うリーダーキー"), { target: { value: leader } });
-    expect(latest?.settings.leader).toBe(leader);
-    fireEvent.click(screen.getByRole("button", { name: "管理ブロックを保存する" }));
-    await waitFor(() => expect(gateway.managedWrites).toHaveLength(1));
-    expect(gateway.managedWrites[0]).toMatchObject({ expected: "fp1", settings: { leader } });
-    expect(latest?.loaded?.raw.startsWith('" unmanaged 日本語\r\nset number\r\n')).toBe(true);
-  });
-
-  it("accepts Space notation, custom Unicode and focuses custom input", async () => {
-    await renderHost(fakeGateway(defaultRead()));
-    const input = screen.getByLabelText("リーダーキー");
-    fireEvent.change(screen.getByLabelText("よく使うリーダーキー"), { target: { value: "custom" } });
-    expect(document.activeElement).toBe(input);
-    expect(screen.getByRole("button", { name: "管理ブロックを保存する" })).toBeDisabled();
-    fireEvent.change(input, { target: { value: "<space>" } });
-    expect(input).toHaveValue("<Space>"); expect(latest?.settings.leader).toBe(" ");
-    expect(screen.getByRole("button", { name: "管理ブロックを保存する" })).not.toBeDisabled();
-    fireEvent.change(input, { target: { value: "🚀" } });
-    expect(latest?.settings.leader).toBe("🚀");
-    expect(screen.getByLabelText("よく使うリーダーキー")).toHaveValue("custom");
-    fireEvent.change(input, { target: { value: "<Tab>" } });
-    expect(screen.getByRole("button", { name: "管理ブロックを保存する" })).toBeDisabled();
-  });
-
-  it("keeps full mapping mode names and individually labelled mapping controls", async () => {
-    await renderHost(fakeGateway(defaultRead()));
-    fireEvent.click(screen.getByRole("button", { name: "マッピングを追加する" }));
-    expect(screen.getByLabelText("マッピング1のモード")).toHaveTextContent("nnoremap");
-    fireEvent.change(screen.getByLabelText("マッピング1のキー"), { target: { value: "<Leader>w" } });
-    fireEvent.change(screen.getByLabelText("マッピング1の内容"), { target: { value: ":w<CR>" } });
-    expect(latest?.settings.mappings).toEqual([{ mode: "n", lhs: "<Leader>w", rhs: ":w<CR>" }]);
-    fireEvent.click(screen.getByRole("button", { name: "マッピング1を削除する" }));
-    expect(latest?.settings.mappings).toEqual([]);
-  });
-
-  it("edits indent controls and saves the managed block", async () => {
+  it("offers only text editing and preserves complete Vimscript with the loaded fingerprint", async () => {
     const gateway = fakeGateway(defaultRead());
     await renderHost(gateway);
-    fireEvent.change(screen.getByLabelText("タブ幅"), { target: { value: "4" } });
-    expect(latest?.settings.tabstop).toBe(4);
-    fireEvent.click(screen.getByRole("button", { name: "管理ブロックを保存する" }));
-    await waitFor(() => expect(gateway.saved.some((call) => call.startsWith("managed:fp1:4"))).toBe(true));
-    await waitFor(() =>
-      expect(screen.getByText("管理ブロックを保存しました。設定の適用でNeovimを再起動します。")).toBeVisible(),
-    );
-  });
-
-  it("disables structured controls on Lua targets but keeps the raw editor", async () => {
-    const gateway = fakeGateway({
-      ...defaultRead(),
-      path: "/cfg/init.lua",
-      isLua: true,
-      raw: "vim.opt.number = true\n",
-    });
-    await renderHost(gateway);
-    expect(screen.getByLabelText("タブ幅")).toBeDisabled();
-    expect(screen.getByLabelText("Vim設定ファイルの設定コード")).not.toBeDisabled();
-    expect(screen.getByRole("button", { name: "管理ブロックを保存する" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "設定コードを保存する" })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Vim設定ファイルの設定コード"), {
-      target: { value: "vim.opt.number = false\n" },
-    });
-    expect(screen.getByRole("button", { name: "設定コードを保存する" })).not.toBeDisabled();
-  });
-
-  it("surfaces validation errors and blocks the managed save", async () => {
-    const gateway = fakeGateway(defaultRead());
-    await renderHost(gateway);
-    fireEvent.change(screen.getByLabelText("タブ幅"), { target: { value: "99" } });
-    expect(await screen.findAllByText("tabstop は 1〜32 で指定してください。")).not.toHaveLength(0);
-    expect(screen.getByRole("button", { name: "管理ブロックを保存する" })).toBeDisabled();
-  });
-
-  it("shows managed parse failures while keeping raw saving available", async () => {
-    const gateway = fakeGateway({
-      ...defaultRead(),
-      raw: "bad block",
-      managedError: "管理ブロックのマーカーが重複または不足しています。",
-    });
-    await renderHost(gateway);
-    expect(screen.getByText("管理ブロックのマーカーが重複または不足しています。")).toBeVisible();
-    expect(screen.getByRole("button", { name: "管理ブロックを保存する" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "設定コードを保存する" })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Vim設定ファイルの設定コード"), {
-      target: { value: "set number\n" },
-    });
-    expect(screen.getByRole("button", { name: "設定コードを保存する" })).not.toBeDisabled();
-  });
-
-  it("edits the raw text and saves it verbatim", async () => {
-    const gateway = fakeGateway(defaultRead());
-    await renderHost(gateway);
-    fireEvent.change(screen.getByLabelText("Vim設定ファイルの設定コード"), {
-      target: { value: "set number\nset relativenumber\n" },
-    });
+    expect(screen.queryByLabelText("リーダーキー")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "管理ブロックを保存する" })).not.toBeInTheDocument();
+    const code = 'let mapleader = " "\nfunction! MarxenSave()\n  Marxen file-save\nendfunction\nnoremap <Leader>w :call MarxenSave()<CR>\n';
+    fireEvent.change(screen.getByLabelText("Vim設定ファイルの設定コード"), { target: { value: code } });
+    expect(screen.getByRole("button", { name: "Vim詳細設定を再読込する" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "設定コードを保存する" }));
-    await waitFor(() => expect(gateway.saved.some((call) => call.startsWith("raw:fp1:"))).toBe(true));
+    await waitFor(() => expect(gateway.saved).toHaveLength(1));
+    expect(gateway.saved[0]).toBe(`raw:fp1:${code.length}`);
+    expect(latest?.rawDraft).toBe(code);
+    expect(gateway.managedWrites).toHaveLength(0);
+  });
+
+  it("saves Lua and arbitrary Vimscript without managed-block validation", async () => {
+    await renderHost(fakeGateway({ ...defaultRead(), path: "/cfg/init.lua", isLua: true, raw: "vim.g.mapleader = ' '\n", managedError: "old managed block" }));
+    const code = "vim.keymap.set('n', '<leader>w', function() vim.cmd('Marxen file-save') end)\n";
+    fireEvent.change(screen.getByLabelText("Vim設定ファイルの設定コード"), { target: { value: code } });
+    fireEvent.click(screen.getByRole("button", { name: "設定コードを保存する" }));
+    await waitFor(() => expect(latest?.rawDirty).toBe(false));
+    expect(latest?.rawDraft).toBe(code);
   });
 });

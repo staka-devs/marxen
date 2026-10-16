@@ -49,7 +49,7 @@ export interface AiProviderSettingsProps {
   connectionControls?: ApiConnectionControls;
 }
 
-const KIND_ORDER: AiProviderKind[] = ["acp", "openai_compatible", "anthropic"];
+const KIND_ORDER: AiProviderKind[] = ["acp", "openai_compatible", "openai_responses", "anthropic"];
 
 /**
  * Describe the active connection in one neutral line without claiming success.
@@ -65,9 +65,10 @@ export function describeProviderSummary(provider: AiProviderConfig, t: Translato
     }
     return t(PRESET_LABELS[provider.acp?.preset ?? "codex"] as LabelKey);
   }
-  if (provider.kind === "openai_compatible") {
+  if (provider.kind === "openai_compatible" || provider.kind === "openai_responses") {
     const model = provider.openai?.model?.trim() ?? "";
-    return model === "" ? t("OpenAI互換") : t("OpenAI互換 • {{value0}}", { value0: (model) });
+    const label = provider.kind === "openai_responses" ? "OpenAI Responses" : "OpenAI Chat Completions";
+    return model === "" ? label : `${label} • ${model}`;
   }
   const model = provider.anthropic?.model?.trim() ?? "";
   const enabled = provider.anthropic?.enabled ?? false;
@@ -362,11 +363,11 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
                 setTestResult(null);
                 setTestFailure(null);
                 if (candidate === "anthropic") setEndpoint(DEFAULT_ENDPOINTS.anthropic);
-                else if (candidate === "openai_compatible") setEndpoint(DEFAULT_ENDPOINTS.openai_compatible);
+                else if ((candidate === "openai_compatible" || candidate === "openai_responses")) setEndpoint(DEFAULT_ENDPOINTS.openai_compatible);
               }}
             >
               <ProviderIcon provider={candidate === "acp" ? preset : candidate} size={14} />
-              {candidate === "acp" ? "ACP" : candidate === "openai_compatible" ? t("OpenAI 互換") : "Anthropic"}
+              {candidate === "acp" ? "ACP" : candidate === "openai_responses" ? "OpenAI Responses" : candidate === "openai_compatible" ? "OpenAI Chat Completions" : "Anthropic"}
             </Button>
           ))}
         </div>
