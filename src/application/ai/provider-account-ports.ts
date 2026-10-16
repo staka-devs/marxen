@@ -1,4 +1,4 @@
-import type { AccountHost, AccountProvider, AccountSelection, AccountSnapshot, ProviderAccount, ProviderAccountUsage } from "../../contracts/provider-accounts";
+import type { AccountCredentialPatch, AccountHost, AccountProvider, AccountSelection, AccountSnapshot, ProviderAccount, ProviderAccountUsage } from "../../contracts/provider-accounts";
 
 /** Native account settings keep secrets out of browser persistence and returned data. */
 export interface ProviderAccountGateway {
@@ -7,7 +7,7 @@ export interface ProviderAccountGateway {
   /** Read saved metadata and credential presence. */
   snapshot(): Promise<AccountSnapshot>;
   /** Save metadata plus an optional replacement secret directly to Rust. */
-  save(account: ProviderAccount, credential?: string): Promise<void>;
+  save(account: ProviderAccount, credentials?: AccountCredentialPatch): Promise<void>;
   /** Select an account from the same provider and host for subsequent operations. */
   select(selection: AccountSelection): Promise<void>;
   /** Delete only a managed account, never a system default. */

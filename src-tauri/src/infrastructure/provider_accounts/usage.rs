@@ -8,7 +8,10 @@ use serde_json::{json, Value};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Stamp receipt time without exposing the account identifier or raw provider response.
-fn report(quotas: Vec<AccountQuota>, reason: Option<AccountReason>) -> ProviderAccountUsage {
+pub(super) fn report(
+    quotas: Vec<AccountQuota>,
+    reason: Option<AccountReason>,
+) -> ProviderAccountUsage {
     ProviderAccountUsage {
         quotas,
         received_ms: SystemTime::now()
@@ -16,6 +19,7 @@ fn report(quotas: Vec<AccountQuota>, reason: Option<AccountReason>) -> ProviderA
             .unwrap_or_default()
             .as_millis() as f64,
         unavailable_reason: reason,
+        workspace_id: None,
     }
 }
 
@@ -38,8 +42,8 @@ fn token(value: &Value, path: &str) -> Option<String> {
 }
 
 /// Bound response size while rejecting redirects and ignoring server error bodies entirely.
-async fn response(request: RequestBuilder) -> Result<Value, ProviderAccountError> {
-    let mut reply = request
+pub(super) async fn response(request: RequestBuilder) -> Result<Value, ProviderAccountError> {
+    let reply = request
         .send()
         .await
         .map_err(|_| ProviderAccountError::RequestFailed)?;
@@ -49,6 +53,14 @@ async fn response(request: RequestBuilder) -> Result<Value, ProviderAccountError
         200..=299 => {}
         _ => return Err(ProviderAccountError::RequestFailed),
     }
+    serde_json::from_slice(&bounded_body(reply).await?)
+        .map_err(|_| ProviderAccountError::InvalidResponse)
+}
+
+/// Bound JSON and console HTML with the same byte budget without exposing response contents.
+pub(super) async fn bounded_body(
+    mut reply: reqwest::Response,
+) -> Result<Vec<u8>, ProviderAccountError> {
     if reply.content_length().is_some_and(|n| n > 262144) {
         return Err(ProviderAccountError::InvalidResponse);
     }
@@ -63,7 +75,7 @@ async fn response(request: RequestBuilder) -> Result<Value, ProviderAccountError
         }
         bytes.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&bytes).map_err(|_| ProviderAccountError::InvalidResponse)
+    Ok(bytes)
 }
 
 /// Refresh only explicitly supplied Google OAuth client configuration at Google's fixed host.
@@ -200,7 +212,17 @@ pub(super) async fn read(
         .as_ref()
         .map(|a| a.endpoint.as_str())
         .unwrap_or(endpoints(provider)[0]);
-    let value: Value = serde_json::from_str(&secret).unwrap_or(Value::Null);
+    if matches!(
+        provider,
+        AccountProvider::Minimax | AccountProvider::OpencodeGo
+    ) {
+        return super::web_usage::read(&client, provider, account.as_ref(), &secret).await;
+    }
+    let mut value: Value = serde_json::from_str(&secret).unwrap_or(Value::Null);
+    if provider == AccountProvider::Grok && value.get("accessToken").is_none() {
+        value = crate::domain::provider_accounts::grok_login(&value)?
+            .ok_or(ProviderAccountError::Unauthorized)?;
+    }
     let reply = if provider == AccountProvider::Gemini {
         let access = gemini_token(&client, &value).await?;
         let mut project = account

@@ -10,8 +10,8 @@ export const ACCOUNT_PROVIDERS: { id: AccountProvider; label: string; endpoints:
   { id: "gemini", label: "Gemini CLI (legacy)", endpoints: ["https://cloudcode-pa.googleapis.com"], docs: "https://geminicli.com/docs/get-started/authentication/", credential: "Gemini の oauth_creds.json", usage: true, launch: false },
   { id: "antigravity", label: "Antigravity", endpoints: ["https://antigravity.google"], docs: "https://antigravity.google/docs/home", credential: "認証設定 JSON", usage: false, launch: false },
   { id: "opencode_go", label: "OpenCode Go", endpoints: ["https://opencode.ai"], docs: "https://opencode.ai/docs/go/", credential: "OpenCode Go の API キー", usage: true, launch: false },
-  { id: "minimax", label: "MiniMax", endpoints: ["https://www.minimax.io", "https://www.minimaxi.com"], docs: "https://platform.minimax.io/docs/token-plan/faq", credential: "MiniMax の Subscription Key", usage: true, launch: false },
-  { id: "grok", label: "Grok", endpoints: ["https://cli-chat-proxy.grok.com"], docs: "https://grok.com/", credential: "Grok の認証 JSON（accessToken / userId）", usage: true, launch: false },
+  { id: "minimax", label: "MiniMax", endpoints: ["https://www.minimax.io", "https://www.minimaxi.com"], docs: "https://platform.minimax.io/docs/token-plan/faq", credential: "MiniMax の API キー（Subscription Key）", usage: true, launch: false },
+  { id: "grok", label: "Grok", endpoints: ["https://cli-chat-proxy.grok.com"], docs: "https://grok.com/", credential: "Grok の auth.json", usage: true, launch: false },
   { id: "cursor", label: "Cursor", endpoints: ["https://cursor.com"], docs: "https://cursor.com/dashboard", credential: "Cursor の Cookie ヘッダー（WorkosCursorSessionToken）", usage: true, launch: false },
   { id: "glm", label: "GLM Coding Plan", endpoints: ["https://api.z.ai", "https://open.bigmodel.cn", "https://dev.bigmodel.cn"], docs: "https://docs.z.ai/devpack/overview", credential: "GLM Coding Plan の API キー", usage: true, launch: false },
 ];
@@ -45,6 +45,7 @@ export function accountReasonKey(reason: AccountReason): LabelKey {
     case "adapter_unsupported": return "このプロバイダーの使用量・認証アダプターは未対応です。公式画面で確認してください。";
     case "missing_credential": return "管理アカウントの認証情報が未保存です。システム既定へは切り替えません。";
     case "login_required": return "認証情報がありません。公式の手順でログインするか、管理アカウントを追加してください。";
+    case "missing_workspace": return "コンソールからワークスペースを特定できません。ID を設定してください。";
     case "missing_project": return "Gemini のプロジェクトを取得できません。プロジェクト ID を設定してください。";
     case "refresh_required": return "再ログインが必要です。Google の自動更新には client_id と client_secret も必要です。";
     case "invalid_response": return "使用量の応答形式に対応していません。値は表示しません。";

@@ -1,6 +1,8 @@
 //! Private account homes and quota adapters never change host-default authentication.
+mod login;
 mod store;
 mod usage;
+mod web_usage;
 #[cfg(windows)]
 mod windows;
 use crate::application::provider_accounts::*;
@@ -122,6 +124,18 @@ impl NativeAccountRuntime {
                     .join("devin/credentials.toml")
             }),
             AccountProvider::Gemini => Some(self.home.join(".gemini/oauth_creds.json")),
+            AccountProvider::Grok => Some(self.home.join(".grok/auth.json")),
+            AccountProvider::Cursor => Some(
+                login::cursor_paths(
+                    &self.home,
+                    login::host_platform(),
+                    std::env::var_os("APPDATA").map(PathBuf::from).as_deref(),
+                    std::env::var_os("XDG_CONFIG_HOME")
+                        .map(PathBuf::from)
+                        .as_deref(),
+                )
+                .0,
+            ),
             _ => None,
         }
     }
@@ -131,6 +145,12 @@ impl NativeAccountRuntime {
         &self,
         provider: AccountProvider,
     ) -> Result<Option<String>, ProviderAccountError> {
+        if provider == AccountProvider::Grok {
+            return login::read_grok(&self.home.join(".grok/auth.json"));
+        }
+        if provider == AccountProvider::Cursor {
+            return login::read_cursor(&self.home);
+        }
         let Some(path) = self.system_file(provider) else {
             return Ok(None);
         };
@@ -151,11 +171,19 @@ impl NativeAccountRuntime {
         }
         let value = store::read_json(&path)?;
         match (provider, value) {
-            (AccountProvider::OpencodeGo, Some(value)) => Ok(value
+            (AccountProvider::OpencodeGo, Some(value)) => value
                 .get("opencode-go")
                 .and_then(|v| v.get("key"))
                 .and_then(Value::as_str)
-                .map(str::to_owned)),
+                .filter(|s| !s.is_empty())
+                .map(|key| {
+                    serde_json::to_string(&crate::domain::provider_accounts::WebAccountSecret {
+                        api_key: key.into(),
+                        cookie: String::new(),
+                    })
+                    .map_err(|_| ProviderAccountError::InvalidResponse)
+                })
+                .transpose(),
             (_, Some(value)) => serde_json::to_string(&value)
                 .map(Some)
                 .map_err(|_| ProviderAccountError::InvalidResponse),
@@ -202,7 +230,10 @@ impl ProviderAccountRuntime for NativeAccountRuntime {
         let Some(secret) = self.system_secret(provider)? else {
             return Ok(false);
         };
-        if provider == AccountProvider::OpencodeGo {
+        if matches!(
+            provider,
+            AccountProvider::OpencodeGo | AccountProvider::Cursor | AccountProvider::Grok
+        ) {
             return Ok(!secret.is_empty());
         }
         Ok(crate::domain::provider_accounts::validate_credential(provider, &secret).is_ok())

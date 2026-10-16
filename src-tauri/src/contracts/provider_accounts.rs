@@ -37,6 +37,27 @@ pub struct ProviderAccount {
     pub endpoint: String,
     /// Gemini Code Assist project, when explicitly configured.
     pub project: String,
+    #[serde(default)]
+    pub group_id: String,
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default)]
+    pub workspace_id: String,
+}
+
+/// Write-only credential patch: absent preserves a slot; an empty value removes that slot.
+#[derive(Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountCredentialPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub secret: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cookie: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -59,6 +80,8 @@ pub struct AccountSettings {
 pub struct AccountState {
     pub account: ProviderAccount,
     pub has_credential: bool,
+    pub has_api_key: bool,
+    pub has_cookie: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -77,6 +100,7 @@ pub enum AccountReason {
     MissingCredential,
     LoginRequired,
     MissingProject,
+    MissingWorkspace,
     RefreshRequired,
     InvalidResponse,
 }
@@ -110,6 +134,9 @@ pub struct ProviderAccountUsage {
     pub quotas: Vec<AccountQuota>,
     pub received_ms: f64,
     pub unavailable_reason: Option<AccountReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub workspace_id: Option<String>,
 }
 
 /// Generate the separate account IPC contract without changing the AI preset enum.
@@ -120,6 +147,7 @@ pub fn typescript() -> String {
         AccountProvider::decl(&cfg),
         AccountHost::decl(&cfg),
         ProviderAccount::decl(&cfg),
+        AccountCredentialPatch::decl(&cfg),
         AccountSelection::decl(&cfg),
         AccountSettings::decl(&cfg),
         AccountState::decl(&cfg),

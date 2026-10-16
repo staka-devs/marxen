@@ -99,6 +99,9 @@ fn account(provider: AccountProvider, host: AccountHost) -> ProviderAccount {
         name: "work".into(),
         endpoint: endpoints(provider)[0].into(),
         project: String::new(),
+        group_id: String::new(),
+        models: Vec::new(),
+        workspace_id: String::new(),
     }
 }
 
@@ -116,10 +119,12 @@ fn credential(provider: AccountProvider) -> String {
         }
         AccountProvider::Gemini => json!({"access_token":"fixture-gemini-secret"}).to_string(),
         AccountProvider::Grok => {
-            json!({"accessToken":"fixture-grok-secret","userId":"fixture-user"}).to_string()
+            json!({"https://auth.x.ai":{"key":"fixture-grok-secret","user_id":"fixture-user"}})
+                .to_string()
         }
-        AccountProvider::Devin => "token = \"fixture-devin-secret\"\n".into(),
-        AccountProvider::Antigravity => json!({"token":"fixture-secret"}).to_string(),
+        AccountProvider::Devin | AccountProvider::Antigravity => {
+            json!({"token":"fixture-secret"}).to_string()
+        }
         _ => "fixture-secret".into(),
     }
 }
@@ -132,7 +137,7 @@ fn all_provider_accounts_save_select_delete_without_leaking_secrets() {
         service
             .save(
                 account(provider, AccountHost::Local),
-                Some(credential(provider)),
+                Some(credential_patch(provider, credential(provider))),
             )
             .unwrap();
         let first = service
@@ -180,7 +185,10 @@ fn host_and_provider_selection_are_strict() {
     service
         .save(
             account(AccountProvider::Codex, wsl.clone()),
-            Some(credential(AccountProvider::Codex)),
+            Some(credential_patch(
+                AccountProvider::Codex,
+                credential(AccountProvider::Codex),
+            )),
         )
         .unwrap();
     let id = service.snapshot().unwrap().accounts[0].account.id.clone();
@@ -224,7 +232,10 @@ fn failures_keep_records_and_credentials_consistent() {
     assert!(service
         .save(
             account(AccountProvider::Cursor, AccountHost::Local),
-            Some("fixture-old".into())
+            Some(credential_patch(
+                AccountProvider::Cursor,
+                "fixture-old".into()
+            ))
         )
         .is_err());
     assert!(secrets.values.lock().unwrap().is_empty());
@@ -232,13 +243,22 @@ fn failures_keep_records_and_credentials_consistent() {
     service
         .save(
             account(AccountProvider::Cursor, AccountHost::Local),
-            Some("fixture-old".into()),
+            Some(credential_patch(
+                AccountProvider::Cursor,
+                "fixture-old".into(),
+            )),
         )
         .unwrap();
     let saved = service.snapshot().unwrap().accounts[0].account.clone();
     store.fail.store(true, Ordering::SeqCst);
     assert!(service
-        .save(saved.clone(), Some("fixture-new".into()))
+        .save(
+            saved.clone(),
+            Some(credential_patch(
+                AccountProvider::Cursor,
+                "fixture-new".into()
+            ))
+        )
         .is_err());
     assert_eq!(
         secrets.get(&saved.id).unwrap().as_deref(),
@@ -255,7 +275,10 @@ fn failures_keep_records_and_credentials_consistent() {
     assert!(service
         .save(
             account(AccountProvider::Minimax, AccountHost::Local),
-            Some("fixture-key".into())
+            Some(credential_patch(
+                AccountProvider::Minimax,
+                "fixture-key".into()
+            ))
         )
         .is_err());
     assert_eq!(service.snapshot().unwrap().accounts.len(), 1);
@@ -310,7 +333,7 @@ fn isolated_launch_files_are_private_and_revision_bound() {
         service
             .save(
                 account(provider, AccountHost::Local),
-                Some(credential(provider)),
+                Some(credential_patch(provider, credential(provider))),
             )
             .unwrap();
         let saved = service
@@ -456,7 +479,13 @@ fn rejects_untrusted_configuration_without_echoing_input() {
         let mut bad = account(AccountProvider::Glm, AccountHost::Local);
         bad.endpoint = endpoint.into();
         let error = service
-            .save(bad, Some("fixture-secret".into()))
+            .save(
+                bad,
+                Some(credential_patch(
+                    AccountProvider::Glm,
+                    "fixture-secret".into(),
+                )),
+            )
             .unwrap_err();
         assert_eq!(error, ProviderAccountError::InvalidSettings);
         assert!(!serde_json::to_string(&error)
@@ -483,7 +512,10 @@ fn rejects_symlink_runtime_escape() {
     service
         .save(
             account(AccountProvider::Codex, AccountHost::Local),
-            Some(credential(AccountProvider::Codex)),
+            Some(credential_patch(
+                AccountProvider::Codex,
+                credential(AccountProvider::Codex),
+            )),
         )
         .unwrap();
     let saved = service.snapshot().unwrap().accounts[0].account.clone();
@@ -539,7 +571,10 @@ fn same_provider_accounts_keep_independent_credentials() {
         service
             .save(
                 draft,
-                Some(json!({"tokens":{"access_token":marker}}).to_string()),
+                Some(credential_patch(
+                    AccountProvider::Codex,
+                    json!({"tokens":{"access_token":marker}}).to_string(),
+                )),
             )
             .unwrap();
         let saved = service
@@ -623,7 +658,10 @@ fn rejects_nested_symlink_runtime_escape() {
     service
         .save(
             account(AccountProvider::Opencode, AccountHost::Local),
-            Some(credential(AccountProvider::Opencode)),
+            Some(credential_patch(
+                AccountProvider::Opencode,
+                credential(AccountProvider::Opencode),
+            )),
         )
         .unwrap();
     let saved = service.snapshot().unwrap().accounts[0].account.clone();
@@ -657,7 +695,10 @@ fn native_acp_probe_uses_selected_private_account() {
     service
         .save(
             account(AccountProvider::Codex, AccountHost::Local),
-            Some(credential(AccountProvider::Codex)),
+            Some(credential_patch(
+                AccountProvider::Codex,
+                credential(AccountProvider::Codex),
+            )),
         )
         .unwrap();
     let saved = service.snapshot().unwrap().accounts[0].account.clone();
@@ -698,36 +739,193 @@ fn native_acp_probe_uses_selected_private_account() {
     assert!(std::fs::read_dir(temp.path().join("host-home")).is_err());
 }
 
-/// Import the official Devin credential file verbatim into a private CLI data directory.
+/// Build only the current typed input shape; web API keys are not stored as raw strings.
+fn credential_patch(provider: AccountProvider, value: String) -> AccountCredentialPatch {
+    if matches!(
+        provider,
+        AccountProvider::Minimax | AccountProvider::OpencodeGo
+    ) {
+        AccountCredentialPatch {
+            secret: None,
+            api_key: Some(value),
+            cookie: None,
+        }
+    } else {
+        AccountCredentialPatch {
+            secret: Some(value),
+            api_key: None,
+            cookie: None,
+        }
+    }
+}
+
 #[test]
-fn devin_credentials_are_scoped_without_modifying_the_default_login() {
-    let (temp, service, _, _) = fixture();
-    let secret = "[auth]\ntoken = \"fixture-devin-secret\"\n";
+/// Typed API-key/Cookie updates preserve sibling slots, roll back failures and never disclose values.
+fn web_secret_patches_preserve_clear_and_rollback_slots() {
+    let (_temp, service, store, secrets) = fixture();
     service
         .save(
-            account(AccountProvider::Devin, AccountHost::Local),
-            Some(secret.into()),
+            account(AccountProvider::Minimax, AccountHost::Local),
+            Some(AccountCredentialPatch {
+                secret: None,
+                api_key: Some("fixture-api-secret".into()),
+                cookie: Some("Cookie: _token=fixture-cookie-secret; preference=value".into()),
+            }),
+        )
+        .unwrap();
+    let state = service.snapshot().unwrap();
+    let saved = state.accounts[0].account.clone();
+    assert!(state.accounts[0].has_api_key && state.accounts[0].has_cookie);
+    let public = serde_json::to_string(&state).unwrap();
+    assert!(!public.contains("fixture-api-secret"));
+    assert!(!public.contains("fixture-cookie-secret"));
+    service
+        .save(
+            saved,
+            Some(AccountCredentialPatch {
+                secret: None,
+                api_key: None,
+                cookie: Some("_token=fixture-new-cookie".into()),
+            }),
         )
         .unwrap();
     let saved = service.snapshot().unwrap().accounts[0].account.clone();
+    let stored = web_secret(saved.provider, &secrets.get(&saved.id).unwrap().unwrap()).unwrap();
+    assert_eq!(stored.api_key, "fixture-api-secret");
+    assert_eq!(stored.cookie, "_token=fixture-new-cookie");
+    store.fail.store(true, Ordering::SeqCst);
+    assert!(service
+        .save(
+            saved.clone(),
+            Some(AccountCredentialPatch {
+                secret: None,
+                api_key: Some(String::new()),
+                cookie: None
+            })
+        )
+        .is_err());
+    let stored = web_secret(saved.provider, &secrets.get(&saved.id).unwrap().unwrap()).unwrap();
+    assert_eq!(stored.api_key, "fixture-api-secret");
+    store.fail.store(false, Ordering::SeqCst);
     service
-        .select(AccountSelection {
-            provider: saved.provider,
-            host: saved.host.clone(),
-            account_id: Some(saved.id.clone()),
-        })
+        .save(
+            saved,
+            Some(AccountCredentialPatch {
+                secret: None,
+                api_key: Some(String::new()),
+                cookie: None,
+            }),
+        )
         .unwrap();
-    let environment = service
-        .launch_environment(saved.provider, &saved.host)
+    let state = service.snapshot().unwrap();
+    assert!(!state.accounts[0].has_api_key && state.accounts[0].has_cookie);
+    service
+        .save(
+            state.accounts[0].account.clone(),
+            Some(AccountCredentialPatch {
+                secret: None,
+                api_key: None,
+                cookie: Some(String::new()),
+            }),
+        )
         .unwrap();
-    let data = std::path::Path::new(&environment.set["XDG_DATA_HOME"]);
+    let state = service.snapshot().unwrap();
+    assert!(!state.accounts[0].has_credential);
+    assert!(secrets
+        .get(&state.accounts[0].account.id)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+/// The one save API rejects mixed credential shapes, header injection and invalid metadata selectors.
+fn typed_credentials_and_metadata_are_validated() {
+    let (_temp, service, _store, secrets) = fixture();
+    assert!(service
+        .save(
+            account(AccountProvider::Minimax, AccountHost::Local),
+            Some(AccountCredentialPatch {
+                secret: Some("fixture-key".into()),
+                api_key: None,
+                cookie: None
+            })
+        )
+        .is_err());
+    assert!(service
+        .save(
+            account(AccountProvider::Cursor, AccountHost::Local),
+            Some(AccountCredentialPatch {
+                secret: None,
+                api_key: Some("fixture-key".into()),
+                cookie: None
+            })
+        )
+        .is_err());
+    for cookie in ["_token=fixture\r\nInjected: value", "no-cookie-pair"] {
+        assert!(service
+            .save(
+                account(AccountProvider::Minimax, AccountHost::Local),
+                Some(AccountCredentialPatch {
+                    secret: None,
+                    api_key: None,
+                    cookie: Some(cookie.into())
+                })
+            )
+            .is_err());
+    }
+    let mut bad = account(AccountProvider::OpencodeGo, AccountHost::Local);
+    bad.workspace_id = "wrk_valid/../../other".into();
+    assert!(service.save(bad, None).is_err());
+    let mut bad = account(AccountProvider::Minimax, AccountHost::Local);
+    bad.group_id = "group\r\nInjected: bad".into();
+    assert!(service.save(bad, None).is_err());
+    let mut bad = account(AccountProvider::Minimax, AccountHost::Local);
+    bad.models = vec!["model".into(); 33];
+    assert!(service.save(bad, None).is_err());
+    assert!(web_secret(AccountProvider::Minimax, "fixture-raw-api-key").is_err());
     assert_eq!(
-        std::fs::read_to_string(data.join("devin/credentials.toml")).unwrap(),
-        secret
+        cookie_header("COOKIE: __Host-console_session=fixture; auth=other").unwrap(),
+        "__Host-console_session=fixture; auth=other"
     );
-    assert!(environment
-        .remove
-        .iter()
-        .any(|name| name == "DEVIN_API_KEY"));
-    assert!(!temp.path().join("host-home").exists());
+    assert!(secrets.values.lock().unwrap().is_empty());
+}
+
+#[test]
+#[cfg(unix)]
+/// Trusted parent aliases work like macOS /var while managed-root and nested symlinks remain blocked.
+fn trusted_parent_alias_does_not_weaken_managed_root_guards() {
+    let temp = tempfile::tempdir().unwrap();
+    let actual = temp.path().join("private-var");
+    std::fs::create_dir(&actual).unwrap();
+    let alias = temp.path().join("var");
+    std::os::unix::fs::symlink(&actual, &alias).unwrap();
+    let root = alias.join("marxen-accounts");
+    let store = NativeAccountStore { root: root.clone() };
+    let mut saved = account(AccountProvider::Opencode, AccountHost::Local);
+    saved.id = store.issue_id().unwrap();
+    saved.revision = 1;
+    let settings = AccountSettings {
+        accounts: vec![saved.clone()],
+        selections: vec![],
+    };
+    store.save(&settings).unwrap();
+    assert_eq!(store.load().unwrap(), settings);
+    let runtime = NativeAccountRuntime {
+        root: root.clone(),
+        home: temp.path().join("host-home"),
+    };
+    let environment = runtime
+        .environment(&saved, &credential(saved.provider))
+        .unwrap();
+    assert!(std::path::Path::new(environment.set.get("HOME").unwrap())
+        .join("data/opencode/auth.json")
+        .exists());
+    std::fs::remove_dir_all(root.join(&saved.id)).unwrap();
+    std::os::unix::fs::symlink(&actual, root.join(&saved.id)).unwrap();
+    assert!(runtime
+        .environment(&saved, &credential(saved.provider))
+        .is_err());
+    let linked = alias.join("linked-managed-root");
+    std::os::unix::fs::symlink(&actual, &linked).unwrap();
+    assert!(NativeAccountStore { root: linked }.load().is_err());
 }

@@ -1,0 +1,19 @@
+{
+  "access": {
+    "meters": {
+      "fiveHour": {
+        "usedMicroCents": "25",
+        "limitMicroCents": "100",
+        "resetsAt": "2026-10-16T18:00:00Z"
+      },
+      "week": {
+        "usedMicroCents": "50",
+        "limitMicroCents": "100"
+      },
+      "month": {
+        "usedMicroCents": "75",
+        "limitMicroCents": "100"
+      }
+    }
+  }
+}

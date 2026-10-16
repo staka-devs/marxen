@@ -95,6 +95,20 @@ pub fn validate_account(account: &ProviderAccount) -> Result<(), ProviderAccount
     {
         return Err(ProviderAccountError::InvalidSettings);
     }
+    if !text(&account.group_id, 128)
+        || !account
+            .group_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
+        || (!account.workspace_id.is_empty() && !valid_workspace(&account.workspace_id))
+        || account.models.len() > 32
+        || account
+            .models
+            .iter()
+            .any(|model| model.is_empty() || !text(model, 160))
+    {
+        return Err(ProviderAccountError::InvalidSettings);
+    }
     Ok(())
 }
 
@@ -145,6 +159,17 @@ pub fn validate_credential(
             Ok(())
         };
     }
+    if matches!(
+        provider,
+        AccountProvider::Minimax | AccountProvider::OpencodeGo
+    ) {
+        let value = web_secret(provider, secret)?;
+        return if value.api_key.is_empty() && value.cookie.is_empty() {
+            Err(ProviderAccountError::InvalidSettings)
+        } else {
+            Ok(())
+        };
+    }
     let json_required = matches!(
         provider,
         AccountProvider::Codex
@@ -185,10 +210,7 @@ pub fn validate_credential(
                         .and_then(Value::as_str)
                         .is_some_and(|s| !s.is_empty())
             }
-            AccountProvider::Grok => value
-                .get("accessToken")
-                .and_then(Value::as_str)
-                .is_some_and(|s| !s.is_empty()),
+            AccountProvider::Grok => grok_login(&value)?.is_some(),
             _ => true,
         };
         if !valid {
@@ -268,6 +290,22 @@ pub fn parse_usage(provider: AccountProvider, value: &Value) -> Vec<AccountQuota
             }
         }
         AccountProvider::OpencodeGo => {
+            for key in ["fiveHour", "week", "month"] {
+                if let Some(row) = value.pointer("/access/meters").and_then(|v| v.get(key)) {
+                    let amount = row
+                        .get("usedMicroCents")
+                        .and_then(Value::as_str)
+                        .and_then(|s| s.parse::<u64>().ok());
+                    let limit = row
+                        .get("limitMicroCents")
+                        .and_then(Value::as_str)
+                        .and_then(|s| s.parse::<u64>().ok());
+                    let p = amount.zip(limit).and_then(|(used, limit)| {
+                        (limit > 0 && used <= limit).then_some(used as f64 / limit as f64 * 100.0)
+                    });
+                    quota(&mut quotas, key, p, row.get("resetsAt"));
+                }
+            }
             for key in ["rolling", "weekly", "monthly"] {
                 if let Some(row) = value.get("usage").and_then(|v| v.get(key)) {
                     quota(
@@ -361,4 +399,245 @@ pub fn parse_usage(provider: AccountProvider, value: &Value) -> Vec<AccountQuota
         _ => {}
     }
     quotas
+}
+
+/// Secrets remain an OS-store-only envelope and have no Debug or IPC response representation.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WebAccountSecret {
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub cookie: String,
+}
+
+/// Restrict workspace selectors to the provider's established identifier formats.
+pub fn valid_workspace(value: &str) -> bool {
+    let Some((prefix, id)) = value.split_once('_') else {
+        return false;
+    };
+    matches!(prefix, "org" | "wrk" | "wk")
+        && !id.is_empty()
+        && id.len() <= 128
+        && id.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// Normalize a full Cookie header while preserving every cookie name and its exact value.
+pub fn cookie_header(value: &str) -> Result<String, ProviderAccountError> {
+    let value = value.trim();
+    let value = if value
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("cookie:"))
+    {
+        &value[7..]
+    } else {
+        value
+    };
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 24576
+        || !value.bytes().all(|b| (32..127).contains(&b))
+        || value.split(';').any(|pair| {
+            let Some((name, value)) = pair.trim().split_once('=') else {
+                return true;
+            };
+            name.is_empty()
+                || value.is_empty()
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+        })
+    {
+        return Err(ProviderAccountError::InvalidSettings);
+    }
+    Ok(value.to_owned())
+}
+
+/// Read the strict OS-store envelope; raw API-key and arbitrary JSON formats are rejected.
+pub fn web_secret(
+    provider: AccountProvider,
+    secret: &str,
+) -> Result<WebAccountSecret, ProviderAccountError> {
+    let value: WebAccountSecret =
+        serde_json::from_str(secret).map_err(|_| ProviderAccountError::InvalidSettings)?;
+    if value.api_key.len() > 8192 || value.api_key.chars().any(char::is_control) {
+        return Err(ProviderAccountError::InvalidSettings);
+    }
+    if !value.cookie.is_empty() {
+        let cookie = cookie_header(&value.cookie)?;
+        if provider == AccountProvider::OpencodeGo
+            && !cookie.split(';').any(|pair| {
+                pair.trim().split_once('=').is_some_and(|(name, _)| {
+                    matches!(name, "auth" | "__Host-auth" | "__Host-console_session")
+                })
+            })
+        {
+            return Err(ProviderAccountError::InvalidSettings);
+        }
+    }
+    Ok(value)
+}
+
+/// Merge write-only input in Rust so replacing one secret never clears its untouched sibling.
+pub fn merge_web_secret(
+    provider: AccountProvider,
+    old: Option<&str>,
+    patch: AccountCredentialPatch,
+) -> Result<Option<String>, ProviderAccountError> {
+    if patch.secret.is_some()
+        || !matches!(
+            provider,
+            AccountProvider::Minimax | AccountProvider::OpencodeGo
+        )
+    {
+        return Err(ProviderAccountError::InvalidSettings);
+    }
+    let mut value = old
+        .map(|s| web_secret(provider, s))
+        .transpose()?
+        .unwrap_or_default();
+    if let Some(api_key) = patch.api_key {
+        value.api_key = api_key;
+    }
+    if let Some(cookie) = patch.cookie {
+        value.cookie = if cookie.is_empty() {
+            String::new()
+        } else {
+            cookie_header(&cookie)?
+        };
+    }
+    if value.api_key.is_empty() && value.cookie.is_empty() {
+        return Ok(None);
+    }
+    let encoded =
+        serde_json::to_string(&value).map_err(|_| ProviderAccountError::InvalidSettings)?;
+    if encoded.len() > 32768 {
+        return Err(ProviderAccountError::InvalidSettings);
+    }
+    web_secret(provider, &encoded)?;
+    Ok(Some(encoded))
+}
+
+/// Read only first-party Grok access-token records; unrelated IdP credentials never reach xAI.
+pub fn grok_login(value: &Value) -> Result<Option<Value>, ProviderAccountError> {
+    let Some(records) = value.as_object() else {
+        return Err(ProviderAccountError::InvalidResponse);
+    };
+    let scopes = std::iter::once("https://auth.x.ai").chain(
+        records
+            .keys()
+            .map(String::as_str)
+            .filter(|key| key.starts_with("https://auth.x.ai::")),
+    );
+    for scope in scopes {
+        let Some(record) = records.get(scope) else {
+            continue;
+        };
+        if record.get("auth_mode").and_then(Value::as_str) == Some("api_key")
+            || record
+                .get("oidc_issuer")
+                .and_then(Value::as_str)
+                .is_some_and(|issuer| issuer != "https://auth.x.ai")
+        {
+            continue;
+        }
+        let key = record
+            .get("key")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty() && s.len() <= 32768 && !s.chars().any(char::is_control))
+            .ok_or(ProviderAccountError::InvalidResponse)?;
+        let user = record
+            .get("user_id")
+            .and_then(Value::as_str)
+            .filter(|s| s.len() <= 256 && !s.chars().any(char::is_control));
+        return Ok(Some(serde_json::json!({"accessToken":key,"userId":user})));
+    }
+    Ok(None)
+}
+
+/// Form the verified Cursor session cookie from a CLI/IDE JWT without claiming signature validation.
+pub fn cursor_cookie(access: &str, now_seconds: f64) -> Result<String, ProviderAccountError> {
+    use base64::Engine;
+    if access.len() > 32768
+        || !access
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.=".contains(&b))
+    {
+        return Err(ProviderAccountError::InvalidResponse);
+    }
+    let mut parts = access.split('.');
+    let _header = parts.next();
+    let payload = parts.next().ok_or(ProviderAccountError::InvalidResponse)?;
+    if parts.next().is_none() || parts.next().is_some() {
+        return Err(ProviderAccountError::InvalidResponse);
+    }
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .map_err(|_| ProviderAccountError::InvalidResponse)?;
+    let value: Value =
+        serde_json::from_slice(&bytes).map_err(|_| ProviderAccountError::InvalidResponse)?;
+    let subject = value
+        .get("sub")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
+        .ok_or(ProviderAccountError::InvalidResponse)?;
+    if value.get("exp").is_some_and(|v| {
+        v.as_f64()
+            .is_none_or(|exp| !exp.is_finite() || exp <= now_seconds)
+    }) {
+        return Err(ProviderAccountError::Unauthorized);
+    }
+    let subject = subject
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    Ok(format!("WorkosCursorSessionToken={subject}%3A%3A{access}"))
+}
+
+/// Apply exactly one typed credential shape per provider without retaining a superseded save API.
+pub fn merge_account_secret(
+    provider: AccountProvider,
+    old: Option<&str>,
+    patch: AccountCredentialPatch,
+) -> Result<Option<String>, ProviderAccountError> {
+    if matches!(
+        provider,
+        AccountProvider::Minimax | AccountProvider::OpencodeGo
+    ) {
+        return merge_web_secret(provider, old, patch);
+    }
+    if patch.api_key.is_some() || patch.cookie.is_some() {
+        return Err(ProviderAccountError::InvalidSettings);
+    }
+    match patch.secret {
+        None => Ok(old.map(str::to_owned)),
+        Some(value) if value.is_empty() => Ok(None),
+        Some(value) => {
+            validate_credential(provider, &value)?;
+            Ok(Some(value))
+        }
+    }
+}
+
+/// Extract bounded workspace IDs from authenticated console SSR records or workspace links.
+pub fn console_workspaces(body: &str) -> Vec<String> {
+    let pattern=regex::Regex::new(r#"(?:\bid["']?\s*:\s*["']|/(?:console|workspace)/)((?:org|wrk|wk)_[A-Za-z0-9]+)(?:["'/\s?>]|$)"#).expect("fixed workspace expression");
+    let mut ids = Vec::new();
+    for capture in pattern.captures_iter(body) {
+        let id = capture[1].to_owned();
+        if valid_workspace(&id) && !ids.contains(&id) {
+            ids.push(id);
+            if ids.len() == 8 {
+                break;
+            }
+        }
+    }
+    ids
 }
