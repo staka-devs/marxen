@@ -1985,6 +1985,38 @@ mod regression {
         ));
     }
 
+    /// Direct missing-binary hints to an app restart and an absolute-path fallback.
+    #[test]
+    fn missing_binary_hint_guides_restart_and_absolute_path() {
+        for command in ["codex-acp", "opencode", "marxen-unknown-agent"] {
+            let hint = missing_binary_hint(command);
+            assert!(hint.contains("PATH"), "hint for {command}");
+            assert!(hint.contains("再起動"), "hint for {command}");
+            assert!(hint.contains("絶対パス"), "hint for {command}");
+        }
+    }
+
+    /// Probe a synthetic npm prefix directory with the same strict candidate rules.
+    #[cfg(windows)]
+    #[test]
+    fn npm_prefix_directory_probes_direct_executables() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = root.path().join("marxen-fallback-probe.exe");
+        std::fs::write(&exe, b"fixture").unwrap();
+        let order = pathext_order();
+        let launch = resolve_launch_in_dir(root.path(), "marxen-fallback-probe", &[], &order)
+            .expect("direct executable in prefix");
+        assert_eq!(launch.program, std::path::absolute(&exe).unwrap());
+        assert!(launch.args.is_empty());
+        assert!(resolve_launch_in_dir(
+            root.path(),
+            "marxen-definitely-missing-binary",
+            &[],
+            &order
+        )
+        .is_none());
+    }
+
     /// Refuse Claude Code commands during resolution before any process starts.
     #[test]
     fn resolve_refuses_claude_without_spawning() {

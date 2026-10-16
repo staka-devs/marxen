@@ -164,20 +164,21 @@ pub fn missing_binary_hint(command: &str) -> String {
     let lower = command.to_ascii_lowercase();
     let base = basename_of(&lower);
     if base.contains("codex-acp") {
-        "npm install -g @agentclientprotocol/codex-acp で導入し PATH を通してください（自動導入はしません）".into()
+        "npm install -g @agentclientprotocol/codex-acp で導入し PATH を通してください（自動導入はしません）。導入・PATH変更後はアプリを再起動してください。見つからない場合はカスタムコマンドに実行ファイルの絶対パスを指定してください".into()
     } else if base.contains("opencode") {
-        "opencode v2 を導入し PATH を通してください（例: npm の @opencode/cli、https://opencode.ai）".into()
+        "opencode v2 を導入し PATH を通してください（例: npm の @opencode/cli、https://opencode.ai）。導入・PATH変更後はアプリを再起動してください。見つからない場合はカスタムコマンドに実行ファイルの絶対パスを指定してください".into()
     } else if base.contains("claude-agent-acp") {
         "npm install -g @agentclientprotocol/claude-agent-acp で導入し、利用するホストで Claude Code にログインしてください".into()
     } else if base == "devin" || base == "devin.exe" {
         "Devin CLI を導入し、devin auth login でログインしてください（https://docs.devin.ai/cli）"
             .into()
     } else if base.contains("copilot") {
-        "GitHub Copilot CLI を導入し PATH を通してください".into()
+        "GitHub Copilot CLI を導入し PATH を通してください。導入・PATH変更後はアプリを再起動してください".into()
     } else if base.contains("node") {
-        "Node.js を導入し PATH を通してください".into()
+        "Node.js を導入し PATH を通してください。導入・PATH変更後はアプリを再起動してください"
+            .into()
     } else {
-        "CLI をインストールして PATH を通してください".into()
+        "CLI をインストールして PATH を通してください。導入・PATH変更後はアプリを再起動してください。見つからない場合はカスタムコマンドに実行ファイルの絶対パスを指定してください".into()
     }
 }
 

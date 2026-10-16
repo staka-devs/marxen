@@ -634,9 +634,48 @@ pub(super) fn codex_npm_program(npm_root: &Path) -> Option<PathBuf> {
         })
 }
 
+/// Probe one directory for a directly runnable program or a resolvable official shim.
+///
+/// Returns `None` when nothing in the directory satisfies the lookup; callers
+/// keep searching other directories or report the command as missing.
+pub(super) fn resolve_launch_in_dir(
+    dir: &Path,
+    command: &str,
+    args: &[String],
+    order: &[String],
+) -> Option<ResolvedAcpLaunch> {
+    if cfg!(not(windows)) || Path::new(command).extension().is_some() {
+        return resolve_launch_candidate(&dir.join(command), args);
+    }
+    // First pass: directly runnable `.com`/`.exe` in PATHEXT order.
+    for ext in order {
+        if !matches!(ext.as_str(), "com" | "exe") {
+            continue;
+        }
+        let candidate = dir.join(format!("{command}.{ext}"));
+        if let Some(launch) = resolve_launch_candidate(&candidate, args) {
+            return Some(launch);
+        }
+    }
+    // Second pass: resolvable official shims (`.cmd`/`.bat`/`.ps1`).
+    for ext in order {
+        if !is_windows_script_extension(ext) {
+            continue;
+        }
+        let candidate = dir.join(format!("{command}.{ext}"));
+        if let Some(launch) = resolve_launch_candidate(&candidate, args) {
+            return Some(launch);
+        }
+    }
+    None
+}
+
 /// Resolve bare PATH commands to directly spawnable launches in directory order.
+///
 /// Each directory prefers PATHEXT-ordered direct executables, then resolvable
 /// official npm shims; unresolvable scripts never satisfy the lookup.
+/// On Windows, an npm global prefix outside the app's `PATH` is probed as a
+/// fallback so per-user installs stay reachable after GUI launches.
 fn resolve_bare_launch(command: &str, args: &[String]) -> Result<ResolvedAcpLaunch, AiError> {
     let path_var = std::env::var_os("PATH").ok_or_else(|| AiError::MissingBinary {
         command: command.to_owned(),
@@ -646,36 +685,43 @@ fn resolve_bare_launch(command: &str, args: &[String]) -> Result<ResolvedAcpLaun
         if dir.as_os_str().is_empty() {
             continue;
         }
-        if cfg!(not(windows)) || Path::new(command).extension().is_some() {
-            if let Some(launch) = resolve_launch_candidate(&dir.join(command), args) {
-                return Ok(launch);
-            }
-            continue;
+        if let Some(launch) = resolve_launch_in_dir(&dir, command, args, &order) {
+            return Ok(launch);
         }
-        // First pass: directly runnable `.com`/`.exe` in PATHEXT order.
-        for ext in &order {
-            if !matches!(ext.as_str(), "com" | "exe") {
-                continue;
-            }
-            let candidate = dir.join(format!("{command}.{ext}"));
-            if let Some(launch) = resolve_launch_candidate(&candidate, args) {
-                return Ok(launch);
-            }
-        }
-        // Second pass: resolvable official shims (`.cmd`/`.bat`/`.ps1`).
-        for ext in &order {
-            if !is_windows_script_extension(ext) {
-                continue;
-            }
-            let candidate = dir.join(format!("{command}.{ext}"));
-            if let Some(launch) = resolve_launch_candidate(&candidate, args) {
-                return Ok(launch);
-            }
-        }
+    }
+    if let Some(launch) = resolve_npm_prefix_fallback(command, args, &order) {
+        return Ok(launch);
     }
     Err(AiError::MissingBinary {
         command: command.to_owned(),
     })
+}
+
+/// Probe the default npm global prefix when the app's `PATH` does not carry it.
+///
+/// GUI launches can inherit a reduced `PATH` that hides per-user npm shims
+/// even though the same command works in a terminal. Only the default
+/// `%APPDATA%\npm` prefix is probed with the same strict candidate rules;
+/// other managers and custom prefixes stay the caller's explicit-path concern.
+#[cfg(windows)]
+fn resolve_npm_prefix_fallback(
+    command: &str,
+    args: &[String],
+    order: &[String],
+) -> Option<ResolvedAcpLaunch> {
+    let prefix = std::env::var_os("APPDATA").map(PathBuf::from)?;
+    let dir = prefix.join("npm");
+    resolve_launch_in_dir(&dir, command, args, order)
+}
+
+/// Never probe extra locations outside Windows; the `PATH` lookup stands alone.
+#[cfg(not(windows))]
+fn resolve_npm_prefix_fallback(
+    _command: &str,
+    _args: &[String],
+    _order: &[String],
+) -> Option<ResolvedAcpLaunch> {
+    None
 }
 
 /// Resolve configured ACP argv to a directly spawnable program and final args.
