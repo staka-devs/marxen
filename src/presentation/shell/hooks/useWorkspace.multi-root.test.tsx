@@ -208,6 +208,28 @@ it("renames same-name images only in their owning root", async () => {
   expect(f.result.current.session.imageTabs[ownerB]).toBe("same.png");
 });
 
+it("hides recovery entries for already-open documents instead of offering restore again", async () => {
+  const f = fixture();
+  await act(async () => f.result.current.workspace.openWorkspaceFolder(a.root));
+  await act(async () => f.result.current.session.openFile("same.md", a.scope));
+  f.gateway.listRecovery = vi.fn(async () => [
+    { location: { scope: a.scope, path: "same.md", position: 0 }, documentId: "root-a:same.md", path: "same.md", revision: 3, conflict: false },
+    { location: { scope: a.scope, path: "other.md", position: 0 }, documentId: "other-unsaved", path: "other.md", revision: 3, conflict: false },
+  ]);
+  await act(async () => f.result.current.workspace.refreshRecovery());
+  expect(f.result.current.workspace.recovery.map((entry) => entry.documentId)).toEqual(["other-unsaved"]);
+});
+
+it("drops a restored entry from the recovery list without requiring a second refresh", async () => {
+  const f = fixture();
+  await act(async () => f.result.current.workspace.openWorkspaceFolder(a.root));
+  const doc: OpenDocument = { path: "other.md", snapshot: { documentId: "other-unsaved", location: { scope: a.scope, path: "other.md", position: 0 }, revision: 3, text: "unsaved", dirty: true } };
+  f.gateway.restoreRecovery = vi.fn(async () => doc);
+  f.gateway.listRecovery = vi.fn(async () => []);
+  await act(async () => f.result.current.workspace.restoreEntry("other-unsaved", false));
+  expect(f.result.current.session.docs["other-unsaved"].text).toBe("unsaved");
+  expect(f.result.current.workspace.recovery).toEqual([]);
+});
 it("automatically restores named and untitled working copies when reopening a folder", async () => {
   const f = fixture();
   const saved = ["same.md", null].map((path, index): OpenDocument => ({ path, snapshot: { documentId: `recovered-${index}`, location: { scope: a.scope, path, position: 0 }, revision: 9, text: `unsaved 日本😀 ${index}`, dirty: true } }));
