@@ -98,9 +98,11 @@ jobs:
           }
           New-Item -ItemType Directory -Path "$release/bundle/portable" -Force | Out-Null
           $archive = "$release/bundle/portable/Marxen_${version}_x64-portable.zip"
-          Compress-Archive -Path "$stage/*" -DestinationPath $archive -Force
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($stage, $archive)
           $verify = Join-Path $env:RUNNER_TEMP 'marxen-portable-verify'
           Expand-Archive -Path $archive -DestinationPath $verify -Force
+          if ((Get-ChildItem $stage -Recurse -File -Force).Count -ne (Get-ChildItem $verify -Recurse -File -Force).Count) { throw "Standalone archive omitted resources" }
           foreach ($file in $required) {
             if ((Get-FileHash "$stage/$file").Hash -ne (Get-FileHash "$verify/$file").Hash) { throw "Standalone archive mismatch: $file" }
           }

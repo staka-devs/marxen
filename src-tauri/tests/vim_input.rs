@@ -373,6 +373,13 @@ fn native_command_line_and_application_commands_are_visible() {
         ["palette-settings"]
     );
     assert!(actor.current_mode().unwrap().commands.unwrap().is_empty());
+    actor.input_via_nvim("<C-S-i>").unwrap();
+    assert_eq!(
+        actor.current_mode().unwrap().commands.unwrap(),
+        ["inline-chat"]
+    );
+    actor.input_via_nvim("<C-i>").unwrap();
+    assert!(actor.current_mode().unwrap().commands.unwrap().is_empty());
 }
 
 #[test]
