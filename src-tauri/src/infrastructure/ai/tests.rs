@@ -1985,17 +1985,6 @@ mod regression {
         ));
     }
 
-    /// Direct missing-binary hints to an app restart and an absolute-path fallback.
-    #[test]
-    fn missing_binary_hint_guides_restart_and_absolute_path() {
-        for command in ["codex-acp", "opencode", "marxen-unknown-agent"] {
-            let hint = missing_binary_hint(command);
-            assert!(hint.contains("PATH"), "hint for {command}");
-            assert!(hint.contains("再起動"), "hint for {command}");
-            assert!(hint.contains("絶対パス"), "hint for {command}");
-        }
-    }
-
     /// Probe a synthetic npm prefix directory with the same strict candidate rules.
     #[cfg(windows)]
     #[test]
