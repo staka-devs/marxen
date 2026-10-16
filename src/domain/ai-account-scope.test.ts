@@ -10,7 +10,7 @@ it("fences local account revisions while keeping API and WSL selections independ
   snapshot.selections.push({ provider: "codex", host: { kind: "wsl", distribution: "Ubuntu" }, accountId: "wsl" });
   expect(aiAccountScope(provider, snapshot)).toBe(system);
   snapshot.selections.push({ provider: "codex", host: { kind: "local" }, accountId: "local" });
-  snapshot.accounts.push({ hasCredential: true, account: { id: "local", revision: 1, provider: "codex", host: { kind: "local" }, name: "Work", endpoint: "https://chatgpt.com", project: "" } });
+  snapshot.accounts.push({ hasCredential: true, hasApiKey: false, hasCookie: false, account: { id: "local", revision: 1, provider: "codex", host: { kind: "local" }, name: "Work", endpoint: "https://chatgpt.com", project: "", groupId: "", models: [], workspaceId: "" } });
   const work = aiAccountScope(provider, snapshot);
   expect(work).not.toBe(system);
   snapshot.accounts[0].account.revision += 1;
