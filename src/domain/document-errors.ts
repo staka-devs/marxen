@@ -87,7 +87,7 @@ function describeWorkspaceError(cause: unknown, t: Translator = japaneseTranslat
     case "stale_location":
       return t("フォルダーまたは文書の位置が変わりました。操作し直してください。");
     case "search_pattern":
-      return t("検索パターンが不正、未対応、または上限を超えています。一致規則と上限を確認してください。");
+      return t("検索パターンを使用できません。修正してください。");
     case "stale_search":
       return t("検索条件または本文が変わりました。検索し直してください。");
     case "search_incomplete":

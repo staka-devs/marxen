@@ -21,10 +21,10 @@ function labels(locale: "ja-JP" | "en-US") {
     model: english ? "Model" : "モデル",
     secret: english ? "Enter credentials" : "資格情報の入力",
     save: english ? "Save" : "保存",
-    empty: english ? "No API connections yet. Choose “Add API” to register one." : "登録した API 接続先がありません。「API を追加」で登録します。",
+    empty: english ? "No API connections." : "API 接続先がありません。",
     blankName: english ? "Enter a connection name of 1–64 characters." : "接続先名は 1〜64 文字で指定します",
     remove: english ? "Delete" : "削除",
-    removeNote: english ? "Delete this connection and remove its credential from the OS store." : "この接続先を削除します。OS ストアの資格情報も削除します。",
+    removeNote: english ? "Delete this connection and its API key." : "接続先と API キーを削除します。",
   };
 }
 

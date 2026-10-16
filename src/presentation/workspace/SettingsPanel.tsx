@@ -117,7 +117,6 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
                   <option value="ja-JP-x-kansai">{t("関西弁 (大阪)")}</option>
                   <option value="ja-JP-x-tokushima">{t("阿波弁 (徳島・鳴門)")}</option>
                 </select></SettingRow>
-                <p className="text-xs text-muted-foreground">{t("メニューや操作に使う言語を選びます。")}</p>
                 <SettingRow label={t("カラーテーマ")}><select aria-label={t("カラーテーマ")} className={`${inputClass} w-40`} value={theme} onChange={(event) => onTheme(event.target.value as ThemeId)}>{THEMES.map((item) => <option key={item.id} value={item.id}>{t(item.label as LabelKey)}</option>)}</select></SettingRow>
               </>}
               {id === "editor" && <>
@@ -130,10 +129,9 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
                 <SettingRow label={t("通知の表示位置")}><select aria-label={t("通知の表示位置")} value={preferences.notificationPosition} onChange={(event) => change("notificationPosition", event.target.value as EditorPreferences["notificationPosition"])} className={`${inputClass} w-52`}>
                   {NOTIFICATION_POSITIONS.map((position) => <option key={position} value={position}>{t(POSITION_LABELS[position])}</option>)}
                 </select></SettingRow>
-                <p className="text-xs leading-5 text-muted-foreground">{t("保存結果やエラーの通知位置を選びます。本文の配置や入力フォーカスは変わりません。")}</p>
               </>}
               {id === "vim" && <div className="space-y-3">
-                <p className="text-[13px]">{t("Neovim 設定ファイル")}</p><p className="text-xs leading-5 text-muted-foreground">{t(".vimrc、init.vim、init.lua など、普段の設定を読み込めます。")}</p>
+                <p className="text-[13px]">{t("Neovim 設定ファイル")}</p>
                 <div className="flex gap-2"><input value={configPath} onChange={(event) => onConfigPath(event.target.value)} placeholder={t("設定ファイルのパス")} aria-label={t("Neovim 設定ファイルのパス")} className={`${inputClass} min-w-0 flex-1`} />{onBrowseConfig && <button type="button" onClick={onBrowseConfig} aria-label={t("設定ファイルを参照する")} className="shrink-0 rounded-sm border border-border px-3 text-xs hover:bg-muted">{t("参照…")}</button>}</div>
                 {currentConfig !== null && <p data-testid="current-config" className="break-all text-xs text-muted-foreground">{t("使用中:")}{currentConfig === "" ? t("Marxen の標準設定") : currentConfig}</p>}
                 {nameInvalid && <p role="alert" className="text-xs text-red-500">{t("vimrc / _vimrc / .vimrc / init.vim / init.lua を指定してください。")}</p>}{configError && <p role="alert" className="whitespace-pre-wrap text-xs text-red-500">{configError}</p>}
@@ -144,10 +142,8 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
               {id === "copy" && <div className="space-y-3">
                 <p className="text-xs leading-5 text-muted-foreground">{t("yy / yw / 選択して y の直後に形式キーを押します。")}</p>
                 {Object.entries(copyKeys ?? {}).length > 0 ? <div className="divide-y divide-border">{Object.entries(copyKeys!).map(([format, key]) => <div key={format} className="flex items-center justify-between py-2 text-[13px]"><span>{t(COPY_LABELS[format as keyof typeof COPY_LABELS] as LabelKey)}</span><kbd className="rounded-sm border border-border bg-card px-2 py-0.5 font-mono text-xs">{key || t("無効")}</kbd></div>)}</div> : <p className="text-xs text-muted-foreground">{t("キー設定はデスクトップで読み込みます。")}</p>}
-                <details><summary className="text-xs text-muted-foreground">{t("vimrc でキーを変更する")}</summary><pre className="mt-2 overflow-x-auto rounded-sm bg-card p-3 text-xs leading-6">{"let g:marxen_copy_markdown_key = '<F6>'\nlet g:marxen_copy_text_key = '<F7>'\nlet g:marxen_copy_rich_key = '<F8>'\nlet g:marxen_copy_html_key = '<F9>'"}</pre></details>
-                <p className="text-xs leading-5 text-muted-foreground">{t("既存の Vim マッピングを優先します。リッチテキストには文書内の相対画像を埋め込みます。")}</p>
               </div>}
-              {id === "ai" && <div className="space-y-4">{aiVisibilitySettings}<p className="text-xs leading-5 text-muted-foreground">{t("Agent チャットとインラインチャットで共通の接続先を使います。")}</p>{aiSettings ?? <p className="text-xs text-muted-foreground">{t("AI 接続はデスクトップアプリで設定できます。")}</p>}</div>}
+              {id === "ai" && <div className="space-y-4">{aiVisibilitySettings}{aiSettings ?? <p className="text-xs text-muted-foreground">{t("AI 接続はデスクトップアプリで設定できます。")}</p>}</div>}
             </section>)}
           </div>
         </div>

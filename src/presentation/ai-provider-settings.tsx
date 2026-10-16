@@ -373,12 +373,12 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
         {kind === "acp" ? (
           <div className="space-y-2">
             <label className="block text-xs">
-              {t("プリセット")}<ChoiceMenu label={t("ACP プリセット")} value={preset} onChange={(value) => { if (value !== preset) { setPreset(value as AcpPreset); setAcpSelections(undefined); } }} searchLabel={t("接続先を検索")} emptyLabel={t("表示する候補がありません。表示設定で変更できます。")} choices={(Object.keys(PRESET_LABELS) as AcpPreset[]).map((candidate) => ({ value: candidate, label: t(PRESET_LABELS[candidate] as LabelKey), icon: <ProviderIcon provider={candidate} /> }))} />
+              {t("プリセット")}<ChoiceMenu label={t("ACP プリセット")} value={preset} onChange={(value) => { if (value !== preset) { setPreset(value as AcpPreset); setAcpSelections(undefined); } }} searchLabel={t("接続先を検索")} emptyLabel={t("候補がありません。表示設定を確認してください。")} choices={(Object.keys(PRESET_LABELS) as AcpPreset[]).map((candidate) => ({ value: candidate, label: t(PRESET_LABELS[candidate] as LabelKey), icon: <ProviderIcon provider={candidate} /> }))} />
             </label>
             {preset === "custom" ? (
               <>
                 <label className="block text-xs">
-                  {t("コマンド (シェルを介さず直接起動します)")}<input
+                  {t("コマンド")}<input
                     aria-label={t("カスタムコマンド")}
                     className="mt-1 block w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
                     value={command}
@@ -398,13 +398,9 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
                 </label>
                 {claudeBlocked && <p className="text-xs text-red-600">{t("Claude コマンドは起動しません。")}</p>}
               </>
-            ) : (
+            ) : preset === "codex" && (
               <p className="text-[11px] text-muted-foreground">
-                {preset === "codex"
-                  ? t("codex-acp アダプターを利用者が事前にインストールします。自動取得はしません。")
-                  : preset === "opencode"
-                    ? t("OpenCode を opencode acp として起動します。")
-                    : t("GitHub Copilot を copilot --acp --stdio として起動します。")}
+                {t("codex-acp のインストールが必要です。")}
               </p>
             )}
           </div>
@@ -464,7 +460,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
         {kind !== "acp" && connectionControls === undefined && <div className="border-t border-border pt-2">
           <p className="text-xs font-medium">{t("API キー")}</p>
           <p className="mt-1 text-[11px] text-muted-foreground">
-            {credential === null ? t("状態を確認してください。値は表示しません。") : credential.hasSecret ? t("保存済み。値は表示しません。") : t("未保存。")}
+            {credential === null ? t("未確認") : credential.hasSecret ? t("保存済み") : t("未保存")}
           </p>
           <div className="mt-1 flex flex-wrap gap-1">
             <Button variant="outline" size="sm" onClick={() => void refreshCredential()}>{t("状態を確認")}</Button>

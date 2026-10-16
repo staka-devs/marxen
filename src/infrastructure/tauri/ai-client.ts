@@ -30,7 +30,7 @@ import type { AiGateway, ApiConnectionGateway } from "../../application/ports";
  */
 export function requireDesktop(): void {
   if (!isTauri()) {
-    throw new LocalizedError("AI 機能はデスクトップアプリで利用します。ブラウザ表示では使えません。");
+    throw new LocalizedError("AI 機能はデスクトップアプリで利用できます。");
   }
 }
 

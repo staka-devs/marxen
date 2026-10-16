@@ -91,7 +91,7 @@ function UsageRow({ agent, detailed }: { agent: AgentUsage; detailed: boolean })
         {agent.cost && <><dt className="text-muted-foreground">{t("セッション料金")}</dt><dd className="text-right tabular-nums">{agent.cost.amount} {agent.cost.currency}</dd></>}
         {tokens.map(({ key, label, value }) => <div key={key} className="contents"><dt className="text-muted-foreground">{t(label)}</dt><dd className="text-right tabular-nums">{number.format(value)}</dd></div>)}
       </dl>
-      {tokens.length > 0 && <p className="mt-2 text-[11px] leading-4 text-muted-foreground">{t("トークン集計範囲はエージェントから報告されていません。")}</p>}
+      {tokens.length > 0 && <p className="mt-2 text-[11px] leading-4 text-muted-foreground">{t("トークン集計範囲: 不明")}</p>}
       <p className="mt-2 text-[10px] text-muted-foreground">{t("最終更新")} {new Intl.DateTimeFormat(intlLocale(language), { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(agent.receivedMs)}</p>
     </>}
   </article>;
@@ -155,10 +155,9 @@ function UsagePopup({ gateway, accountGateway, anchor, id, theme, onClose }: Usa
       {account.usage && <CodexQuota usage={account.usage} detailed={detailed} />}
       {failed && <p role="alert" className="px-3 py-2 text-xs text-destructive">{t("使用量を読み込めませんでした。")}</p>}
       {loading && agents.length === 0 && <p role="status" className="px-3 py-4 text-xs text-muted-foreground">{t("使用量を読み込み中…")}</p>}
-      {!loading && !failed && agents.length === 0 && <p className="px-3 py-3 text-xs text-muted-foreground">{t("まだセッションの使用量報告がありません。")}</p>}
+      {!loading && !failed && agents.length === 0 && <p className="px-3 py-3 text-xs text-muted-foreground">{t("使用量の報告がありません。")}</p>}
       {agents.length > 0 && <h3 className="border-b border-border px-3 py-1.5 text-[10px] text-muted-foreground">{t("セッションの報告")}</h3>}
       {agents.map((agent) => <UsageRow key={agent.key} agent={agent} detailed={detailed} />)}
-      <div className="border-t border-border px-3 py-2 text-[11px] leading-4 text-muted-foreground"><p>{t("エージェントから報告された値を表示します。")}</p><p className="mt-1">{t("料金やクレジットの消費量は推計しません。")}</p></div>
     </div>
   </div>, document.body);
 }

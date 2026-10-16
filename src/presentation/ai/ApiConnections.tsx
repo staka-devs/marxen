@@ -251,7 +251,7 @@ export function ApiConnectionDialog({ initial, isNew, connectionGateway, onSave,
             <div className="border-t border-border pt-2">
               <p className="text-xs font-medium">{t("API キー")}</p>
               <p className="mt-1 text-[11px] text-muted-foreground">
-                {credential === null ? t("状態を確認してください。値は表示しません。") : credential.hasSecret ? t("保存済み。値は表示しません。") : t("未保存。")}
+                {credential === null ? t("未確認") : credential.hasSecret ? t("保存済み") : t("未保存")}
               </p>
               <div className="mt-1 flex flex-wrap gap-1">
                 <Button variant="outline" size="sm" onClick={() => void refreshCredential()}>{t("状態を確認")}</Button>
@@ -392,7 +392,7 @@ export function ApiConnectionSettings({ list, activeId, onSelect, onAdd, onUpdat
       {onRetryMigration && <div><Button variant="outline" size="sm" onClick={onRetryMigration}>{t("再試行")}</Button></div>}
       {onRetryDeleteCredential && <div><Button variant="outline" size="sm" onClick={onRetryDeleteCredential}>{t("資格情報の削除を再試行")}</Button></div>}
       {list.connections.length === 0 ? (
-        <p className="text-[11px] text-muted-foreground">{t("登録した API 接続先がありません。「API を追加」で登録します。")}</p>
+        <p className="text-[11px] text-muted-foreground">{t("API 接続先がありません。")}</p>
       ) : (
         <ul className="space-y-1">
           {list.connections.map((connection) => {
@@ -420,7 +420,7 @@ export function ApiConnectionSettings({ list, activeId, onSelect, onAdd, onUpdat
                 </div>
                 {confirmingDelete && (
                   <div className="mt-1.5 border-t border-border pt-1.5">
-                    <p className="text-[11px] text-muted-foreground">{t("この接続先を削除します。OS ストアの資格情報も削除します。")}</p>
+                    <p className="text-[11px] text-muted-foreground">{t("接続先と API キーを削除します。")}</p>
                     <div className="mt-1 flex gap-1">
                       <Button variant="outline" size="sm" onClick={() => setConfirming(null)}>{t("キャンセル")}</Button>
                       <Button size="sm" onClick={() => { const ok = onDelete(connection.id); if (ok !== false) setConfirming(null); }}>{t("削除")}</Button>

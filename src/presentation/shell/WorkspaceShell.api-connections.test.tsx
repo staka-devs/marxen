@@ -344,7 +344,7 @@ describe("shell named-connection selection identity", () => {
     const settings = openSettings();
     const list = within(settings).getByTestId("api-connection-settings");
     fireEvent.click(within(list).getByRole("button", { name: "削除" }));
-    const confirm = within(list).getByText("この接続先を削除します。OS ストアの資格情報も削除します。").closest("div")!;
+    const confirm = within(list).getByText("接続先と API キーを削除します。").closest("div")!;
     fireEvent.click(within(confirm as HTMLElement).getByRole("button", { name: "削除" }));
     expect(connections.current().connections).toHaveLength(0);
     expect(await within(settings).findByText("接続先を削除しましたが、OSストアの資格情報の削除に失敗しました。再試行できます。")).toBeVisible();

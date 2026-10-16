@@ -91,13 +91,13 @@ export function SearchPanel({ query, onQuery, hits, searching, canReplace, repla
         <button type="button" disabled={!canReplace} aria-pressed={searchOptions.wholeWord} aria-label={t("単語単位で検索")} onClick={() => onSearchOptions({ ...searchOptions, wholeWord: !searchOptions.wholeWord })} className="rounded border border-border px-2 text-xs aria-pressed:bg-muted disabled:opacity-50">{t("単語")}</button>
         <button type="button" disabled={!canReplace} aria-pressed={searchOptions.regex} aria-label={t("正規表現で検索")} onClick={() => onSearchOptions({ ...searchOptions, regex: !searchOptions.regex })} className="rounded border border-border px-2 text-xs aria-pressed:bg-muted disabled:opacity-50">.*</button>
       </div>
-      {canReplace ? <details className="mt-1 text-[10px] text-muted-foreground"><summary>{t("一致規則と上限")}</summary><p>{t("Rust regex 1.13.1 の構文を使用します。後読み・先読みと後方参照は未対応です。Unicode の単語と単純ケースフォールドを使用し、^ と $ は各行に一致します。置換文字列はそのまま挿入します。")}</p><p>{t("上限: パターン 4096 バイト、深さ 64、コンパイル 1 MiB、1 ファイル 1 MiB、合計 32 MiB、2000 ファイル・一致、10000 候補/ファイル、5000 項目、2 秒（処理間で確認）。")}</p></details> : <p className="mt-1 text-[10px] text-muted-foreground">{t("ブラウザのサンプルは大文字小文字を区別する文字列検索のみです。")}</p>}
+      {!canReplace && <p className="mt-1 text-[10px] text-muted-foreground">{t("大文字小文字を区別する文字列検索のみ対応。")}</p>}
       {canReplace && replaceOpen && <div id="search-replace-panel" className="mt-2 flex gap-1">
         <input value={replaceText} onChange={(event) => onReplaceText(event.target.value)} placeholder={t("置換後…")} aria-label={t("置換後の文字列")} className="h-7 min-w-0 flex-1 rounded-sm border border-border bg-background px-2 text-xs" />
         <button type="button" onClick={onReplaceAll} disabled={!actionsEnabled || !!searchLimit || hits.length === 0} aria-label={t("すべて置換する")} className="rounded border border-border px-2 text-xs disabled:opacity-50">{t("一括置換")}</button>
       </div>}
       {searchError && <p role="alert" className="mt-2 text-xs text-destructive">{searchError}</p>}
-      {searchLimit && <p role="status" className="mt-2 text-xs text-muted-foreground">{t("検索を上限で打ち切りました。表示件数は全件数ではありません。一括置換には検索範囲を絞ってください。")}</p>}
+      {searchLimit && <p role="status" className="mt-2 text-xs text-muted-foreground">{t("結果の一部を表示しています。一括置換には検索範囲を絞ってください。")}</p>}
       {query !== "" && <p className="mt-2 text-xs text-muted-foreground" role="status">{busy ? (replacing ? t("置換中…") : t("検索中…")) : searchLimit ? t("表示 {{count}} 件・{{files}} ファイル以上", { count: hits.length, files: groups.length }) : t("{{count}} 件・{{files}} ファイル", { count: hits.length, files: groups.length })}</p>}
       <ul className="mt-2 space-y-1">
         {groups.map((group) => <li key={group.key}>

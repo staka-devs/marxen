@@ -148,7 +148,7 @@ it.each([{ searching: true }, { replacing: true }, { resultsReady: false }, { se
 it("displays truncation and forbids replace-all while allowing validated single actions", () => {
   setup({ searchLimit: "matches" });
   openReplacement();
-  expect(screen.getByText(/表示件数は全件数ではありません/)).toBeVisible();
+  expect(screen.getByText(/結果の一部を表示しています/)).toBeVisible();
   expect(screen.getByText("表示 3 件・2 ファイル以上")).toBeVisible();
   expect(screen.getByRole("button", { name: "すべて置換する" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "b.txtの一致を置換する" })).toBeEnabled();

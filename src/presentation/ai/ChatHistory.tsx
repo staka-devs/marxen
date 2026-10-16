@@ -43,6 +43,6 @@ export function ChatHistory({ conversations, activeId, onSelect }: Props) {
           <MessageSquare size={14} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden="true" /><span className="min-w-0 flex-1"><span className="block truncate text-xs" title={conversationTitle(item, t)}>{conversationTitle(item, t)}</span><span className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground"><time dateTime={new Date(item.updatedAt).toISOString()}>{new Intl.DateTimeFormat(intlLocale(language), { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(item.updatedAt)}</time><span>{isBusy(item.messages) ? t("応答中") : item.id === activeId ? t("現在のチャット") : t("{{count}} 件の依頼", { count: (item.messages.filter((message) => message.role === "user").length) })}</span></span></span>
         </button></li>)}</ul></div>)}
     </div>
-    <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">{t("この起動中のチャットを表示しています。")}</p>
+    <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">{t("履歴はアプリ終了まで保持されます。")}</p>
   </section>;
 }

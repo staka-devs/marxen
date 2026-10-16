@@ -1072,7 +1072,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                     setMoreOpen(false);
                   }}
                   aria-pressed={navBasis === basis}
-                  title={basis === "display" ? t("折り返し行の上下・行頭末は表示基準で移動します") : t("上下・行頭末・単語・テキストオブジェクト・マクロは実 Neovim のVim の移動で動作します")}
+                  title={basis === "display" ? t("折り返し行に沿って移動") : t("Vim の移動")}
                   className={`rounded-md px-2 py-1 text-xs ${navBasis === basis ? "bg-primary text-primary-foreground" : "border border-border"}`}
                 >
                   {basis === "display" ? t("表示行") : "Vim"}
@@ -1423,7 +1423,6 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         </WorkspaceDialog>}
         {helpOpen && <WorkspaceDialog theme={theme} label={t("キーボードショートカット")} onDismiss={() => setHelpOpen(false)}>
           <dl className="space-y-2">{workbench.commands.filter((item) => item.shortcut).map((item) => <div key={item.id} className="flex justify-between gap-3"><dt>{item.label}</dt><dd><kbd>{item.shortcut}</kbd></dd></div>)}</dl>
-          <p className="mt-3 text-xs text-muted-foreground">{t("Vimのキー操作は現在の設定に従います。編集メニューで実際のマッピングを確認できます。")}</p>
         </WorkspaceDialog>}
         {settings && (
           <SettingsPanel
@@ -1517,7 +1516,6 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               >
                 {t("対象:")}{staging.aiProposal.proposal.baseContexts.map((ref) => contextLabels[ref.documentId] ?? t("現在の文書")).join(", ")}
               </p>
-              <p className="mt-1 text-muted-foreground">{t("適用は上の差分レビューで行います。")}</p>
               <button type="button" onClick={() => staging.setAiProposal(null)} className="mt-2 w-full rounded-md border border-border px-3 py-1.5">
                 {t("却下する")}</button>
             </details>

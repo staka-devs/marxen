@@ -602,7 +602,6 @@ export default function AiPanel({
   }
 
   if (!conversation) return null;
-  const isDirectApi = provider.kind !== "acp";
 
   return (
     <div aria-label={t("チャット")} className="ai-chat-panel flex h-full min-h-0 flex-col">
@@ -656,8 +655,7 @@ export default function AiPanel({
       <div ref={transcriptRef} aria-live="polite" aria-label={t("会話")} className="ai-chat-transcript min-h-0 flex-1 overflow-y-auto py-1.5">
         {conversation.messages.length === 0 ? (
           <div className="ai-chat-empty px-1 py-2">
-            <p className="text-xs leading-6 text-muted-foreground">{t("文書を添えて質問や書き換えを頼めます。結果は差分確認のうえで取り込みます。")}</p>
-            <div className="mt-2 flex flex-col gap-1.5">
+            <div className="flex flex-col gap-1.5">
               {EMPTY_EXAMPLES.map((exampleKey) => { const example = t(exampleKey as LabelKey); return (
                 <button
                   key={example}
@@ -697,12 +695,6 @@ export default function AiPanel({
                 {message.text && (message.state === "done"
                   ? <div className="marxen-chat-body mt-1"><MarkdownPreview text={message.text} label={t("AI の回答")} testId={`chat-response-${message.id}`} /></div>
                   : <p className="ai-chat-text mt-0.5 whitespace-pre-wrap leading-6">{message.text}</p>)}
-                {message.mode === "ask" && message.state === "done" && (
-                  <p className="mt-1 text-[11px] text-muted-foreground">{t("質問は読み取りのみです。")}</p>
-                )}
-                {isDirectApi && message.mode !== "ask" && message.state === "done" && (
-                  <p className="mt-1 text-[11px] text-muted-foreground">{t("直接APIは文章のみです。ファイル変更はACPで行います。")}</p>
-                )}
                 {message.state === "error" && message.error && (
                   <p role="alert" className="mt-1 text-xs font-medium text-red-600">{describeAiError(message.error, t)}</p>
                 )}
@@ -730,7 +722,7 @@ export default function AiPanel({
           />
           <div className="mt-1 flex flex-wrap items-center gap-1">
             <div role="group" aria-label={t("プロンプトの種類")} className="min-w-0 shrink-0">
-              <ChoiceMenu label={t("モード")} value={mode} onChange={(value) => setMode(value as PromptMode)} disabled={running || disabled} choices={MODE_ORDER.map((value) => ({ value, label: t(MODE_LABELS[value] as LabelKey), description: value === "ask" ? t("質問・要約・説明を依頼します。") : value === "generate" ? t("指示から Markdown の草案を作ります。") : value === "rewrite" ? t("選択した文章を整えます。") : t("送信対象への変更を差分で確認します。") }))} />
+              <ChoiceMenu label={t("モード")} value={mode} onChange={(value) => setMode(value as PromptMode)} disabled={running || disabled} choices={MODE_ORDER.map((value) => ({ value, label: t(MODE_LABELS[value] as LabelKey) }))} />
             </div>
             {modelControls && <div className="ai-chat-model-slot min-w-0 flex-1 empty:hidden">{modelControls}</div>}
             <Button size="sm" aria-label={t("送信")} title={t("送信")} onClick={() => void handleSend()} disabled={!canSend} className="ai-chat-action shrink-0">

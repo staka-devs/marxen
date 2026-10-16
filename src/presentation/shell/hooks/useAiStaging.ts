@@ -582,7 +582,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
       await isolationGateway!.rejectCopy(copyId);
       clearStaging();
       setAiProposal(null);
-      setNotice(message("提案を却下しました。Markdownとディスクは変更していません。"));
+      setNotice(message("提案を却下しました。"));
     } catch (cause) {
       setReviewMessage(localizedFailure(cause, describeIsolationError));
     } finally {
@@ -600,7 +600,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
       await isolationGateway!.cancelCopy(copyId);
       clearStaging();
       setAiProposal(null);
-      setNotice(message("取り消しました。Markdownとディスクは変更していません。"));
+      setNotice(message("取り消しました。"));
     } catch (cause) {
       setReviewMessage(localizedFailure(cause, describeIsolationError));
     } finally {
