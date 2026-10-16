@@ -75,14 +75,21 @@ fn fixture() -> (
     Arc<Secrets>,
 ) {
     let temp = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    let base = temp
+        .path()
+        .canonicalize()
+        .expect("fixture tempdir must resolve to a real path");
+    #[cfg(not(unix))]
+    let base = temp.path().to_path_buf();
     let store = Arc::new(MemoryStore::default());
     let secrets = Arc::new(Secrets::default());
     let service = ProviderAccountService {
         store: store.clone(),
         credentials: secrets.clone(),
         runtime: Arc::new(NativeAccountRuntime {
-            root: temp.path().join("managed"),
-            home: temp.path().join("host-home"),
+            root: base.join("managed"),
+            home: base.join("host-home"),
         }),
         mutation: Mutex::new(()),
     };
@@ -385,8 +392,15 @@ fn isolated_launch_files_are_private_and_revision_bound() {
 /// Real atomic storage rejects corrupt documents and never persists secret contents.
 fn native_metadata_roundtrip_and_corruption_are_explicit() {
     let temp = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    let base = temp
+        .path()
+        .canonicalize()
+        .expect("metadata tempdir must resolve to a real path");
+    #[cfg(not(unix))]
+    let base = temp.path().to_path_buf();
     let store = NativeAccountStore {
-        root: temp.path().join("accounts"),
+        root: base.join("accounts"),
     };
     assert!(store.load().unwrap().accounts.is_empty());
     let mut saved = account(AccountProvider::Minimax, AccountHost::Local);

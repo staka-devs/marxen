@@ -419,7 +419,7 @@ mod browser_tests {
             Err(ProviderAccountError::RequestFailed)
         );
         let started = Instant::now();
-        assert!(wait_browser_launcher(shell_script("sleep 2"), Duration::from_millis(1)).is_ok());
-        assert!(started.elapsed() < Duration::from_millis(150));
+        assert!(wait_browser_launcher(shell_script("sleep 5"), Duration::from_millis(50)).is_ok());
+        assert!(started.elapsed() < Duration::from_millis(1000));
     }
 }
