@@ -120,6 +120,15 @@ npm run desktop:build -- --bundles nsis
 
 CI は Windows x64 (NSIS)、macOS arm64 / x64 (app / DMG)、Linux x64 (deb / AppImage) の native build、3種類の IPC 契約、Rust / TypeScript / unit / E2E を設定します。配布版は未署名です。署名・公証は対応する資格情報のある環境で別途実施します。
 
+公開は版タグが起動する別の Release workflow が行います。版変更・main CI・`vX.Y.Z` タグ・CD の順にし、CD で再ビルドしません。
+
+```sh
+git push origin v0.1.0
+# 復旧で既存タグを使う場合のみ Actions の workflow_dispatch に tag を指定する
+```
+
+タグ commit と同一 SHA の main push Integration 成功だけを使い、四つの `marxen-{target}` から最終 installer 5（Windows x64 NSIS、Linux x64 deb と AppImage、macOS arm64 と x64 DMG）と `SHA256SUMS` を公開します。草稿で検査してから公開し、公開済みは上書きしません。配布は未署名・未公証で、実 WebView・日本語 IME・導入は未検証です。macOS 実機の確認はありません。`SHA256SUMS` で検証してください。
+
 実施済みの回帰・Windows 配布確認と、未実施の OS・WebView・日本語 IME・署名の範囲は [Issue #9](https://github.com/staka-devs/marxen/issues/9) で報告します。他 OS の package 操作、実 WebView / IME、署名・公証をブラウザや Windows の成功から推定しません。devcontainer の GUI にはホストの表示サーバーが必要です。
 
 [実装契約](docs/implementation.md)、[文書 IPC](docs/foundation.md)、[AI 接続の検証](https://github.com/staka-devs/marxen/issues/7)、[隔離・承認](docs/isolation.md)、[AnyDR](docs/adr/README.md) を参照してください。
