@@ -49,8 +49,6 @@ export interface AiProviderSettingsProps {
   connectionControls?: ApiConnectionControls;
 }
 
-const KIND_ORDER: AiProviderKind[] = ["acp", "openai_compatible", "openai_responses", "anthropic"];
-
 /**
  * Describe the active connection in one neutral line without claiming success.
  *
@@ -334,7 +332,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
   const fields = (
       <div className={embedded ? "space-y-4" : "space-y-2.5 px-2.5 py-2"}>
         <div role="group" aria-label={t("接続先")}>
-          {connectionControls !== undefined ? (
+          {(
             <Button
               variant={kind === "acp" ? "default" : "outline"}
               size="sm"
@@ -350,26 +348,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
               <ProviderIcon provider={preset} size={14} />
               ACP
             </Button>
-          ) : KIND_ORDER.map((candidate) => (
-            <Button
-              key={candidate}
-              variant={candidate === kind ? "default" : "outline"}
-              size="sm"
-              className="mb-1 mr-1"
-              aria-pressed={candidate === kind}
-              onClick={() => {
-                setKind(candidate);
-                setCredentialState(null);
-                setTestResult(null);
-                setTestFailure(null);
-                if (candidate === "anthropic") setEndpoint(DEFAULT_ENDPOINTS.anthropic);
-                else if ((candidate === "openai_compatible" || candidate === "openai_responses")) setEndpoint(DEFAULT_ENDPOINTS.openai_compatible);
-              }}
-            >
-              <ProviderIcon provider={candidate === "acp" ? preset : candidate} size={14} />
-              {candidate === "acp" ? "ACP" : candidate === "openai_responses" ? "OpenAI Responses" : candidate === "openai_compatible" ? "OpenAI Chat Completions" : "Anthropic"}
-            </Button>
-          ))}
+          )}
         </div>
         {kind === "acp" ? (
           <div className="space-y-2">

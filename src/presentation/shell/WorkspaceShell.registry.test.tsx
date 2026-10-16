@@ -542,6 +542,7 @@ it("picks the config file natively and applies it with restart", async () => {
     expect(mockedInvoke).toHaveBeenCalledWith("configure_document", {
       documentId: "doc_a",
       baseRevision: 0,
+      location: undefined,
       path: "/cfg/init.lua",
     }),
   );

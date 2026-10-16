@@ -19,6 +19,9 @@ describe("provider settings", () => {
     provider.acp!.preset = preset;
     render(<I18nProvider language={language} createTranslator={createTranslator}><AiProviderSettings embedded provider={provider} onProvider={vi.fn()} /></I18nProvider>);
     expect(screen.getByText(description)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "OpenAI Chat Completions" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "OpenAI Responses" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Anthropic" })).toBeNull();
   });
 
   it("mounts the dialog inside the live theme scope above its panel", () => {

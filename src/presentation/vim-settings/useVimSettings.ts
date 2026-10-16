@@ -25,6 +25,8 @@ export interface VimSettingsArgs {
   initialPath?: string | null;
   /** Called with the saved path so the shell can offer a config apply. */
   onSaved?: (path: string) => void;
+  /** Share an accepted path change before another settings action can run. */
+  onPathChange?: (path: string) => void;
 }
 
 /** Editable vim-settings state and operations for the panel. */
@@ -80,6 +82,8 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
   /** Latest save notice without retriggering the save callbacks. */
   const savedRef = useRef(onSaved);
   savedRef.current = onSaved;
+  const pathChangedRef = useRef(args.onPathChange);
+  pathChangedRef.current = args.onPathChange;
 
   /** Invalidate pending reads immediately when selecting another config file. */
   const setSelectedPath = useCallback((path: string) => {
@@ -91,6 +95,7 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
     setError(null);
     setNotice(null);
     changeSelectedPath(path);
+    pathChangedRef.current?.(path);
   }, []);
 
   /** Reload the selected config through the gateway. */
