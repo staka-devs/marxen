@@ -25,23 +25,28 @@ $verifiedRules = @($verifiedAcl.GetAccessRules($true, $true, [System.Security.Pr
 if (-not $verifiedAcl.AreAccessRulesProtected -or $verifiedAcl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $accountSid.Value -or $verifiedRules.Count -ne 1 -or $verifiedRules[0].IdentityReference.Value -ne $accountSid.Value -or $verifiedRules[0].AccessControlType -ne 'Allow' -or ($verifiedRules[0].FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne [System.Security.AccessControl.FileSystemRights]::FullControl) { throw 'Invalid private directory ACL' }
 "#;
     let system_root = std::env::var_os("SystemRoot").ok_or(ProviderAccountError::StoreFailed)?;
-    let mut child = Command::new(
-        Path::new(&system_root).join("System32/WindowsPowerShell/v1.0/powershell.exe"),
-    )
-    .args([
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        script,
-    ])
-    .env("MARXEN_PRIVATE_DIRECTORY", path)
-    .creation_flags(0x0800_0000)
-    .stdin(Stdio::null())
-    .stdout(Stdio::null())
-    .stderr(Stdio::null())
-    .spawn()
-    .map_err(|_| ProviderAccountError::StoreFailed)?;
+    let powershell = Path::new(&system_root)
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+    let mut child = Command::new(powershell)
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .env("MARXEN_PRIVATE_DIRECTORY", path)
+        .creation_flags(0x0800_0000)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| ProviderAccountError::StoreFailed)?;
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         match child.try_wait() {
@@ -59,6 +64,16 @@ if (-not $verifiedAcl.AreAccessRulesProtected -or $verifiedAcl.GetOwner([System.
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Resolve the inbox Windows PowerShell without relying on PATH ordering.
+    fn powershell_exe() -> std::path::PathBuf {
+        let system_root =
+            std::env::var_os("SystemRoot").expect("SystemRoot must exist for ACL test");
+        Path::new(&system_root)
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe")
+    }
     /// Verify the real Windows ACL path also accepts Unicode and shell metacharacters as data.
     #[test]
     fn private_home_acl_is_verified_without_path_interpolation() {
@@ -68,8 +83,8 @@ mod tests {
         private_directory(&path).unwrap();
         let auth = path.join("auth.json");
         std::fs::write(&auth, b"{}").unwrap();
-        let verified = Command::new("powershell.exe")
-            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", r#"
+        let verified = Command::new(powershell_exe())
+            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", r#"
 $ErrorActionPreference = 'Stop'
 $accountSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $rules = @((Get-Acl -LiteralPath $env:MARXEN_PRIVATE_FILE).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))

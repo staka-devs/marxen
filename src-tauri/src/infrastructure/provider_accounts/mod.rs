@@ -398,31 +398,28 @@ impl ProviderAccountRuntime for NativeAccountRuntime {
 #[cfg(all(test, unix))]
 mod browser_tests {
     use super::*;
+    /// Spawn a POSIX shell script without relying on PATH-resolved helper binaries.
+    fn shell_script(script: &str) -> std::process::Child {
+        use std::process::{Command, Stdio};
+        Command::new("/bin/sh")
+            .args(["-c", script])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("POSIX /bin/sh must exist for browser launcher test")
+    }
     #[test]
     /// Synthetic launchers report failure without opening a browser or terminating a long-lived app.
     fn browser_dispatch_is_bounded_and_reports_failure() {
-        use std::{
-            process::Command,
-            time::{Duration, Instant},
-        };
-        assert!(wait_browser_launcher(
-            Command::new("true").spawn().unwrap(),
-            Duration::from_secs(1)
-        )
-        .is_ok());
+        use std::time::{Duration, Instant};
+        assert!(wait_browser_launcher(shell_script("exit 0"), Duration::from_secs(1)).is_ok());
         assert_eq!(
-            wait_browser_launcher(
-                Command::new("false").spawn().unwrap(),
-                Duration::from_secs(1)
-            ),
+            wait_browser_launcher(shell_script("exit 1"), Duration::from_secs(1)),
             Err(ProviderAccountError::RequestFailed)
         );
         let started = Instant::now();
-        assert!(wait_browser_launcher(
-            Command::new("sleep").arg("0.2").spawn().unwrap(),
-            Duration::from_millis(1)
-        )
-        .is_ok());
+        assert!(wait_browser_launcher(shell_script("sleep 2"), Duration::from_millis(1)).is_ok());
         assert!(started.elapsed() < Duration::from_millis(150));
     }
 }

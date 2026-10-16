@@ -50,7 +50,8 @@ jobs:
           if (!$script) { throw 'Private account ACL script is missing' }
           $env:MARXEN_PRIVATE_DIRECTORY = Join-Path $env:RUNNER_TEMP "marxen-acl-fixture [認証]"
           [System.IO.Directory]::CreateDirectory($env:MARXEN_PRIVATE_DIRECTORY) | Out-Null
-          & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoLogo -NoProfile -NonInteractive -Command $script
+          $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          & $powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $script
           if ($LASTEXITCODE -ne 0) { throw 'Private account ACL verification failed' }
       - uses: actions/setup-node@v4
         with:
