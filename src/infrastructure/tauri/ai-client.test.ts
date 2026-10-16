@@ -45,7 +45,7 @@ describe("ai transport", () => {
       openai: null,
       anthropic: null,
     });
-    const openai = defaultProviderConfig("openai_compatible");
+    const openai = defaultProviderConfig("openai_chat_completions");
     expect(openai.openai?.endpoint).toContain("https://");
     const anthropic = defaultProviderConfig("anthropic");
     expect(anthropic.anthropic?.enabled).toBe(false);

@@ -353,8 +353,7 @@ export interface ApiConnectionGateway {
   setConnectionCredential(connectionId: import("../contracts/ai-contracts").ApiConnectionId, secret: string): Promise<void>;
   /** Delete the secret of one named connection from the OS store. */
   deleteConnectionCredential(connectionId: import("../contracts/ai-contracts").ApiConnectionId): Promise<void>;
-  /** Copy the legacy kind credential into an empty connection slot inside Rust. */
-  migrateConnectionCredential(connectionId: import("../contracts/ai-contracts").ApiConnectionId, kind: import("../contracts/ai-contracts").AiProviderKind): Promise<import("../contracts/ai-contracts").ConnectionCredentialRef>;
+
 }
 
 /** View-only editor preferences store. */

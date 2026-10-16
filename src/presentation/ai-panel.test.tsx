@@ -109,7 +109,7 @@ describe("agent chat", () => {
 
   it("starts a fresh conversation when the controlled endpoint changes", async () => {
     let handler!: (event: AiStreamEvent) => void;
-    const first = { kind: "openai_compatible", acp: null, anthropic: null, openai: { endpoint: "http://localhost:9001/v1", model: "first" } } as const;
+    const first = { kind: "openai_chat_completions", acp: null, anthropic: null, openai: { endpoint: "http://localhost:9001/v1", model: "first" } } as const;
     const second = { ...first, openai: { endpoint: "http://localhost:9002/v1", model: "second" } };
     mockStartPrompt.mockImplementation(async (_request, onEvent) => {
       handler = onEvent;

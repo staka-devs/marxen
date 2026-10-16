@@ -8,9 +8,9 @@
 
 | プロバイダー | 管理アカウントの入力 | 使用量取得 | 管理 CLI 起動 |
 | --- | --- | --- | --- |
-| Codex | `auth.json` JSON (`tokens.access_token` または `OPENAI_API_KEY`) | 既存の公式 `account/rateLimits/read` RPC。実測 quota window のみ | Unix 私有 `CODEX_HOME`、file credential store |
-| Claude Code | `.credentials.json` JSON (`claudeAiOauth.accessToken`) | 固定 OAuth usage endpoint、five_hour / seven_day の utilization | Linux 私有 `CLAUDE_CONFIG_DIR`。macOS Keychain / Windows 未対応 |
-| OpenCode | `auth.json` JSON | サービス横断のアカウント利用枠 API は未対応 | Unix 私有 HOME / XDG data/config/state/cache |
+| Codex | `auth.json` JSON (`tokens.access_token` または `OPENAI_API_KEY`) | 既存の公式 `account/rateLimits/read` RPC。実測 quota window のみ | Unix / Windows 私有 `CODEX_HOME`、file credential store |
+| Claude Code | `.credentials.json` JSON (`claudeAiOauth.accessToken`) | 固定 OAuth usage endpoint、five_hour / seven_day の utilization | Linux / Windows 私有 `CLAUDE_CONFIG_DIR`。macOS Keychain 未対応 |
+| OpenCode | `auth.json` JSON | サービス横断のアカウント利用枠 API は未対応 | Unix / Windows 私有 HOME / XDG data/config/state/cache |
 | Devin | 認証設定 JSON を保存可能 | CLI 利用枠 API は未対応 | 独立した CLI 認証 adapter 未対応 |
 | Gemini CLI legacy | `oauth_creds.json` JSON (`access_token` / `refresh_token`)、任意 project ID | Google Code Assist の model 別 `remainingFraction` | この設定からの CLI 起動は未対応 |
 | Antigravity | 認証設定 JSON を保存可能 | 安全な adapter 未対応。CLI に `/usage` prompt を送らない | 未対応 |

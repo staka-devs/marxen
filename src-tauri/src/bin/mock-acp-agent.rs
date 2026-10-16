@@ -656,6 +656,11 @@ fn serve_account_usage() {
 /// permission denial, graceful cancellation, and staging writes before/after completion.
 /// `--exit-early` exits with status 1; unsupported request methods receive mock errors.
 fn main() {
+    if let Some(name) = flag_value("--expect-env") {
+        if std::env::var(name).ok() != flag_value("--expect-env-value") {
+            std::process::exit(23);
+        }
+    }
     if has_flag("--exit-early") {
         std::process::exit(1);
     }

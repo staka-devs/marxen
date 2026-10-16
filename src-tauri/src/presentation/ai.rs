@@ -56,16 +56,6 @@ pub fn ai_delete_connection_credential(
     service.delete_connection_credential(&connection_id)
 }
 #[tauri::command]
-/// Copy the legacy kind credential into a named connection slot inside Rust.
-/// Copies only when the target slot is absent; legacy slots are never deleted.
-pub fn ai_migrate_connection_credential(
-    service: tauri::State<'_, AiService>,
-    connection_id: ApiConnectionId,
-    kind: AiProviderKind,
-) -> Result<ConnectionCredentialRef, AiError> {
-    service.migrate_connection_credential(&connection_id, kind)
-}
-#[tauri::command]
 /// Run the caller's local readiness or explicit live provider probe.
 pub async fn ai_test_connection(
     service: tauri::State<'_, AiService>,

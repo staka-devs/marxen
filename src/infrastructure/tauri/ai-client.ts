@@ -106,17 +106,6 @@ export async function deleteConnectionCredential(connectionId: ApiConnectionId):
 }
 
 /**
- * Copy the legacy kind credential into an empty connection slot inside Rust.
- *
- * Copies only when the target slot is absent; legacy slots are never
- * deleted and no secret crosses the IPC boundary.
- */
-export async function migrateConnectionCredential(connectionId: ApiConnectionId, kind: AiProviderKind): Promise<ConnectionCredentialRef> {
-  requireDesktop();
-  return invoke<ConnectionCredentialRef>("ai_migrate_connection_credential", { connectionId, kind });
-}
-
-/**
  * Answer a pending permission request with the exact chosen option ID.
  *
  * Stale, foreign, or unoffered IDs surface as invoke errors; the waiting
@@ -236,5 +225,4 @@ export const apiConnectionGateway: ApiConnectionGateway = {
   /** Delete the secret of one named connection from the OS store. */
   deleteConnectionCredential,
   /** Copy the legacy kind credential into an empty connection slot inside Rust. */
-  migrateConnectionCredential,
 };

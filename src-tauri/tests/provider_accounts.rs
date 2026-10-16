@@ -645,3 +645,56 @@ fn rejects_nested_symlink_runtime_escape() {
         .is_err());
     assert_eq!(std::fs::read_dir(outside).unwrap().count(), 0);
 }
+
+/// The production transport applies a selected account to a mock ACP child, never an installed CLI.
+#[test]
+fn native_acp_probe_uses_selected_private_account() {
+    use marxen_lib::{
+        application::ai::transport::AiTransport,
+        contracts::ai::{AcpArgv, AiError},
+        infrastructure::ai::transport::NativeAiTransport,
+    };
+    let (temp, service, _, secrets) = fixture();
+    service
+        .save(
+            account(AccountProvider::Codex, AccountHost::Local),
+            Some(credential(AccountProvider::Codex)),
+        )
+        .unwrap();
+    let saved = service.snapshot().unwrap().accounts[0].account.clone();
+    service
+        .select(AccountSelection {
+            provider: saved.provider,
+            host: saved.host.clone(),
+            account_id: Some(saved.id.clone()),
+        })
+        .unwrap();
+    let environment = service
+        .launch_environment(saved.provider, &saved.host)
+        .unwrap();
+    let program = temp.path().join(if cfg!(windows) {
+        "codex-acp.exe"
+    } else {
+        "codex-acp"
+    });
+    std::fs::copy(env!("CARGO_BIN_EXE_mock-acp-agent"), &program).unwrap();
+    let argv = AcpArgv {
+        command: program.to_string_lossy().into_owned(),
+        args: vec![
+            "--expect-env".into(),
+            "CODEX_HOME".into(),
+            "--expect-env-value".into(),
+            environment.set["CODEX_HOME"].clone(),
+        ],
+    };
+    let transport = NativeAiTransport {
+        accounts: Some(Arc::new(service)),
+    };
+    assert!(transport.handshake(&argv).unwrap().ok);
+    secrets.delete(&saved.id).unwrap();
+    assert!(matches!(
+        transport.handshake(&argv),
+        Err(AiError::InvalidConfig { .. })
+    ));
+    assert!(std::fs::read_dir(temp.path().join("host-home")).is_err());
+}

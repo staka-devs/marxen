@@ -6,8 +6,14 @@ import { ACCOUNT_PROVIDERS, accountErrorKey, accountReasonKey, sameAccountHost }
 import { useI18n } from "../i18n/I18nProvider";
 import { Button } from "../ui/button";
 
+interface Props {
+  gateway?: ProviderAccountGateway;
+  /** Broadcast committed selections for model and history scoping. */
+  onSnapshot?: (snapshot: AccountSnapshot) => void;
+}
+
 /** Complete provider account settings, backed only by injected native ports. */
-export function ProviderAccountsSettings({ gateway }: { gateway?: ProviderAccountGateway }) {
+export function ProviderAccountsSettings({ gateway, onSnapshot }: Props) {
   const { t } = useI18n();
   const [snapshot, setSnapshot] = useState<AccountSnapshot>({ accounts: [], selections: [] });
   const [provider, setProvider] = useState<AccountProvider>("codex");
@@ -32,9 +38,9 @@ export function ProviderAccountsSettings({ gateway }: { gateway?: ProviderAccoun
 
   useEffect(() => {
     let active = true;
-    if (gateway) gateway.snapshot().then(result => { if (active) setSnapshot(result); }).catch(error => { if (active) setNotice(accountErrorKey(error)); });
+    if (gateway) gateway.snapshot().then(result => { if (active) { setSnapshot(result); onSnapshot?.(result); } }).catch(error => { if (active) setNotice(accountErrorKey(error)); });
     return () => { active = false; attempt.current += 1; };
-  }, [gateway]);
+  }, [gateway, onSnapshot]);
 
   /** Invalidate outstanding results before changing provider, host or account. */
   function resetView() {
@@ -61,7 +67,7 @@ export function ProviderAccountsSettings({ gateway }: { gateway?: ProviderAccoun
     await gateway.save(account, credential);
     const updated = await gateway.snapshot();
     if (id !== attempt.current) return;
-    setSnapshot(updated); setDraft(null); setNotice("アカウントを保存しました。選択すると次の起動に反映します。");
+    setSnapshot(updated); onSnapshot?.(updated); setDraft(null); setNotice("アカウントを保存しました。選択すると次の起動に反映します。");
   }
 
   /** Change selection only after native persistence succeeds, preserving the previous account on failure. */
@@ -71,7 +77,7 @@ export function ProviderAccountsSettings({ gateway }: { gateway?: ProviderAccoun
     await gateway.select({ provider, host, accountId: id || null });
     const updated = await gateway.snapshot();
     if (attemptId !== attempt.current) return;
-    setSnapshot(updated); setDraft(null); setSecret(""); setUsage(null); setPresence(null); setConfirmDelete(false);
+    setSnapshot(updated); onSnapshot?.(updated); setDraft(null); setSecret(""); setUsage(null); setPresence(null); setConfirmDelete(false);
     setNotice("選択を保存しました。既存の会話には反映しません。");
   }
 
@@ -82,13 +88,13 @@ export function ProviderAccountsSettings({ gateway }: { gateway?: ProviderAccoun
     await gateway.delete(selected.account.id);
     const updated = await gateway.snapshot();
     if (attemptId !== attempt.current) return;
-    setSnapshot(updated); setDraft(null); setSecret(""); setUsage(null); setPresence(null); setConfirmDelete(false);
+    setSnapshot(updated); onSnapshot?.(updated); setDraft(null); setSecret(""); setUsage(null); setPresence(null); setConfirmDelete(false);
     setNotice("管理アカウントを削除しました。システム既定のログインは変更しません。");
   }
 
   return <section className="space-y-3 border-t border-border pt-4" aria-label={t("プロバイダーアカウント")}>
     <h3 className="text-sm font-semibold">{t("プロバイダーアカウント")}</h3>
-    <Button size="sm" variant="outline" disabled={!gateway || busy} onClick={() => { void perform(async () => { const id = attempt.current; const updated = await gateway!.snapshot(); if (id === attempt.current) { setSnapshot(updated); setUsage(null); setPresence(null); } }); }}>{t("設定を再読み込み")}</Button>
+    <Button size="sm" variant="outline" disabled={!gateway || busy} onClick={() => { void perform(async () => { const id = attempt.current; const updated = await gateway!.snapshot(); if (id === attempt.current) { setSnapshot(updated); onSnapshot?.(updated); setUsage(null); setPresence(null); } }); }}>{t("設定を再読み込み")}</Button>
     <p className="text-xs text-muted-foreground">{t("選択は次の ACP 起動に適用します。既存の会話は元のアカウントを維持します。")}</p>
     {!gateway && <p role="status">{t("AI 機能はデスクトップアプリで利用します。")}</p>}
     <label className="block text-xs">{t("プロバイダーアカウント")}<select className="ml-2 rounded border bg-background p-1" value={provider} onChange={event => { resetView(); setProvider(event.target.value as AccountProvider); }}>

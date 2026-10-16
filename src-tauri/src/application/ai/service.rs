@@ -113,22 +113,6 @@ impl AiService {
         validate_connection_id(id)?;
         self.connection_keyring.delete_connection(id)
     }
-    /// Copy the legacy kind credential into a named connection slot inside Rust.
-    /// Copies only when the target slot is absent; legacy slots are never
-    /// deleted here and no secret crosses the IPC boundary.
-    pub fn migrate_connection_credential(
-        &self,
-        id: &ApiConnectionId,
-        kind: AiProviderKind,
-    ) -> Result<ConnectionCredentialRef, AiError> {
-        validate_connection_id(id)?;
-        if !self.connection_keyring.has_connection(id)? {
-            if let Some(secret) = self.keyring.get(kind)? {
-                self.connection_keyring.set_connection(id, &secret)?;
-            }
-        }
-        self.connection_credential_state(id)
-    }
     /// Check local readiness or perform the caller's explicit live connection probe.
     pub async fn test_connection(
         &self,
@@ -286,7 +270,7 @@ impl AiService {
                 }));
                 Ok(run_id)
             }
-            AiProviderKind::OpenaiCompatible
+            AiProviderKind::OpenaiChatCompletions
             | AiProviderKind::OpenaiResponses
             | AiProviderKind::Anthropic => {
                 // Credential and target readiness BEFORE any scope pin: a missing

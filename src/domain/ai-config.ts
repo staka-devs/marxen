@@ -26,7 +26,7 @@ export const AI_CONTRACT_VERSION = 7;
 /** Japanese labels for provider kinds shown in settings. */
 export const KIND_LABELS: Record<AiProviderKind, string> = {
   acp: "ACP エージェント",
-  openai_compatible: "OpenAI Chat Completions",
+  openai_chat_completions: "OpenAI Chat Completions",
   openai_responses: "OpenAI Responses",
   anthropic: "Anthropic",
 };
@@ -51,7 +51,7 @@ export const MODE_LABELS: Record<PromptMode, string> = {
 /** Default endpoints per provider kind (ACP has none). */
 export const DEFAULT_ENDPOINTS: Record<AiProviderKind, string> = {
   acp: "",
-  openai_compatible: "https://api.openai.com/v1",
+  openai_chat_completions: "https://api.openai.com/v1",
   openai_responses: "https://api.openai.com/v1",
   anthropic: "https://api.anthropic.com/v1",
 };
@@ -78,11 +78,11 @@ export function defaultProviderConfig(kind: AiProviderKind): AiProviderConfig {
   if (kind === "acp") {
     return { kind, acp: { preset: "codex", argv: null }, openai: null, anthropic: null };
   }
-  if (kind === "openai_compatible" || kind === "openai_responses") {
+  if (kind === "openai_chat_completions" || kind === "openai_responses") {
     return {
       kind,
       acp: null,
-      openai: { endpoint: DEFAULT_ENDPOINTS.openai_compatible, model: "" },
+      openai: { endpoint: DEFAULT_ENDPOINTS.openai_chat_completions, model: "" },
       anthropic: null,
     };
   }
@@ -128,7 +128,7 @@ export function buildProviderConfig(state: ProviderConfigState): AiProviderConfi
     }
     return { kind: "acp", acp: { preset: state.preset, argv: null, ...(state.acpSelections?.length ? { selections: state.acpSelections } : {}) }, openai: null, anthropic: null };
   }
-  if (state.kind === "openai_compatible" || state.kind === "openai_responses") {
+  if (state.kind === "openai_chat_completions" || state.kind === "openai_responses") {
     return {
       kind: state.kind,
       acp: null,

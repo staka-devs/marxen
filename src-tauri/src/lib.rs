@@ -75,6 +75,7 @@ pub fn open_isolation(root: &Path) -> Result<IsolationManager, WorkspaceError> {
 /// Compose native adapters, desktop state, events and Tauri command handlers before starting the app.
 pub fn run() {
     use tauri::{Emitter, Manager};
+    let accounts = Arc::new(provider_account_service().expect("provider account storage path"));
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(presentation::clipboard::ClipboardState(
@@ -89,7 +90,9 @@ pub fn run() {
         .manage(application::ai::service::AiService {
             keyring: Arc::new(infrastructure::ai::credentials::OsKeyring),
             connection_keyring: Arc::new(infrastructure::ai::credentials::OsKeyring),
-            transport: Arc::new(infrastructure::ai::transport::NativeAiTransport),
+            transport: Arc::new(infrastructure::ai::transport::NativeAiTransport {
+                accounts: Some(accounts.clone()),
+            }),
             spawner: Arc::new(infrastructure::ai::transport::NativeTaskSpawner),
             runs: Arc::new(application::ai::runs::RunRegistry::new()),
             usage: Arc::new(application::ai::usage::UsageRegistry::new()),
@@ -98,7 +101,7 @@ pub fn run() {
             reader: Arc::new(infrastructure::ai::account_usage::NativeAccountUsageReader),
             clock: Arc::new(infrastructure::storage::SystemClock),
         })
-        .manage(provider_account_service().expect("provider account storage path"))
+        .manage(accounts)
         .setup(|app| {
             infrastructure::neovim::configure_resource_dir(app.path().resource_dir()?);
             let mut services = document_services();
@@ -191,7 +194,6 @@ pub fn run() {
             presentation::ai::ai_connection_credential_state,
             presentation::ai::ai_set_connection_credential,
             presentation::ai::ai_delete_connection_credential,
-            presentation::ai::ai_migrate_connection_credential,
             presentation::ai::ai_test_connection,
             presentation::ai::ai_prompt_stream,
             presentation::ai::ai_prompt_cancel,

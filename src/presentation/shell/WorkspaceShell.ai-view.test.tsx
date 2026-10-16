@@ -51,7 +51,7 @@ describe("shell AI view composition", () => {
     expect(testConnection).toHaveBeenCalledOnce();
   });
   it("keeps a hidden named connection selected while its dialog toggle restores independently", () => {
-    const connections: ApiConnectionList = sanitizeApiConnectionList({ version: 1, initialized: true, activeId: "api-a", connections: [{ id: "api-a", name: "Twin", protocol: "openai_compatible", endpoint: "https://a.example/v1", model: "model-a" }, { id: "api-b", name: "Twin", protocol: "openai_compatible", endpoint: "https://b.example/v1", model: "model-a" }] });
+    const connections: ApiConnectionList = sanitizeApiConnectionList({ version: 1, initialized: true, activeId: "api-a", connections: [{ id: "api-a", name: "Twin", protocol: "openai_chat_completions", endpoint: "https://a.example/v1", model: "model-a" }, { id: "api-b", name: "Twin", protocol: "openai_chat_completions", endpoint: "https://b.example/v1", model: "model-a" }] });
     const store: ApiConnectionStore = {
       /** Load the twin-connection fixture for visibility plumbing. */
       load: () => connections,

@@ -49,7 +49,7 @@ describe("provider settings", () => {
 
   it("summarizes the connection name without claiming success", () => {
     expect(describeProviderSummary(defaultProviderConfig("acp"))).toBe("Codex");
-    const openai = defaultProviderConfig("openai_compatible");
+    const openai = defaultProviderConfig("openai_chat_completions");
     openai.openai!.model = "local-model";
     expect(describeProviderSummary(openai)).toBe("OpenAI Chat Completions • local-model");
     const onProvider = vi.fn();
@@ -67,7 +67,7 @@ describe("provider settings", () => {
 
   it("opens with the trigger and keeps direct model input usable", () => {
     const onProvider = vi.fn();
-    const openai = defaultProviderConfig("openai_compatible");
+    const openai = defaultProviderConfig("openai_chat_completions");
     openai.openai!.model = "local-model";
     render(<AiProviderSettings provider={openai} onProvider={onProvider} openToken={0} />);
     fireEvent.click(screen.getByRole("button", { name: /接続設定/ }));
@@ -114,8 +114,8 @@ describe("provider settings", () => {
   });
 
   it("does not strip connection IDs through legacy persistence for named selections", () => {
-    const first = { id: "api-1", name: "API-A", protocol: "openai_compatible" as const, endpoint: "https://a.example.com/v1", model: "model-a" };
-    const second = { id: "api-2", name: "API-B", protocol: "openai_compatible" as const, endpoint: "https://b.example.com/v1", model: "model-b" };
+    const first = { id: "api-1", name: "API-A", protocol: "openai_chat_completions" as const, endpoint: "https://a.example.com/v1", model: "model-a" };
+    const second = { id: "api-2", name: "API-B", protocol: "openai_chat_completions" as const, endpoint: "https://b.example.com/v1", model: "model-b" };
     const list = { version: 1 as const, activeId: "api-1", initialized: true, connections: [first, second] };
     const controls = {
       list,
@@ -136,10 +136,10 @@ describe("provider settings", () => {
     /** Load a fixture ACP profile without touching storage. */
     const loadFixtureProfile = () => ({ kind: "acp" }) as never;
     const { rerender } = render(
-      <AiProviderSettings embedded provider={{ kind: "openai_compatible", acp: null, openai: { endpoint: first.endpoint, model: first.model }, anthropic: null, connectionId: "api-1" }} onProvider={onProvider} profileStore={{ load: loadFixtureProfile, save: profileSave }} connectionControls={controls as never} />,
+      <AiProviderSettings embedded provider={{ kind: "openai_chat_completions", acp: null, openai: { endpoint: first.endpoint, model: first.model }, anthropic: null, connectionId: "api-1" }} onProvider={onProvider} profileStore={{ load: loadFixtureProfile, save: profileSave }} connectionControls={controls as never} />,
     );
     rerender(
-      <AiProviderSettings embedded provider={{ kind: "openai_compatible", acp: null, openai: { endpoint: second.endpoint, model: second.model }, anthropic: null, connectionId: "api-2" }} onProvider={onProvider} profileStore={{ load: loadFixtureProfile, save: profileSave }} connectionControls={{ ...controls, list: { ...list, activeId: "api-2" }, activeId: "api-2" } as never} />,
+      <AiProviderSettings embedded provider={{ kind: "openai_chat_completions", acp: null, openai: { endpoint: second.endpoint, model: second.model }, anthropic: null, connectionId: "api-2" }} onProvider={onProvider} profileStore={{ load: loadFixtureProfile, save: profileSave }} connectionControls={{ ...controls, list: { ...list, activeId: "api-2" }, activeId: "api-2" } as never} />,
     );
     expect(profileSave).not.toHaveBeenCalled();
     for (const call of onProvider.mock.calls) {

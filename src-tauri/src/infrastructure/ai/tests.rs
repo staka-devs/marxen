@@ -200,7 +200,7 @@ mod regression {
     fn provider_configs_must_match_kind_and_anthropic_is_opt_in() {
         assert!(validate_provider_config(&acp_request().provider).is_ok());
         let mut openai = AiProviderConfig {
-            kind: AiProviderKind::OpenaiCompatible,
+            kind: AiProviderKind::OpenaiChatCompletions,
             acp: None,
             openai: Some(OpenAiConfig {
                 endpoint: "https://api.example.com/v1".into(),
@@ -273,7 +273,7 @@ mod regression {
         assert!(validate_prompt_request(&bad).is_err());
         let mut http = acp_request();
         http.provider = AiProviderConfig {
-            kind: AiProviderKind::OpenaiCompatible,
+            kind: AiProviderKind::OpenaiChatCompletions,
             acp: None,
             openai: Some(OpenAiConfig {
                 endpoint: "https://api.example.com/v1".into(),
@@ -1375,18 +1375,20 @@ mod regression {
     #[test]
     fn memory_keyring_holds_separate_slots() {
         let keyring = MemoryKeyring::default();
-        assert!(!keyring.has(AiProviderKind::OpenaiCompatible).unwrap());
+        assert!(!keyring.has(AiProviderKind::OpenaiChatCompletions).unwrap());
         keyring
-            .set(AiProviderKind::OpenaiCompatible, "s3cret")
+            .set(AiProviderKind::OpenaiChatCompletions, "s3cret")
             .unwrap();
-        assert!(keyring.has(AiProviderKind::OpenaiCompatible).unwrap());
+        assert!(keyring.has(AiProviderKind::OpenaiChatCompletions).unwrap());
         assert!(!keyring.has(AiProviderKind::Anthropic).unwrap());
         assert_ne!(
-            credential_account(AiProviderKind::OpenaiCompatible),
+            credential_account(AiProviderKind::OpenaiChatCompletions),
             credential_account(AiProviderKind::Anthropic)
         );
-        keyring.delete(AiProviderKind::OpenaiCompatible).unwrap();
-        assert!(!keyring.has(AiProviderKind::OpenaiCompatible).unwrap());
+        keyring
+            .delete(AiProviderKind::OpenaiChatCompletions)
+            .unwrap();
+        assert!(!keyring.has(AiProviderKind::OpenaiChatCompletions).unwrap());
         assert!(validate_secret("").is_err());
     }
 
@@ -1398,17 +1400,17 @@ mod regression {
         let first = ApiConnectionId("api-first".into());
         let second = ApiConnectionId("api-second".into());
         keyring
-            .set(AiProviderKind::OpenaiCompatible, "legacy")
+            .set(AiProviderKind::OpenaiChatCompletions, "legacy")
             .unwrap();
         keyring.set_connection(&first, "one").unwrap();
         keyring.set_connection(&second, "two").unwrap();
         assert!(keyring.has_connection(&first).unwrap());
         assert!(keyring.has_connection(&second).unwrap());
-        assert!(keyring.has(AiProviderKind::OpenaiCompatible).unwrap());
+        assert!(keyring.has(AiProviderKind::OpenaiChatCompletions).unwrap());
         assert_ne!(connection_account(&first), connection_account(&second));
         assert_ne!(
             connection_account(&first),
-            credential_account(AiProviderKind::OpenaiCompatible).to_owned()
+            credential_account(AiProviderKind::OpenaiChatCompletions).to_owned()
         );
         keyring.delete_connection(&first).unwrap();
         assert!(!keyring.has_connection(&first).unwrap());
@@ -1418,7 +1420,7 @@ mod regression {
         );
         assert_eq!(
             keyring
-                .get(AiProviderKind::OpenaiCompatible)
+                .get(AiProviderKind::OpenaiChatCompletions)
                 .unwrap()
                 .as_deref(),
             Some("legacy")
@@ -1446,7 +1448,7 @@ mod regression {
         let valid = ApiConnection {
             id: ApiConnectionId("api-1".into()),
             name: "本番".into(),
-            protocol: ApiProtocol::OpenaiCompatible,
+            protocol: ApiProtocol::OpenaiChatCompletions,
             endpoint: "https://api.example.com/v1".into(),
             model: "model-x".into(),
         };
@@ -1490,12 +1492,12 @@ mod regression {
         let openai = ApiConnection {
             id: ApiConnectionId("api-o".into()),
             name: "  Open  ".into(),
-            protocol: ApiProtocol::OpenaiCompatible,
+            protocol: ApiProtocol::OpenaiChatCompletions,
             endpoint: "https://api.example.com/v1/".into(),
             model: "  model-a  ".into(),
         };
         let config = provider_config_for_connection(&openai).unwrap();
-        assert_eq!(config.kind, AiProviderKind::OpenaiCompatible);
+        assert_eq!(config.kind, AiProviderKind::OpenaiChatCompletions);
         let openai_config = config.openai.expect("openai section");
         assert_eq!(openai_config.endpoint, "https://api.example.com/v1");
         assert_eq!(openai_config.model, "model-a");
@@ -1519,113 +1521,10 @@ mod regression {
         assert!(provider_config_for_connection(&modeless).is_err());
     }
 
-    struct StubTransport;
-    struct StubSpawner;
-
-    impl crate::application::ai::transport::AiTransport for StubTransport {
-        /// Never called by credential tests; panic if the wiring changes.
-        fn resolve_launch(
-            &self,
-            _argv: &AcpArgv,
-        ) -> Result<crate::application::ai::transport::ResolvedAcpLaunch, AiError> {
-            unimplemented!("credential tests never resolve launches")
-        }
-        /// Never called by credential tests; panic if the wiring changes.
-        fn handshake(&self, _argv: &AcpArgv) -> Result<AiTestResult, AiError> {
-            unimplemented!("credential tests never handshake")
-        }
-        /// Never called by credential tests; panic if the wiring changes.
-        fn test_http<'a>(
-            &'a self,
-            _target: &'a HttpTarget,
-            _secret: &'a str,
-        ) -> crate::application::ai::transport::AiFuture<'a, Result<AiTestResult, AiError>>
-        {
-            unimplemented!("credential tests never probe http")
-        }
-        /// Never called by credential tests; panic if the wiring changes.
-        fn run_acp(
-            &self,
-            _params: &crate::application::ai::transport::AcpRunParams,
-            _request: &AiPromptRequest,
-            _run_id: &AiRunId,
-            _registry: &std::sync::Arc<RunRegistry>,
-            _cancel: &AtomicBool,
-            _emit: &mut (dyn FnMut(AiStreamEvent) + Send),
-        ) -> Result<(), AiError> {
-            unimplemented!("credential tests never run acp")
-        }
-        /// Never called by credential tests; panic if the wiring changes.
-        fn run_http<'a>(
-            &'a self,
-            _target: &'a HttpTarget,
-            _secret: &'a str,
-            _request: &'a AiPromptRequest,
-            _run_id: &'a AiRunId,
-            _cancel: &'a AtomicBool,
-            _emit: &'a mut (dyn FnMut(AiStreamEvent) + Send),
-        ) -> crate::application::ai::transport::AiFuture<'a, Result<(), AiError>> {
-            unimplemented!("credential tests never run http")
-        }
-    }
-
-    impl crate::application::ai::transport::TaskSpawner for StubSpawner {
-        /// Never called by credential tests; panic if the wiring changes.
-        fn spawn_blocking(&self, _task: Box<dyn FnOnce() + Send>) {
-            unimplemented!("credential tests never spawn")
-        }
-        /// Never called by credential tests; panic if the wiring changes.
-        fn spawn_async(&self, _task: crate::application::ai::transport::AiFuture<'static, ()>) {
-            unimplemented!("credential tests never spawn")
-        }
-    }
-
-    /// Copy a legacy kind credential into an empty connection slot without
-    /// exposing it, keep the legacy slot, and never overwrite an owned secret.
-    #[test]
-    fn service_migrates_connection_credential_without_exposing_or_overwriting() {
-        use std::sync::Arc;
-        let keyring = Arc::new(MemoryKeyring::default());
-        let service = crate::application::ai::service::AiService {
-            keyring: keyring.clone(),
-            connection_keyring: keyring.clone(),
-            transport: Arc::new(StubTransport),
-            spawner: Arc::new(StubSpawner),
-            runs: Arc::new(RunRegistry::new()),
-            usage: Arc::new(UsageRegistry::new()),
-        };
-        let id = ApiConnectionId("api-migrated".into());
-        keyring
-            .set(AiProviderKind::Anthropic, "legacy-secret")
-            .unwrap();
-        let state = service
-            .migrate_connection_credential(&id, AiProviderKind::Anthropic)
-            .unwrap();
-        assert_eq!(state.connection_id, id);
-        assert!(state.has_secret);
-        assert_eq!(
-            keyring.get_connection(&id).unwrap().as_deref(),
-            Some("legacy-secret")
-        );
-        assert!(keyring.has(AiProviderKind::Anthropic).unwrap());
-        keyring.set_connection(&id, "owned-secret").unwrap();
-        let state = service
-            .migrate_connection_credential(&id, AiProviderKind::Anthropic)
-            .unwrap();
-        assert!(state.has_secret);
-        assert_eq!(
-            keyring.get_connection(&id).unwrap().as_deref(),
-            Some("owned-secret")
-        );
-        service.delete_connection_credential(&id).unwrap();
-        assert!(!keyring.has_connection(&id).unwrap());
-        assert!(keyring.has(AiProviderKind::Anthropic).unwrap());
-    }
-
-    /// Build one named OpenAI-compatible provider config carrying its stable ID.
+    /// Build one named OpenAI Chat Completions provider config carrying its stable ID.
     fn named_openai_config(id: &str) -> AiProviderConfig {
         AiProviderConfig {
-            kind: AiProviderKind::OpenaiCompatible,
+            kind: AiProviderKind::OpenaiChatCompletions,
             acp: None,
             openai: Some(OpenAiConfig {
                 endpoint: "https://api.example.com/v1".into(),
@@ -1647,7 +1546,7 @@ mod regression {
         keyring.set_connection(&first, "secret-one").unwrap();
         keyring.set_connection(&second, "secret-two").unwrap();
         keyring
-            .set(AiProviderKind::OpenaiCompatible, "legacy-secret")
+            .set(AiProviderKind::OpenaiChatCompletions, "legacy-secret")
             .unwrap();
         let (_, one) =
             resolve_http_request(&keyring, &keyring, &named_openai_config("api-first")).unwrap();
@@ -1950,7 +1849,7 @@ mod regression {
     }
 
     /// Keep a prior question/answer as separate HTTP messages before the current
-    /// scoped prompt for both OpenAI-compatible and Anthropic body builders.
+    /// scoped prompt for both OpenAI Chat Completions and Anthropic body builders.
     #[test]
     fn http_bodies_carry_two_turn_history_as_messages() {
         let history = vec![
@@ -1959,7 +1858,7 @@ mod regression {
         ];
         let mut openai = acp_request();
         openai.provider = AiProviderConfig {
-            kind: AiProviderKind::OpenaiCompatible,
+            kind: AiProviderKind::OpenaiChatCompletions,
             acp: None,
             openai: Some(OpenAiConfig {
                 endpoint: "https://api.example.com/v1".into(),
@@ -2643,7 +2542,7 @@ mod regression {
         };
         assert_eq!(acp_preset_of(&acp), Some(AcpPreset::Copilot));
         let http = AiProviderConfig {
-            kind: AiProviderKind::OpenaiCompatible,
+            kind: AiProviderKind::OpenaiChatCompletions,
             acp: None,
             openai: Some(OpenAiConfig {
                 endpoint: "https://api.example.com/v1".into(),

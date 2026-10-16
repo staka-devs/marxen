@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildProviderConfigFromConnection, defaultConnectionList, findConnectionForProvider, isApiProtocol, isConnectionId, isConnectionName, isConnectionStorageCorrupted, migrateLegacyProfile, pickConnectionId, resolveProviderChange, sanitizeApiConnection, sanitizeApiConnectionList, validateConnectionFields } from "./ai-connections";
+import { buildProviderConfigFromConnection, defaultConnectionList, findConnectionForProvider, isApiProtocol, isConnectionId, isConnectionName, isConnectionStorageCorrupted, pickConnectionId, resolveProviderChange, sanitizeApiConnection, sanitizeApiConnectionList, validateConnectionFields } from "./ai-connections";
 import { defaultProviderConfig } from "./ai-config";
-import { defaultProfile } from "./ai-profile";
 import type { ApiConnection } from "../contracts/ai-contracts";
 
 /** Build one valid connection fixture with overridable fields. */
 function connection(overrides: Partial<ApiConnection> = {}): ApiConnection {
-  return { id: "api-fixture", name: "本番", protocol: "openai_compatible", endpoint: "https://api.example.com/v1", model: "model-x", ...overrides };
+  return { id: "api-fixture", name: "本番", protocol: "openai_chat_completions", endpoint: "https://api.example.com/v1", model: "model-x", ...overrides };
 }
 
 describe("named API connection rules", () => {
@@ -61,26 +60,13 @@ describe("named API connection rules", () => {
     expect(validateConnectionFields({ name: "開発", protocol: "anthropic", endpoint: "https://api.example.com/v1", model: "m" })).toEqual([]);
     expect(validateConnectionFields({ name: "", protocol: "anthropic", endpoint: "https://api.example.com/v1", model: "" })).toContain("接続先名は 1〜64 文字で指定します");
     expect(validateConnectionFields({ name: "a", protocol: "acp", endpoint: "https://api.example.com/v1", model: "" })).toContain("通信形式を選びます。");
-    expect(validateConnectionFields({ name: "a", protocol: "openai_compatible", endpoint: "ftp://x", model: "" })).toContain("endpoint は http:// または https:// です");
-    expect(validateConnectionFields({ name: "a", protocol: "openai_compatible", endpoint: "https://user@host/v1", model: "" })).toContain("endpoint は http:// または https:// です");
-  });
-  it("migrates only a customized legacy backend and leaves ACP and defaults alone", () => {
-    expect(migrateLegacyProfile(defaultProfile(), "既定", "api-legacy")).toBeNull();
-    expect(migrateLegacyProfile({ ...defaultProfile(), kind: "acp" }, "既定", "api-legacy")).toBeNull();
-    const untouchedAnthropic = migrateLegacyProfile({ ...defaultProfile(), kind: "anthropic", anthropicEnabled: false }, "既定", "api-legacy");
-    expect(untouchedAnthropic).toBeNull();
-    const migrated = migrateLegacyProfile({ ...defaultProfile(), kind: "openai_compatible", endpoint: "https://proxy.example.com/v1", model: "g" }, "移行", "api-migrated");
-    expect(migrated?.connections).toHaveLength(1);
-    expect(migrated?.connections[0]).toMatchObject({ id: "api-migrated", name: "移行", protocol: "openai_compatible", endpoint: "https://proxy.example.com/v1", model: "g" });
-    expect(migrated?.activeId).toBe(migrated?.connections[0].id);
-    const modelOnly = migrateLegacyProfile({ ...defaultProfile(), kind: "anthropic", anthropicEnabled: true, model: "c" }, "移行", "api-second");
-    expect(modelOnly?.connections[0].protocol).toBe("anthropic");
-    expect(modelOnly?.connections[0].id).toBe("api-second");
+    expect(validateConnectionFields({ name: "a", protocol: "openai_chat_completions", endpoint: "ftp://x", model: "" })).toContain("endpoint は http:// または https:// です");
+    expect(validateConnectionFields({ name: "a", protocol: "openai_chat_completions", endpoint: "https://user@host/v1", model: "" })).toContain("endpoint は http:// または https:// です");
   });
   it("maps connections to wire configs and matches providers back without mixing", () => {
     const openai = connection();
     const config = buildProviderConfigFromConnection(openai);
-    expect(config).toEqual({ kind: "openai_compatible", acp: null, openai: { endpoint: "https://api.example.com/v1", model: "model-x" }, anthropic: null, connectionId: "api-fixture" });
+    expect(config).toEqual({ kind: "openai_chat_completions", acp: null, openai: { endpoint: "https://api.example.com/v1", model: "model-x" }, anthropic: null, connectionId: "api-fixture" });
     const anthropic = connection({ id: "api-2", protocol: "anthropic" });
     const second = buildProviderConfigFromConnection(anthropic);
     expect(second.anthropic).toMatchObject({ enabled: true, model: "model-x" });
@@ -132,10 +118,10 @@ describe("named API connection rules", () => {
     expect(decided.persist).toBeNull();
     expect(decided.provider).toBeNull();
   });
-  it.each(["openai_compatible", "anthropic"] as const)("restores the saved %s record when a same-ID conversation uses the old protocol", (protocol) => {
+  it.each(["openai_chat_completions", "anthropic"] as const)("restores the saved %s record when a same-ID conversation uses the old protocol", (protocol) => {
     const target = connection({ protocol });
     const other = connection({ id: "api-other" });
-    const stale = buildProviderConfigFromConnection(connection({ protocol: protocol === "anthropic" ? "openai_compatible" : "anthropic", endpoint: "https://old.example.com/v1", model: "old-model" }));
+    const stale = buildProviderConfigFromConnection(connection({ protocol: protocol === "anthropic" ? "openai_chat_completions" : "anthropic", endpoint: "https://old.example.com/v1", model: "old-model" }));
     for (const activeId of [target.id, other.id, null]) {
       const list = { version: 1 as const, activeId, initialized: true, connections: [target, other] };
       const decided = resolveProviderChange(list, stale);
@@ -146,7 +132,7 @@ describe("named API connection rules", () => {
       expect(list.connections).toEqual([target, other]);
     }
   });
-  it.each(["openai_compatible", "anthropic"] as const)("clears named selection for ID-less %s choices without editing any record", (protocol) => {
+  it.each(["openai_chat_completions", "anthropic"] as const)("clears named selection for ID-less %s choices without editing any record", (protocol) => {
     const first = connection();
     const second = connection({ id: "api-second", protocol: "anthropic" });
     const list = { version: 1 as const, activeId: first.id, initialized: true, connections: [first, second] };
@@ -158,7 +144,7 @@ describe("named API connection rules", () => {
     expect(resolveProviderChange(list, defaults)).toEqual({ persist: { ...list, activeId: null }, provider: defaults, missing: false });
     expect(list.connections).toEqual([first, second]);
   });
-  it.each(["openai_compatible", "anthropic"] as const)("preserves explicit same-ID %s field edits", (protocol) => {
+  it.each(["openai_chat_completions", "anthropic"] as const)("preserves explicit same-ID %s field edits", (protocol) => {
     const target = connection({ protocol });
     const other = connection({ id: "api-other" });
     const list = { version: 1 as const, activeId: target.id, initialized: true, connections: [target, other] };
@@ -177,6 +163,6 @@ it("stores Responses as a separate named protocol while retaining Chat Completio
   expect(provider.openai?.endpoint).toBe(responses.endpoint);
   expect(provider.connectionId).toBe("responses");
   const legacy = connection({ id: "existing-chat" });
-  expect(buildProviderConfigFromConnection(legacy).kind).toBe("openai_compatible");
+  expect(buildProviderConfigFromConnection(legacy).kind).toBe("openai_chat_completions");
   expect(findConnectionForProvider({ ...defaultConnectionList(), connections: [legacy, responses] }, provider)?.id).toBe("responses");
 });

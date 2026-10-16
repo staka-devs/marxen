@@ -29,8 +29,8 @@ describe("reported agent usage", () => {
   });
 
   it("keeps provider observations separate and leaves absent values absent", () => {
-    const rows = latestAgentUsage([usage(), usage({ preset: "opencode", receivedMs: 2 }), usage({ provider: "openai_compatible", preset: undefined, receivedMs: 3 })]);
-    expect(rows.map((row) => row.key)).toEqual(["openai_compatible", "acp:opencode", "acp:codex"]);
+    const rows = latestAgentUsage([usage(), usage({ preset: "opencode", receivedMs: 2 }), usage({ provider: "openai_chat_completions", preset: undefined, receivedMs: 3 })]);
+    expect(rows.map((row) => row.key)).toEqual(["openai_chat_completions", "acp:opencode", "acp:codex"]);
     for (const row of rows) {
       expect(row.context).toBeUndefined();
       expect(row.cost).toBeUndefined();

@@ -63,7 +63,7 @@ export function describeProviderSummary(provider: AiProviderConfig, t: Translato
     }
     return t(PRESET_LABELS[provider.acp?.preset ?? "codex"] as LabelKey);
   }
-  if (provider.kind === "openai_compatible" || provider.kind === "openai_responses") {
+  if (provider.kind === "openai_chat_completions" || provider.kind === "openai_responses") {
     const model = provider.openai?.model?.trim() ?? "";
     const label = provider.kind === "openai_responses" ? "OpenAI Responses" : "OpenAI Chat Completions";
     return model === "" ? label : `${label} • ${model}`;
@@ -128,7 +128,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
   const [command, setCommand] = useState(provider.acp?.argv?.command ?? "");
   const [argsText, setArgsText] = useState((provider.acp?.argv?.args ?? []).join("\n"));
   const [endpoint, setEndpoint] = useState(
-    provider.openai?.endpoint ?? provider.anthropic?.endpoint ?? DEFAULT_ENDPOINTS.openai_compatible,
+    provider.openai?.endpoint ?? provider.anthropic?.endpoint ?? DEFAULT_ENDPOINTS.openai_chat_completions,
   );
   const [model, setModel] = useState(provider.openai?.model ?? provider.anthropic?.model ?? "");
   const [anthropicEnabled, setAnthropicEnabled] = useState(provider.anthropic?.enabled ?? false);
@@ -159,7 +159,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
     setPreset(provider.acp?.preset ?? "codex");
     setCommand(provider.acp?.argv?.command ?? "");
     setArgsText((provider.acp?.argv?.args ?? []).join("\n"));
-    setEndpoint(provider.openai?.endpoint ?? provider.anthropic?.endpoint ?? DEFAULT_ENDPOINTS.openai_compatible);
+    setEndpoint(provider.openai?.endpoint ?? provider.anthropic?.endpoint ?? DEFAULT_ENDPOINTS.openai_chat_completions);
     setModel(provider.openai?.model ?? provider.anthropic?.model ?? "");
     setAnthropicEnabled(provider.anthropic?.enabled ?? false);
     setAcpSelections(provider.acp?.selections);
@@ -211,7 +211,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
         setPreset(provider.acp?.preset ?? "codex");
         setCommand(provider.acp?.argv?.command ?? "");
         setArgsText((provider.acp?.argv?.args ?? []).join("\n"));
-        setEndpoint(provider.openai?.endpoint ?? provider.anthropic?.endpoint ?? DEFAULT_ENDPOINTS.openai_compatible);
+        setEndpoint(provider.openai?.endpoint ?? provider.anthropic?.endpoint ?? DEFAULT_ENDPOINTS.openai_chat_completions);
         setModel(provider.openai?.model ?? provider.anthropic?.model ?? "");
         setAnthropicEnabled(provider.anthropic?.enabled ?? false);
         setAcpSelections(provider.acp?.selections);
@@ -433,7 +433,6 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
             onMintId={connectionControls.onMintId}
             connectionGateway={connectionControls.connectionGateway}
             notice={connectionControls.notice}
-            onRetryMigration={connectionControls.onRetryMigration}
             onRetryDeleteCredential={connectionControls.onRetryDeleteCredential}
           />
         )}

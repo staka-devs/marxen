@@ -26,7 +26,7 @@ pub const SECRET_SERVICE: &str = "dev.staka.marxen";
 #[serde(rename_all = "snake_case")]
 pub enum AiProviderKind {
     Acp,
-    OpenaiCompatible,
+    OpenaiChatCompletions,
     OpenaiResponses,
     Anthropic,
 }
@@ -118,7 +118,7 @@ pub struct ApiConnectionId(pub String);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiProtocol {
-    OpenaiCompatible,
+    OpenaiChatCompletions,
     OpenaiResponses,
     Anthropic,
 }

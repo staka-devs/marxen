@@ -1,7 +1,7 @@
 // Generated from src-tauri/src/contracts/ai.rs. Run npm run ai-contracts:generate.
 // Do not edit by hand. AI IPC schema version 7.
 import type { DocumentId, Revision, Utf16Range, DocumentLocation } from "./contracts";
-export type AiProviderKind = "acp" | "openai_compatible" | "openai_responses" | "anthropic";
+export type AiProviderKind = "acp" | "openai_chat_completions" | "openai_responses" | "anthropic";
 export type AcpPreset = "codex" | "opencode" | "copilot" | "claude_code" | "custom";
 export type AcpArgv = { command: string, args: Array<string>, };
 export type AcpConfig = { preset: AcpPreset, 
@@ -19,7 +19,7 @@ export type AcpConfigOption = { id: string, name: string, category: string, curr
 export type OpenAiConfig = { endpoint: string, model: string, };
 export type AnthropicConfig = { enabled: boolean, endpoint: string, model: string, };
 export type ApiConnectionId = string;
-export type ApiProtocol = "openai_compatible" | "openai_responses" | "anthropic";
+export type ApiProtocol = "openai_chat_completions" | "openai_responses" | "anthropic";
 export type ApiConnection = { id: ApiConnectionId, name: string, protocol: ApiProtocol, endpoint: string, model: string, };
 export type AiProviderConfig = { kind: AiProviderKind, acp: AcpConfig | null, openai: OpenAiConfig | null, anthropic: AnthropicConfig | null, 
 /**

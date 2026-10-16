@@ -78,7 +78,11 @@ pub(super) fn directory(path: &Path) -> Result<(), ProviderAccountError> {
             .map_err(|_| ProviderAccountError::StoreFailed)?;
     }
     #[cfg(not(unix))]
-    fs::create_dir_all(path).map_err(|_| ProviderAccountError::StoreFailed)?;
+    {
+        fs::create_dir_all(path).map_err(|_| ProviderAccountError::StoreFailed)?;
+        #[cfg(windows)]
+        super::windows::private_directory(path)?;
+    }
     Ok(())
 }
 

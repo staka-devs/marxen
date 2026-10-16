@@ -49,7 +49,7 @@ export function AiModelControls({ provider, onProvider, options, loading, discov
    * never share hide state; same-protocol twins never share hide state either.
    */
   const scopedConnectionId = providerScopeId;
-  const switcherLabel = activeConnection?.name ?? (selectedProvider === "openai_responses" ? "OpenAI Responses" : selectedProvider === "openai_compatible" ? t("OpenAI Chat Completions") : selectedProvider === "anthropic" ? "Anthropic API" : t(PRESET_LABELS[selectedProvider] as LabelKey));
+  const switcherLabel = activeConnection?.name ?? (selectedProvider === "openai_responses" ? "OpenAI Responses" : selectedProvider === "openai_chat_completions" ? t("OpenAI Chat Completions") : selectedProvider === "anthropic" ? "Anthropic API" : t(PRESET_LABELS[selectedProvider] as LabelKey));
   const hiddenCurrent = !isAiProviderVisible(preferences, selectedProvider, provider.kind === "acp" ? null : providerScopeId) || options.some((option) => option.category === "model" && !isAiModelVisible(preferences, selectedProvider, option.id, provider.acp?.selections?.find((item) => item.id === option.id)?.value ?? option.currentValue, scopedConnectionId));
   /** Switch to a configured adapter or an API profile without starting or authenticating it. */
   function changeProvider(value: string) {

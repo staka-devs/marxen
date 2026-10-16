@@ -1,6 +1,7 @@
 //! ACP subprocess lifecycle and bounded stdio framing.
 use crate::application::ai::runs::*;
 use crate::application::ai::transport::ResolvedAcpLaunch;
+use crate::application::provider_accounts::AccountLaunchEnvironment;
 use crate::contracts::ai::*;
 use crate::domain::ai::*;
 use serde_json::Value;
@@ -702,66 +703,56 @@ pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 /// Bounded newline-delimited JSON reader for native ACP stdout.
 pub struct NdjsonReader<R: BufRead> {
     inner: R,
-    buf: Vec<u8>,
 }
 
 impl<R: BufRead> NdjsonReader<R> {
-    /// Start an empty bounded newline-delimited JSON decoder over the supplied reader.
+    /// Start a bounded newline-delimited JSON decoder over the supplied reader.
     pub fn new(inner: R) -> Self {
-        Self {
-            inner,
-            buf: Vec::new(),
-        }
+        Self { inner }
     }
 
-    /// Read one message. `Ok(None)` only on clean EOF with no pending bytes.
+    /// Read each byte once, allowing CRLF while bounding allocation before parsing.
     pub fn next_value(&mut self) -> Result<Option<serde_json::Value>, AiError> {
         loop {
-            if let Some(end) = self.buf.iter().position(|byte| *byte == b'\n') {
-                let raw: Vec<u8> = self.buf.drain(..=end).collect();
-                let mut line = &raw[..raw.len() - 1];
-                if line.ends_with(b"\r") {
-                    line = &line[..line.len() - 1];
-                }
-                if line.is_empty() {
-                    continue;
-                }
-                if line.len() > MAX_ACP_LINE_BYTES {
-                    return Err(AiError::StreamFailed {
-                        detail: "ACP の応答が大きすぎます".into(),
-                    });
-                }
-                let text = std::str::from_utf8(line).map_err(|_| AiError::StreamFailed {
-                    detail: "ACP の応答が UTF-8 ではありません".into(),
+            let mut raw = Vec::new();
+            let count = Read::take(&mut self.inner, (MAX_ACP_LINE_BYTES + 2) as u64)
+                .read_until(b'\n', &mut raw)
+                .map_err(|_| AiError::StreamFailed {
+                    detail: "ACP の応答を読み取れません".into(),
                 })?;
-                return serde_json::from_str(text)
-                    .map(Some)
-                    .map_err(|_| AiError::StreamFailed {
-                        detail: "ACP の応答を解釈できません".into(),
-                    });
+            if count == 0 {
+                return Ok(None);
             }
-            if self.buf.len() > MAX_ACP_LINE_BYTES + 1 {
+            if raw.last() != Some(&b'\n') {
+                return Err(AiError::StreamFailed {
+                    detail: if count > MAX_ACP_LINE_BYTES {
+                        "ACP の応答が大きすぎます"
+                    } else {
+                        "エージェントが途中で標準出力を閉じました"
+                    }
+                    .into(),
+                });
+            }
+            raw.pop();
+            if raw.last() == Some(&b'\r') {
+                raw.pop();
+            }
+            if raw.len() > MAX_ACP_LINE_BYTES {
                 return Err(AiError::StreamFailed {
                     detail: "ACP の応答が大きすぎます".into(),
                 });
             }
-            let mut chunk = [0u8; 4096];
-            match self.inner.read(&mut chunk) {
-                Ok(0) => {
-                    if self.buf.is_empty() {
-                        return Ok(None);
-                    }
-                    return Err(AiError::StreamFailed {
-                        detail: "エージェントが途中で標準出力を閉じました".into(),
-                    });
-                }
-                Ok(read) => self.buf.extend_from_slice(&chunk[..read]),
-                Err(_) => {
-                    return Err(AiError::StreamFailed {
-                        detail: "ACP の応答を読み取れません".into(),
-                    });
-                }
+            if raw.is_empty() {
+                continue;
             }
+            let text = std::str::from_utf8(&raw).map_err(|_| AiError::StreamFailed {
+                detail: "ACP の応答が UTF-8 ではありません".into(),
+            })?;
+            return serde_json::from_str(text)
+                .map(Some)
+                .map_err(|_| AiError::StreamFailed {
+                    detail: "ACP の応答を解釈できません".into(),
+                });
         }
     }
 }
@@ -771,10 +762,23 @@ pub use crate::application::ai::transport::AcpRunParams;
 
 /// Spawn the configured ACP argv directly with piped stdio and an isolated working directory.
 pub(super) fn spawn_acp(argv: &AcpArgv, staging_dir: &Path) -> Result<Child, AiError> {
+    spawn_acp_with_environment(argv, staging_dir, &AccountLaunchEnvironment::default())
+}
+
+/// Apply selected credentials only to this child; the host login stays untouched.
+pub(super) fn spawn_acp_with_environment(
+    argv: &AcpArgv,
+    staging_dir: &Path,
+    environment: &AccountLaunchEnvironment,
+) -> Result<Child, AiError> {
     // Resolve npm shims to bundled targets first. The resolved program goes
     // directly to the OS with an argv array. No shell, no interpolation.
     let launch = resolve_acp_launch(argv)?;
     let mut command = Command::new(&launch.program);
+    for name in &environment.remove {
+        command.env_remove(name);
+    }
+    command.envs(&environment.set);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -1026,8 +1030,23 @@ pub fn agent_handshake(
     staging_dir: &Path,
     timeout: Duration,
 ) -> Result<HandshakeInfo, AiError> {
+    agent_handshake_with_environment(
+        argv,
+        staging_dir,
+        timeout,
+        &AccountLaunchEnvironment::default(),
+    )
+}
+
+/// Negotiate using one immutable account environment for the complete probe.
+fn agent_handshake_with_environment(
+    argv: &AcpArgv,
+    staging_dir: &Path,
+    timeout: Duration,
+    environment: &AccountLaunchEnvironment,
+) -> Result<HandshakeInfo, AiError> {
     validate_argv(argv)?;
-    let mut child = spawn_acp(argv, staging_dir)?;
+    let mut child = spawn_acp_with_environment(argv, staging_dir, environment)?;
     let stdin = child.stdin.take().ok_or_else(|| AiError::SpawnFailed {
         detail: "エージェントの標準入力を開けません".into(),
     })?;
@@ -1220,6 +1239,27 @@ pub fn run_acp_prompt(
     cancel: &AtomicBool,
     emit: &mut (dyn FnMut(AiStreamEvent) + Send),
 ) -> Result<(), AiError> {
+    run_acp_prompt_with_environment(
+        params,
+        request,
+        run_id,
+        registry,
+        cancel,
+        &AccountLaunchEnvironment::default(),
+        emit,
+    )
+}
+
+/// Keep a selected account fixed for the lifetime of the authorized run.
+pub(super) fn run_acp_prompt_with_environment(
+    params: &AcpRunParams,
+    request: &AiPromptRequest,
+    run_id: &AiRunId,
+    registry: &Arc<RunRegistry>,
+    cancel: &AtomicBool,
+    environment: &AccountLaunchEnvironment,
+    emit: &mut (dyn FnMut(AiStreamEvent) + Send),
+) -> Result<(), AiError> {
     // The overall prompt budget starts here: permission waits below use the
     // remainder of this same deadline instead of restarting it per request.
     let run_started = Instant::now();
@@ -1230,7 +1270,7 @@ pub fn run_acp_prompt(
         cancelled_or_timed_out(run_id, registry, emit);
         return Ok(());
     }
-    let mut child = spawn_acp(&params.argv, &params.staging_dir)?;
+    let mut child = spawn_acp_with_environment(&params.argv, &params.staging_dir, environment)?;
     // Drain stderr on a side thread so a chatty agent can never block us.
     let stderr_captured: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
     if let Some(mut stderr) = child.stderr.take() {
@@ -1555,10 +1595,18 @@ fn run_acp_conversation(
     }
 }
 
-// ---- HTTP SSE drivers (OpenAI-compatible and Anthropic) ----
+// ---- HTTP SSE drivers (OpenAI Chat Completions and Anthropic) ----
 
 /// Probe ACP initialization in a temporary directory and always reap the probe child.
 pub fn handshake_acp(argv: &AcpArgv) -> Result<AiTestResult, AiError> {
+    handshake_acp_with_environment(argv, &AccountLaunchEnvironment::default())
+}
+
+/// Probe the same selected account used by the next native prompt.
+pub(super) fn handshake_acp_with_environment(
+    argv: &AcpArgv,
+    environment: &AccountLaunchEnvironment,
+) -> Result<AiTestResult, AiError> {
     validate_argv(argv)?;
     let staging = tempfile::Builder::new()
         .prefix("marxen-acp-probe-")
@@ -1566,7 +1614,12 @@ pub fn handshake_acp(argv: &AcpArgv) -> Result<AiTestResult, AiError> {
         .map_err(|error| AiError::ConnectionFailed {
             detail: format!("接続確認用フォルダーを作れません: {error}"),
         })?;
-    match agent_handshake(argv, staging.path(), Duration::from_secs(60)) {
+    match agent_handshake_with_environment(
+        argv,
+        staging.path(),
+        Duration::from_secs(60),
+        environment,
+    ) {
         Ok(info) => Ok(AiTestResult {
             config_options: Some(info.config_options),
             ok: true,

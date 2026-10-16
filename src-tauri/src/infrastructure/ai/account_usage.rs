@@ -60,27 +60,11 @@ pub fn read_codex_with_environment(
     environment: Option<&AccountLaunchEnvironment>,
 ) -> Result<Vec<CodexUsageBucket>, AiError> {
     let scratch = tempfile::tempdir().map_err(|_| read_error())?;
-    let mut child = if let Some(environment) = environment {
-        let launch = super::acp::resolve_acp_launch(argv)?;
-        let mut command = std::process::Command::new(&launch.program);
-        command
-            .args(&launch.args)
-            .current_dir(scratch.path())
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        for key in &environment.remove {
-            command.env_remove(key);
+    let mut child = match environment {
+        Some(environment) => {
+            super::acp::spawn_acp_with_environment(argv, scratch.path(), environment)?
         }
-        command.envs(&environment.set);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x0800_0000);
-        }
-        command.spawn().map_err(|_| read_error())?
-    } else {
-        spawn_acp(argv, scratch.path())?
+        None => spawn_acp(argv, scratch.path())?,
     };
     let result = (|| {
         let stdin = child.stdin.take().ok_or_else(read_error)?;

@@ -1,3 +1,5 @@
+import { aiAccountScope } from "../../domain/ai-account-scope";
+import type { AccountSnapshot } from "../../contracts/provider-accounts";
 import { localizedFailure } from "../../domain/localization";
 import type { LocalizedText } from "../../contracts/localization";
 import type { LabelKey } from "../../contracts/localization";
@@ -22,11 +24,10 @@ import { EditorActionsPopover } from "../workspace/EditorActionsPopover";
 import { WorkspaceSidebar } from "../workspace/WorkspaceSidebar";
 import InlineChat from "../ai-inline-chat";
 import ReviewPanel from "../review-panel";
-import type { AiProviderConfig, ApiConnection, ApiConnectionId, AiProviderKind } from "../../contracts/ai-contracts";
+import type { AiProviderConfig, ApiConnection, ApiConnectionId } from "../../contracts/ai-contracts";
 import { buildProviderConfig, defaultProviderConfig, describeInvokeError } from "../../domain/ai-config";
-import { buildProviderConfigFromConnection, defaultConnectionList, migrateLegacyProfile, resolveProviderChange, type ApiConnectionList } from "../../domain/ai-connections";
+import { buildProviderConfigFromConnection, defaultConnectionList, resolveProviderChange, type ApiConnectionList } from "../../domain/ai-connections";
 import { mintConnectionId } from "../ai/connection-id";
-import { defaultProfile } from "../../domain/ai-profile";
 import type { ApiConnectionControls } from "../ai/ApiConnections";
 import { FileTree, buildTree } from "../workspace/FileTree";
 import { ImageViewer } from "../workspace/ImageViewer";
@@ -171,8 +172,7 @@ const MODE_LABEL: Record<ViewMode, string> = {
 /**
  * Load the initial chat provider, preferring the active named connection.
  *
- * Falls back to the legacy single profile (and finally Codex defaults) so
- * existing settings keep working until the user registers a connection.
+ * Reuse the saved ACP selection; direct APIs come only from registered records.
  */
 function initialAiProvider(aiProfileStore: AiProfileStore | undefined, apiConnectionStore: ApiConnectionStore | undefined): AiProviderConfig {
   try {
@@ -184,7 +184,7 @@ function initialAiProvider(aiProfileStore: AiProfileStore | undefined, apiConnec
   }
   try {
     const saved = aiProfileStore?.load();
-    if (!saved) return buildProviderConfig({ kind: "acp", preset: "codex", command: "", argsText: "", endpoint: "https://api.openai.com/v1", model: "", anthropicEnabled: false });
+    if (!saved || saved.kind !== "acp") return buildProviderConfig({ kind: "acp", preset: "codex", command: "", argsText: "", endpoint: "https://api.openai.com/v1", model: "", anthropicEnabled: false });
     return buildProviderConfig(saved);
   } catch {
     return buildProviderConfig({ kind: "acp", preset: "codex", command: "", argsText: "", endpoint: "https://api.openai.com/v1", model: "", anthropicEnabled: false });
@@ -250,7 +250,6 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   const [aiProvider, setAiProviderState] = useState<AiProviderConfig>(() => initialAiProvider(aiProfileStore, apiConnectionStore));
   const [apiConnections, setApiConnections] = useState<ApiConnectionList>(() => initialApiConnections(apiConnectionStore));
   const [connectionNotice, setConnectionNotice] = useState<import("../../contracts/localization").LocalizedText | null>(null);
-  const [migrationStatus, setMigrationStatus] = useState<"pending" | "failed" | null>(null);
   const apiConnectionsRef = useRef(apiConnections);
   apiConnectionsRef.current = apiConnections;
   /**
@@ -468,139 +467,31 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       onMintId: mintApiConnectionId,
       connectionGateway: apiConnectionGateway,
       notice: connectionNotice,
-      onRetryMigration: migrationStatus === "failed" ? retryMigrationCredential : undefined,
       onRetryDeleteCredential: deleteCredentialFailure ? retryDeleteCredential : undefined,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiConnectionStore, apiConnections, apiConnectionGateway, connectionNotice, migrationStatus, deleteCredentialFailure]);
+  }, [apiConnectionStore, apiConnections, apiConnectionGateway, connectionNotice, deleteCredentialFailure]);
 
-  const aiModels = useAiModels(aiProvider, aiGateway, aiProvider.connectionId ?? null);
+  const [accountSnapshot, setAccountSnapshot] = useState<AccountSnapshot>({ accounts: [], selections: [] });
+  const accountSnapshotEpoch = useRef(0);
+  /** Publish a committed account selection and fence older startup reads. */
+  const noteAccountSnapshot = useCallback((next: AccountSnapshot) => {
+    accountSnapshotEpoch.current += 1;
+    setAccountSnapshot(next);
+  }, []);
+  useEffect(() => {
+    let active = true;
+    const epoch = accountSnapshotEpoch.current;
+    void providerAccountGateway?.snapshot().then(next => {
+      if (active && epoch === accountSnapshotEpoch.current) setAccountSnapshot(next);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [providerAccountGateway]);
   const aiView = useAiViewPreferences(props.aiViewPreferencesStore);
   const [aiVisibilityOpen, setAiVisibilityOpen] = useState(false);
   /** Restore the composer after managing its view-only preferences. */
   const closeAiVisibility = useCallback(() => setAiVisibilityOpen(false), []);
 
-  const migratedOnce = useRef(false);
-  const migrationRef = useRef<{ id: ApiConnectionId; kind: AiProviderKind; name: string } | null>(null);
-
-  /**
-   * Carry the legacy kind credential into the migrated connection slot.
-   *
-   * Selects the migrated connection only when the copy proves a secret is
-   * present; pending, failed, or empty copies keep the previous provider so
-   * nothing auto-selects or sends without credentials. Failures surface with
-   * an explicit retry instead of silent drift.
-   */
-  async function carryOverMigrationCredential() {
-    const pending = migrationRef.current;
-    if (!pending || !apiConnectionGateway) return;
-    try {
-      const carried = await apiConnectionGateway.migrateConnectionCredential(pending.id, pending.kind);
-      if (migrationRef.current?.id !== pending.id) return;
-      const current = apiConnectionsRef.current.connections.find((item) => item.id === pending.id) ?? null;
-      if (current === null) {
-        migrationRef.current = null;
-        setMigrationStatus(null);
-        setConnectionNotice(null);
-        return;
-      }
-      if (!carried.hasSecret) {
-        migrationRef.current = null;
-        setMigrationStatus(null);
-        setConnectionNotice(message("資格情報を引き継げませんでした。接続先の編集画面で設定します。"));
-        return;
-      }
-      if (!persistConnections({ ...apiConnectionsRef.current, activeId: current.id })) {
-        // Keep the recorded target and the previous selection: the secret
-        // already sits in its slot, so retry only re-applies the selection.
-        setMigrationStatus("failed");
-        setConnectionNotice(message("API接続先を保存できませんでした。変更は適用されませんでした。"));
-        return;
-      }
-      setAiProviderState(buildProviderConfigFromConnection(current));
-      migrationRef.current = null;
-      setMigrationStatus(null);
-      setConnectionNotice(message("以前の単一設定から {{value0}} を引き継ぎました。", { value0: current.name }));
-    } catch {
-      if (migrationRef.current?.id !== pending.id) return;
-      setMigrationStatus("failed");
-      setConnectionNotice(message("資格情報の引き継ぎに失敗しました。再試行できます。"));
-    }
-  }
-
-  /**
-   * Retry a failed credential carry-over without reselecting anything.
-   *
-   * Reuses the recorded migration target; superseded or removed targets
-   * settle quietly instead of touching the current selection.
-   */
-  function retryMigrationCredential() {
-    if (migrationRef.current === null || migrationStatus !== "failed") return;
-    setMigrationStatus("pending");
-    setConnectionNotice(message("資格情報を引き継いでいます…"));
-    void carryOverMigrationCredential();
-  }
-  useEffect(() => {
-    if (migratedOnce.current || !apiConnectionStore) return;
-    /**
-     * Migrate the legacy single profile into one named connection exactly once.
-     *
-     * Runs only for uninitialized empty stores with clean storage; corrupt or
-     * unsupported bytes never migrate so the original stays retained. The
-     * legacy profile and its kind credential slots stay untouched, and the
-     * secret moves slot to slot inside Rust without crossing IPC. The list
-     * persists first WITHOUT selecting the new connection: the previous
-     * provider stays active and nothing sends until the key copy succeeds. A
-     * failed persist retries on remount, while a failed or empty key copy
-     * keeps the old selection and offers an explicit retry beside the notice.
-     */
-    try {
-      try {
-        if (apiConnectionStore.inspect?.()?.corrupted) {
-          migratedOnce.current = true;
-          return;
-        }
-      } catch {
-        // Inspection failures block migration to avoid overwriting unknown bytes.
-        migratedOnce.current = true;
-        return;
-      }
-      const stored = apiConnectionStore.load();
-      if (stored.initialized || stored.connections.length > 0) {
-        migratedOnce.current = true;
-        return;
-      }
-      const legacy = aiProfileStore?.load() ?? defaultProfile();
-      if (legacy.kind !== "openai_compatible" && legacy.kind !== "openai_responses" && legacy.kind !== "anthropic") {
-        migratedOnce.current = true;
-        return;
-      }
-      const migrated = migrateLegacyProfile(legacy, t(legacy.kind === "anthropic" ? "Anthropic 1" : "OpenAI Chat Completions 1"), mintConnectionId([]));
-      if (!migrated) {
-        migratedOnce.current = true;
-        return;
-      }
-      const active = migrated.connections.find((item) => item.id === migrated.activeId) ?? migrated.connections[0];
-      if (!active) {
-        migratedOnce.current = true;
-        return;
-      }
-      if (!persistConnections({ version: 1, activeId: null, connections: migrated.connections, initialized: true })) return;
-      migratedOnce.current = true;
-      migrationRef.current = { id: active.id, kind: legacy.kind, name: active.name };
-      setMigrationStatus("pending");
-      setConnectionNotice(message("資格情報を引き継いでいます…"));
-      if (!apiConnectionGateway) {
-        setMigrationStatus(null);
-        setConnectionNotice(message("資格情報を引き継げませんでした。接続先の編集画面で設定します。"));
-        return;
-      }
-      void carryOverMigrationCredential();
-    } catch {
-      migratedOnce.current = true;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiConnectionStore]);
 
   const [preferences, setPreferences] = useState(() => {
     try {
@@ -698,6 +589,12 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     isolationGateway,
     onWorkspaceChanged: refreshAfterImport,
   });
+  const selectedAccountScope = aiAccountScope(aiProvider, accountSnapshot);
+  const settledAccountScope = useRef(selectedAccountScope);
+  // A running child keeps its original account; the next turn gets a separate history.
+  if (!staging.agentBusy && !staging.inlineBusy) settledAccountScope.current = selectedAccountScope;
+  const sessionScopeKey = settledAccountScope.current;
+  const aiModels = useAiModels(aiProvider, aiGateway, sessionScopeKey);
   const modelControls = <AiModelControls provider={aiProvider} onProvider={setAiProvider} {...aiModels} preferences={aiView.preferences} onManageVisibility={() => setAiVisibilityOpen(true)} onRefresh={() => void aiModels.refresh()} disabled={staging.agentBusy || staging.inlineBusy} connectionSelection={connectionControls ?? undefined} />;
   // Read-through aliases for narrowing-heavy JSX; ownership stays in hooks.
   /** Active document for pane rendering. */
@@ -1444,7 +1341,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             onTheme={setTheme}
             preferences={preferences}
             onPreferences={updatePreferences}
-            aiSettings={<><AiProviderSettings embedded provider={aiProvider} onProvider={setAiProvider} gateway={aiGateway} profileStore={aiProfileStore} connectionControls={connectionControls} /><ProviderAccountsSettings gateway={providerAccountGateway} /></>}
+            aiSettings={<><AiProviderSettings embedded provider={aiProvider} onProvider={setAiProvider} gateway={aiGateway} profileStore={aiProfileStore} connectionControls={connectionControls} /><ProviderAccountsSettings gateway={providerAccountGateway} onSnapshot={noteAccountSnapshot} /></>}
             aiVisibilitySettings={<AiVisibilitySettings preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} connections={apiConnections.connections} saveFailed={aiView.saveFailed} />}
             vimSettings={desktop && vimSettingsGateway ? <VimSettingsHost gateway={vimSettingsGateway} initialPath={workspace.configPath} onPathChange={workspace.setConfigPath} onSaved={(path) => { workspace.setConfigPath(path); void workspace.applyConfig(path); }} dialogGateway={dialogGateway} /> : undefined}
             configPath={workspace.configPath}
@@ -1489,7 +1386,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             profileStore={aiProfileStore}
             aiGateway={aiGateway}
             connectionControls={connectionControls}
-            sessionScopeKey={connectionControls ? (aiProvider.connectionId ?? null) : undefined}
+            sessionScopeKey={sessionScopeKey}
           />
           </div>
           <div className="max-h-72 min-h-0 overflow-y-auto">

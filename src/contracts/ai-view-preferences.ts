@@ -1,7 +1,7 @@
 import type { AcpConfigOption, ApiConnectionId } from "./ai-contracts";
 
 /** Supported connection choices; these identifiers never assert connection health. */
-export type AiProviderId = "codex" | "opencode" | "copilot" | "claude_code" | "custom" | "openai_compatible" | "openai_responses" | "anthropic";
+export type AiProviderId = "codex" | "opencode" | "copilot" | "claude_code" | "custom" | "openai_chat_completions" | "openai_responses" | "anthropic";
 
 /** One hidden advertised value, scoped by provider and the agent's actual option ID. */
 export interface HiddenAiModel {

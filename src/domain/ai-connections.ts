@@ -6,8 +6,6 @@
 // this model. ACP presets stay separate and are never represented here.
 
 import type { AiProviderConfig, ApiConnection, ApiConnectionId, ApiProtocol } from "../contracts/ai-contracts";
-import { DEFAULT_ENDPOINTS } from "./ai-config";
-import type { AiProfile } from "./ai-profile";
 
 /** Persisted non-secret list of named API connections with the active selection. */
 export interface ApiConnectionList {
@@ -23,10 +21,10 @@ export interface ApiConnectionList {
 }
 
 /** Protocols offered by the settings protocol dropdown. */
-export const API_PROTOCOLS: ApiProtocol[] = ["openai_compatible", "openai_responses", "anthropic"];
+export const API_PROTOCOLS: ApiProtocol[] = ["openai_chat_completions", "openai_responses", "anthropic"];
 
 /** Storage key versioning the named-connection shape. */
-export const API_CONNECTIONS_STORAGE_KEY = "marxen.api-connections.v1";
+export const API_CONNECTIONS_STORAGE_KEY = "marxen.api-connections.v2";
 
 /** Maximum display-name length in Unicode scalars. */
 export const MAX_CONNECTION_NAME_CHARS = 64;
@@ -68,7 +66,7 @@ export function isConnectionName(value: unknown): value is string {
  * Only direct-API protocols validate; ACP is never a connection protocol.
  */
 export function isApiProtocol(value: unknown): value is ApiProtocol {
-  return value === "openai_compatible" || value === "openai_responses" || value === "anthropic";
+  return value === "openai_chat_completions" || value === "openai_responses" || value === "anthropic";
 }
 
 /**
@@ -185,31 +183,6 @@ export function validateConnectionFields(input: { name: string; protocol: unknow
 }
 
 /**
- * Migrate the legacy single profile into named connections, if it configures one.
- *
- * Migrates only the currently selected legacy backend and only when it
- * differs from an untouched default (custom endpoint or non-empty model);
- * ACP selections and untouched defaults yield null so no phantom
- * connections appear. The legacy profile itself is never modified here.
- * The connection ID is caller-minted so this stays pure and deterministic.
- */
-export function migrateLegacyProfile(profile: AiProfile, defaultName: string, id: string): { connections: ApiConnection[]; activeId: string } | null {
-  if (profile.kind !== "openai_compatible" && profile.kind !== "openai_responses" && profile.kind !== "anthropic") return null;
-  if (profile.kind === "anthropic" && !profile.anthropicEnabled) return null;
-  const fallback = profile.kind !== "anthropic" ? DEFAULT_ENDPOINTS.openai_compatible : DEFAULT_ENDPOINTS.anthropic;
-  const customized = profile.endpoint.trim() !== "" && profile.endpoint.trim() !== fallback;
-  if (!customized && profile.model.trim() === "") return null;
-  const connection: ApiConnection = {
-    id: id as ApiConnectionId,
-    name: defaultName,
-    protocol: profile.kind,
-    endpoint: profile.endpoint.trim() === "" ? fallback : profile.endpoint.trim(),
-    model: profile.model.trim(),
-  };
-  return { connections: [connection], activeId: connection.id };
-}
-
-/**
  * Resolve a provider change against the stored list without side effects.
  *
  * ACP and ID-less API selections clear the named marker without editing saved
@@ -228,7 +201,7 @@ export function resolveProviderChange(
     if (list.activeId !== null) return { persist: { ...list, activeId: null }, provider: next, missing: false };
     return { persist: null, provider: next, missing: false };
   }
-  if (next.kind !== "openai_compatible" && next.kind !== "openai_responses" && next.kind !== "anthropic") {
+  if (next.kind !== "openai_chat_completions" && next.kind !== "openai_responses" && next.kind !== "anthropic") {
     return { persist: null, provider: next, missing: false };
   }
   const nextId = next.connectionId ?? null;
@@ -282,7 +255,7 @@ export function buildProviderConfigFromConnection(connection: ApiConnection): Ai
  * switcher never highlights a foreign connection.
  */
 export function findConnectionForProvider(list: ApiConnectionList, provider: AiProviderConfig): ApiConnection | null {
-  if (provider.kind !== "openai_compatible" && provider.kind !== "openai_responses" && provider.kind !== "anthropic") return null;
+  if (provider.kind !== "openai_chat_completions" && provider.kind !== "openai_responses" && provider.kind !== "anthropic") return null;
   const endpoint = provider.kind !== "anthropic" ? provider.openai?.endpoint.trim() : provider.anthropic?.endpoint.trim();
   const model = provider.kind !== "anthropic" ? provider.openai?.model.trim() : provider.anthropic?.model.trim();
   return list.connections.find((item) => item.protocol === provider.kind && item.endpoint.trim() === endpoint && item.model.trim() === model) ?? null;

@@ -31,7 +31,7 @@ fn service(kind: AiProviderKind) -> AiService {
     AiService {
         keyring: keyring.clone(),
         connection_keyring: keyring,
-        transport: Arc::new(NativeAiTransport),
+        transport: Arc::new(NativeAiTransport::default()),
         spawner: Arc::new(ProbeOnlySpawner),
         runs: Arc::new(RunRegistry::new()),
         usage: Arc::new(UsageRegistry::new()),
@@ -43,7 +43,7 @@ fn config(kind: AiProviderKind, endpoint: String) -> AiProviderConfig {
     AiProviderConfig {
         kind,
         acp: None,
-        openai: (kind == AiProviderKind::OpenaiCompatible).then(|| OpenAiConfig {
+        openai: (kind == AiProviderKind::OpenaiChatCompletions).then(|| OpenAiConfig {
             endpoint: endpoint.clone(),
             model: "fixture-model".into(),
         }),
@@ -117,7 +117,7 @@ async fn probe_request(kind: AiProviderKind) -> String {
 /// Prevent the prompt URL from being reused as an OpenAI connection-probe API root.
 #[tokio::test]
 async fn openai_service_probes_models_at_the_validated_api_root() {
-    let request = probe_request(AiProviderKind::OpenaiCompatible).await;
+    let request = probe_request(AiProviderKind::OpenaiChatCompletions).await;
     assert!(
         request.starts_with("GET /v1/models HTTP/1.1\r\n"),
         "{request}"
@@ -151,7 +151,7 @@ fn connection_service() -> (AiService, std::sync::Arc<MemoryKeyring>) {
         AiService {
             keyring: keyring.clone(),
             connection_keyring: keyring.clone(),
-            transport: Arc::new(NativeAiTransport),
+            transport: Arc::new(NativeAiTransport::default()),
             spawner: Arc::new(ProbeOnlySpawner),
             runs: Arc::new(RunRegistry::new()),
             usage: Arc::new(UsageRegistry::new()),
@@ -160,10 +160,10 @@ fn connection_service() -> (AiService, std::sync::Arc<MemoryKeyring>) {
     )
 }
 
-/// Build one named OpenAI-compatible probe config carrying its stable ID.
+/// Build one named OpenAI Chat Completions probe config carrying its stable ID.
 fn named_config(id: &str, endpoint: String) -> AiProviderConfig {
     AiProviderConfig {
-        kind: AiProviderKind::OpenaiCompatible,
+        kind: AiProviderKind::OpenaiChatCompletions,
         acp: None,
         openai: Some(OpenAiConfig {
             endpoint,
@@ -183,7 +183,7 @@ async fn named_connection_probe_never_falls_back_to_kind_slot() {
     let (service, keyring) = connection_service();
     let id = ApiConnectionId("api-probe".into());
     keyring
-        .set(AiProviderKind::OpenaiCompatible, "legacy-key")
+        .set(AiProviderKind::OpenaiChatCompletions, "legacy-key")
         .unwrap();
     let config = named_config("api-probe", "http://127.0.0.1:9/v1".into());
     let readiness = service
@@ -197,7 +197,9 @@ async fn named_connection_probe_never_falls_back_to_kind_slot() {
         Err(AiError::MissingCredentials { .. })
     ));
     keyring.set_connection(&id, "named-key").unwrap();
-    keyring.delete(AiProviderKind::OpenaiCompatible).unwrap();
+    keyring
+        .delete(AiProviderKind::OpenaiChatCompletions)
+        .unwrap();
     let readiness = service
         .test_connection(
             named_config("api-probe", "http://127.0.0.1:9/v1".into()),
@@ -214,7 +216,7 @@ async fn named_connection_probe_never_falls_back_to_kind_slot() {
 async fn local_readiness_keeps_http_and_credentials_inside_the_service() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
-    let kind = AiProviderKind::OpenaiCompatible;
+    let kind = AiProviderKind::OpenaiChatCompletions;
     let result = service(kind)
         .test_connection(
             config(

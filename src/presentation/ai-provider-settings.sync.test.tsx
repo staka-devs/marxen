@@ -11,7 +11,7 @@ it("reflects a provider edited in the other settings surface without publishing 
   const acp = defaultProviderConfig("acp");
   const { rerender } = render(<AiProviderSettings embedded provider={acp} onProvider={onProvider} />);
   expect(screen.queryByLabelText("資格情報の入力")).not.toBeInTheDocument();
-  const next = defaultProviderConfig("openai_compatible");
+  const next = defaultProviderConfig("openai_chat_completions");
   next.openai!.endpoint = "http://localhost:3000/v1";
   next.openai!.model = "local-model";
   rerender(<AiProviderSettings embedded provider={next} onProvider={onProvider} />);
@@ -26,7 +26,7 @@ it("clears a successful connection result and fences a pending result when the c
   let finish!: (result: { ok: boolean; detail: string }) => void;
   /** Delay a connection result until the test changes its configured target. */
   const testConnection = vi.fn(() => new Promise<{ ok: boolean; detail: string }>((resolve) => { finish = resolve; }));
-  render(<AiProviderSettings embedded provider={defaultProviderConfig("openai_compatible")} onProvider={vi.fn()} gateway={{ testConnection } as unknown as AiGateway} />);
+  render(<AiProviderSettings embedded provider={defaultProviderConfig("openai_chat_completions")} onProvider={vi.fn()} gateway={{ testConnection } as unknown as AiGateway} />);
   fireEvent.click(screen.getByRole("button", { name: "設定を確認" }));
   fireEvent.change(screen.getByLabelText("モデル"), { target: { value: "changed-model" } });
   await act(async () => finish({ ok: true, detail: "old target is valid" }));

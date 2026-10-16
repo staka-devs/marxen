@@ -11,7 +11,7 @@ import { WorkspaceShell } from "./WorkspaceShell";
 
 /** Build one named connection fixture with overridable fields. */
 function named(overrides: Partial<ApiConnection> = {}): ApiConnection {
-  return { id: "api-a", name: "API-A", protocol: "openai_compatible", endpoint: "https://a.example.com/v1", model: "model-a", ...overrides };
+  return { id: "api-a", name: "API-A", protocol: "openai_chat_completions", endpoint: "https://a.example.com/v1", model: "model-a", ...overrides };
 }
 
 /** In-memory named-connection store with controllable persistence failures. */
@@ -69,8 +69,6 @@ function memoryCredentialGateway() {
       calls.deleted.push(connectionId);
       if (state.failDelete) throw new Error("fixture credential delete failed");
     },
-    /** Report no migrated secret in fixtures. */
-    migrateConnectionCredential: async (connectionId) => ({ connectionId, hasSecret: false }),
   };
   return { gateway, calls, state };
 }
@@ -215,40 +213,12 @@ describe("shell named-connection selection identity", () => {
     expect(connections.current().connections).toEqual([{ ...saved.connections[0], model: "explicit-model" }, other]);
   });
 
-  it.each(["openai_compatible", "anthropic"] as const)("restores ID-less %s history only after saving and retains it across remount", async (kind) => {
-    const first = named();
-    const other = named({ id: "api-b", name: "API-B", protocol: "anthropic" });
-    const records = [first, other];
-    const connections = memoryConnectionStore({ version: 1, activeId: null, initialized: true, connections: records });
-    const legacy = { ...defaultProfile(), kind, endpoint: "https://legacy.example.com/v1", model: "legacy-model", anthropicEnabled: true };
-    const profiles = memoryProfileStore(legacy);
-    const props = { desktop: true, runtimeGateway, ...historyPorts(), apiConnectionStore: connections.store, aiProfileStore: profiles.store };
-    const mounted = render(<WorkspaceShell {...props} />);
-    await openHistoryDocument();
-    const pane = openChat();
-    await retainConversation(pane, "legacy conversation");
-    fireEvent.click(within(pane).getByRole("combobox", { name: "チャットの接続先" }));
-    fireEvent.click(screen.getByRole("option", { name: "API-A" }));
-    const saves = connections.state.saves;
-    connections.state.fail = true;
-    selectHistory(pane, "legacy conversation");
-    expect(connections.state.saves).toBe(saves + 1);
-    expect(connections.current()).toEqual({ version: 1, activeId: first.id, initialized: true, connections: records });
-    expect(within(pane).getByRole("combobox", { name: "チャットの接続先" })).toHaveTextContent("API-A");
-    expect(within(pane).getByLabelText("チャットのモデル")).toHaveValue(first.model);
-    expect(within(pane).queryByText("legacy conversation")).toBeNull();
-    expect(screen.getByText("API接続先を保存できませんでした。変更は適用されませんでした。")).toBeVisible();
-    connections.state.fail = false;
-    selectHistory(pane, "legacy conversation");
-    expect(connections.current()).toEqual({ version: 1, activeId: null, initialized: true, connections: records });
-    expect(within(pane).getByLabelText("チャットのモデル")).toHaveValue(legacy.model);
-    expect(profiles.current()).toMatchObject(legacy);
-    mounted.unmount();
-    render(<WorkspaceShell {...props} />);
-    const restored = openChat();
-    expect(within(restored).getByLabelText("チャットのモデル")).toHaveValue(legacy.model);
-    expect(profiles.current()).toMatchObject(legacy);
-    expect(connections.current()).toEqual({ version: 1, activeId: null, initialized: true, connections: records });
+  it.each(["openai_chat_completions", "anthropic"] as const)("requires explicit API registration instead of importing the old %s profile", (kind) => {
+    const profiles = memoryProfileStore({ ...defaultProfile(), kind, endpoint: "https://old.example.com/v1", model: "old-model", anthropicEnabled: true });
+    const connections = memoryConnectionStore(defaultConnectionList());
+    render(<WorkspaceShell desktop runtimeGateway={runtimeGateway} aiProfileStore={profiles.store} apiConnectionStore={connections.store} />);
+    expect(connections.current().connections).toEqual([]);
+    expect(connections.state.saves).toBe(0);
   });
 
   it("clears the named marker for ACP and restores ACP on remount", () => {

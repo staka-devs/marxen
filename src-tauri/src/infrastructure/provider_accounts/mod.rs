@@ -1,6 +1,8 @@
 //! Private account homes and quota adapters never change host-default authentication.
 mod store;
 mod usage;
+#[cfg(windows)]
+mod windows;
 use crate::application::provider_accounts::*;
 use crate::contracts::provider_accounts::*;
 use crate::domain::provider_accounts::{valid_id, validate_account};
@@ -192,8 +194,9 @@ impl ProviderAccountRuntime for NativeAccountRuntime {
                 reason: AccountReason::WslUnsupported,
             });
         }
-        if !cfg!(unix)
-            || (account.provider == AccountProvider::Claude && !cfg!(target_os = "linux"))
+        if !(cfg!(unix) || cfg!(windows))
+            || (account.provider == AccountProvider::Claude
+                && !(cfg!(target_os = "linux") || cfg!(windows)))
         {
             return Err(ProviderAccountError::Unsupported {
                 reason: AccountReason::PrivateFilesUnsupported,
@@ -218,6 +221,20 @@ impl ProviderAccountRuntime for NativeAccountRuntime {
         store::directory(&root)?;
         env.set
             .insert("HOME".into(), root.to_string_lossy().into_owned());
+        #[cfg(windows)]
+        {
+            env.set
+                .insert("USERPROFILE".into(), root.to_string_lossy().into_owned());
+            for (key, subdir) in [
+                ("APPDATA", "AppData/Roaming"),
+                ("LOCALAPPDATA", "AppData/Local"),
+            ] {
+                let private = root.join(subdir);
+                store::directory(&private)?;
+                env.set
+                    .insert(key.into(), private.to_string_lossy().into_owned());
+            }
+        }
         for (key, _) in std::env::vars_os() {
             let name = key.to_string_lossy();
             if name.ends_with("_API_KEY")

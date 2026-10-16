@@ -316,14 +316,14 @@ pub fn validate_provider_config(config: &AiProviderConfig) -> Result<(), AiError
                 .ok_or_else(|| invalid("ACP の設定が必要です"))?;
             resolve_acp_argv(acp).map(|_| ())
         }
-        AiProviderKind::OpenaiCompatible | AiProviderKind::OpenaiResponses => {
+        AiProviderKind::OpenaiChatCompletions | AiProviderKind::OpenaiResponses => {
             if config.acp.is_some() || config.anthropic.is_some() {
-                return Err(invalid("OpenAI 互換には他の backend 設定を付けません"));
+                return Err(invalid("OpenAIには他の backend 設定を付けません"));
             }
             let openai = config
                 .openai
                 .as_ref()
-                .ok_or_else(|| invalid("OpenAI 互換の設定が必要です"))?;
+                .ok_or_else(|| invalid("OpenAIの設定が必要です"))?;
             validate_endpoint(&openai.endpoint)?;
             validate_model(&openai.model)
         }
@@ -509,7 +509,7 @@ pub fn proposal_from_text(text: String, request: &AiPromptRequest) -> ProposalTe
     }
 }
 
-// ---- Server-sent events (shared by OpenAI-compatible and Anthropic) ----
+// ---- Server-sent events (shared by OpenAI Chat Completions and Anthropic) ----
 
 /// Incremental SSE decoder tolerant to chunked HTTP bodies.
 #[derive(Debug, Default)]
@@ -587,7 +587,7 @@ impl SseDecoder {
     }
 }
 
-/// Recognize the OpenAI-compatible `[DONE]` sentinel with surrounding whitespace allowed.
+/// Recognize the OpenAI Chat Completions `[DONE]` sentinel with surrounding whitespace allowed.
 pub fn is_stream_done(data: &str) -> bool {
     data.trim() == "[DONE]"
 }
@@ -615,13 +615,13 @@ pub fn map_http_status(status: u16, body: &str) -> Option<AiError> {
     }
 }
 
-/// Extract streamed text from an OpenAI-compatible chat chunk.
+/// Extract streamed text from an OpenAI Chat Completions chat chunk.
 /// Missing content is ignored; malformed JSON or provider errors fail the stream,
 /// with recognized unauthorized/API-key messages classified as authentication failures.
 pub fn openai_delta_text(data: &str) -> Result<Option<String>, AiError> {
     let value: serde_json::Value =
         serde_json::from_str(data).map_err(|_| AiError::StreamFailed {
-            detail: "OpenAI 互換の応答を解釈できません".into(),
+            detail: "OpenAI Chat Completionsの応答を解釈できません".into(),
         })?;
     if let Some(error) = value.get("error") {
         let message = error
@@ -1439,7 +1439,7 @@ pub fn validate_currency_code(code: &str) -> Option<String> {
 pub fn acp_preset_of(provider: &AiProviderConfig) -> Option<AcpPreset> {
     match provider.kind {
         AiProviderKind::Acp => provider.acp.as_ref().map(|config| config.preset),
-        AiProviderKind::OpenaiCompatible
+        AiProviderKind::OpenaiChatCompletions
         | AiProviderKind::OpenaiResponses
         | AiProviderKind::Anthropic => None,
     }
@@ -1659,7 +1659,7 @@ impl Default for AcpSessionTracker {
 pub fn credential_account(kind: AiProviderKind) -> &'static str {
     match kind {
         AiProviderKind::Acp => "ai/acp",
-        AiProviderKind::OpenaiCompatible => "ai/openai-compatible",
+        AiProviderKind::OpenaiChatCompletions => "ai/openai-chat-completions",
         AiProviderKind::OpenaiResponses => "ai/openai-responses",
         AiProviderKind::Anthropic => "ai/anthropic",
     }
@@ -1715,11 +1715,11 @@ pub fn provider_config_for_connection(
     let model = connection.model.trim();
     validate_model(model)?;
     match connection.protocol {
-        ApiProtocol::OpenaiCompatible | ApiProtocol::OpenaiResponses => Ok(AiProviderConfig {
+        ApiProtocol::OpenaiChatCompletions | ApiProtocol::OpenaiResponses => Ok(AiProviderConfig {
             kind: if connection.protocol == ApiProtocol::OpenaiResponses {
                 AiProviderKind::OpenaiResponses
             } else {
-                AiProviderKind::OpenaiCompatible
+                AiProviderKind::OpenaiChatCompletions
             },
             acp: None,
             openai: Some(OpenAiConfig {
@@ -1769,11 +1769,11 @@ pub struct HttpTarget {
 /// or `/messages`; reject ACP and Anthropic without opt-in as invalid configuration.
 pub fn http_target(config: &AiProviderConfig) -> Result<HttpTarget, AiError> {
     match config.kind {
-        AiProviderKind::OpenaiCompatible | AiProviderKind::OpenaiResponses => {
+        AiProviderKind::OpenaiChatCompletions | AiProviderKind::OpenaiResponses => {
             let openai = config
                 .openai
                 .as_ref()
-                .ok_or_else(|| invalid("OpenAI 互換の設定が必要です"))?;
+                .ok_or_else(|| invalid("OpenAIの設定が必要です"))?;
             let endpoint = validate_endpoint(&openai.endpoint)?;
             let suffix = if config.kind == AiProviderKind::OpenaiResponses {
                 "/responses"

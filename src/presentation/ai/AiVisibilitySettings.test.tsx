@@ -60,8 +60,8 @@ describe("AI visibility management", () => {
     expect(opener).toHaveFocus();
   });
   it("lists named connections by stable ID and keeps same-name twins independent", () => {
-    const first: ApiConnection = { id: "api-a", name: "Twin", protocol: "openai_compatible", endpoint: "https://a.example/v1", model: "model-a" };
-    const second: ApiConnection = { id: "api-b", name: "Twin", protocol: "openai_compatible", endpoint: "https://b.example/v1", model: "model-a" };
+    const first: ApiConnection = { id: "api-a", name: "Twin", protocol: "openai_chat_completions", endpoint: "https://a.example/v1", model: "model-a" };
+    const second: ApiConnection = { id: "api-b", name: "Twin", protocol: "openai_chat_completions", endpoint: "https://b.example/v1", model: "model-a" };
     const connections = [first, second];
     const onPreferences = vi.fn();
     render(<AiVisibilitySettings preferences={defaultAiViewPreferences()} onPreferences={onPreferences} advertisedProviders={advertisedProviders} connections={connections} />);
@@ -84,7 +84,7 @@ describe("AI visibility management", () => {
     expect(onShow).toHaveBeenCalledWith(expect.objectContaining({ hiddenConnectionIds: [] }));
   });
   it("searches connection endpoints and models with the existing searchbox", () => {
-    const first: ApiConnection = { id: "api-a", name: "Office", protocol: "openai_compatible", endpoint: "https://a.example/v1", model: "model-a" };
+    const first: ApiConnection = { id: "api-a", name: "Office", protocol: "openai_chat_completions", endpoint: "https://a.example/v1", model: "model-a" };
     const second: ApiConnection = { id: "api-b", name: "Home", protocol: "anthropic", endpoint: "https://b.example/v1", model: "" };
     const onPreferences = vi.fn();
     render(<AiVisibilitySettings preferences={defaultAiViewPreferences()} onPreferences={onPreferences} advertisedProviders={advertisedProviders} connections={[first, second]} />);

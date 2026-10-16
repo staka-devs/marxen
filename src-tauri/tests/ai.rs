@@ -85,12 +85,12 @@ fn context() -> PromptContext {
     }
 }
 
-/// Build a rewrite request pointed at the supplied loopback OpenAI-compatible endpoint.
+/// Build a rewrite request pointed at the supplied loopback OpenAI Chat Completions endpoint.
 fn openai_request(base: &str) -> AiPromptRequest {
     AiPromptRequest {
         conversation_id: None,
         provider: AiProviderConfig {
-            kind: AiProviderKind::OpenaiCompatible,
+            kind: AiProviderKind::OpenaiChatCompletions,
             acp: None,
             openai: Some(OpenAiConfig {
                 endpoint: base.into(),
@@ -1110,7 +1110,7 @@ fn dry_runs_and_handshakes_use_no_real_credentials() {
     let report = dry_run_report(&openai.provider, &keyring).unwrap();
     assert!(!report.ok);
     keyring
-        .set(AiProviderKind::OpenaiCompatible, "mock")
+        .set(AiProviderKind::OpenaiChatCompletions, "mock")
         .unwrap();
     let report = dry_run_report(&openai.provider, &keyring).unwrap();
     assert!(report.ok);

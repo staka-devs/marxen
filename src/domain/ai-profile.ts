@@ -20,7 +20,7 @@ export interface AiProfile {
 }
 
 /** Valid provider kinds accepted from stored JSON. */
-const KINDS: AiProviderKind[] = ["acp", "openai_compatible", "openai_responses", "anthropic"];
+const KINDS: AiProviderKind[] = ["acp", "openai_chat_completions", "openai_responses", "anthropic"];
 
 /** Valid ACP presets accepted from stored JSON. */
 const PRESETS: AcpPreset[] = ["codex", "opencode", "copilot", "claude_code", "custom"];
@@ -37,7 +37,7 @@ export function defaultProfile(): AiProfile {
     preset: "codex",
     command: "",
     argsText: "",
-    endpoint: DEFAULT_ENDPOINTS.openai_compatible,
+    endpoint: DEFAULT_ENDPOINTS.openai_chat_completions,
     model: "",
     anthropicEnabled: false,
   };
