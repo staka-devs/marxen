@@ -15,6 +15,8 @@ import { useAiViewPreferences } from "../ai/useAiViewPreferences";
 import { AiVisibilityDialog, AiVisibilitySettings } from "../ai/AiVisibilitySettings";
 import { ResizableAiPane } from "../ai/ResizableAiPane";
 import type { AiViewPreferencesStore } from "../../application/ai/view-preferences-port";
+import type { ProviderAccountGateway } from "../../application/ai/provider-account-ports";
+import { ProviderAccountsSettings } from "../ai/ProviderAccounts";
 import AiProviderSettings from "../ai-provider-settings";
 import { EditorActionsPopover } from "../workspace/EditorActionsPopover";
 import { WorkspaceSidebar } from "../workspace/WorkspaceSidebar";
@@ -118,6 +120,8 @@ export interface WorkspaceShellProps {
   aiUsageGateway?: AiUsageGateway;
   /** Read the authenticated Codex account's officially reported limits. */
   codexAccountUsageGateway?: CodexAccountUsageGateway;
+  /** Native provider account storage and measured usage; secrets never enter browser storage. */
+  providerAccountGateway?: ProviderAccountGateway;
   /** Isolation staging lifecycle pinned by Rust. */
   isolationGateway?: IsolationGateway;
   /** Runtime connectivity status. */
@@ -218,6 +222,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     aiGateway,
     aiUsageGateway,
     codexAccountUsageGateway,
+    providerAccountGateway,
     isolationGateway,
     runtimeGateway,
     dialogGateway,
@@ -1439,7 +1444,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             onTheme={setTheme}
             preferences={preferences}
             onPreferences={updatePreferences}
-            aiSettings={<AiProviderSettings embedded provider={aiProvider} onProvider={setAiProvider} gateway={aiGateway} profileStore={aiProfileStore} connectionControls={connectionControls} />}
+            aiSettings={<><AiProviderSettings embedded provider={aiProvider} onProvider={setAiProvider} gateway={aiGateway} profileStore={aiProfileStore} connectionControls={connectionControls} /><ProviderAccountsSettings gateway={providerAccountGateway} /></>}
             aiVisibilitySettings={<AiVisibilitySettings preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} connections={apiConnections.connections} saveFailed={aiView.saveFailed} />}
             vimSettings={desktop && vimSettingsGateway ? <VimSettingsHost gateway={vimSettingsGateway} initialPath={workspace.configPath} onPathChange={workspace.setConfigPath} onSaved={(path) => { workspace.setConfigPath(path); void workspace.applyConfig(path); }} dialogGateway={dialogGateway} /> : undefined}
             configPath={workspace.configPath}

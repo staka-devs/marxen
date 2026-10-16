@@ -10,3 +10,4 @@ pub mod storage;
 pub mod validation;
 pub mod vim_settings;
 pub mod vim_ui;
+pub mod provider_accounts;

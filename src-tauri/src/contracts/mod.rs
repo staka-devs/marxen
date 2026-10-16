@@ -568,3 +568,5 @@ pub fn typescript() -> String {
     }
     output
 }
+
+pub mod provider_accounts;

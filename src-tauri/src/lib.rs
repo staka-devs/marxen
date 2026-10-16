@@ -22,6 +22,20 @@ pub fn document_services() -> DocumentServices {
 pub fn vim_settings_files() -> Arc<dyn application::vim_settings::VimSettingsFiles> {
     Arc::new(infrastructure::vim_settings::NativeVimSettingsFiles)
 }
+/// Construct account ports once; the same service is the ACP launch-environment lookup.
+pub fn provider_account_service() -> Result<
+    application::provider_accounts::ProviderAccountService,
+    contracts::provider_accounts::ProviderAccountError,
+> {
+    use infrastructure::provider_accounts::*;
+    let (root, home) = platform_paths()?;
+    Ok(application::provider_accounts::ProviderAccountService {
+        store: Arc::new(NativeAccountStore { root: root.clone() }),
+        credentials: Arc::new(NativeAccountCredentials),
+        runtime: Arc::new(NativeAccountRuntime { root, home }),
+        mutation: std::sync::Mutex::new(()),
+    })
+}
 /// Open a real authoritative document with isolated configuration and native storage.
 pub fn open_document(
     id: DocumentId,
@@ -84,6 +98,7 @@ pub fn run() {
             reader: Arc::new(infrastructure::ai::account_usage::NativeAccountUsageReader),
             clock: Arc::new(infrastructure::storage::SystemClock),
         })
+        .manage(provider_account_service().expect("provider account storage path"))
         .setup(|app| {
             infrastructure::neovim::configure_resource_dir(app.path().resource_dir()?);
             let mut services = document_services();
@@ -183,6 +198,13 @@ pub fn run() {
             presentation::ai::ai_permission_reply,
             presentation::ai::ai_usage_snapshot,
             presentation::ai::ai_codex_account_usage,
+            presentation::provider_accounts::provider_accounts_snapshot,
+            presentation::provider_accounts::provider_accounts_save,
+            presentation::provider_accounts::provider_accounts_select,
+            presentation::provider_accounts::provider_accounts_delete,
+            presentation::provider_accounts::provider_accounts_credential_present,
+            presentation::provider_accounts::provider_accounts_usage,
+            presentation::provider_accounts::provider_accounts_open_setup,
             presentation::isolation::isolation_create,
             presentation::isolation::isolation_diff,
             presentation::isolation::isolation_new_files,
