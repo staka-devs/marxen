@@ -80,7 +80,34 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("認証 [private] ' $(throw).dir");
         std::fs::create_dir(&path).unwrap();
-        private_directory(&path).unwrap();
+        assert!(
+            powershell_exe().exists(),
+            "inbox PowerShell must exist for ACL test"
+        );
+        assert!(path.is_dir(), "fixture directory must exist for ACL test");
+        if let Err(error) = private_directory(&path) {
+            let probe = Command::new(powershell_exe())
+                .args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    "$ErrorActionPreference='Continue'; $p=$env:MARXEN_PRIVATE_DIRECTORY; Write-Host \"exists=$([IO.Directory]::Exists($p))\"; try { $a=Get-Acl -LiteralPath $p; Write-Host \"protected=$($a.AreAccessRulesProtected) owner=$($a.Owner) count=@($a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])).Count\" } catch { Write-Host \"get-acl failed: $($_.Exception.Message)\" }; exit 0",
+                ])
+                .env("MARXEN_PRIVATE_DIRECTORY", &path)
+                .output()
+                .map(|o| {
+                    format!(
+                        "stdout={} stderr={}",
+                        String::from_utf8_lossy(&o.stdout),
+                        String::from_utf8_lossy(&o.stderr)
+                    )
+                })
+                .unwrap_or_else(|e| format!("probe spawn failed: {e}"));
+            panic!("private_directory failed with {error:?}; probe: {probe}");
+        }
         let auth = path.join("auth.json");
         std::fs::write(&auth, b"{}").unwrap();
         let verified = Command::new(powershell_exe())
