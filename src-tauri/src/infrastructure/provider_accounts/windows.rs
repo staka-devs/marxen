@@ -10,6 +10,7 @@ use std::{
 pub(super) fn private_directory(path: &Path) -> Result<(), ProviderAccountError> {
     use std::os::windows::process::CommandExt;
     // The script is constant; the path crosses the process boundary only as environment data.
+    // Use .NET Directory ACL APIs directly so the inbox Security module is not required.
     let script = r#"
 $ErrorActionPreference = 'Stop'
 $accountPath = $env:MARXEN_PRIVATE_DIRECTORY
@@ -19,8 +20,8 @@ $accountAcl.SetOwner($accountSid)
 $accountAcl.SetAccessRuleProtection($true, $false)
 $accountRule = New-Object System.Security.AccessControl.FileSystemAccessRule($accountSid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
 $accountAcl.AddAccessRule($accountRule)
-Set-Acl -LiteralPath $accountPath -AclObject $accountAcl
-$verifiedAcl = Get-Acl -LiteralPath $accountPath
+[System.IO.Directory]::SetAccessControl($accountPath, $accountAcl)
+$verifiedAcl = [System.IO.Directory]::GetAccessControl($accountPath)
 $verifiedRules = @($verifiedAcl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
 if (-not $verifiedAcl.AreAccessRulesProtected -or $verifiedAcl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $accountSid.Value -or $verifiedRules.Count -ne 1 -or $verifiedRules[0].IdentityReference.Value -ne $accountSid.Value -or $verifiedRules[0].AccessControlType -ne 'Allow' -or ($verifiedRules[0].FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne [System.Security.AccessControl.FileSystemRights]::FullControl) { throw 'Invalid private directory ACL' }
 "#;
@@ -80,41 +81,15 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("認証 [private] ' $(throw).dir");
         std::fs::create_dir(&path).unwrap();
-        assert!(
-            powershell_exe().exists(),
-            "inbox PowerShell must exist for ACL test"
-        );
-        assert!(path.is_dir(), "fixture directory must exist for ACL test");
-        if let Err(error) = private_directory(&path) {
-            let probe = Command::new(powershell_exe())
-                .args([
-                    "-NoLogo",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-Command",
-                    "$ErrorActionPreference='Continue'; $p=$env:MARXEN_PRIVATE_DIRECTORY; Write-Host \"exists=$([IO.Directory]::Exists($p))\"; try { $a=Get-Acl -LiteralPath $p; Write-Host \"protected=$($a.AreAccessRulesProtected) owner=$($a.Owner) count=@($a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])).Count\" } catch { Write-Host \"get-acl failed: $($_.Exception.Message)\" }; exit 0",
-                ])
-                .env("MARXEN_PRIVATE_DIRECTORY", &path)
-                .output()
-                .map(|o| {
-                    format!(
-                        "stdout={} stderr={}",
-                        String::from_utf8_lossy(&o.stdout),
-                        String::from_utf8_lossy(&o.stderr)
-                    )
-                })
-                .unwrap_or_else(|e| format!("probe spawn failed: {e}"));
-            panic!("private_directory failed with {error:?}; probe: {probe}");
-        }
+        private_directory(&path).unwrap();
         let auth = path.join("auth.json");
         std::fs::write(&auth, b"{}").unwrap();
         let verified = Command::new(powershell_exe())
             .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", r#"
 $ErrorActionPreference = 'Stop'
 $accountSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$rules = @((Get-Acl -LiteralPath $env:MARXEN_PRIVATE_FILE).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+$acl = [System.IO.Directory]::GetAccessControl($env:MARXEN_PRIVATE_FILE)
+$rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
 if ($rules.Count -ne 1 -or $rules[0].IdentityReference.Value -ne $accountSid -or $rules[0].AccessControlType -ne 'Allow') { exit 1 }
 "#])
             .env("MARXEN_PRIVATE_FILE", auth)
