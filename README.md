@@ -124,10 +124,10 @@ CI は Windows x64 (NSIS)、macOS arm64 / x64 (app / DMG)、Linux x64 (deb / App
 
 ```sh
 git push origin v0.1.0
-# 復旧で既存タグを使う場合のみ Actions の workflow_dispatch に tag を指定する
+# 一時的な失敗で草稿が残っていない場合のみ workflow_dispatch に tag を指定する
 ```
 
-タグ commit と同一 SHA の main push Integration 成功だけを使い、四つの `marxen-{target}` から最終 installer 5（Windows x64 NSIS、Linux x64 deb と AppImage、macOS arm64 と x64 DMG）と `SHA256SUMS` を公開します。草稿で検査してから公開し、公開済みは上書きしません。配布は未署名・未公証で、実 WebView・日本語 IME・導入は未検証です。macOS 実機の確認はありません。`SHA256SUMS` で検証してください。
+タグ commit と同一 SHA の main push Integration 成功だけを使い、四つの `marxen-{target}` から最終 installer 5（Windows x64 NSIS、Linux x64 deb と AppImage、macOS arm64 と x64 DMG）と `SHA256SUMS` を公開します。草稿で検査してから公開し、既存の草稿や公開済みがある場合は失敗します。残った草稿は自動で削除しないため、中身を確認して手で削除してください。配布は未署名・未公証で、実 WebView・日本語 IME・導入は未検証です。macOS 実機の確認はありません。`SHA256SUMS` で検証してください。
 
 実施済みの回帰・Windows 配布確認と、未実施の OS・WebView・日本語 IME・署名の範囲は [Issue #9](https://github.com/staka-devs/marxen/issues/9) で報告します。他 OS の package 操作、実 WebView / IME、署名・公証をブラウザや Windows の成功から推定しません。devcontainer の GUI にはホストの表示サーバーが必要です。
 

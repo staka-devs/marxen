@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,11 +12,13 @@ import {
   assertJobs,
   assetDigestHex,
   buildReleaseNotes,
+  collectVerifyLocals,
   decideReleaseAction,
   expectedReleaseFiles,
   extractCargoLockVersion,
   extractCargoPackageVersion,
   formatSha256Sums,
+  ghApiArgs,
   isReleaseNotFound,
   parseSha256Sums,
   parseTag,
@@ -200,8 +203,11 @@ test("existing releases fail closed without automatic recovery", () => {
   assert.ok(isReleaseNotFound("release not found"));
   assert.ok(isReleaseNotFound("Not Found (HTTP 404)"));
   assert.ok(!isReleaseNotFound("HTTP 401: bad credentials"));
-  assert.equal(assetDigestHex("sha256:AFE49E".padEnd(7 + 64, "0")), "afe49e".padEnd(64, "0"));
+  assert.equal(assetDigestHex(`sha256:${"a".repeat(64)}`), "a".repeat(64));
   assert.throws(() => assetDigestHex("nohex"), /Bad asset digest/);
+  assert.throws(() => assetDigestHex("a".repeat(64)), /Bad asset digest/);
+  assert.throws(() => assetDigestHex(`sha256:${"z".repeat(64)}`), /Bad asset digest/);
+  assert.throws(() => assetDigestHex(`sha256:${"a".repeat(63)}`), /Bad asset digest/);
 });
 
 test("draft assets must match local names, sizes, and digests", () => {
@@ -215,6 +221,58 @@ test("draft assets must match local names, sizes, and digests", () => {
   badState.assets[1] = { ...badState.assets[1], state: "open" };
   assert.throws(() => assertDraftAssets(badState, locals, { tag: "v0.1.0" }), /not uploaded/);
   assert.throws(() => assertDraftAssets({ ...draftFor(locals), isDraft: false }, locals, { tag: "v0.1.0" }), /published/);
+  const duplicated = draftFor(locals);
+  duplicated.assets[1] = { ...duplicated.assets[0] };
+  assert.throws(() => assertDraftAssets(duplicated, locals, { tag: "v0.1.0" }), /Duplicate draft assets/);
+  const sha = "086aa022f13163a103d8a33dddafe2dcb0430468";
+  assertDraftAssets({ ...draftFor(locals), targetCommitish: sha }, locals, { tag: "v0.1.0", sha });
+  assert.throws(() => assertDraftAssets({ ...draftFor(locals), targetCommitish: "0".repeat(40) }, locals, { tag: "v0.1.0", sha }), /source mismatch/);
+  assertDraftAssets({ ...draftFor(locals), targetCommitish: "main" }, locals, { tag: "v0.1.0", sha });
+});
+
+test("api argv forces GET so -f parameters stay a query string", () => {
+  /** Model gh's rule that -f without an explicit method becomes POST. */
+  const ghMethod = (args) => {
+    const at = args.indexOf("--method");
+    if (at >= 0) return args[at + 1];
+    return args.includes("-f") ? "POST" : "GET";
+  };
+  const args = ghApiArgs("repos/o/r/actions/workflows/ci.yml/runs", [["head_sha", "a".repeat(40)], ["per_page", "20"]]);
+  assert.deepEqual(args, ["api", "--method", "GET", "repos/o/r/actions/workflows/ci.yml/runs", "-f", `head_sha=${"a".repeat(40)}`, "-f", "per_page=20"]);
+  assert.equal(ghMethod(args), "GET");
+  assert.equal(ghMethod(["api", "repos/o/r/actions/workflows/ci.yml/runs", "-f", "head_sha=abc"]), "POST");
+});
+
+test("assembled output collects six publish files for draft validation", () => {
+  const dist = mkdtempSync(join(tmpdir(), "marxen-dist-"));
+  try {
+    const contents = new Map();
+    for (const item of expectedReleaseFiles("0.1.0")) {
+      const data = Buffer.from(`payload-${item.basename}\n`);
+      writeFileSync(join(dist, item.basename), data);
+      contents.set(item.basename, data);
+    }
+    const pairs = [...contents].map(([basename, data]) => ({ basename, sha256: createHash("sha256").update(data).digest("hex") }));
+    writeFileSync(join(dist, "SHA256SUMS"), formatSha256Sums(pairs));
+    const locals = collectVerifyLocals(dist);
+    assert.equal(locals.length, 6);
+    assertDraftAssets({
+      tagName: "v0.1.0",
+      isDraft: true,
+      isPrerelease: false,
+      assets: locals.map(item => ({ name: item.basename, size: item.size, state: "uploaded", digest: `sha256:${item.sha256}` })),
+    }, locals, { tag: "v0.1.0" });
+    const fiveOnly = locals.filter(item => item.basename !== "SHA256SUMS");
+    assert.equal(fiveOnly.length, 5);
+    assert.throws(() => assertDraftAssets({
+      tagName: "v0.1.0",
+      isDraft: true,
+      isPrerelease: false,
+      assets: locals.map(item => ({ name: item.basename, size: item.size, state: "uploaded", digest: `sha256:${item.sha256}` })),
+    }, fiveOnly, { tag: "v0.1.0" }), /count mismatch/);
+  } finally {
+    rmSync(dist, { recursive: true, force: true });
+  }
 });
 
 test("tag resolution supports lightweight and annotated tags in an isolated repo", () => {
@@ -302,16 +360,4 @@ test("validate uses GET and exact source with a controlled gh boundary", () => {
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
-});
-
-test("readonly public API probe shows baseline Integration run shape over GET", async () => {
-  const response = await fetch("https://api.github.com/repos/staka-devs/marxen/actions/runs/38856078680", {
-    headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "marxen-release-test" },
-  });
-  assert.equal(response.status, 200);
-  const run = await response.json();
-  assert.equal(run.id, 38856078680);
-  assert.equal(run.head_sha, "086aa022f13163a103d8a33dddafe2dcb0430468");
-  assert.equal(run.name, "Integration");
-  assert.equal(run.path, ".github/workflows/ci.yml");
 });

@@ -289,23 +289,27 @@ export function decideReleaseAction(existing, input) {
   throw new Error(`Release already exists for ${tag}, refusing automatic recovery`);
 }
 
-/** Extract the hex digest from a release asset digest field. */
+/** Extract the hex digest from a strict sha256:64hex release asset digest field. */
 export function assetDigestHex(digest) {
-  const text = String(digest ?? "");
-  const match = /([0-9a-f]{64})/i.exec(text);
-  if (!match) throw new Error(`Bad asset digest: ${text}`);
+  const match = /^sha256:([0-9a-f]{64})$/i.exec(String(digest ?? ""));
+  if (!match) throw new Error(`Bad asset digest: ${String(digest ?? "")}`);
   return match[1].toLowerCase();
 }
 
 /** Require draft assets to match local files in name, size, and SHA-256. */
 export function assertDraftAssets(draft, locals, input) {
-  const { tag } = input;
+  const { tag, sha } = input;
   parseTag(tag);
   if (!draft || draft.tagName !== tag) throw new Error(`Draft tag mismatch: ${draft?.tagName}`);
   if (!draft.isDraft) throw new Error(`Release already published: ${tag}`);
   if (draft.isPrerelease) throw new Error(`Draft is prerelease: ${tag}`);
+  if (sha && /^[0-9a-f]{40}$/i.test(String(draft.targetCommitish ?? "")) && String(draft.targetCommitish).toLowerCase() !== String(sha).toLowerCase()) {
+    throw new Error(`Draft source mismatch: ${draft.targetCommitish}`);
+  }
   const remote = Array.isArray(draft.assets) ? draft.assets : [];
   if (remote.length !== locals.length) throw new Error(`Draft asset count mismatch: ${remote.length} vs ${locals.length}`);
+  const remoteNames = remote.map(asset => asset.name);
+  if (new Set(remoteNames).size !== remoteNames.length) throw new Error(`Duplicate draft assets: ${remoteNames.join(",")}`);
   const byName = new Map(locals.map(item => [item.basename, item]));
   if (byName.size !== locals.length) throw new Error("Duplicate local basenames");
   for (const asset of remote) {
@@ -317,6 +321,22 @@ export function assertDraftAssets(draft, locals, input) {
       throw new Error(`Draft asset hash mismatch: ${asset.name}`);
     }
   }
+}
+
+/** Collect the six publish files and hashes from an assembled directory. */
+export function collectVerifyLocals(dist) {
+  const sumsText = readFileSync(join(dist, "SHA256SUMS"), "utf8");
+  const entries = parseSha256Sums(sumsText);
+  if (entries.length !== 5) throw new Error(`SHA256SUMS must list 5 installers, got ${entries.length}`);
+  const locals = entries.map(entry => {
+    const data = readBinarySync(join(dist, entry.basename));
+    const actual = createHash("sha256").update(data).digest("hex");
+    if (actual !== entry.sha256) throw new Error(`Local hash mismatch: ${entry.basename}`);
+    return { basename: entry.basename, sha256: actual, size: data.length };
+  });
+  const manifest = readBinarySync(join(dist, "SHA256SUMS"));
+  locals.push({ basename: "SHA256SUMS", sha256: createHash("sha256").update(manifest).digest("hex"), size: manifest.length });
+  return locals;
 }
 
 /** Read one --name value from exact argv without shell interpolation. */
@@ -336,11 +356,16 @@ export function runCapture(command, args, options = {}) {
   return String(result.stdout ?? "").trim();
 }
 
-/** Call the GitHub REST API for reads with an explicit GET method. */
-export function ghApiGet(path, fields, options = {}) {
+/** Build exact gh api argv for reads, forcing GET so -f stays a query string. */
+export function ghApiArgs(path, fields) {
   const args = ["api", "--method", "GET", path];
   for (const [key, value] of fields) args.push("-f", `${key}=${value}`);
-  return runCapture("gh", args, options);
+  return args;
+}
+
+/** Call the GitHub REST API for reads with an explicit GET method. */
+export function ghApiGet(path, fields, options = {}) {
+  return runCapture("gh", ghApiArgs(path, fields), options);
 }
 
 /** Collect regular files under a directory while marking symlinks for refusal. */

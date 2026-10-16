@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing version tag to re-publish (for example v0.1.0)"
+        description: "Existing version tag to retry (only when no draft or release exists for it)"
         required: true
         type: string
 
@@ -93,8 +93,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release view "$TAG" --json tagName,isDraft,isPrerelease,assets > /tmp/draft.json
-          DIST=dist-release TAG="$TAG" node --input-type=module -e "import { readFileSync, readdirSync, statSync } from 'node:fs'; import { createHash } from 'node:crypto'; import { join } from 'node:path'; import { assertDraftAssets, parseSha256Sums } from './scripts/release-common.mjs'; const draft = JSON.parse(readFileSync('/tmp/draft.json', 'utf8')); const sums = parseSha256Sums(readFileSync(join(process.env.DIST, 'SHA256SUMS'), 'utf8')); const locals = sums.map(entry => { const path = join(process.env.DIST, entry.basename); const data = readFileSync(path); return { basename: entry.basename, sha256: createHash('sha256').update(data).digest('hex'), size: Number(statSync(path).size) }; }); assertDraftAssets(draft, locals, { tag: process.env.TAG }); console.log('Draft assets match local files.');"
-          test "$(gh release view "$TAG" --json assets --jq '.assets | length')" = "6"
+          node scripts/verify-release.mjs --dist dist-release --tag "$TAG" --sha "${{ steps.source.outputs.sha }}"
           gh release edit "$TAG" --draft=false --latest --verify-tag
           gh release view "$TAG" --json tagName,isDraft,isPrerelease,assets --jq '{ tag: .tagName, draft: .isDraft, prerelease: .isPrerelease, assets: (.assets | length) }'
