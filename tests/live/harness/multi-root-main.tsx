@@ -10,7 +10,7 @@ import { RegistryClient } from "../../../src/application/document/registry-clien
 import type { CursorUpdate, OpenDocument, RootScope, WorkspaceInfo } from "../../../src/contracts/contracts";
 import type { Language } from "../../../src/contracts/language";
 import type { WorkspaceGateway } from "../../../src/application/ports";
-import pixel from "../../fixtures/pixel.png?url";
+import pixelInline from "../../fixtures/pixel.png?inline";
 import "../../../src/styles.css";
 
 const alpha: WorkspaceInfo = { root: "/fixture/alpha", scope: { rootId: "root-alpha", generation: "1" } };
@@ -18,6 +18,20 @@ const beta: WorkspaceInfo = { root: "/fixture/beta", scope: { rootId: "root-beta
 let roots: WorkspaceInfo[] = [];
 const documents = new Map<string, OpenDocument>();
 const calls: string[] = [];
+
+/**
+ * Valid 1x1 PNG bytes decoded once from the single fixture source.
+ *
+ * Vite `?inline` embeds tests/fixtures/pixel.png as a data URL at transform
+ * time (see `inlineRE`/`fileToDevUrl` in the installed Vite source), so this
+ * stays byte-identical without a second copy or a dev-server fetch; ownership
+ * stays in the recorded `image:rootId:path` call and the root-qualified tab.
+ */
+const PIXEL_BYTES: readonly number[] = (() => {
+  const base64 = pixelInline.slice(pixelInline.indexOf(",") + 1);
+  const binary = atob(base64);
+  return [...binary].map((character) => character.charCodeAt(0));
+})();
 
 /** Open an independently owned simulated text actor. */
 async function openFile(path: string, scope?: RootScope): Promise<OpenDocument> {
@@ -48,7 +62,7 @@ const gateway: WorkspaceGateway = {
   openMarkdown: openFile,
   openTextFile: openFile,
   /** Supply valid local PNG bytes while recording the requested owner. */
-  loadWorkspaceImage: async (path, scope) => { calls.push(`image:${scope?.rootId}:${path}`); return { mime: "image/png", bytes: [...new Uint8Array(await (await fetch(pixel)).arrayBuffer())], fingerprint: "a".repeat(64) }; },
+  loadWorkspaceImage: async (path, scope) => { calls.push(`image:${scope?.rootId}:${path}`); return { mime: "image/png", bytes: [...PIXEL_BYTES], fingerprint: "a".repeat(64) }; },
   /** This navigation fixture contains no crash-recovery records. */
   listRecovery: async () => [],
   /** No simulated external filesystem events. */
