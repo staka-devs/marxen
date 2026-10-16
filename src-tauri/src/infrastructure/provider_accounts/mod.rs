@@ -247,7 +247,16 @@ impl ProviderAccountRuntime for NativeAccountRuntime {
         let account_root = self.root.join(&account.id);
         store::directory(&account_root)?;
         let root = account_root.join(account.revision.to_string());
+        store::guard_managed(&self.root, &root)?;
         store::directory(&root)?;
+        let files: &[&str] = match account.provider {
+            AccountProvider::Codex => &["auth.json", "config.toml"],
+            AccountProvider::Claude => &[".credentials.json"],
+            _ => &["data/opencode/auth.json"],
+        };
+        for file in files {
+            store::guard_managed(&self.root, &root.join(file))?;
+        }
         env.set
             .insert("HOME".into(), root.to_string_lossy().into_owned());
         #[cfg(windows)]

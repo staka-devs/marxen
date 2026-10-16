@@ -50,15 +50,27 @@ impl ProviderAccountCredentials for NativeAccountCredentials {
 
 /// Reject symlink entries before private files or account metadata can be accessed.
 pub(super) fn reject_link(path: &Path) -> Result<(), ProviderAccountError> {
-    for component in path.ancestors() {
-        match fs::symlink_metadata(component) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                return Err(ProviderAccountError::StoreFailed)
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return Err(ProviderAccountError::StoreFailed),
-        }
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(ProviderAccountError::StoreFailed),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(ProviderAccountError::StoreFailed),
+    }
+}
+
+/// Check every managed component while permitting trusted ancestors such as macOS /var aliases.
+pub(super) fn guard_managed(root: &Path, path: &Path) -> Result<(), ProviderAccountError> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| ProviderAccountError::StoreFailed)?;
+    reject_link(root)?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(part) = component else {
+            return Err(ProviderAccountError::StoreFailed);
+        };
+        current.push(part);
+        reject_link(&current)?;
     }
     Ok(())
 }
