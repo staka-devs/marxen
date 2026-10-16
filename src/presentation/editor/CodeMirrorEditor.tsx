@@ -170,6 +170,9 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
         doc: valueRef.current,
         selection: initialSelection ? { anchor: initialSelection.anchor, head: initialSelection.head } : undefined,
         extensions: [
+          // Rust/Neovim retain CR as source text (ADR-0040). Keep identical
+          // UTF-16 offsets and beforeText instead of normalizing CRLF or CR.
+          EditorState.lineSeparator.of("\n"),
           markdown(),
           syntaxHighlighting(HighlightStyle.define([
             { tag: tags.heading, fontWeight: "600" },
