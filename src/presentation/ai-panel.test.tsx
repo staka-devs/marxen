@@ -468,6 +468,32 @@ describe("agent chat", () => {
     expect(seen).toEqual(["古い基準の提案"]);
   });
 
+  it("disables send without contexts and explains it beside the composer", () => {
+    render(<AiPanel startPrompt={mockStartPrompt} contexts={[]} staging={staging} contextLabels={labels} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "質問" } });
+    expect(screen.getByRole("button", { name: "送信" })).toBeDisabled();
+    expect(screen.getByTestId("ai-composer-empty-hint")).toHaveTextContent("送信対象がありません。");
+    expect(mockStartPrompt).not.toHaveBeenCalled();
+  });
+
+  it("offers to restore a dismissed scope from the composer hint", () => {
+    const onRestoreContexts = vi.fn();
+    render(<AiPanel startPrompt={mockStartPrompt} contexts={[]} staging={staging} contextLabels={labels} contextsDismissed onRestoreContexts={onRestoreContexts} />);
+    fireEvent.click(screen.getByRole("button", { name: "現在の選択を送る" }));
+    expect(onRestoreContexts).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the draft when staging fails before any turn is recorded", async () => {
+    /** Staging resolver failing before any message is recorded. */
+    const ensureStaging = vi.fn(async (): Promise<StagingTarget> => { throw { code: "staging_unresolved" }; });
+    render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={null} ensureStaging={ensureStaging} contextLabels={labels} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "消さないで" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/作業コピー/);
+    expect(screen.getByLabelText("プロンプト")).toHaveValue("消さないで");
+    expect(mockStartPrompt).not.toHaveBeenCalled();
+  });
+
   it("blocks sending while staging is unresolved and reports it", async () => {
     render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={null} contextLabels={labels} />);
     fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "質問" } });
