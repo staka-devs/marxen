@@ -80,8 +80,14 @@ fn cursor_ide_token(path: &Path) -> Result<Option<String>, ProviderAccountError>
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(ProviderAccountError::StoreFailed),
     }
+    #[cfg(unix)]
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| ProviderAccountError::StoreFailed)?;
+    #[cfg(not(unix))]
+    let canonical = path.to_path_buf();
     let connection = Connection::open_with_flags(
-        path,
+        &canonical,
         OpenFlags::SQLITE_OPEN_READ_ONLY
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_NOFOLLOW,
@@ -184,35 +190,30 @@ mod tests {
     #[test]
     /// Each platform uses its verified CLI/IDE path, including case-sensitive Linux directory names.
     fn platform_paths_are_distinct_and_fixed() {
-        let home = Path::new("/fixture/home");
+        #[cfg(windows)]
+        let (home, roaming, config) = (
+            Path::new("C:/fixture/home"),
+            Path::new("C:/fixture/roaming"),
+            Path::new("C:/fixture/config"),
+        );
+        #[cfg(not(windows))]
+        let (home, roaming, config) = (
+            Path::new("/fixture/home"),
+            Path::new("/fixture/roaming"),
+            Path::new("/fixture/config"),
+        );
         let (cli, ide) = cursor_paths(home, LoginPlatform::MacOs, None, None);
         assert_eq!(cli, home.join(".cursor/auth.json"));
         assert_eq!(
             ide,
             home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb")
         );
-        let (cli, ide) = cursor_paths(
-            home,
-            LoginPlatform::Windows,
-            Some(Path::new("/fixture/roaming")),
-            None,
-        );
-        assert_eq!(cli, Path::new("/fixture/roaming/Cursor/auth.json"));
-        assert_eq!(
-            ide,
-            Path::new("/fixture/roaming/Cursor/User/globalStorage/state.vscdb")
-        );
-        let (cli, ide) = cursor_paths(
-            home,
-            LoginPlatform::Linux,
-            None,
-            Some(Path::new("/fixture/config")),
-        );
-        assert_eq!(cli, Path::new("/fixture/config/cursor/auth.json"));
-        assert_eq!(
-            ide,
-            Path::new("/fixture/config/Cursor/User/globalStorage/state.vscdb")
-        );
+        let (cli, ide) = cursor_paths(home, LoginPlatform::Windows, Some(roaming), None);
+        assert_eq!(cli, roaming.join("Cursor/auth.json"));
+        assert_eq!(ide, roaming.join("Cursor/User/globalStorage/state.vscdb"));
+        let (cli, ide) = cursor_paths(home, LoginPlatform::Linux, None, Some(config));
+        assert_eq!(cli, config.join("cursor/auth.json"));
+        assert_eq!(ide, config.join("Cursor/User/globalStorage/state.vscdb"));
     }
 
     #[test]
