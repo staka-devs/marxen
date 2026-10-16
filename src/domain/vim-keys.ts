@@ -75,10 +75,9 @@ export function serializeVimKey(event: VimKey): string | null {
   if (PLATFORM_IME_KEYS.has(key)) return null;
   const normalized = NAMED_VIM_KEYS[key] ?? key;
   if (ctrlKey || metaKey) {
-    const mod = "C";
+    const mod = metaKey ? "D" : "C";
     const base = normalized.length === 1 ? normalized.toLowerCase() : normalized;
-    void metaKey;
-    return `<${mod}-${base}>`;
+    return `<${mod}-${shiftKey ? "S-" : ""}${altKey ? "M-" : ""}${base}>`;
   }
   if (altKey) {
     return `<M-${normalized}>`;
@@ -89,7 +88,7 @@ export function serializeVimKey(event: VimKey): string | null {
     case "BS":
       return "<BS>";
     case "Tab":
-      return "<Tab>";
+      return shiftKey ? "<S-Tab>" : "<Tab>";
     case "Esc":
       return "<Esc>";
     case "Del":
@@ -114,6 +113,6 @@ export function serializeVimKey(event: VimKey): string | null {
       return " ";
     default:
       if (/^F\d{1,2}$/.test(normalized)) return shiftKey ? `<S-${normalized}>` : `<${normalized}>`;
-      return key;
+      return key === "<" ? "<LT>" : key;
   }
 }

@@ -10,3 +10,6 @@ pub mod isolation;
 pub mod runtime;
 #[cfg(feature = "desktop")]
 pub mod vim_settings;
+
+#[cfg(feature = "desktop")]
+pub mod provider_accounts;

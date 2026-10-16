@@ -157,6 +157,25 @@ pub struct ModeUpdate {
     pub document_id: DocumentId,
     pub revision: Revision,
     pub mode: VimMode,
+    /// Native command line, including its prompt and UTF-16 cursor position.
+    #[serde(default)]
+    #[ts(optional)]
+    pub command_line: Option<VimCommandLine>,
+    /// Last native Ex output or error, without interpreting Vimscript in the GUI.
+    #[serde(default)]
+    #[ts(optional)]
+    pub message: Option<String>,
+    /// Application commands requested by the user's Vim mappings.
+    #[serde(default)]
+    #[ts(optional)]
+    pub commands: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VimCommandLine {
+    pub text: String,
+    pub cursor: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -513,6 +532,7 @@ pub fn typescript() -> String {
         EditorPresentation::decl(&cfg),
         EditorContext::decl(&cfg),
         VimMode::decl(&cfg),
+        VimCommandLine::decl(&cfg),
         ModeUpdate::decl(&cfg),
         DocumentEvent::decl(&cfg),
         ConnectionState::decl(&cfg),
@@ -548,3 +568,5 @@ pub fn typescript() -> String {
     }
     output
 }
+
+pub mod provider_accounts;

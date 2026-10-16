@@ -181,6 +181,9 @@ fn validates_save_cursor_and_mode_against_exact_snapshot() {
         document_id: doc.document_id.clone(),
         revision: Revision(6),
         mode: VimMode::Insert,
+        command_line: None,
+        message: None,
+        commands: None,
     };
     assert!(matches!(
         validate_mode(&doc, &mode),

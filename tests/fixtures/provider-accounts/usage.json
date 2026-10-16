@@ -1,0 +1,9 @@
+{
+  "claude": {"five_hour":{"utilization":0,"resets_at":"2026-10-16T18:00:00Z"},"seven_day":{"utilization":42.5},"input_tokens":999},
+  "gemini": {"buckets":[{"modelId":"gemini-pro","remainingFraction":0.75,"resetTime":"2026-10-17T00:00:00Z"},{"modelId":"gemini-flash","remainingFraction":1}]},
+  "opencode_go": {"usage":{"rolling":{"percent":12,"resetsAt":"2026-10-16T18:00:00Z"},"weekly":{"percent":35},"monthly":{"percent":50}}},
+  "minimax": {"base_resp":{"status_code":0},"model_remains":[{"model_name":"MiniMax-M2.7","current_interval_remaining_percent":80,"current_weekly_remaining_percent":55,"end_time":1792173600000}]},
+  "grok": {"config":{"creditUsagePercent":18,"currentPeriod":{"end":"2026-10-19T00:00:00Z"}}},
+  "cursor": {"billingCycleEnd":"2026-11-01T00:00:00Z","individualUsage":{"plan":{"totalPercentUsed":23.5},"onDemand":{"used":10,"limit":50}}},
+  "glm": {"success":true,"data":{"limits":[{"type":"TOKENS_LIMIT","unit":3,"number":5,"usage":1000,"currentValue":125,"nextResetTime":1792173600000},{"type":"TIME_LIMIT","unit":5,"number":1,"percentage":5}]}}
+}

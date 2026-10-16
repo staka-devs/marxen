@@ -970,7 +970,7 @@ fn startup_readiness_fails_before_pin_without_user_secrets() {
     // Production HTTP order uses this exact helper BEFORE any scope pin.
     // No user credentials are touched anywhere here.
     let openai = || AiProviderConfig {
-        kind: AiProviderKind::OpenaiCompatible,
+        kind: AiProviderKind::OpenaiChatCompletions,
         acp: None,
         openai: Some(OpenAiConfig {
             endpoint: "http://127.0.0.1:9".into(),
@@ -1324,7 +1324,7 @@ async fn http_delayed_terminal_settles_once_then_releases() {
         stream.write_all(rest.as_bytes()).expect("rest");
     });
     let provider = AiProviderConfig {
-        kind: AiProviderKind::OpenaiCompatible,
+        kind: AiProviderKind::OpenaiChatCompletions,
         acp: None,
         openai: Some(OpenAiConfig {
             endpoint: format!("http://127.0.0.1:{port}"),
@@ -1349,7 +1349,7 @@ async fn http_delayed_terminal_settles_once_then_releases() {
     manager.pin_for_run(&copy.copy_id).unwrap();
     let keyring = MemoryKeyring::default();
     keyring
-        .set(AiProviderKind::OpenaiCompatible, "mock-secret")
+        .set(AiProviderKind::OpenaiChatCompletions, "mock-secret")
         .unwrap();
     // Same production readiness helper the IPC path calls before pinning.
     let (target, secret) = resolve_http_request(&keyring, &keyring, &request.provider).unwrap();

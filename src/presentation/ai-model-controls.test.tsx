@@ -29,14 +29,14 @@ function choose(label: string, name: string) {
 }
 describe("chat model selection", () => {
   it("hides only the named connection ID while retaining the active connection and model", () => {
-    const first: ApiConnection = { id: "api-a", name: "Twin", protocol: "openai_compatible", endpoint: "https://a.example/v1", model: "model-a" };
+    const first: ApiConnection = { id: "api-a", name: "Twin", protocol: "openai_chat_completions", endpoint: "https://a.example/v1", model: "model-a" };
     const second = { ...first, id: "api-b", endpoint: "https://b.example/v1" };
     const provider = buildProviderConfigFromConnection(first);
     const onProvider = vi.fn();
     const onSelect = vi.fn();
     const onRefresh = vi.fn();
     const onManageVisibility = vi.fn();
-    const preferences = { ...defaultAiViewPreferences(), hiddenConnectionIds: [first.id], hiddenProviders: ["openai_compatible" as const] };
+    const preferences = { ...defaultAiViewPreferences(), hiddenConnectionIds: [first.id], hiddenProviders: ["openai_chat_completions" as const] };
     const props = { provider, onProvider, options: [], loading: false, discovered: false, error: null, onRefresh, onManageVisibility, connectionSelection: { list: { version: 1 as const, initialized: true, activeId: first.id, connections: [first, second] }, activeId: first.id, onSelect } };
     const { rerender } = render(<AiModelControls {...props} preferences={preferences} />);
     const trigger = screen.getByRole("combobox", { name: "チャットの接続先" });
@@ -111,7 +111,7 @@ describe("chat model selection", () => {
     expect(screen.queryByRole("combobox")).toBeNull();
     expect(screen.getByRole("button", { name: "接続して候補を確認" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "AI の表示設定" })).toBeEnabled();
-    rerender(<AiModelControls {...props} provider={defaultProviderConfig("openai_compatible")} preferences={preferences} />);
+    rerender(<AiModelControls {...props} provider={defaultProviderConfig("openai_chat_completions")} preferences={preferences} />);
     expect(screen.queryByRole("textbox", { name: "チャットのモデル" })).toBeNull();
     expect(props.onProvider).not.toHaveBeenCalled();
   });
@@ -127,7 +127,7 @@ describe("chat model selection", () => {
   });
   it("preserves a direct API endpoint when editing the model", () => {
     const onProvider = vi.fn();
-    const provider = defaultProviderConfig("openai_compatible");
+    const provider = defaultProviderConfig("openai_chat_completions");
     provider.openai = { endpoint: "http://localhost:8080/v1", model: "local-a" };
     render(<AiModelControls provider={provider} onProvider={onProvider} options={[]} loading={false} discovered={false} error={null} onRefresh={vi.fn()} />);
     fireEvent.change(screen.getByRole("textbox", { name: "チャットのモデル" }), { target: { value: "local-b" } });
@@ -170,4 +170,15 @@ describe("chat model selection", () => {
     await act(async () => resolve({ ok: true, detail: "new-scope", configOptions: [] }));
     await waitFor(() => expect(screen.getByTestId("scoped").textContent).toBe("true:0"));
   });
+});
+
+it("shows API connections only after registration and uses their names", () => {
+  const provider = defaultProviderConfig("acp");
+  const props = { provider, onProvider: vi.fn(), options: [], loading: false, discovered: false, error: null, onRefresh: vi.fn() };
+  render(<AiModelControls {...props} />);
+  fireEvent.click(screen.getByRole("combobox", { name: "チャットの接続先" }));
+  expect(screen.queryByRole("option", { name: "OpenAI Chat Completions" })).toBeNull();
+  expect(screen.queryByRole("option", { name: "OpenAI Responses" })).toBeNull();
+  expect(screen.queryByRole("option", { name: "Anthropic API" })).toBeNull();
+  expect(screen.getByRole("option", { name: "Claude Code" })).toBeVisible();
 });

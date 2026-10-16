@@ -6,15 +6,54 @@ use serde_json::{json, Value};
 
 /// Decode supported select controls, flattening grouped ACP choices without inventing models.
 pub(super) fn read_options(reply: &Value) -> Result<Vec<AcpConfigOption>, AiError> {
-    let Some(raw) = reply.pointer("/result/configOptions") else {
-        return Ok(Vec::new());
+    let Some(raw) = reply
+        .pointer("/result/configOptions")
+        .filter(|value| !value.is_null())
+    else {
+        let Some(models) = reply.pointer("/result/models") else {
+            return Ok(Vec::new());
+        };
+        let current_value = text(models, "currentModelId")?;
+        let choices = models
+            .get("availableModels")
+            .and_then(Value::as_array)
+            .ok_or_else(|| invalid("モデル候補が配列ではありません"))?;
+        let options = choices
+            .iter()
+            .map(|choice| {
+                Ok(AcpChoice {
+                    value: text(choice, "modelId")?,
+                    name: text(choice, "name")?,
+                })
+            })
+            .collect::<Result<Vec<_>, AiError>>()?;
+        if options.is_empty() {
+            return Ok(Vec::new());
+        }
+        if !options.iter().any(|choice| choice.value == current_value) {
+            return Err(invalid("エージェントの現在値がモデル候補にありません"));
+        }
+        return Ok(vec![AcpConfigOption {
+            id: "model".into(),
+            name: "Model".into(),
+            category: "model".into(),
+            current_value,
+            options,
+        }]);
     };
     let entries = raw
         .as_array()
         .ok_or_else(|| invalid("configOptions が配列ではありません"))?;
     let mut result = Vec::new();
     for entry in entries {
-        let category = entry.get("category").and_then(Value::as_str).unwrap_or("");
+        let category = entry
+            .get("category")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| match entry.get("id").and_then(Value::as_str) {
+                Some("model") => "model",
+                Some("reasoning_effort" | "thought_level") => "thought_level",
+                _ => "",
+            });
         if !matches!(category, "model" | "thought_level")
             || entry.get("type").and_then(Value::as_str) != Some("select")
         {
@@ -90,6 +129,10 @@ pub(super) fn apply_selections(
     selected: &[AcpSelection],
 ) -> Result<(), AiError> {
     let mut options = read_options(reply)?;
+    let legacy_models = reply
+        .pointer("/result/configOptions")
+        .is_none_or(Value::is_null)
+        && reply.pointer("/result/models").is_some();
     // Apply the model first, then validate dependent reasoning choices against the new complete list.
     let mut ordered = selected.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|selection| {
@@ -114,6 +157,15 @@ pub(super) fn apply_selections(
             continue;
         }
         let id = conn.fresh_id();
+        if legacy_models {
+            conn.roundtrip(json!({"jsonrpc":"2.0","id":id,"method":"session/set_model","params":{"sessionId":session_id,"modelId":selection.value}}), PermissionAnswer::Deny, &mut |_| {})?;
+            for option in &mut options {
+                if option.id == selection.id {
+                    option.current_value = selection.value.clone();
+                }
+            }
+            continue;
+        }
         let response = conn.roundtrip(
             json!({"jsonrpc":"2.0","id":id,"method":"session/set_config_option",
             "params":{"sessionId":session_id,"configId":selection.id,"value":selection.value}}),

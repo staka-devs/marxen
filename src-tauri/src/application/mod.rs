@@ -7,3 +7,5 @@ pub mod ports;
 pub mod root_registry;
 pub mod vim_settings;
 pub mod workspace;
+
+pub mod provider_accounts;

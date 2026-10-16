@@ -1,6 +1,7 @@
 //! Official read-only Codex account RPC, using installed CLI authentication.
 use super::acp::{codex_npm_program, find_on_path, spawn_acp, AgentConn, ConnLine, ReadFail};
 use crate::application::ai::account_usage::AccountUsageReader;
+use crate::application::provider_accounts::AccountLaunchEnvironment;
 use crate::contracts::ai::{AcpArgv, AiError, CodexUsageBucket};
 use crate::domain::ai_account_usage::parse_codex_rate_limits;
 use serde_json::{json, Value};
@@ -49,8 +50,22 @@ pub fn read_codex_with_argv(
     argv: &AcpArgv,
     timeout: Duration,
 ) -> Result<Vec<CodexUsageBucket>, AiError> {
+    read_codex_with_environment(argv, timeout, None)
+}
+
+/// Read limits with a managed child environment while retaining the bounded RPC protocol.
+pub fn read_codex_with_environment(
+    argv: &AcpArgv,
+    timeout: Duration,
+    environment: Option<&AccountLaunchEnvironment>,
+) -> Result<Vec<CodexUsageBucket>, AiError> {
     let scratch = tempfile::tempdir().map_err(|_| read_error())?;
-    let mut child = spawn_acp(argv, scratch.path())?;
+    let mut child = match environment {
+        Some(environment) => {
+            super::acp::spawn_acp_with_environment(argv, scratch.path(), environment)?
+        }
+        None => spawn_acp(argv, scratch.path())?,
+    };
     let result = (|| {
         let stdin = child.stdin.take().ok_or_else(read_error)?;
         let stdout = child.stdout.take().ok_or_else(read_error)?;
@@ -73,29 +88,31 @@ pub fn read_codex_with_argv(
     result
 }
 
+/// Resolve the installed Codex account reader without starting it.
+pub fn codex_account_argv() -> Result<AcpArgv, AiError> {
+    let mut command = "codex".to_owned();
+    if !cfg!(windows) {
+        if let Some(script) = find_on_path("codex").and_then(|path| path.canonicalize().ok()) {
+            if script.ends_with("@openai/codex/bin/codex.js") {
+                let npm_root = script.ancestors().nth(5).ok_or_else(read_error)?;
+                command = codex_npm_program(npm_root)
+                    .ok_or_else(|| AiError::MissingBinary {
+                        command: "codex".into(),
+                    })?
+                    .to_string_lossy()
+                    .into_owned();
+            }
+        }
+    }
+    Ok(AcpArgv {
+        command,
+        args: vec!["app-server".into(), "--listen".into(), "stdio://".into()],
+    })
+}
+
 impl AccountUsageReader for NativeAccountUsageReader {
     /// Read official Codex limits using the installed CLI and its managed authentication.
     fn read_codex(&self) -> Result<Vec<CodexUsageBucket>, AiError> {
-        let mut command = "codex".to_owned();
-        if !cfg!(windows) {
-            if let Some(script) = find_on_path("codex").and_then(|path| path.canonicalize().ok()) {
-                if script.ends_with("@openai/codex/bin/codex.js") {
-                    let npm_root = script.ancestors().nth(5).ok_or_else(read_error)?;
-                    command = codex_npm_program(npm_root)
-                        .ok_or_else(|| AiError::MissingBinary {
-                            command: "codex".into(),
-                        })?
-                        .to_string_lossy()
-                        .into_owned();
-                }
-            }
-        }
-        read_codex_with_argv(
-            &AcpArgv {
-                command,
-                args: vec!["app-server".into(), "--listen".into(), "stdio://".into()],
-            },
-            Duration::from_secs(15),
-        )
+        read_codex_with_argv(&codex_account_argv()?, Duration::from_secs(15))
     }
 }

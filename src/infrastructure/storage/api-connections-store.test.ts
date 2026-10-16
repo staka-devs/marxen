@@ -9,7 +9,7 @@ function storedList() {
     activeId: "api-1",
     initialized: true,
     connections: [
-      { id: "api-1", name: "本番", protocol: "openai_compatible" as const, endpoint: "https://api.example.com/v1", model: "model-a" },
+      { id: "api-1", name: "本番", protocol: "openai_chat_completions" as const, endpoint: "https://api.example.com/v1", model: "model-a" },
       { id: "api-2", name: "検証", protocol: "anthropic" as const, endpoint: "https://api.anthropic.com/v1", model: "model-b" },
     ],
   };
@@ -46,7 +46,7 @@ describe("named API connections persist non-secrets only", () => {
     expect(corrupt).toEqual({ ...defaultConnectionList(), initialized: true });
     expect(inspectApiConnectionStorage()).toEqual({ corrupted: true });
     expect(window.localStorage.getItem(API_CONNECTIONS_STORAGE_KEY)).toBe("{broken");
-    window.localStorage.setItem(API_CONNECTIONS_STORAGE_KEY, JSON.stringify({ version: 2, activeId: "api-9", connections: [{ id: "api-9", name: "未来", protocol: "openai_compatible", endpoint: "https://api.example.com/v1", model: "m" }] }));
+    window.localStorage.setItem(API_CONNECTIONS_STORAGE_KEY, JSON.stringify({ version: 2, activeId: "api-9", connections: [{ id: "api-9", name: "未来", protocol: "openai_chat_completions", endpoint: "https://api.example.com/v1", model: "m" }] }));
     const future = loadApiConnections();
     expect(future.initialized).toBe(true);
     expect(future.connections).toHaveLength(1);
@@ -90,11 +90,20 @@ describe("named API connections persist non-secrets only", () => {
       version: 1,
       activeId: "api-1",
       initialized: true,
-      connections: [{ id: "api-1", name: "本番", protocol: "openai_compatible", endpoint: "https://api.example.com/v1", model: "m" }],
+      connections: [{ id: "api-1", name: "本番", protocol: "openai_chat_completions", endpoint: "https://api.example.com/v1", model: "m" }],
     });
     const stored = window.localStorage.getItem(API_CONNECTIONS_STORAGE_KEY) ?? "";
     expect(stored).not.toContain("s3cret");
     expect(JSON.parse(stored)).not.toHaveProperty("secret");
     expect(JSON.parse(stored).connections[0]).not.toHaveProperty("secret");
   });
+});
+
+it("keeps the old API namespace untouched and requires explicit registration in the new namespace", () => {
+  localStorage.removeItem(API_CONNECTIONS_STORAGE_KEY);
+  const previous = '{"protocol":"openai_compatible"}';
+  localStorage.setItem("marxen.api-connections.v1", previous);
+  expect(loadApiConnections().connections).toEqual([]);
+  expect(localStorage.getItem("marxen.api-connections.v1")).toBe(previous);
+  expect(API_CONNECTIONS_STORAGE_KEY).toBe("marxen.api-connections.v2");
 });

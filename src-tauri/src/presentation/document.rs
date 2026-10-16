@@ -79,7 +79,7 @@ mod desktop {
         }
     }
     #[tauri::command(async)]
-    /// Resolve the app recovery directory and replace only a clean workspace registry.
+    /// Resolve recovery storage and checkpoint current working copies before switching folders.
     pub fn open_workspace(
         app: tauri::AppHandle,
         state: tauri::State<'_, ActorState>,
@@ -95,7 +95,6 @@ mod desktop {
         let mut guard = state.workspace.lock().map_err(|_| WorkspaceError::Io {
             detail: "workspace lock poisoned".into(),
         })?;
-        guard.ensure_clean()?;
         let workspace = Workspace::open(
             std::path::Path::new(&path),
             &recovery,

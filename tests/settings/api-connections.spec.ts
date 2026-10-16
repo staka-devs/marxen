@@ -15,7 +15,7 @@ function labels(locale: "ja-JP" | "en-US") {
     add: english ? "Add API" : "API を追加",
     dialog: english ? "Add API connection" : "API 接続先を追加",
     protocol: english ? "Protocol" : "通信形式",
-    openai: english ? "OpenAI compatible" : "OpenAI 互換",
+    openai: english ? "OpenAI Chat Completions" : "OpenAI Chat Completions",
     name: english ? "Connection name" : "接続先名",
     endpoint: english ? "API endpoint" : "API エンドポイント",
     model: english ? "Model" : "モデル",
@@ -67,7 +67,7 @@ test("named API connections register, validate, persist, and delete across local
       await dialog.getByRole("button", { name: text.save, exact: true }).click();
       await expect(page.getByRole("button", { name: /検証用/ })).toBeVisible();
       // Secrets never land in the persisted JSON.
-      const stored = await page.evaluate(() => window.localStorage.getItem("marxen.api-connections.v1") ?? "");
+      const stored = await page.evaluate(() => window.localStorage.getItem("marxen.api-connections.v2") ?? "");
       expect(stored).toContain("検証用");
       expect(stored).not.toContain("s3cret-value");
       // Restart restoration keeps the registered connection.

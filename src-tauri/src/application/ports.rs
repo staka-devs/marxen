@@ -8,6 +8,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigSource {
     Isolated,
+    Standard,
     UserFile(PathBuf),
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +35,7 @@ pub enum BufferNotification {
     Yank(String),
     SaveRequested,
     Redraw(serde_json::Value),
+    Command(String),
 }
 /// Start row/byte column, exclusive end row/byte column and replacement text.
 /// Rows are zero-based; columns are UTF-8 byte offsets, never UTF-16 offsets.
@@ -110,6 +112,8 @@ pub trait Buffer: Send {
     fn drain_notifications(&self) -> Vec<BufferNotification>;
 }
 pub trait BufferFactory: Send + Sync {
+    /// Persist the default config selection used by future authoritative buffers.
+    fn select_config(&self, path: Option<&Path>) -> Result<(), BufferError>;
     /// Create an authoritative buffer with the selected config and initial clean state.
     fn open(
         &self,

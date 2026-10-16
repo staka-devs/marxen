@@ -6,3 +6,5 @@ pub mod neovim;
 pub mod staging;
 pub mod storage;
 pub mod vim_settings;
+
+pub mod provider_accounts;

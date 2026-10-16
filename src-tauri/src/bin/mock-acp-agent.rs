@@ -656,6 +656,11 @@ fn serve_account_usage() {
 /// permission denial, graceful cancellation, and staging writes before/after completion.
 /// `--exit-early` exits with status 1; unsupported request methods receive mock errors.
 fn main() {
+    if let Some(name) = flag_value("--expect-env") {
+        if std::env::var(name).ok() != flag_value("--expect-env-value") {
+            std::process::exit(23);
+        }
+    }
     if has_flag("--exit-early") {
         std::process::exit(1);
     }
@@ -709,15 +714,22 @@ fn main() {
             .and_then(|method| method.as_str())
             .unwrap_or("");
         match method {
-            "initialize" => agent.respond(
-                &id,
-                serde_json::json!({
-                    "protocolVersion": 1,
-                    "agentCapabilities": { "loadSession": false },
-                    "agentInfo": { "name": "marxen-mock-acp", "version": "0.1.0" },
-                    "authMethods": []
-                }),
-            ),
+            "initialize" => {
+                if let Some(delay) =
+                    flag_value("--initialize-delay-ms").and_then(|s| s.parse::<u64>().ok())
+                {
+                    std::thread::sleep(Duration::from_millis(delay));
+                }
+                agent.respond(
+                    &id,
+                    serde_json::json!({
+                        "protocolVersion": 1,
+                        "agentCapabilities": { "loadSession": false },
+                        "agentInfo": { "name": "marxen-mock-acp", "version": "0.1.0" },
+                        "authMethods": []
+                    }),
+                );
+            }
             "session/new" => {
                 if !no_early_notify {
                     // Interleaved notification BEFORE the response: the client
@@ -735,10 +747,21 @@ fn main() {
                     }));
                 }
                 let mut result = serde_json::json!({ "sessionId": "mock-sess-1" });
+                if has_flag("--legacy-models") {
+                    result["models"] = serde_json::json!({"currentModelId":selected_model,"availableModels":[{"modelId":"fixture-a","name":"First"},{"modelId":"fixture-b","name":"Second"}]});
+                }
                 if has_flag("--models") {
                     result["configOptions"] = model_options(&selected_model, &selected_effort);
                 }
                 agent.respond(&id, result);
+            }
+            "session/set_model" => {
+                let value = message
+                    .pointer("/params/modelId")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                selected_model = value.to_owned();
+                agent.respond(&id, serde_json::json!({}));
             }
             "session/set_config_option" => {
                 let key = message
@@ -760,7 +783,7 @@ fn main() {
                 agent.respond(&id, serde_json::json!({ "configOptions": model_options(&selected_model, &selected_effort) }));
             }
             "session/prompt" => {
-                if has_flag("--models") {
+                if has_flag("--models") || has_flag("--legacy-models") {
                     if let Some(dir) = flag_dir() {
                         let _ = std::fs::write(
                             dir.join("prompt-model.json"),

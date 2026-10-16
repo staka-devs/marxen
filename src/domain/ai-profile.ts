@@ -20,15 +20,15 @@ export interface AiProfile {
 }
 
 /** Valid provider kinds accepted from stored JSON. */
-const KINDS: AiProviderKind[] = ["acp", "openai_compatible", "anthropic"];
+const KINDS: AiProviderKind[] = ["acp", "openai_chat_completions", "openai_responses", "anthropic"];
 
 /** Valid ACP presets accepted from stored JSON. */
-const PRESETS: AcpPreset[] = ["codex", "opencode", "copilot", "custom"];
+const PRESETS: AcpPreset[] = ["codex", "opencode", "copilot", "claude_code", "devin", "custom"];
 
 /**
  * Create the default Codex profile for first-run settings.
  *
- * Uses the OpenAI-compatible default endpoint as the placeholder so manual
+ * Uses the OpenAI Chat Completions default endpoint as the placeholder so manual
  * inputs start from a valid shape.
  */
 export function defaultProfile(): AiProfile {
@@ -37,7 +37,7 @@ export function defaultProfile(): AiProfile {
     preset: "codex",
     command: "",
     argsText: "",
-    endpoint: DEFAULT_ENDPOINTS.openai_compatible,
+    endpoint: DEFAULT_ENDPOINTS.openai_chat_completions,
     model: "",
     anthropicEnabled: false,
   };

@@ -49,8 +49,6 @@ export interface AiProviderSettingsProps {
   connectionControls?: ApiConnectionControls;
 }
 
-const KIND_ORDER: AiProviderKind[] = ["acp", "openai_compatible", "anthropic"];
-
 /**
  * Describe the active connection in one neutral line without claiming success.
  *
@@ -65,9 +63,10 @@ export function describeProviderSummary(provider: AiProviderConfig, t: Translato
     }
     return t(PRESET_LABELS[provider.acp?.preset ?? "codex"] as LabelKey);
   }
-  if (provider.kind === "openai_compatible") {
+  if (provider.kind === "openai_chat_completions" || provider.kind === "openai_responses") {
     const model = provider.openai?.model?.trim() ?? "";
-    return model === "" ? t("OpenAI互換") : t("OpenAI互換 • {{value0}}", { value0: (model) });
+    const label = provider.kind === "openai_responses" ? "OpenAI Responses" : "OpenAI Chat Completions";
+    return model === "" ? label : `${label} • ${model}`;
   }
   const model = provider.anthropic?.model?.trim() ?? "";
   const enabled = provider.anthropic?.enabled ?? false;
@@ -129,7 +128,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
   const [command, setCommand] = useState(provider.acp?.argv?.command ?? "");
   const [argsText, setArgsText] = useState((provider.acp?.argv?.args ?? []).join("\n"));
   const [endpoint, setEndpoint] = useState(
-    provider.openai?.endpoint ?? provider.anthropic?.endpoint ?? DEFAULT_ENDPOINTS.openai_compatible,
+    provider.openai?.endpoint ?? provider.anthropic?.endpoint ?? DEFAULT_ENDPOINTS.openai_chat_completions,
   );
   const [model, setModel] = useState(provider.openai?.model ?? provider.anthropic?.model ?? "");
   const [anthropicEnabled, setAnthropicEnabled] = useState(provider.anthropic?.enabled ?? false);
@@ -160,7 +159,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
     setPreset(provider.acp?.preset ?? "codex");
     setCommand(provider.acp?.argv?.command ?? "");
     setArgsText((provider.acp?.argv?.args ?? []).join("\n"));
-    setEndpoint(provider.openai?.endpoint ?? provider.anthropic?.endpoint ?? DEFAULT_ENDPOINTS.openai_compatible);
+    setEndpoint(provider.openai?.endpoint ?? provider.anthropic?.endpoint ?? DEFAULT_ENDPOINTS.openai_chat_completions);
     setModel(provider.openai?.model ?? provider.anthropic?.model ?? "");
     setAnthropicEnabled(provider.anthropic?.enabled ?? false);
     setAcpSelections(provider.acp?.selections);
@@ -212,7 +211,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
         setPreset(provider.acp?.preset ?? "codex");
         setCommand(provider.acp?.argv?.command ?? "");
         setArgsText((provider.acp?.argv?.args ?? []).join("\n"));
-        setEndpoint(provider.openai?.endpoint ?? provider.anthropic?.endpoint ?? DEFAULT_ENDPOINTS.openai_compatible);
+        setEndpoint(provider.openai?.endpoint ?? provider.anthropic?.endpoint ?? DEFAULT_ENDPOINTS.openai_chat_completions);
         setModel(provider.openai?.model ?? provider.anthropic?.model ?? "");
         setAnthropicEnabled(provider.anthropic?.enabled ?? false);
         setAcpSelections(provider.acp?.selections);
@@ -333,7 +332,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
   const fields = (
       <div className={embedded ? "space-y-4" : "space-y-2.5 px-2.5 py-2"}>
         <div role="group" aria-label={t("接続先")}>
-          {connectionControls !== undefined ? (
+          {(
             <Button
               variant={kind === "acp" ? "default" : "outline"}
               size="sm"
@@ -349,26 +348,7 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
               <ProviderIcon provider={preset} size={14} />
               ACP
             </Button>
-          ) : KIND_ORDER.map((candidate) => (
-            <Button
-              key={candidate}
-              variant={candidate === kind ? "default" : "outline"}
-              size="sm"
-              className="mb-1 mr-1"
-              aria-pressed={candidate === kind}
-              onClick={() => {
-                setKind(candidate);
-                setCredentialState(null);
-                setTestResult(null);
-                setTestFailure(null);
-                if (candidate === "anthropic") setEndpoint(DEFAULT_ENDPOINTS.anthropic);
-                else if (candidate === "openai_compatible") setEndpoint(DEFAULT_ENDPOINTS.openai_compatible);
-              }}
-            >
-              <ProviderIcon provider={candidate === "acp" ? preset : candidate} size={14} />
-              {candidate === "acp" ? "ACP" : candidate === "openai_compatible" ? t("OpenAI 互換") : "Anthropic"}
-            </Button>
-          ))}
+          )}
         </div>
         {kind === "acp" ? (
           <div className="space-y-2">
@@ -453,7 +433,6 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
             onMintId={connectionControls.onMintId}
             connectionGateway={connectionControls.connectionGateway}
             notice={connectionControls.notice}
-            onRetryMigration={connectionControls.onRetryMigration}
             onRetryDeleteCredential={connectionControls.onRetryDeleteCredential}
           />
         )}

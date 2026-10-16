@@ -3,19 +3,19 @@ import { clampAiChatWidth, defaultAiViewPreferences, isAiModelVisible, isAiProvi
 
 describe("AI view preference rules", () => {
   it("keeps named connection visibility independent of legacy kinds and model scopes", () => {
-    const original = { ...defaultAiViewPreferences(), hiddenProviders: ["openai_compatible" as const, "codex" as const], hiddenModels: [{ provider: "openai_compatible" as const, connectionId: "api-a", optionId: "model", value: "same-model" }] };
+    const original = { ...defaultAiViewPreferences(), hiddenProviders: ["openai_chat_completions" as const, "codex" as const], hiddenModels: [{ provider: "openai_chat_completions" as const, connectionId: "api-a", optionId: "model", value: "same-model" }] };
     const hidden = setAiConnectionVisible(original, "api-a", false);
-    expect(isAiProviderVisible(hidden, "openai_compatible", "api-a")).toBe(false);
-    expect(isAiProviderVisible(hidden, "openai_compatible", "api-b")).toBe(true);
+    expect(isAiProviderVisible(hidden, "openai_chat_completions", "api-a")).toBe(false);
+    expect(isAiProviderVisible(hidden, "openai_chat_completions", "api-b")).toBe(true);
     expect(isAiProviderVisible(hidden, "anthropic", "api-a")).toBe(false);
-    expect(isAiProviderVisible(hidden, "openai_compatible")).toBe(false);
+    expect(isAiProviderVisible(hidden, "openai_chat_completions")).toBe(false);
     expect(isAiProviderVisible(hidden, "codex")).toBe(false);
     expect(isAiProviderVisible(hidden, "opencode")).toBe(true);
     expect(setAiConnectionVisible(hidden, "api-a", false).hiddenConnectionIds).toEqual(["api-a"]);
     const shown = setAiConnectionVisible(hidden, "api-a", true);
     expect(shown).toEqual(original);
-    expect(isAiModelVisible(shown, "openai_compatible", "model", "same-model", "api-a")).toBe(false);
-    expect(isAiModelVisible(shown, "openai_compatible", "model", "same-model", "api-b")).toBe(true);
+    expect(isAiModelVisible(shown, "openai_chat_completions", "model", "same-model", "api-a")).toBe(false);
+    expect(isAiModelVisible(shown, "openai_chat_completions", "model", "same-model", "api-b")).toBe(true);
     expect(original.hiddenConnectionIds).toEqual([]);
   });
   it("restores legacy preferences and sanitizes only stable connection IDs", () => {
@@ -56,14 +56,14 @@ describe("AI view preference rules", () => {
     expect(clampAiChatWidth(400, -10)).toBe(0);
   });
   it("separates named-connection model visibility by stable ID without touching kind entries", () => {
-    const scoped = { provider: "openai_compatible" as const, optionId: "model", value: "model-a" };
+    const scoped = { provider: "openai_chat_completions" as const, optionId: "model", value: "model-a" };
     const hidden = setAiModelVisible(defaultAiViewPreferences(), { ...scoped, connectionId: "api-1" }, false);
-    expect(isAiModelVisible(hidden, "openai_compatible", "model", "model-a", "api-1")).toBe(false);
-    expect(isAiModelVisible(hidden, "openai_compatible", "model", "model-a", "api-2")).toBe(true);
-    expect(isAiModelVisible(hidden, "openai_compatible", "model", "model-a")).toBe(true);
+    expect(isAiModelVisible(hidden, "openai_chat_completions", "model", "model-a", "api-1")).toBe(false);
+    expect(isAiModelVisible(hidden, "openai_chat_completions", "model", "model-a", "api-2")).toBe(true);
+    expect(isAiModelVisible(hidden, "openai_chat_completions", "model", "model-a")).toBe(true);
     const kindHidden = setAiModelVisible(defaultAiViewPreferences(), scoped, false);
-    expect(isAiModelVisible(kindHidden, "openai_compatible", "model", "model-a")).toBe(false);
-    expect(isAiModelVisible(kindHidden, "openai_compatible", "model", "model-a", "api-1")).toBe(true);
+    expect(isAiModelVisible(kindHidden, "openai_chat_completions", "model", "model-a")).toBe(false);
+    expect(isAiModelVisible(kindHidden, "openai_chat_completions", "model", "model-a", "api-1")).toBe(true);
     expect(setAiModelVisible(hidden, { ...scoped, connectionId: "api-1" }, true).hiddenModels).toEqual([]);
     const normalized = normalizeAiViewPreferences({ hiddenModels: [{ ...scoped, connectionId: "api-1" }, { ...scoped, connectionId: "bad id" }, { ...scoped, connectionId: 7 }] });
     expect(normalized.hiddenModels).toEqual([{ ...scoped, connectionId: "api-1" }]);

@@ -11,7 +11,7 @@ import { useI18n } from "../../i18n/I18nProvider";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EditorSelection, ExternalCursor } from "../../editor/CodeMirrorEditor";
-import type { DocumentSnapshot, TextEdit, YankCopy, RootScope, WorkspaceInfo } from "../../../contracts/contracts";
+import type { DocumentSnapshot, TextEdit, YankCopy, RootScope, WorkspaceInfo, VimCommandLine } from "../../../contracts/contracts";
 import { sameRoot } from "../../../domain/document-location";
 import { imageTabId, parseImageTabId } from "../../../domain/workspace-roots";
 import { SAMPLE_WORKSPACE } from "../../../domain/workspace-content";
@@ -34,6 +34,8 @@ export interface DocumentSessionArgs {
   clipboardGateway?: ClipboardGateway;
   /** Surface a notice without importing shell state. */
   notify: (message: LocalizedText | null, kind?: NoticeKind) => void;
+  /** Run an application command requested by the user's native Vim mapping. */
+  onVimCommand?: (command: string) => void;
 }
 
 /** Document session state and revision-aware operations. */
@@ -76,6 +78,10 @@ export interface DocumentSession {
   echoCursor: (id: string, anchor: number, head: number) => void;
   /** Current Vim mode label for display. */
   vimMode: string;
+  /** Native Ex/search input with its actual cursor position. */
+  commandLine: VimCommandLine | null;
+  /** Native command output or error. */
+  vimMessage: string | null;
   /** Replace the Vim mode display. */
   setVimMode: React.Dispatch<React.SetStateAction<string>>;
   /** Live ref mirroring the Vim mode for event-time routing. */
@@ -183,6 +189,10 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
   const [selections, setSelections] = useState<Record<string, EditorSelection>>({});
   const [cursorEcho, setCursorEcho] = useState<Record<string, ExternalCursor>>({});
   const [vimMode, setVimMode] = useState("normal");
+  const [commandLine, setCommandLine] = useState<VimCommandLine | null>(null);
+  const [vimMessage, setVimMessage] = useState<string | null>(null);
+  const vimCommand = useRef(args.onVimCommand);
+  vimCommand.current = args.onVimCommand;
   const [vimKeys, setVimKeys] = useState("");
   const [externalByDoc, setExternalByDoc] = useState<Record<string, { path: string; deleted: boolean }>>({});
   const [conflictDoc, setConflictDoc] = useState<string | null>(null);
@@ -282,8 +292,14 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       let nativeMode: string | undefined;
       try {
         const mode = await registry.fetchMode(id);
+        for (const command of mode.commands ?? []) vimCommand.current?.(command);
         if (!isSelectionGenCurrent(id, ticket)) return;
         nativeMode = mode.mode;
+        if (activeRef.current === id) {
+          setVimMode(mode.mode);
+          setCommandLine(mode.commandLine ?? null);
+          setVimMessage(mode.message ?? null);
+        }
       } catch {
         // Best-effort display only.
       }
@@ -315,9 +331,10 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       let mode: string;
       try {
         const update = await registry.fetchMode(id);
+        for (const command of update.commands ?? []) vimCommand.current?.(command);
         if (!isSelectionGenCurrent(id, gen)) return;
         mode = update.mode;
-        if (activeRef.current === id) setVimMode(mode);
+        if (activeRef.current === id) { setVimMode(mode); setCommandLine(update.commandLine ?? null); setVimMessage(update.message ?? null); }
       } catch {
         return;
       }
@@ -679,6 +696,8 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
     cursorEcho,
     echoCursor,
     vimMode,
+    commandLine,
+    vimMessage,
     setVimMode,
     vimModeRef,
     vimKeys,

@@ -113,22 +113,6 @@ impl AiService {
         validate_connection_id(id)?;
         self.connection_keyring.delete_connection(id)
     }
-    /// Copy the legacy kind credential into a named connection slot inside Rust.
-    /// Copies only when the target slot is absent; legacy slots are never
-    /// deleted here and no secret crosses the IPC boundary.
-    pub fn migrate_connection_credential(
-        &self,
-        id: &ApiConnectionId,
-        kind: AiProviderKind,
-    ) -> Result<ConnectionCredentialRef, AiError> {
-        validate_connection_id(id)?;
-        if !self.connection_keyring.has_connection(id)? {
-            if let Some(secret) = self.keyring.get(kind)? {
-                self.connection_keyring.set_connection(id, &secret)?;
-            }
-        }
-        self.connection_credential_state(id)
-    }
     /// Check local readiness or perform the caller's explicit live connection probe.
     pub async fn test_connection(
         &self,
@@ -187,9 +171,17 @@ impl AiService {
             };
         }
         match config.kind {
-            AiProviderKind::Acp => self
-                .transport
-                .handshake(&resolve_acp_argv(config.acp.as_ref().expect("validated"))?),
+            AiProviderKind::Acp => {
+                let transport = self.transport.clone();
+                let argv = resolve_acp_argv(config.acp.as_ref().expect("validated"))?;
+                let (reply, result) = futures::channel::oneshot::channel();
+                self.spawner.spawn_blocking(Box::new(move || {
+                    let _ = reply.send(transport.handshake(&argv));
+                }));
+                result.await.map_err(|_| AiError::ConnectionFailed {
+                    detail: "接続テストが中断されました".into(),
+                })?
+            }
             kind => {
                 let target = http_target(&config)?;
                 let secret = match config.connection_id.as_ref() {
@@ -278,7 +270,9 @@ impl AiService {
                 }));
                 Ok(run_id)
             }
-            AiProviderKind::OpenaiCompatible | AiProviderKind::Anthropic => {
+            AiProviderKind::OpenaiChatCompletions
+            | AiProviderKind::OpenaiResponses
+            | AiProviderKind::Anthropic => {
                 // Credential and target readiness BEFORE any scope pin: a missing
                 // secret or keyring failure must return without pinning, so the
                 // copy stays usable for reject/cancel/approve. Scope

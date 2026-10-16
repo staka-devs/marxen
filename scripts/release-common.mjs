@@ -160,12 +160,13 @@ export function assertArtifacts(artifacts, expectedNames = RELEASE_EXPECTED_ARTI
   }
 }
 
-/** Return the exact five installer basenames and owners observed for a version. */
+/** Return the exact six package basenames and owners observed for a version. */
 export function expectedReleaseFiles(version) {
   if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(version)) {
     throw new Error(`Version must be X.Y.Z: ${version}`);
   }
   return [
+    { slot: "windows-portable", basename: `Marxen_${version}_x64-portable.zip`, owner: "marxen-x86_64-pc-windows-msvc" },
     { slot: "windows-nsis", basename: `Marxen_${version}_x64-setup.exe`, owner: "marxen-x86_64-pc-windows-msvc" },
     { slot: "linux-deb", basename: `Marxen_${version}_amd64.deb`, owner: "marxen-x86_64-unknown-linux-gnu" },
     { slot: "linux-appimage", basename: `Marxen_${version}_amd64.AppImage`, owner: "marxen-x86_64-unknown-linux-gnu" },
@@ -174,7 +175,7 @@ export function expectedReleaseFiles(version) {
   ];
 }
 
-/** Select the exact five installers, rejecting wrong versions, owners, and escapes. */
+/** Select the exact six packages, rejecting wrong versions, owners, and escapes. */
 export function selectInstallers(files, version) {
   const expected = expectedReleaseFiles(version);
   const byBasename = new Map(expected.map(item => [item.basename, item]));
@@ -246,7 +247,7 @@ export function buildReleaseNotes(input) {
   if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`Bad source SHA: ${sha}`);
   if (!(Number(runId) > 0)) throw new Error(`Bad Integration run id: ${runId}`);
   const bySlot = Object.fromEntries(assets.map(item => [item.slot, item.basename]));
-  for (const slot of ["windows-nsis", "linux-deb", "linux-appimage", "mac-arm64-dmg", "mac-x64-dmg"]) {
+  for (const slot of ["windows-portable", "windows-nsis", "linux-deb", "linux-appimage", "mac-arm64-dmg", "mac-x64-dmg"]) {
     if (!bySlot[slot]) throw new Error(`Release notes missing asset: ${slot}`);
   }
   return [
@@ -259,11 +260,13 @@ export function buildReleaseNotes(input) {
     `| OS / CPU | ファイル | 形式 |`,
     `| --- | --- | --- |`,
     `| Windows x64 | \`${bySlot["windows-nsis"]}\` | NSIS |`,
+    `| Windows x64 | \`${bySlot["windows-portable"]}\` | スタンドアローン ZIP |`,
     `| Linux x64 | \`${bySlot["linux-deb"]}\` | deb |`,
     `| Linux x64 | \`${bySlot["linux-appimage"]}\` | AppImage |`,
     `| macOS arm64 | \`${bySlot["mac-arm64-dmg"]}\` | DMG |`,
     `| macOS x64 | \`${bySlot["mac-x64-dmg"]}\` | DMG |`,
     ``,
+    `スタンドアローン版はZIPを展開し、同じフォルダーの Marxen.exe を実行してください。neovim フォルダーも一緒に配置します。Windows の WebView2 Runtime を使用します。`,
     `SHA256SUMS で検証してください。`,
     ``,
     `## 注意`,
@@ -327,7 +330,7 @@ export function assertDraftAssets(draft, locals, input) {
 export function collectVerifyLocals(dist) {
   const sumsText = readFileSync(join(dist, "SHA256SUMS"), "utf8");
   const entries = parseSha256Sums(sumsText);
-  if (entries.length !== 5) throw new Error(`SHA256SUMS must list 5 installers, got ${entries.length}`);
+  if (entries.length !== 6) throw new Error(`SHA256SUMS must list 6 packages, got ${entries.length}`);
   const locals = entries.map(entry => {
     const data = readBinarySync(join(dist, entry.basename));
     const actual = createHash("sha256").update(data).digest("hex");

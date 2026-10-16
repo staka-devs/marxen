@@ -5,20 +5,17 @@ import { useI18n } from "../i18n/I18nProvider";
 // Vim-settings editor state over the application use case (presentation).
 //
 // Owns the selected config path, the loaded fingerprint-guarded file, the
-// structured draft, the raw draft, and pure previews. All native access
+// raw text draft, and guarded writes. All native access
 // arrives via the injected gateway, so this hook never imports
 // infrastructure directly.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { VimConfigRead, VimSettings } from "../../contracts/vim-settings";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { VimConfigRead } from "../../contracts/vim-settings";
 import type { VimSettingsGateway } from "../../application/vim-settings/ports";
 import {
   loadVimSettings,
-  previewVimSettings,
-  saveManagedVimSettings,
   saveRawVimSettings,
 } from "../../application/vim-settings/vim-settings-service";
-import { defaultVimSettings, validateVimSettings } from "../../domain/vim-settings";
 
 /** Injected gateway and initial path for the vim-settings editor. */
 export interface VimSettingsArgs {
@@ -28,6 +25,8 @@ export interface VimSettingsArgs {
   initialPath?: string | null;
   /** Called with the saved path so the shell can offer a config apply. */
   onSaved?: (path: string) => void;
+  /** Share an accepted path change before another settings action can run. */
+  onPathChange?: (path: string) => void;
 }
 
 /** Editable vim-settings state and operations for the panel. */
@@ -40,26 +39,10 @@ export interface VimSettingsModel {
   loaded: VimConfigRead | null;
   /** Whether a native read or write is in flight. */
   busy: boolean;
-  /** Structured draft edited through the GUI controls. */
-  settings: VimSettings;
-  /** Replace the structured draft wholesale. */
-  setSettings: (settings: VimSettings) => void;
   /** Raw file draft edited through the raw editor. */
   rawDraft: string;
   /** Replace the raw file draft. */
   setRawDraft: (raw: string) => void;
-  /** Whether the loaded file is Lua raw-only. */
-  isLua: boolean;
-  /** Managed-block parse failure from the last load, if any. */
-  managedError: string | null;
-  /** Structured validation details for the current draft. */
-  validation: string[];
-  /** Rewritten file preview, or null when the preview itself fails. */
-  preview: string | null;
-  /** Preview failure detail, if any. */
-  previewError: string | null;
-  /** Whether the preview differs from the loaded raw text. */
-  changed: boolean;
   /** Whether the raw draft has unsaved edits against the loaded text. */
   rawDirty: boolean;
   /** Last native or validation failure surfaced to the panel. */
@@ -68,21 +51,19 @@ export interface VimSettingsModel {
   notice: string | null;
   /** Reload the selected config through the gateway. */
   reload: () => Promise<void>;
-  /** Save the structured draft through the managed block. */
-  saveManaged: () => Promise<void>;
   /** Save the raw draft verbatim. */
   saveRaw: () => Promise<void>;
 }
 
 /**
- * Own the vim-settings editor: path, guarded file, drafts, and previews.
+ * Own the vim-settings editor: path, guarded file and text draft.
  *
  * Loads on mount and on path change; drafts reset from every load so the
  * fingerprint always matches the displayed text. Document buffers are never
  * touched here, so unsaved text survives saves and applies.
  */
 export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
-  const { t, message, language } = useI18n();
+  const { t, message } = useI18n();
   const { gateway, initialPath = null, onSaved } = args;
   const [selectedPath, changeSelectedPath] = useState(initialPath ?? "");
   const selectedPathRef = useRef(selectedPath);
@@ -92,7 +73,6 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
   const loadedFor = useRef<string | null>(null);
   const [loaded, setLoaded] = useState<VimConfigRead | null>(null);
   const [busy, setBusy] = useState(false);
-  const [settings, setSettings] = useState<VimSettings>(defaultVimSettings());
   const [rawDraft, setRawDraft] = useState("");
   const [error, setError] = useState<LocalizedText | null>(null);
   const [notice, setNotice] = useState<LocalizedText | null>(null);
@@ -102,6 +82,8 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
   /** Latest save notice without retriggering the save callbacks. */
   const savedRef = useRef(onSaved);
   savedRef.current = onSaved;
+  const pathChangedRef = useRef(args.onPathChange);
+  pathChangedRef.current = args.onPathChange;
 
   /** Invalidate pending reads immediately when selecting another config file. */
   const setSelectedPath = useCallback((path: string) => {
@@ -113,6 +95,7 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
     setError(null);
     setNotice(null);
     changeSelectedPath(path);
+    pathChangedRef.current?.(path);
   }, []);
 
   /** Reload the selected config through the gateway. */
@@ -128,7 +111,6 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
       if (token !== operation.current) return;
       loadedFor.current = selectedPath;
       setLoaded(read);
-      setSettings(read.managedError ? defaultVimSettings() : read.settings);
       setRawDraft(read.raw);
       setNotice(read.exists ? null : message("設定ファイルはまだありません。保存すると新規作成します。"));
     } catch (cause) {
@@ -138,44 +120,12 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
     }
   }, [selectedPath]);
 
+  useEffect(() => { setSelectedPath(initialPath ?? ""); }, [initialPath, setSelectedPath]);
+
   useEffect(() => {
     void reload();
     return () => { operation.current += 1; };
   }, [reload]);
-
-  /** Save the structured draft through the managed block. */
-  const saveManaged = useCallback(async () => {
-    if (writing.current || busy || !loaded || loadedFor.current !== selectedPath) return;
-    if (rawDraft !== loaded.raw) {
-      setError(message("設定コードに未保存の変更があります。先に設定コードを保存してください。"));
-      return;
-    }
-    writing.current = true;
-    const token = ++operation.current;
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const path = selectedPath === "" ? null : selectedPath;
-      const written = await saveManagedVimSettings(
-        gatewayRef.current,
-        path,
-        loaded?.fingerprint ?? null,
-        settings, t);
-      const read = await loadVimSettings(gatewayRef.current, path);
-      if (token !== operation.current) return;
-      setLoaded(read);
-      setSettings(read.managedError ? defaultVimSettings() : read.settings);
-      setRawDraft(read.raw);
-      setNotice(message("管理ブロックを保存しました。設定の適用でNeovimを再起動します。"));
-      savedRef.current?.(written.path);
-    } catch (cause) {
-      if (token === operation.current) setError(localizedFailure(cause, opaqueErrorText));
-    } finally {
-      writing.current = false;
-      if (token === operation.current) setBusy(false);
-    }
-  }, [selectedPath, loaded, settings, busy, rawDraft]);
 
   /** Save the raw draft verbatim. */
   const saveRaw = useCallback(async () => {
@@ -191,7 +141,6 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
       const read = await loadVimSettings(gatewayRef.current, path);
       if (token !== operation.current) return;
       setLoaded(read);
-      setSettings(read.managedError ? defaultVimSettings() : read.settings);
       setRawDraft(read.raw);
       setNotice(message("設定コードを保存しました。設定の適用でNeovimを再起動します。"));
       savedRef.current?.(written.path);
@@ -203,46 +152,17 @@ export function useVimSettings(args: VimSettingsArgs): VimSettingsModel {
     }
   }, [selectedPath, loaded, rawDraft, busy]);
 
-  /** Structured validation details for the current draft. */
-  const validation = useMemo(() => validateVimSettings(settings, t), [settings, language]);
-  /** Whether the loaded file is Lua raw-only. */
-  const isLua = loaded?.isLua ?? false;
-  /** Managed-block parse failure from the last load, if any. */
-  const managedError = loaded?.managedError ?? null;
-  const previewed = useMemo(() => {
-    if (!loaded) return { preview: null as string | null, previewError: null as string | null, changed: false };
-    try {
-      const { next, changed } = previewVimSettings(loaded.raw, settings, loaded.path, t);
-      return { preview: next, previewError: null as string | null, changed };
-    } catch (cause) {
-      return {
-        preview: null as string | null,
-        previewError: localizedFailure(cause, opaqueErrorText),
-        changed: false,
-      };
-    }
-  }, [loaded, settings, language]);
-
   return {
     selectedPath,
     setSelectedPath,
     loaded,
     busy,
-    settings,
-    setSettings,
     rawDraft,
     setRawDraft,
-    isLua,
-    managedError,
-    validation,
-    preview: previewed.preview,
-    previewError: previewed.previewError === null ? null : renderLocalizedText(previewed.previewError, t),
-    changed: previewed.changed,
     rawDirty: loaded ? rawDraft !== loaded.raw : false,
     error: error === null ? null : renderLocalizedText(error, t),
     notice: notice === null ? null : renderLocalizedText(notice, t),
     reload,
-    saveManaged,
     saveRaw,
   };
 }

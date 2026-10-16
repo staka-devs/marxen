@@ -5,7 +5,45 @@ use crate::contracts::ai::*;
 use crate::domain::ai::*;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
-pub struct NativeAiTransport;
+#[derive(Default)]
+pub struct NativeAiTransport {
+    pub accounts: Option<Arc<crate::application::provider_accounts::ProviderAccountService>>,
+}
+
+impl NativeAiTransport {
+    /// Resolve only known ACP account adapters, preserving custom commands' inherited login.
+    fn environment(
+        &self,
+        argv: &AcpArgv,
+    ) -> Result<crate::application::provider_accounts::AccountLaunchEnvironment, AiError> {
+        use crate::contracts::provider_accounts::{AccountHost, AccountProvider};
+        let command = argv
+            .command
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let command = command
+            .trim_end_matches(".exe")
+            .trim_end_matches(".cmd")
+            .trim_end_matches(".ps1");
+        let provider = match command {
+            "codex-acp" => AccountProvider::Codex,
+            "claude-agent-acp" => AccountProvider::Claude,
+            "opencode" => AccountProvider::Opencode,
+            "devin" => AccountProvider::Devin,
+            _ => return Ok(Default::default()),
+        };
+        match &self.accounts {
+            Some(accounts) => accounts
+                .launch_environment(provider, &AccountHost::Local)
+                .map_err(|error| AiError::InvalidConfig {
+                    detail: format!("選択したアカウントを使用できません: {error:?}"),
+                }),
+            None => Ok(Default::default()),
+        }
+    }
+}
 impl AiTransport for NativeAiTransport {
     /// Resolve configured argv to a directly spawnable program without a shell.
     fn resolve_launch(&self, argv: &AcpArgv) -> Result<ResolvedAcpLaunch, AiError> {
@@ -13,7 +51,7 @@ impl AiTransport for NativeAiTransport {
     }
     /// Run the explicit ACP readiness probe through the native subprocess adapter.
     fn handshake(&self, argv: &AcpArgv) -> Result<AiTestResult, AiError> {
-        super::acp::handshake_acp(argv)
+        super::acp::handshake_acp_with_environment(argv, &self.environment(argv)?)
     }
     /// Dispatch a connection probe using the validated API root and selected provider credential.
     fn test_http<'a>(
@@ -24,7 +62,7 @@ impl AiTransport for NativeAiTransport {
         Box::pin(async move {
             let client = super::http::http_client(HTTP_TEST_TIMEOUT)?;
             match target.backend {
-                HttpBackend::OpenAi => {
+                HttpBackend::OpenAi | HttpBackend::OpenAiResponses => {
                     super::http::test_openai_live(&client, &target.base, secret).await
                 }
                 HttpBackend::Anthropic => {
@@ -44,7 +82,15 @@ impl AiTransport for NativeAiTransport {
         cancel: &AtomicBool,
         emit: &mut (dyn FnMut(AiStreamEvent) + Send),
     ) -> Result<(), AiError> {
-        super::acp::run_acp_prompt(params, request, run_id, registry, cancel, emit)
+        super::acp::run_acp_prompt_with_environment(
+            params,
+            request,
+            run_id,
+            registry,
+            cancel,
+            &self.environment(&params.argv)?,
+            emit,
+        )
     }
     /// Drive a scoped HTTP stream with a bounded client and the owning cancellation flag.
     fn run_http<'a>(

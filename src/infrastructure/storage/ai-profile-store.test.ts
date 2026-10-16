@@ -6,7 +6,7 @@ describe("ai profiles persist non-secrets only", () => {
   it("round-trips provider/endpoint/model/argv/options", () => {
     saveAiProfile({
       ...defaultProfile(),
-      kind: "openai_compatible",
+      kind: "openai_chat_completions",
       endpoint: "https://example.com/v1",
       model: "model-id",
       command: "my-agent",
@@ -14,7 +14,7 @@ describe("ai profiles persist non-secrets only", () => {
       anthropicEnabled: false,
     });
     expect(loadAiProfile()).toMatchObject({
-      kind: "openai_compatible",
+      kind: "openai_chat_completions",
       endpoint: "https://example.com/v1",
       model: "model-id",
       command: "my-agent",

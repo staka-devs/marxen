@@ -26,7 +26,6 @@ import type {
   SaveRequest,
   TextEdit,
   Utf16Range,
-  VimMode,
   VimInputResult,
   YankCopy,
 } from "../../contracts/contracts";
@@ -69,6 +68,15 @@ export class RegistryClient {
    * serialization, execution-time revision binding, and stale resync.
    */
   constructor(private transport: DocumentTransport) {}
+
+  private pendingCommands = new Map<DocumentId, string[]>();
+
+  /** Retain native actions observed by routing until presentation consumes them. */
+  private async readMode(documentId: DocumentId): Promise<ModeUpdate> {
+    const update = await this.transport.fetchMode(documentId, this.location(documentId));
+    if (update.commands?.length) this.pendingCommands.set(documentId, [...(this.pendingCommands.get(documentId) ?? []), ...update.commands]);
+    return update;
+  }
 
   /** Select the complete native source in queue order without replaying a stale gesture. */
   selectAll(expected: EditorContext): Promise<CursorUpdate> {
@@ -286,7 +294,7 @@ export class RegistryClient {
   /** Execute committed text inside an already-owned document queue task. */
   private async insertNativeTextNow(documentId: DocumentId, text: string): Promise<DocumentSnapshot> {
     const revision = this.rev.get(documentId) ?? 0;
-    const mode = await this.transport.fetchMode(documentId, this.location(documentId));
+    const mode = await this.readMode(documentId);
     if (mode.revision !== revision || (mode.mode !== "insert" && mode.mode !== "replace")) return this.resync(documentId);
     this.pendingPrefix.delete(documentId);
     try {
@@ -348,7 +356,7 @@ export class RegistryClient {
       let revision = this.rev.get(documentId) ?? 0;
       try {
         if (hardBreak && !hasSelection && !this.pendingPrefix.get(documentId)) {
-          const mode = await this.transport.fetchMode(documentId, this.location(documentId));
+          const mode = await this.readMode(documentId);
           if (mode.revision !== revision) return this.resync(documentId);
           if (mode.mode === "insert" && !await this.transport.hasMapping(documentId, "i", "<CR>", this.location(documentId))) {
             const cursor = await this.transport.fetchCursor(documentId, this.location(documentId));
@@ -380,7 +388,7 @@ export class RegistryClient {
       const revision = this.rev.get(documentId) ?? 0;
       const key = backwards ? "<S-Tab>" : "<Tab>";
       try {
-        const mode = await this.transport.fetchMode(documentId, this.location(documentId));
+        const mode = await this.readMode(documentId);
         if (mode.revision !== revision) return this.resync(documentId);
         if (mode.mode === "insert" && !this.pendingPrefix.get(documentId) && !await this.transport.hasMapping(documentId, "i", key, this.location(documentId))) {
           const source = this.source.get(documentId);
@@ -426,7 +434,7 @@ export class RegistryClient {
       // buffer moved out of band (external/native/AI edit), so refresh and
       // reject instead of mutating offsets that may point elsewhere.
       const known = this.rev.get(documentId) ?? 0;
-      const update = await this.transport.fetchMode(documentId, this.location(documentId));
+      const update = await this.readMode(documentId);
       if (update.revision !== known) await this.resync(documentId);
       const revision = this.rev.get(documentId) ?? 0;
       if (update.mode !== "insert" && update.mode !== "replace") {
@@ -487,7 +495,7 @@ export class RegistryClient {
       // buffer moved out of band (external/native/AI edit), so refresh and
       // reject instead of mutating offsets that may point elsewhere.
       const known = this.rev.get(documentId) ?? 0;
-      const update = await this.transport.fetchMode(documentId, this.location(documentId));
+      const update = await this.readMode(documentId);
       if (update.revision !== known) await this.resync(documentId);
       const revision = this.rev.get(documentId) ?? 0;
       if (keyNotation !== null && (update.mode === "insert" || update.mode === "replace")) {
@@ -653,8 +661,12 @@ export class RegistryClient {
    *
    * Best-effort display data; routing re-reads inside the queue.
    */
-  fetchMode(documentId: DocumentId): Promise<{ mode: VimMode; revision: number }> {
-    return this.transport.fetchMode(documentId, this.location(documentId)).then((update: ModeUpdate) => ({ mode: update.mode, revision: update.revision }));
+  fetchMode(documentId: DocumentId): Promise<Omit<ModeUpdate, "documentId">> {
+    return this.readMode(documentId).then((update) => {
+      const commands = this.pendingCommands.get(documentId);
+      this.pendingCommands.delete(documentId);
+      return { mode: update.mode, revision: update.revision, commandLine: update.commandLine, message: update.message, commands };
+    });
   }
 
   /**

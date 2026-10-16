@@ -38,10 +38,11 @@ pub async fn run_http_prompt(
         .header("Content-Type", "application/json")
         .json(&match target.backend {
             HttpBackend::OpenAi => openai_body(request, &target.model),
+            HttpBackend::OpenAiResponses => responses_body(request, &target.model),
             HttpBackend::Anthropic => anthropic_body(request, &target.model),
         });
     builder = match target.backend {
-        HttpBackend::OpenAi => builder.bearer_auth(secret),
+        HttpBackend::OpenAi | HttpBackend::OpenAiResponses => builder.bearer_auth(secret),
         HttpBackend::Anthropic => builder
             .header("x-api-key", secret)
             .header("anthropic-version", "2023-06-01"),
@@ -126,17 +127,23 @@ pub async fn run_http_prompt(
                         }));
                     }
                 }
-                HttpBackend::Anthropic => match anthropic_signal(&data)? {
-                    AnthropicSignal::Text(text) => {
-                        assembler.push(&text);
-                        emit(AiStreamEvent::Chunk(StreamChunk {
-                            run_id: run_id.clone(),
-                            text,
-                        }));
+                HttpBackend::OpenAiResponses | HttpBackend::Anthropic => {
+                    match if matches!(target.backend, HttpBackend::OpenAiResponses) {
+                        responses_signal(&data)?
+                    } else {
+                        anthropic_signal(&data)?
+                    } {
+                        AnthropicSignal::Text(text) => {
+                            assembler.push(&text);
+                            emit(AiStreamEvent::Chunk(StreamChunk {
+                                run_id: run_id.clone(),
+                                text,
+                            }));
+                        }
+                        AnthropicSignal::End => finished = true,
+                        AnthropicSignal::Ignore => {}
                     }
-                    AnthropicSignal::End => finished = true,
-                    AnthropicSignal::Ignore => {}
-                },
+                }
             }
         }
     }
@@ -153,8 +160,16 @@ pub async fn run_http_prompt(
                     }
                 }
             }
-            HttpBackend::Anthropic => {
-                if let AnthropicSignal::Text(text) = anthropic_signal(&data)? {
+            HttpBackend::OpenAiResponses | HttpBackend::Anthropic => {
+                let signal = if matches!(target.backend, HttpBackend::OpenAiResponses) {
+                    responses_signal(&data)?
+                } else {
+                    anthropic_signal(&data)?
+                };
+                if matches!(signal, AnthropicSignal::End) {
+                    finished = true;
+                }
+                if let AnthropicSignal::Text(text) = signal {
                     assembler.push(&text);
                     emit(AiStreamEvent::Chunk(StreamChunk {
                         run_id: run_id.clone(),
@@ -163,6 +178,11 @@ pub async fn run_http_prompt(
                 }
             }
         }
+    }
+    if matches!(target.backend, HttpBackend::OpenAiResponses) && !finished {
+        return Err(AiError::StreamFailed {
+            detail: "Responses の応答が完了前に切断されました".into(),
+        });
     }
     emit(AiStreamEvent::Done(StreamDone {
         run_id: run_id.clone(),
@@ -182,7 +202,7 @@ pub async fn test_openai_live(
 ) -> Result<AiTestResult, AiError> {
     let base = validate_endpoint(endpoint)?;
     let response = client
-        .get(format!("{base}/models"))
+        .get(http_endpoints(&base, "/models").1)
         .bearer_auth(secret)
         .send()
         .await
@@ -219,7 +239,7 @@ pub async fn test_anthropic_live(
     let base = validate_endpoint(endpoint)?;
     validate_model(model)?;
     let response = client
-        .post(format!("{base}/messages"))
+        .post(http_endpoints(&base, "/messages").1)
         .header("x-api-key", secret)
         .header("anthropic-version", "2023-06-01")
         .json(&serde_json::json!({

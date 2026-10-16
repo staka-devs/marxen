@@ -470,6 +470,14 @@ impl Workspace {
         Ok(())
     }
 
+    /// Flush every authoritative buffer to recovery before leaving a workspace.
+    pub fn checkpoint_all(&self) -> Result<(), WorkspaceError> {
+        for actor in self.actors.values() {
+            actor.sync_from_nvim()?;
+        }
+        Ok(())
+    }
+
     /// Preserve literal callers while refusing to return incomplete results as exhaustive.
     pub fn search(&self, query: &str) -> Result<Vec<SearchMatch>, WorkspaceError> {
         let result =

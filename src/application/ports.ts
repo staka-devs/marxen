@@ -28,7 +28,6 @@ import type {
   TextEdit,
   Utf16Range,
   VimInputResult,
-  VimMode,
   WorkspaceEntry,
   WorkspaceEvent,
   WorkspaceInfo,
@@ -126,7 +125,7 @@ export interface DocumentGateway {
   /** Fetch the authoritative snapshot. */
   fetchSnapshot(documentId: DocumentId): Promise<DocumentSnapshot>;
   /** Fetch the native mode with revision. */
-  fetchMode(documentId: DocumentId): Promise<{ mode: VimMode; revision: number }>;
+  fetchMode(documentId: DocumentId): Promise<Omit<ModeUpdate, "documentId">>;
   /** Fetch the native cursor. */
   fetchCursor(documentId: DocumentId): Promise<CursorUpdate>;
   /** Stage a GUI selection, coalescing rapid gestures. */
@@ -354,8 +353,7 @@ export interface ApiConnectionGateway {
   setConnectionCredential(connectionId: import("../contracts/ai-contracts").ApiConnectionId, secret: string): Promise<void>;
   /** Delete the secret of one named connection from the OS store. */
   deleteConnectionCredential(connectionId: import("../contracts/ai-contracts").ApiConnectionId): Promise<void>;
-  /** Copy the legacy kind credential into an empty connection slot inside Rust. */
-  migrateConnectionCredential(connectionId: import("../contracts/ai-contracts").ApiConnectionId, kind: import("../contracts/ai-contracts").AiProviderKind): Promise<import("../contracts/ai-contracts").ConnectionCredentialRef>;
+
 }
 
 /** View-only editor preferences store. */

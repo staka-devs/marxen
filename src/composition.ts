@@ -21,6 +21,7 @@ import { editorPreferencesStore } from "./infrastructure/storage/editor-preferen
 import { workspaceMetadataStore } from "./infrastructure/storage/workspace-metadata-store";
 import { imageLoader } from "./infrastructure/images/image-loader";
 import { vimSettingsGateway } from "./infrastructure/vim-settings/tauri-vim-settings";
+import { providerAccountGateway } from "./infrastructure/tauri/provider-accounts";
 import { aiUsageGateway, codexAccountUsageGateway } from "./infrastructure/tauri/ai-usage";
 import { languagePreferenceStore } from "./infrastructure/storage/language-preference-store";
 import { createTranslator } from "./infrastructure/localization/i18next-translator";
@@ -48,6 +49,7 @@ export function createComposition() {
   const workspaceGateway: WorkspaceGateway = workspaceApi;
   return {
     desktop,
+    providerAccountGateway: desktop ? providerAccountGateway : undefined,
     documentGateway,
     workspaceGateway,
     workspaceMetadataStore,

@@ -15,12 +15,26 @@ use std::sync::Arc;
 pub fn document_services() -> DocumentServices {
     DocumentServices {
         storage: Arc::new(infrastructure::storage::NativeStorage),
-        buffers: Arc::new(infrastructure::neovim::buffer::NativeBufferFactory),
+        buffers: Arc::new(infrastructure::neovim::buffer::NativeBufferFactory::default()),
     }
 }
 /// Construct the native vim-settings file adapter for guarded config access.
 pub fn vim_settings_files() -> Arc<dyn application::vim_settings::VimSettingsFiles> {
     Arc::new(infrastructure::vim_settings::NativeVimSettingsFiles)
+}
+/// Construct account ports once; the same service is the ACP launch-environment lookup.
+pub fn provider_account_service() -> Result<
+    application::provider_accounts::ProviderAccountService,
+    contracts::provider_accounts::ProviderAccountError,
+> {
+    use infrastructure::provider_accounts::*;
+    let (root, home) = platform_paths()?;
+    Ok(application::provider_accounts::ProviderAccountService {
+        store: Arc::new(NativeAccountStore { root: root.clone() }),
+        credentials: Arc::new(NativeAccountCredentials),
+        runtime: Arc::new(NativeAccountRuntime { root, home }),
+        mutation: std::sync::Mutex::new(()),
+    })
 }
 /// Open a real authoritative document with isolated configuration and native storage.
 pub fn open_document(
@@ -61,13 +75,9 @@ pub fn open_isolation(root: &Path) -> Result<IsolationManager, WorkspaceError> {
 /// Compose native adapters, desktop state, events and Tauri command handlers before starting the app.
 pub fn run() {
     use tauri::{Emitter, Manager};
+    let accounts = Arc::new(provider_account_service().expect("provider account storage path"));
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(presentation::document::ActorState::new(
-            document_services(),
-            std::sync::Arc::new(infrastructure::storage::NativeStorage),
-            std::sync::Arc::new(infrastructure::storage::SystemClock),
-        ))
         .manage(presentation::clipboard::ClipboardState(
             std::sync::Arc::new(infrastructure::clipboard::NativeClipboard::default()),
         ))
@@ -80,7 +90,9 @@ pub fn run() {
         .manage(application::ai::service::AiService {
             keyring: Arc::new(infrastructure::ai::credentials::OsKeyring),
             connection_keyring: Arc::new(infrastructure::ai::credentials::OsKeyring),
-            transport: Arc::new(infrastructure::ai::transport::NativeAiTransport),
+            transport: Arc::new(infrastructure::ai::transport::NativeAiTransport {
+                accounts: Some(accounts.clone()),
+            }),
             spawner: Arc::new(infrastructure::ai::transport::NativeTaskSpawner),
             runs: Arc::new(application::ai::runs::RunRegistry::new()),
             usage: Arc::new(application::ai::usage::UsageRegistry::new()),
@@ -89,8 +101,18 @@ pub fn run() {
             reader: Arc::new(infrastructure::ai::account_usage::NativeAccountUsageReader),
             clock: Arc::new(infrastructure::storage::SystemClock),
         })
+        .manage(accounts)
         .setup(|app| {
             infrastructure::neovim::configure_resource_dir(app.path().resource_dir()?);
+            let mut services = document_services();
+            services.buffers = Arc::new(infrastructure::neovim::buffer::NativeBufferFactory::new(
+                app.path().app_data_dir()?,
+            ));
+            app.manage(presentation::document::ActorState::new(
+                services,
+                Arc::new(infrastructure::storage::NativeStorage),
+                Arc::new(infrastructure::storage::SystemClock),
+            ));
             let state = app.state::<presentation::document::ActorState>();
             let workspace = std::sync::Arc::downgrade(&state.workspace);
             let pending = std::sync::Arc::downgrade(&state.pending);
@@ -172,13 +194,19 @@ pub fn run() {
             presentation::ai::ai_connection_credential_state,
             presentation::ai::ai_set_connection_credential,
             presentation::ai::ai_delete_connection_credential,
-            presentation::ai::ai_migrate_connection_credential,
             presentation::ai::ai_test_connection,
             presentation::ai::ai_prompt_stream,
             presentation::ai::ai_prompt_cancel,
             presentation::ai::ai_permission_reply,
             presentation::ai::ai_usage_snapshot,
             presentation::ai::ai_codex_account_usage,
+            presentation::provider_accounts::provider_accounts_snapshot,
+            presentation::provider_accounts::provider_accounts_save,
+            presentation::provider_accounts::provider_accounts_select,
+            presentation::provider_accounts::provider_accounts_delete,
+            presentation::provider_accounts::provider_accounts_credential_present,
+            presentation::provider_accounts::provider_accounts_usage,
+            presentation::provider_accounts::provider_accounts_open_setup,
             presentation::isolation::isolation_create,
             presentation::isolation::isolation_diff,
             presentation::isolation::isolation_new_files,

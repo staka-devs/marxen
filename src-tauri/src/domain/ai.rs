@@ -167,6 +167,11 @@ pub fn missing_binary_hint(command: &str) -> String {
         "npm install -g @agentclientprotocol/codex-acp で導入し PATH を通してください（自動導入はしません）".into()
     } else if base.contains("opencode") {
         "opencode v2 を導入し PATH を通してください（例: npm の @opencode/cli、https://opencode.ai）".into()
+    } else if base.contains("claude-agent-acp") {
+        "npm install -g @agentclientprotocol/claude-agent-acp で導入し、利用するホストで Claude Code にログインしてください".into()
+    } else if base == "devin" || base == "devin.exe" {
+        "Devin CLI を導入し、devin auth login でログインしてください（https://docs.devin.ai/cli）"
+            .into()
     } else if base.contains("copilot") {
         "GitHub Copilot CLI を導入し PATH を通してください".into()
     } else if base.contains("node") {
@@ -195,6 +200,14 @@ pub fn preset_argv(preset: AcpPreset) -> AcpArgv {
         AcpPreset::Copilot => AcpArgv {
             command: "copilot".into(),
             args: vec!["--acp".into(), "--stdio".into()],
+        },
+        AcpPreset::ClaudeCode => AcpArgv {
+            command: "claude-agent-acp".into(),
+            args: vec![],
+        },
+        AcpPreset::Devin => AcpArgv {
+            command: "devin".into(),
+            args: vec!["acp".into()],
         },
         AcpPreset::Custom => AcpArgv {
             command: String::new(),
@@ -310,14 +323,14 @@ pub fn validate_provider_config(config: &AiProviderConfig) -> Result<(), AiError
                 .ok_or_else(|| invalid("ACP の設定が必要です"))?;
             resolve_acp_argv(acp).map(|_| ())
         }
-        AiProviderKind::OpenaiCompatible => {
+        AiProviderKind::OpenaiChatCompletions | AiProviderKind::OpenaiResponses => {
             if config.acp.is_some() || config.anthropic.is_some() {
-                return Err(invalid("OpenAI 互換には他の backend 設定を付けません"));
+                return Err(invalid("OpenAIには他の backend 設定を付けません"));
             }
             let openai = config
                 .openai
                 .as_ref()
-                .ok_or_else(|| invalid("OpenAI 互換の設定が必要です"))?;
+                .ok_or_else(|| invalid("OpenAIの設定が必要です"))?;
             validate_endpoint(&openai.endpoint)?;
             validate_model(&openai.model)
         }
@@ -503,7 +516,7 @@ pub fn proposal_from_text(text: String, request: &AiPromptRequest) -> ProposalTe
     }
 }
 
-// ---- Server-sent events (shared by OpenAI-compatible and Anthropic) ----
+// ---- Server-sent events (shared by OpenAI Chat Completions and Anthropic) ----
 
 /// Incremental SSE decoder tolerant to chunked HTTP bodies.
 #[derive(Debug, Default)]
@@ -581,7 +594,7 @@ impl SseDecoder {
     }
 }
 
-/// Recognize the OpenAI-compatible `[DONE]` sentinel with surrounding whitespace allowed.
+/// Recognize the OpenAI Chat Completions `[DONE]` sentinel with surrounding whitespace allowed.
 pub fn is_stream_done(data: &str) -> bool {
     data.trim() == "[DONE]"
 }
@@ -609,13 +622,13 @@ pub fn map_http_status(status: u16, body: &str) -> Option<AiError> {
     }
 }
 
-/// Extract streamed text from an OpenAI-compatible chat chunk.
+/// Extract streamed text from an OpenAI Chat Completions chat chunk.
 /// Missing content is ignored; malformed JSON or provider errors fail the stream,
 /// with recognized unauthorized/API-key messages classified as authentication failures.
 pub fn openai_delta_text(data: &str) -> Result<Option<String>, AiError> {
     let value: serde_json::Value =
         serde_json::from_str(data).map_err(|_| AiError::StreamFailed {
-            detail: "OpenAI 互換の応答を解釈できません".into(),
+            detail: "OpenAI Chat Completionsの応答を解釈できません".into(),
         })?;
     if let Some(error) = value.get("error") {
         let message = error
@@ -1433,7 +1446,9 @@ pub fn validate_currency_code(code: &str) -> Option<String> {
 pub fn acp_preset_of(provider: &AiProviderConfig) -> Option<AcpPreset> {
     match provider.kind {
         AiProviderKind::Acp => provider.acp.as_ref().map(|config| config.preset),
-        AiProviderKind::OpenaiCompatible | AiProviderKind::Anthropic => None,
+        AiProviderKind::OpenaiChatCompletions
+        | AiProviderKind::OpenaiResponses
+        | AiProviderKind::Anthropic => None,
     }
 }
 
@@ -1651,7 +1666,8 @@ impl Default for AcpSessionTracker {
 pub fn credential_account(kind: AiProviderKind) -> &'static str {
     match kind {
         AiProviderKind::Acp => "ai/acp",
-        AiProviderKind::OpenaiCompatible => "ai/openai-compatible",
+        AiProviderKind::OpenaiChatCompletions => "ai/openai-chat-completions",
+        AiProviderKind::OpenaiResponses => "ai/openai-responses",
         AiProviderKind::Anthropic => "ai/anthropic",
     }
 }
@@ -1706,8 +1722,12 @@ pub fn provider_config_for_connection(
     let model = connection.model.trim();
     validate_model(model)?;
     match connection.protocol {
-        ApiProtocol::OpenaiCompatible => Ok(AiProviderConfig {
-            kind: AiProviderKind::OpenaiCompatible,
+        ApiProtocol::OpenaiChatCompletions | ApiProtocol::OpenaiResponses => Ok(AiProviderConfig {
+            kind: if connection.protocol == ApiProtocol::OpenaiResponses {
+                AiProviderKind::OpenaiResponses
+            } else {
+                AiProviderKind::OpenaiChatCompletions
+            },
             acp: None,
             openai: Some(OpenAiConfig {
                 endpoint,
@@ -1740,6 +1760,7 @@ pub fn validate_secret(secret: &str) -> Result<(), AiError> {
 
 pub enum HttpBackend {
     OpenAi,
+    OpenAiResponses,
     Anthropic,
 }
 
@@ -1751,22 +1772,40 @@ pub struct HttpTarget {
     pub backend: HttpBackend,
 }
 
+/// Build a protocol URL while preserving query parameters on both the API base and target.
+pub fn http_endpoints(endpoint: &str, suffix: &str) -> (String, String) {
+    let (path, query) = endpoint.split_at(endpoint.find('?').unwrap_or(endpoint.len()));
+    let path = path.trim_end_matches('/');
+    let base = path.strip_suffix(suffix).unwrap_or(path);
+    (format!("{base}{query}"), format!("{base}{suffix}{query}"))
+}
+
 /// Validate the selected HTTP backend's endpoint/model and append `/chat/completions`
 /// or `/messages`; reject ACP and Anthropic without opt-in as invalid configuration.
 pub fn http_target(config: &AiProviderConfig) -> Result<HttpTarget, AiError> {
     match config.kind {
-        AiProviderKind::OpenaiCompatible => {
+        AiProviderKind::OpenaiChatCompletions | AiProviderKind::OpenaiResponses => {
             let openai = config
                 .openai
                 .as_ref()
-                .ok_or_else(|| invalid("OpenAI 互換の設定が必要です"))?;
-            let base = validate_endpoint(&openai.endpoint)?;
+                .ok_or_else(|| invalid("OpenAIの設定が必要です"))?;
+            let endpoint = validate_endpoint(&openai.endpoint)?;
+            let suffix = if config.kind == AiProviderKind::OpenaiResponses {
+                "/responses"
+            } else {
+                "/chat/completions"
+            };
+            let (base, url) = http_endpoints(&endpoint, suffix);
             validate_model(&openai.model)?;
             Ok(HttpTarget {
-                url: format!("{base}/chat/completions"),
+                url,
                 base,
                 model: openai.model.clone(),
-                backend: HttpBackend::OpenAi,
+                backend: if config.kind == AiProviderKind::OpenaiResponses {
+                    HttpBackend::OpenAiResponses
+                } else {
+                    HttpBackend::OpenAi
+                },
             })
         }
         AiProviderKind::Anthropic => {
@@ -1777,10 +1816,11 @@ pub fn http_target(config: &AiProviderConfig) -> Result<HttpTarget, AiError> {
             if !anthropic.enabled {
                 return Err(invalid("Anthropic は opt-in です。有効化してから使います"));
             }
-            let base = validate_endpoint(&anthropic.endpoint)?;
+            let endpoint = validate_endpoint(&anthropic.endpoint)?;
+            let (base, url) = http_endpoints(&endpoint, "/messages");
             validate_model(&anthropic.model)?;
             Ok(HttpTarget {
-                url: format!("{base}/messages"),
+                url,
                 base,
                 model: anthropic.model.clone(),
                 backend: HttpBackend::Anthropic,
@@ -1817,6 +1857,42 @@ pub(crate) fn openai_body(request: &AiPromptRequest, model: &str) -> serde_json:
         "stream": true,
         "messages": messages
     })
+}
+
+/// Build a stateless Responses request using the same authorized history and context.
+pub(crate) fn responses_body(request: &AiPromptRequest, model: &str) -> serde_json::Value {
+    let mut body = openai_body(request, model);
+    let messages = body
+        .as_object_mut()
+        .expect("body object")
+        .remove("messages")
+        .expect("messages");
+    body["input"] = messages;
+    body["store"] = serde_json::json!(false);
+    body
+}
+
+/// Decode typed Responses events, requiring explicit completion and rejecting failed or truncated output.
+pub fn responses_signal(data: &str) -> Result<AnthropicSignal, AiError> {
+    let event: Value = serde_json::from_str(data).map_err(|_| AiError::StreamFailed {
+        detail: "Responses の応答を解析できません".into(),
+    })?;
+    match event.get("type").and_then(Value::as_str) {
+        Some("response.output_text.delta" | "response.refusal.delta") => event
+            .get("delta")
+            .and_then(Value::as_str)
+            .map(|text| AnthropicSignal::Text(text.to_owned()))
+            .ok_or_else(|| AiError::StreamFailed {
+                detail: "Responses のテキストが不正です".into(),
+            }),
+        Some("response.completed") => Ok(AnthropicSignal::End),
+        Some("error" | "response.failed" | "response.incomplete") => Err(AiError::StreamFailed {
+            detail:
+                "Responses の生成が完了しませんでした。接続先のエラーと利用上限を確認してください"
+                    .into(),
+        }),
+        _ => Ok(AnthropicSignal::Ignore),
+    }
 }
 
 /// Build a streaming Messages body with a 2048-token cap, mode system instruction,

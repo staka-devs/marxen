@@ -85,12 +85,12 @@ fn context() -> PromptContext {
     }
 }
 
-/// Build a rewrite request pointed at the supplied loopback OpenAI-compatible endpoint.
+/// Build a rewrite request pointed at the supplied loopback OpenAI Chat Completions endpoint.
 fn openai_request(base: &str) -> AiPromptRequest {
     AiPromptRequest {
         conversation_id: None,
         provider: AiProviderConfig {
-            kind: AiProviderKind::OpenaiCompatible,
+            kind: AiProviderKind::OpenaiChatCompletions,
             acp: None,
             openai: Some(OpenAiConfig {
                 endpoint: base.into(),
@@ -157,6 +157,7 @@ fn read_http_head(stream: &mut std::net::TcpStream) -> String {
     if let Some(length) = length {
         let mut body = vec![0u8; length.min(1_048_576)];
         let _ = stream.read_exact(&mut body);
+        return format!("{head_text}{}", String::from_utf8_lossy(&body));
     }
     head_text
 }
@@ -1109,7 +1110,7 @@ fn dry_runs_and_handshakes_use_no_real_credentials() {
     let report = dry_run_report(&openai.provider, &keyring).unwrap();
     assert!(!report.ok);
     keyring
-        .set(AiProviderKind::OpenaiCompatible, "mock")
+        .set(AiProviderKind::OpenaiChatCompletions, "mock")
         .unwrap();
     let report = dry_run_report(&openai.provider, &keyring).unwrap();
     assert!(report.ok);
@@ -1582,5 +1583,102 @@ fn acp_model_choices_are_acknowledged_before_prompt() {
             assert!(matches!(outcome, Err(AiError::InvalidConfig { .. })));
             assert!(!flags.path().join("prompt-model.json").exists());
         }
+    }
+}
+
+#[tokio::test]
+/// Use a configured Responses endpoint, preserve stateless history and reject incomplete streams.
+async fn responses_streams_typed_events_and_requires_completion() {
+    for (terminal, succeeds) in [
+        ("response.completed", true),
+        ("response.incomplete", false),
+        ("response.failed", false),
+        ("", false),
+    ] {
+        let body = format!("data: {{\"type\":\"response.output_text.delta\",\"delta\":\"日本語😀\"}}\n\ndata: {{\"type\":\"{terminal}\"}}\n\n");
+        let mut server = serve(vec![(0, sse_reply(&body))]);
+        let mut request = openai_request(&server.base);
+        request.provider.kind = AiProviderKind::OpenaiResponses;
+        request.provider.openai.as_mut().unwrap().endpoint = format!("{}/responses", server.base);
+        request.history = vec![ChatHistoryMessage {
+            role: ChatRole::Assistant,
+            text: "previous".into(),
+        }];
+        let target = http_target(&request.provider).unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut events = Vec::new();
+        let outcome = run_http_prompt(
+            &http_client(Duration::from_secs(5)).unwrap(),
+            &target,
+            "fixture-key",
+            &request,
+            &AiRunId("responses".into()),
+            &cancel,
+            &mut |event| events.push(event),
+        )
+        .await;
+        assert_eq!(outcome.is_ok(), succeeds);
+        assert_eq!(events_of(&events).0, "日本語😀");
+        assert_eq!(events_of(&events).1, succeeds);
+        let sent = server.seen.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(sent.starts_with("POST /responses "));
+        let payload: serde_json::Value =
+            serde_json::from_str(sent.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(payload["input"][0]["content"], "previous");
+        assert_eq!(payload["store"], false);
+        assert!(payload.get("messages").is_none());
+        server.done.take().unwrap().join().unwrap();
+    }
+}
+
+#[test]
+/// Bound initial ACP waits and accept the legacy model API without inventing model IDs.
+fn acp_startup_timeout_and_legacy_models() {
+    let dir = tempfile::tempdir().unwrap();
+    let started = std::time::Instant::now();
+    assert!(agent_handshake(
+        &mock_agent_argv(&["--initialize-delay-ms", "5000"]),
+        dir.path(),
+        Duration::from_millis(100)
+    )
+    .is_err());
+    assert!(started.elapsed() < Duration::from_secs(2));
+    let flags = tempfile::tempdir().unwrap();
+    let argv = mock_agent_argv_with_flag_dir(&["--legacy-models", "--no-permission"], flags.path());
+    let probe = agent_handshake(&argv, dir.path(), Duration::from_secs(5)).unwrap();
+    assert_eq!(probe.config_options[0].options[1].value, "fixture-b");
+    let mut request = acp_request(argv.clone());
+    request.provider.acp.as_mut().unwrap().selections = Some(vec![AcpSelection {
+        id: "model".into(),
+        value: "fixture-b".into(),
+    }]);
+    let registry = Arc::new(RunRegistry::new());
+    let (run, cancel) = registry.register();
+    let mut events = Vec::new();
+    run_acp_prompt(
+        &acp_params(argv, dir.path(), Duration::from_secs(5)),
+        &request,
+        &run,
+        &registry,
+        &cancel,
+        &mut |event| events.push(event),
+    )
+    .unwrap();
+    assert!(events_of(&events).1);
+    let record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(flags.path().join("prompt-model.json")).unwrap())
+            .unwrap();
+    assert_eq!(record["model"], "fixture-b");
+}
+
+/// Full URLs and API roots retain their query data when selecting a protocol endpoint.
+#[test]
+fn configured_http_endpoints_preserve_query_parameters() {
+    use marxen_lib::domain::ai::http_endpoints;
+    for suffix in ["/chat/completions", "/responses", "/messages"] {
+        let base = "https://example.com/custom/v1?api-version=fixture&tenant=work";
+        let full = format!("https://example.com/custom/v1{suffix}?api-version=fixture&tenant=work");
+        assert_eq!(http_endpoints(base, suffix), (base.into(), full.clone()));
+        assert_eq!(http_endpoints(&full, suffix), (base.into(), full));
     }
 }

@@ -10,7 +10,7 @@ import { createTranslator } from "../../infrastructure/localization/i18next-tran
 
 /** Build one saved connection fixture with overridable fields. */
 function saved(overrides: Partial<ApiConnection> = {}): ApiConnection {
-  return { id: "api-1", name: "本番", protocol: "openai_compatible", endpoint: "https://api.example.com/v1", model: "model-a", ...overrides };
+  return { id: "api-1", name: "本番", protocol: "openai_chat_completions", endpoint: "https://api.example.com/v1", model: "model-a", ...overrides };
 }
 
 /** Build controllable connection callbacks recording every named operation. */
@@ -61,7 +61,7 @@ describe("named API connection settings", () => {
     expect(screen.getByText("使用中")).toBeVisible();
     fireEvent.click(screen.getByText("検証"));
     expect(owned.calls.select).toEqual(["api-2"]);
-    expect(describeApiConnection(first)).toBe("本番 • OpenAI 互換");
+    expect(describeApiConnection(first)).toBe("本番 • OpenAI Chat Completions");
   });
 
   it("rejects empty names without persisting", () => {
@@ -83,7 +83,7 @@ describe("named API connection settings", () => {
     fireEvent.change(screen.getByLabelText("資格情報の入力"), { target: { value: "s3cret" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     expect(owned.calls.added).toHaveLength(1);
-    expect(owned.calls.added[0]).toMatchObject({ id: "api-fresh", name: "開発", protocol: "openai_compatible", model: "model-b" });
+    expect(owned.calls.added[0]).toMatchObject({ id: "api-fresh", name: "開発", protocol: "openai_chat_completions", model: "model-b" });
   });
 
   it("switches the protocol dropdown and its endpoint default", () => {
@@ -139,8 +139,6 @@ describe("named API connection settings", () => {
         setConnectionCredential: vi.fn(async () => {}),
         /** Accept fixture credential deletion without side effects. */
         deleteConnectionCredential: vi.fn(async () => {}),
-        /** Report a migrated fixture credential without copying secrets. */
-        migrateConnectionCredential: vi.fn(async (connectionId: ApiConnectionId) => ({ connectionId, hasSecret: true })),
       },
     };
     render(<ApiConnectionSettings {...owned} />);
@@ -148,21 +146,6 @@ describe("named API connection settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "状態を確認" }));
     await waitFor(() => expect(screen.getByText("保存済み")).toBeVisible());
     expect(owned.connectionGateway!.getConnectionCredentialState).toHaveBeenCalledWith("api-1");
-  });
-
-  it("offers an explicit migration retry beside the failure notice", () => {
-    /** Record a manual migration retry without touching any credential store. */
-    const onRetryMigration = vi.fn();
-    const owned = {
-      ...controls({ version: 1, activeId: null, initialized: true, connections: [saved()] }),
-      notice: "資格情報の引き継ぎに失敗しました。再試行できます。" as const,
-      onRetryMigration,
-    };
-    render(<ApiConnectionSettings {...owned} />);
-    expect(screen.getByText("資格情報の引き継ぎに失敗しました。再試行できます。")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "再試行" }));
-    expect(onRetryMigration).toHaveBeenCalledOnce();
-    expect(owned.calls.select).toEqual([]);
   });
 
   it.each([["ja-JP", "API を追加"], ["en-US", "Add API"]] as const)("exposes the add entry point in %s", (language, label) => {

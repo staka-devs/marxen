@@ -18,7 +18,8 @@ import type { ApiConnectionGateway } from "../../application/ports";
 /** Protocol choices for the settings dropdown with user-facing labels. */
 function protocolChoices(t: Translator) {
   return [
-    { value: "openai_compatible", label: t("OpenAI 互換"), icon: <ProviderIcon provider="openai_compatible" size={14} /> },
+    { value: "openai_chat_completions", label: t("OpenAI Chat Completions"), icon: <ProviderIcon provider="openai_chat_completions" size={14} /> },
+    { value: "openai_responses", label: "OpenAI Responses", icon: <ProviderIcon provider="openai_responses" size={14} /> },
     { value: "anthropic", label: "Anthropic Messages", icon: <ProviderIcon provider="anthropic" size={14} /> },
   ];
 }
@@ -219,7 +220,7 @@ export function ApiConnectionDialog({ initial, isNew, connectionGateway, onSave,
               className="mt-1 block w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs"
               value={endpoint}
               onChange={(event) => { setEndpoint(event.target.value); setErrors([]); }}
-              placeholder={DEFAULT_ENDPOINTS[protocol === "openai_compatible" ? "openai_compatible" : "anthropic"]}
+              placeholder={DEFAULT_ENDPOINTS[protocol]}
             />
           </label>
           <label className="block text-xs">
@@ -334,8 +335,6 @@ export interface ApiConnectionControls extends ApiConnectionSelection {
   connectionGateway?: ApiConnectionGateway;
   /** One-shot notice (for example migration) rendered above the list. */
   notice?: LocalizedText | null;
-  /** Retry a failed migration key copy without reselecting anything. */
-  onRetryMigration?: () => void;
   /** Retry a failed post-delete credential removal for the retained deleted ID. */
   onRetryDeleteCredential?: () => void;
 }
@@ -351,7 +350,7 @@ export interface ApiConnectionSettingsProps extends ApiConnectionControls {
  * results from another connection never display; deleting states clearly
  * that the OS-store credential goes with the connection.
  */
-export function ApiConnectionSettings({ list, activeId, onSelect, onAdd, onUpdate, onDelete, onMintId, connectionGateway, notice, onRetryMigration, onRetryDeleteCredential, disabled = false }: ApiConnectionSettingsProps) {
+export function ApiConnectionSettings({ list, activeId, onSelect, onAdd, onUpdate, onDelete, onMintId, connectionGateway, notice, onRetryDeleteCredential, disabled = false }: ApiConnectionSettingsProps) {
   const { t } = useI18n();
   const [draft, setDraft] = useState<{ connection: ApiConnection; isNew: boolean } | null>(null);
   const [confirming, setConfirming] = useState<ApiConnectionId | null>(null);
@@ -364,7 +363,7 @@ export function ApiConnectionSettings({ list, activeId, onSelect, onAdd, onUpdat
    */
   function openAdd() {
     setDraft({
-      connection: { id: onMintId(), name: "", protocol: "openai_compatible", endpoint: DEFAULT_ENDPOINTS.openai_compatible, model: "" },
+      connection: { id: onMintId(), name: "", protocol: "openai_chat_completions", endpoint: DEFAULT_ENDPOINTS.openai_chat_completions, model: "" },
       isNew: true,
     });
   }
@@ -389,7 +388,6 @@ export function ApiConnectionSettings({ list, activeId, onSelect, onAdd, onUpdat
         <Button variant="outline" size="sm" onClick={openAdd} disabled={disabled}>{t("API を追加")}</Button>
       </div>
       {notice && <p role="status" className="text-[11px] text-muted-foreground">{renderLocalizedText(notice, t)}</p>}
-      {onRetryMigration && <div><Button variant="outline" size="sm" onClick={onRetryMigration}>{t("再試行")}</Button></div>}
       {onRetryDeleteCredential && <div><Button variant="outline" size="sm" onClick={onRetryDeleteCredential}>{t("資格情報の削除を再試行")}</Button></div>}
       {list.connections.length === 0 ? (
         <p className="text-[11px] text-muted-foreground">{t("API 接続先がありません。")}</p>
@@ -451,7 +449,7 @@ export function ApiConnectionSettings({ list, activeId, onSelect, onAdd, onUpdat
  * Shows the name with its protocol label; liveness comes only from an
  * explicit connection test and is never invented here.
  */
-export function describeApiConnection(connection: ApiConnection, t: Translator = japaneseTranslator): string {
-  const protocol = connection.protocol === "openai_compatible" ? t("OpenAI 互換") : "Anthropic Messages";
+export function describeApiConnection(connection: ApiConnection, _t: Translator = japaneseTranslator): string {
+  const protocol = connection.protocol === "openai_responses" ? "OpenAI Responses" : connection.protocol === "openai_chat_completions" ? "OpenAI Chat Completions" : "Anthropic Messages";
   return `${connection.name} • ${protocol}`;
 }

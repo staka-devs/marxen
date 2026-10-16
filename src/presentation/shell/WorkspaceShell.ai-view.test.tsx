@@ -51,7 +51,7 @@ describe("shell AI view composition", () => {
     expect(testConnection).toHaveBeenCalledOnce();
   });
   it("keeps a hidden named connection selected while its dialog toggle restores independently", () => {
-    const connections: ApiConnectionList = sanitizeApiConnectionList({ version: 1, initialized: true, activeId: "api-a", connections: [{ id: "api-a", name: "Twin", protocol: "openai_compatible", endpoint: "https://a.example/v1", model: "model-a" }, { id: "api-b", name: "Twin", protocol: "openai_compatible", endpoint: "https://b.example/v1", model: "model-a" }] });
+    const connections: ApiConnectionList = sanitizeApiConnectionList({ version: 1, initialized: true, activeId: "api-a", connections: [{ id: "api-a", name: "Twin", protocol: "openai_chat_completions", endpoint: "https://a.example/v1", model: "model-a" }, { id: "api-b", name: "Twin", protocol: "openai_chat_completions", endpoint: "https://b.example/v1", model: "model-a" }] });
     const store: ApiConnectionStore = {
       /** Load the twin-connection fixture for visibility plumbing. */
       load: () => connections,
@@ -77,7 +77,7 @@ describe("shell AI view composition", () => {
     fireEvent.keyDown(screen.getByRole("combobox", { name: "接続先を検索" }), { key: "Escape" });
     const manage = within(pane).getByRole("button", { name: "AI の表示設定" }); fireEvent.click(manage);
     const dialog = screen.getByRole("dialog", { name: "AI の表示設定" });
-    const toggles = within(dialog).getAllByRole("checkbox", { name: "Twin • OpenAI 互換 の候補を表示" });
+    const toggles = within(dialog).getAllByRole("checkbox", { name: "Twin • OpenAI Chat Completions の候補を表示" });
     expect(toggles).toHaveLength(2);
     expect(toggles[0]).not.toBeChecked();
     expect(toggles[1]).toBeChecked();

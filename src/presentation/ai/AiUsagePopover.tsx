@@ -63,7 +63,7 @@ function UsageRow({ agent, detailed }: { agent: AgentUsage; detailed: boolean })
   const number = new Intl.NumberFormat(intlLocale(language));
   const percent = contextOccupancy(agent.context);
   const percentage = percent === undefined ? undefined : new Intl.NumberFormat(intlLocale(language), { maximumFractionDigits: 1 }).format(percent);
-  const name = agent.provider === "acp" ? ({ codex: "Codex", opencode: "OpenCode", copilot: "GitHub Copilot", custom: t("カスタムエージェント") })[agent.preset ?? "custom"] : agent.provider === "anthropic" ? "Anthropic API" : t("OpenAI 互換 API");
+  const name = agent.provider === "acp" ? ({ codex: "Codex", opencode: "OpenCode", copilot: "GitHub Copilot", claude_code: "Claude Code", devin: "Devin", custom: t("カスタムエージェント") })[agent.preset ?? "custom"] : agent.provider === "anthropic" ? "Anthropic API" : agent.provider === "openai_responses" ? "OpenAI Responses" : t("OpenAI Chat Completions");
   const tokens = TOKEN_FIELDS.flatMap(([key, label]) => {
     const value = agent.tokens?.[key];
     return typeof value === "number" ? [{ key, label, value }] : [];
