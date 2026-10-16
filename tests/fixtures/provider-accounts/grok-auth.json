@@ -1,0 +1,12 @@
+{
+  "https://untrusted.example": {
+    "key": "fixture-untrusted-secret",
+    "user_id": "other"
+  },
+  "https://auth.x.ai::fixture-client": {
+    "key": "fixture-grok-access",
+    "user_id": "fixture-grok-user",
+    "refresh_token": "fixture-never-refresh",
+    "oidc_issuer": "https://auth.x.ai"
+  }
+}

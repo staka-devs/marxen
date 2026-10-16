@@ -15,9 +15,9 @@ pub fn provider_accounts_snapshot(
 pub fn provider_accounts_save(
     service: tauri::State<'_, std::sync::Arc<ProviderAccountService>>,
     account: ProviderAccount,
-    credential: Option<String>,
+    credentials: Option<AccountCredentialPatch>,
 ) -> Result<(), ProviderAccountError> {
-    service.save(account, credential)
+    service.save(account, credentials)
 }
 
 #[tauri::command]

@@ -93,10 +93,23 @@ impl ProviderAccountService {
             .accounts
             .into_iter()
             .map(|account| {
-                let has_credential = self.credentials.get(&account.id)?.is_some();
+                let secret = self.credentials.get(&account.id)?;
+                let web = if matches!(
+                    account.provider,
+                    AccountProvider::Minimax | AccountProvider::OpencodeGo
+                ) {
+                    secret
+                        .as_deref()
+                        .map(|s| web_secret(account.provider, s))
+                        .transpose()?
+                } else {
+                    None
+                };
                 Ok(AccountState {
                     account,
-                    has_credential,
+                    has_credential: secret.is_some(),
+                    has_api_key: web.as_ref().is_some_and(|s| !s.api_key.is_empty()),
+                    has_cookie: web.as_ref().is_some_and(|s| !s.cookie.is_empty()),
                 })
             })
             .collect::<Result<_, ProviderAccountError>>()?;
@@ -106,11 +119,11 @@ impl ProviderAccountService {
         })
     }
 
-    /// Save a new or edited account, rolling back its secret if metadata persistence fails.
+    /// Save one account and its typed write-only credential patch in one serialized transaction.
     pub fn save(
         &self,
         mut account: ProviderAccount,
-        credential: Option<String>,
+        credentials: Option<AccountCredentialPatch>,
     ) -> Result<(), ProviderAccountError> {
         let _guard = self
             .mutation
@@ -143,12 +156,14 @@ impl ProviderAccountService {
                 .ok_or(ProviderAccountError::InvalidSettings)?;
         }
         validate_account(&account)?;
-        if let Some(secret) = &credential {
-            validate_credential(account.provider, secret)?;
-        }
         let old_secret = self.credentials.get(&account.id)?;
-        if let Some(secret) = &credential {
-            self.credentials.set(&account.id, secret)?;
+        let change = credentials
+            .map(|patch| merge_account_secret(account.provider, old_secret.as_deref(), patch))
+            .transpose()?;
+        match &change {
+            Some(Some(secret)) => self.credentials.set(&account.id, secret)?,
+            Some(None) => self.credentials.delete(&account.id)?,
+            None => {}
         }
         let id = account.id.clone();
         if let Some(index) = index {
@@ -157,7 +172,7 @@ impl ProviderAccountService {
             settings.accounts.push(account);
         }
         if let Err(error) = validate_settings(&settings).and_then(|_| self.store.save(&settings)) {
-            if credential.is_some() {
+            if change.is_some() {
                 match old_secret {
                     Some(secret) => self.credentials.set(&id, &secret)?,
                     None => self.credentials.delete(&id)?,
