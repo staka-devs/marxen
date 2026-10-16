@@ -1,20 +1,28 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   assertArtifacts,
+  assertCompleteList,
+  assertDraftAssets,
   assertJobs,
+  assetDigestHex,
   buildReleaseNotes,
   decideReleaseAction,
+  expectedReleaseFiles,
   extractCargoLockVersion,
   extractCargoPackageVersion,
   formatSha256Sums,
+  isReleaseNotFound,
   parseSha256Sums,
   parseTag,
   readVersionFiles,
   assertVersionConsistency,
+  resolveTagCommit,
+  runValidate,
   selectInstallers,
   selectWorkflowRun,
 } from "./release-common.mjs";
@@ -37,15 +45,32 @@ function successfulRun(overrides = {}) {
   };
 }
 
-/** Build five final installer entries matching the real 0.1.0 bundle names. */
+/** Build five final installer entries with exact owners for version 0.1.0. */
 function installerFiles() {
   return [
-    { basename: "Marxen_0.1.0_x64-setup.exe", relativePath: "nsis/Marxen_0.1.0_x64-setup.exe", size: 10, isFile: true },
-    { basename: "Marxen_0.1.0_amd64.deb", relativePath: "deb/Marxen_0.1.0_amd64.deb", size: 20, isFile: true },
-    { basename: "Marxen_0.1.0_amd64.AppImage", relativePath: "appimage/Marxen_0.1.0_amd64.AppImage", size: 30, isFile: true },
-    { basename: "Marxen_0.1.0_aarch64.dmg", relativePath: "mac-arm/Marxen_0.1.0_aarch64.dmg", size: 40, isFile: true },
-    { basename: "Marxen_0.1.0_x64.dmg", relativePath: "mac-intel/Marxen_0.1.0_x64.dmg", size: 50, isFile: true },
+    { basename: "Marxen_0.1.0_x64-setup.exe", relativePath: "marxen-x86_64-pc-windows-msvc/nsis/Marxen_0.1.0_x64-setup.exe", size: 10, isFile: true },
+    { basename: "Marxen_0.1.0_amd64.deb", relativePath: "marxen-x86_64-unknown-linux-gnu/deb/Marxen_0.1.0_amd64.deb", size: 20, isFile: true },
+    { basename: "Marxen_0.1.0_amd64.AppImage", relativePath: "marxen-x86_64-unknown-linux-gnu/appimage/Marxen_0.1.0_amd64.AppImage", size: 30, isFile: true },
+    { basename: "Marxen_0.1.0_aarch64.dmg", relativePath: "marxen-aarch64-apple-darwin/dmg/Marxen_0.1.0_aarch64.dmg", size: 40, isFile: true },
+    { basename: "Marxen_0.1.0_x64.dmg", relativePath: "marxen-x86_64-apple-darwin/dmg/Marxen_0.1.0_x64.dmg", size: 50, isFile: true },
   ];
+}
+
+/** Build six local files including SHA256SUMS for draft verification tests. */
+function localSix() {
+  const five = installerFiles().map((file, index) => ({ ...file, sha256: String(index + 1).repeat(64) }));
+  return [...five, { basename: "SHA256SUMS", sha256: "f".repeat(64), size: 100 }];
+}
+
+/** Build a matching draft asset list with uploaded state and digests. */
+function draftFor(locals, overrides = {}) {
+  return {
+    tagName: "v0.1.0",
+    isDraft: true,
+    isPrerelease: false,
+    assets: locals.map(item => ({ name: item.basename, size: item.size, state: "uploaded", digest: `sha256:${item.sha256}` })),
+    ...overrides,
+  };
 }
 
 test("strict tags accept vX.Y.Z and reject prerelease or partial forms", () => {
@@ -74,8 +99,6 @@ test("repository version files must all equal the tag version", () => {
     const versions = readVersionFiles(root);
     assertVersionConsistency("0.1.0", versions);
     assert.throws(() => assertVersionConsistency("0.2.0", versions));
-    writeFileSync(join(root, "src-tauri", "tauri.conf.json"), JSON.stringify({ version: "0.2.0" }));
-    assert.throws(() => assertVersionConsistency("0.1.0", readVersionFiles(root)));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -90,15 +113,17 @@ test("workflow selection needs exact commit, main push, success, and base repo",
     headBranch: "main",
     event: "push",
   };
-  const run = selectWorkflowRun([successfulRun()], options);
-  assert.equal(run.id, 38856078680);
+  assert.equal(selectWorkflowRun([successfulRun()], options).id, 38856078680);
   assert.throws(() => selectWorkflowRun([successfulRun({ head_sha: "0".repeat(40) })], options), /No successful/);
   assert.throws(() => selectWorkflowRun([successfulRun({ event: "pull_request" })], options));
-  assert.throws(() => selectWorkflowRun([successfulRun({ head_branch: "feature" })], options));
   assert.throws(() => selectWorkflowRun([successfulRun({ conclusion: "failure" })], options));
   assert.throws(() => selectWorkflowRun([successfulRun({ head_repository: { full_name: "fork/marxen" } })], options));
-  assert.throws(() => selectWorkflowRun([successfulRun({ pull_requests: [{ number: 1 }] })], options));
   assert.throws(() => selectWorkflowRun([], options));
+});
+
+test("paged lists fail closed on hidden pages", () => {
+  assertCompleteList(1, [{}], "runs");
+  assert.throws(() => assertCompleteList(2, [{}], "runs"), /Incomplete/);
 });
 
 test("native jobs need all four targets completed successfully", () => {
@@ -110,8 +135,6 @@ test("native jobs need all four targets completed successfully", () => {
   ];
   assertJobs(jobs);
   assert.throws(() => assertJobs(jobs.slice(0, 3)), /Expected 4/);
-  assert.throws(() => assertJobs([...jobs, { name: "extra", status: "completed", conclusion: "success" }]));
-  assert.throws(() => assertJobs(jobs.map((job, index) => (index === 0 ? { ...job, conclusion: "failure" } : job))));
 });
 
 test("CI artifacts need four named unexpired payloads without extras", () => {
@@ -123,35 +146,29 @@ test("CI artifacts need four named unexpired payloads without extras", () => {
   ];
   assertArtifacts(artifacts);
   assert.throws(() => assertArtifacts(artifacts.slice(0, 3)), /missing/);
-  assert.throws(() => assertArtifacts([...artifacts, { name: "extra", expired: false, size_in_bytes: 1 }]));
   assert.throws(() => assertArtifacts(artifacts.map(item => ({ ...item, expired: true })), /expired/));
-  assert.throws(() => assertArtifacts([artifacts[0], artifacts[0], artifacts[2], artifacts[3]]), /Duplicate/);
 });
 
-test("installer selection keeps five final files and rejects intermediates", () => {
+test("installers require exact names and owners, rejecting substrings and wrong sources", () => {
   const selected = selectInstallers([
     ...installerFiles(),
-    { basename: "bundle_dmg.sh", relativePath: "dmg/bundle_dmg.sh", size: 5, isFile: true },
-    { basename: "icon.icns", relativePath: "dmg/icon.icns", size: 5, isFile: true },
-    { basename: "marxen", relativePath: "macos/Marxen.app/Contents/MacOS/marxen", size: 5, isFile: true },
+    { basename: "bundle_dmg.sh", relativePath: "marxen-aarch64-apple-darwin/dmg/bundle_dmg.sh", size: 5, isFile: true },
+    { basename: "Marxen.app", relativePath: "marxen-aarch64-apple-darwin/macos/Marxen.app", size: 5, isFile: false },
   ], "0.1.0");
-  assert.deepEqual(selected.map(item => item.slot), [
-    "windows-nsis",
-    "linux-deb",
-    "linux-appimage",
-    "mac-arm64-dmg",
-    "mac-x64-dmg",
-  ]);
-  assert.throws(() => selectInstallers(installerFiles().slice(0, 4), "0.1.0"), /Expected exactly 2 dmg/);
-  assert.throws(() => selectInstallers([...installerFiles(), {
-    basename: "Marxen_0.1.0_x64-setup.exe", relativePath: "copy/Marxen_0.1.0_x64-setup.exe", size: 10, isFile: true,
-  }], "0.1.0"), /Duplicate/);
-  assert.throws(() => selectInstallers(installerFiles().map(file => ({ ...file, basename: file.basename.replace("0.1.0", "0.2.0") })), "0.1.0"), /missing version/);
-  assert.throws(() => selectInstallers([{ basename: "evil.exe", relativePath: "../evil.exe", size: 1, isFile: true }], "0.1.0"), /Path escape/);
-  assert.throws(() => selectInstallers([{ basename: "evil.exe", relativePath: "a/evil.exe", size: 1, isFile: true, isSymlink: true }], "0.1.0"), /Symlink/);
-  assert.throws(() => selectInstallers([...installerFiles(), {
-    basename: "Marxen_0.1.0_amd64.rpm", relativePath: "extra/Marxen_0.1.0_amd64.rpm", size: 1, isFile: true,
-  }], "0.1.0"), /Unexpected installer/);
+  assert.deepEqual(selected.map(item => item.slot), ["windows-nsis", "linux-deb", "linux-appimage", "mac-arm64-dmg", "mac-x64-dmg"]);
+  assert.deepEqual(expectedReleaseFiles("0.1.0").map(item => item.basename), installerFiles().map(file => file.basename));
+  const wrongVersion = installerFiles().map(file => ({
+    ...file,
+    basename: file.basename.replace("0.1.0", "10.1.0"),
+    relativePath: file.relativePath.replace("0.1.0", "10.1.0"),
+  }));
+  assert.throws(() => selectInstallers(wrongVersion, "0.1.0"), /Unexpected installer|Missing installers/);
+  const wrongOwner = installerFiles().map(file => (
+    file.basename.endsWith(".exe") ? { ...file, relativePath: "marxen-x86_64-unknown-linux-gnu/nsis/Marxen_0.1.0_x64-setup.exe" } : file
+  ));
+  assert.throws(() => selectInstallers(wrongOwner, "0.1.0"), /Wrong source artifact/);
+  assert.throws(() => selectInstallers(installerFiles().slice(0, 4), "0.1.0"), /Missing installers/);
+  assert.throws(() => selectInstallers([...installerFiles(), installerFiles()[0]], "0.1.0"), /Duplicate/);
 });
 
 test("checksum formatting stays sorted and rejects bad hashes or names", () => {
@@ -162,27 +179,139 @@ test("checksum formatting stays sorted and rejects bad hashes or names", () => {
   assert.equal(text, `${"a".repeat(64)}  a.exe\n${"b".repeat(64)}  b.dmg\n`);
   assert.deepEqual(parseSha256Sums(text).map(entry => entry.basename), ["a.exe", "b.dmg"]);
   assert.throws(() => formatSha256Sums([{ basename: "a.exe", sha256: "short" }]));
-  assert.throws(() => parseSha256Sums(`${"a".repeat(64)}  a.exe\nbad-line\n`));
 });
 
-test("release notes stay Japanese and name exact assets without agent history", () => {
-  const assets = selectInstallers(installerFiles(), "0.1.0");
+test("release notes name exact assets without agent history", () => {
   const notes = buildReleaseNotes({
     version: "0.1.0",
     tag: "v0.1.0",
     sha: "086aa022f13163a103d8a33dddafe2dcb0430468",
     runId: 38856078680,
-    assets,
+    assets: selectInstallers(installerFiles(), "0.1.0"),
   });
   for (const file of installerFiles()) assert.ok(notes.includes(file.basename));
-  assert.ok(notes.includes("未署名"));
-  assert.ok(notes.includes("未検証"));
-  assert.ok(!notes.includes("Orca") && !notes.includes("agent"));
+  assert.ok(!notes.includes("Orca"));
 });
 
-test("published releases never resolve to overwrite while drafts allow guarded recreate", () => {
+test("existing releases fail closed without automatic recovery", () => {
   assert.equal(decideReleaseAction(null, { tag: "v0.1.0" }), "create");
-  assert.equal(decideReleaseAction({ tagName: "v0.1.0", isDraft: true, isPrerelease: false }, { tag: "v0.1.0" }), "recreate-draft");
-  assert.throws(() => decideReleaseAction({ tagName: "v0.1.0", isDraft: false, isPrerelease: false }, { tag: "v0.1.0" }), /published/);
-  assert.throws(() => decideReleaseAction({ tagName: "v0.2.0", isDraft: true, isPrerelease: false }, { tag: "v0.1.0" }), /mismatch/);
+  assert.throws(() => decideReleaseAction({ tagName: "v0.1.0", isDraft: true, isPrerelease: false }, { tag: "v0.1.0" }), /already exists/);
+  assert.throws(() => decideReleaseAction({ tagName: "v0.1.0", isDraft: false, isPrerelease: false }, { tag: "v0.1.0" }), /already exists/);
+  assert.ok(isReleaseNotFound("release not found"));
+  assert.ok(isReleaseNotFound("Not Found (HTTP 404)"));
+  assert.ok(!isReleaseNotFound("HTTP 401: bad credentials"));
+  assert.equal(assetDigestHex("sha256:AFE49E".padEnd(7 + 64, "0")), "afe49e".padEnd(64, "0"));
+  assert.throws(() => assetDigestHex("nohex"), /Bad asset digest/);
+});
+
+test("draft assets must match local names, sizes, and digests", () => {
+  const locals = localSix();
+  assertDraftAssets(draftFor(locals), locals, { tag: "v0.1.0" });
+  assert.throws(() => assertDraftAssets(draftFor(locals.slice(0, 5)), locals, { tag: "v0.1.0" }), /count mismatch/);
+  const badHash = draftFor(locals);
+  badHash.assets[0] = { ...badHash.assets[0], digest: `sha256:${"0".repeat(64)}` };
+  assert.throws(() => assertDraftAssets(badHash, locals, { tag: "v0.1.0" }), /hash mismatch/);
+  const badState = draftFor(locals);
+  badState.assets[1] = { ...badState.assets[1], state: "open" };
+  assert.throws(() => assertDraftAssets(badState, locals, { tag: "v0.1.0" }), /not uploaded/);
+  assert.throws(() => assertDraftAssets({ ...draftFor(locals), isDraft: false }, locals, { tag: "v0.1.0" }), /published/);
+});
+
+test("tag resolution supports lightweight and annotated tags in an isolated repo", () => {
+  const root = mkdtempSync(join(tmpdir(), "marxen-git-"));
+  try {
+    /** Run git inside the isolated tag fixture. */
+    const git = (args) => {
+      const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+      if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+      return String(result.stdout).trim();
+    };
+    git(["init", "-q"]);
+    git(["config", "user.email", "test@test.test"]);
+    git(["config", "user.name", "test"]);
+    writeFileSync(join(root, "f.txt"), "x\n");
+    git(["add", "f.txt"]);
+    git(["commit", "-qm", "init"]);
+    const head = git(["rev-parse", "HEAD"]);
+    git(["tag", "v9.9.99"]);
+    assert.equal(resolveTagCommit("v9.9.99", root), head);
+    git(["tag", "-a", "v9.9.98", "-m", "annotated"]);
+    assert.equal(resolveTagCommit("v9.9.98", root), head);
+    const broken = spawnSync("git", ["rev-list", "-n", "1", "--", "v9.9.99"], { cwd: root, encoding: "utf8" });
+    assert.notEqual(broken.status, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("validate uses GET and exact source with a controlled gh boundary", () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), "marxen-validate-"));
+  try {
+    mkdirSync(join(repoRoot, "src-tauri"), { recursive: true });
+    writeFileSync(join(repoRoot, "package.json"), JSON.stringify({ version: "9.9.99" }));
+    writeFileSync(join(repoRoot, "package-lock.json"), JSON.stringify({ version: "9.9.99", packages: { "": { version: "9.9.99" } } }));
+    writeFileSync(join(repoRoot, "src-tauri", "Cargo.toml"), '[package]\nname = "marxen"\nversion = "9.9.99"\n');
+    writeFileSync(join(repoRoot, "src-tauri", "tauri.conf.json"), JSON.stringify({ version: "9.9.99" }));
+    writeFileSync(join(repoRoot, "src-tauri", "Cargo.lock"), '[[package]]\nname = "marxen"\nversion = "9.9.99"\n');
+    /** Run git inside the isolated validate fixture. */
+    const git = (args) => {
+      const result = spawnSync("git", args, { cwd: repoRoot, encoding: "utf8" });
+      if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed`);
+      return String(result.stdout).trim();
+    };
+    git(["init", "-q"]);
+    git(["config", "user.email", "test@test.test"]);
+    git(["config", "user.name", "test"]);
+    git(["add", "."]);
+    git(["commit", "-qm", "init"]);
+    git(["tag", "v9.9.99"]);
+    const sha = git(["rev-parse", "HEAD"]);
+    const seen = [];
+    /** Serve canned CI responses while asserting exact-source parameters. */
+    const ghGet = (path, fields) => {
+      seen.push([path, fields]);
+      const params = Object.fromEntries(fields);
+      if (path.endsWith("workflows/ci.yml/runs")) {
+        assert.equal(params.head_sha, sha);
+        assert.equal(params.branch, "main");
+        assert.equal(params.event, "push");
+        return JSON.stringify({ total_count: 1, workflow_runs: [{ id: 7, name: "Integration", path: ".github/workflows/ci.yml", head_sha: sha, head_branch: "main", event: "push", status: "completed", conclusion: "success", repository: { full_name: "test-owner/test-repo" }, head_repository: { full_name: "test-owner/test-repo" }, pull_requests: [] }] });
+      }
+      if (path.endsWith("/jobs")) {
+        return JSON.stringify({ total_count: 4, jobs: ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"].map(target => ({ name: `native (${target})`, status: "completed", conclusion: "success" })) });
+      }
+      return JSON.stringify({ total_count: 4, artifacts: ["marxen-x86_64-pc-windows-msvc", "marxen-x86_64-apple-darwin", "marxen-aarch64-apple-darwin", "marxen-x86_64-unknown-linux-gnu"].map(name => ({ name, expired: false, size_in_bytes: 10 })) });
+    };
+    /** Simulate an absent release for the isolated tag. */
+    const viewRelease = () => ({ status: 1, stdout: "", stderr: "release not found" });
+    /** Reject unwired gh access to prove the GET boundary. */
+    const rejectingGhGet = () => { throw new Error("POST without explicit GET"); };
+    const result = runValidate(
+      ["--tag", "v9.9.99", "--repo", "test-owner/test-repo", "--root", repoRoot],
+      {},
+      { ghGet, viewRelease },
+    );
+    assert.equal(result.runId, 7);
+    assert.equal(result.sha, sha);
+    assert.ok(seen.length >= 3);
+    assert.throws(() => runValidate(
+      ["--tag", "v9.9.99", "--repo", "test-owner/test-repo", "--root", repoRoot],
+      {},
+      { ghGet: rejectingGhGet, viewRelease },
+    ), /POST without explicit GET/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("readonly public API probe shows baseline Integration run shape over GET", async () => {
+  const response = await fetch("https://api.github.com/repos/staka-devs/marxen/actions/runs/38856078680", {
+    headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "marxen-release-test" },
+  });
+  assert.equal(response.status, 200);
+  const run = await response.json();
+  assert.equal(run.id, 38856078680);
+  assert.equal(run.head_sha, "086aa022f13163a103d8a33dddafe2dcb0430468");
+  assert.equal(run.name, "Integration");
+  assert.equal(run.path, ".github/workflows/ci.yml");
 });

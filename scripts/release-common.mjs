@@ -1,4 +1,4 @@
-/** Shared pure validators for the version-tag release workflow. */
+/** Validators for the version-tag release workflow. */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync, readFileSync as readBinarySync } from "node:fs";
@@ -83,6 +83,21 @@ export function assertVersionConsistency(version, versions) {
   }
 }
 
+/** Resolve a version tag to its commit, supporting lightweight and annotated tags. */
+export function resolveTagCommit(tag, cwd) {
+  parseTag(tag);
+  const sha = runCapture("git", ["rev-list", "-n", "1", `refs/tags/${tag}^{commit}`], { cwd });
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`Bad tag commit for ${tag}: ${sha}`);
+  return sha;
+}
+
+/** Resolve the current HEAD commit. */
+export function resolveHeadCommit(cwd) {
+  const sha = runCapture("git", ["rev-parse", "HEAD"], { cwd });
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`Bad HEAD commit: ${sha}`);
+  return sha;
+}
+
 /** Select the single successful main push Integration run for an exact commit. */
 export function selectWorkflowRun(runs, options) {
   const { sha, repo, workflowPath, headBranch, event } = options;
@@ -104,10 +119,9 @@ export function selectWorkflowRun(runs, options) {
   return candidates[candidates.length - 1];
 }
 
-/** Require a completed successful run object to match the exact tag source. */
-export function assertWorkflowRun(run, options) {
-  const selected = selectWorkflowRun([run], options);
-  if (Number(selected.id) !== Number(run.id)) throw new Error("Workflow run failed exact-source validation");
+/** Require a paged list to be complete without hidden pages. */
+export function assertCompleteList(total, items, label) {
+  if (Number(total) !== items.length) throw new Error(`Incomplete ${label}: total ${total}, got ${items.length}`);
 }
 
 /** Require all four native matrix jobs to be completed and successful. */
@@ -146,14 +160,26 @@ export function assertArtifacts(artifacts, expectedNames = RELEASE_EXPECTED_ARTI
   }
 }
 
-/** Classify installer candidates while rejecting symlinks and path escapes. */
-export function selectInstallers(files, version) {
-  if (typeof version !== "string" || !/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(version)) {
+/** Return the exact five installer basenames and owners observed for a version. */
+export function expectedReleaseFiles(version) {
+  if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(version)) {
     throw new Error(`Version must be X.Y.Z: ${version}`);
   }
+  return [
+    { slot: "windows-nsis", basename: `Marxen_${version}_x64-setup.exe`, owner: "marxen-x86_64-pc-windows-msvc" },
+    { slot: "linux-deb", basename: `Marxen_${version}_amd64.deb`, owner: "marxen-x86_64-unknown-linux-gnu" },
+    { slot: "linux-appimage", basename: `Marxen_${version}_amd64.AppImage`, owner: "marxen-x86_64-unknown-linux-gnu" },
+    { slot: "mac-arm64-dmg", basename: `Marxen_${version}_aarch64.dmg`, owner: "marxen-aarch64-apple-darwin" },
+    { slot: "mac-x64-dmg", basename: `Marxen_${version}_x64.dmg`, owner: "marxen-x86_64-apple-darwin" },
+  ];
+}
+
+/** Select the exact five installers, rejecting wrong versions, owners, and escapes. */
+export function selectInstallers(files, version) {
+  const expected = expectedReleaseFiles(version);
+  const byBasename = new Map(expected.map(item => [item.basename, item]));
   if (!Array.isArray(files) || files.length === 0) throw new Error("No artifact files found");
-  const seenBasenames = new Set();
-  const candidates = [];
+  const found = new Map();
   for (const file of files) {
     if (!file || typeof file.basename !== "string" || typeof file.relativePath !== "string") {
       throw new Error("File entries need basename and relativePath");
@@ -162,56 +188,23 @@ export function selectInstallers(files, version) {
     if (!file.isFile) continue;
     const portable = String(file.relativePath).split("\\").join("/");
     if (portable.startsWith("/") || portable.includes("..")) throw new Error(`Path escape refused: ${file.relativePath}`);
+    const wanted = byBasename.get(file.basename);
+    if (wanted) {
+      if (!portable.startsWith(`${wanted.owner}/`)) throw new Error(`Wrong source artifact for ${file.basename}: ${file.relativePath}`);
+      if (!(Number(file.size) > 0)) throw new Error(`Empty installer: ${file.relativePath}`);
+      if (found.has(file.basename)) throw new Error(`Duplicate installer basename: ${file.basename}`);
+      found.set(file.basename, { slot: wanted.slot, ...file });
+      continue;
+    }
     const lower = file.basename.toLowerCase();
-    const isExe = lower.endsWith(".exe");
-    const isDeb = lower.endsWith(".deb");
-    const isAppImage = lower.endsWith(".appimage");
-    const isDmg = lower.endsWith(".dmg");
-    const isUnexpectedInstaller = !isExe && !isDeb && !isAppImage && !isDmg
-      && (lower.endsWith(".msi") || lower.endsWith(".pkg") || lower.endsWith(".rpm")
-        || lower.endsWith(".snap") || lower.endsWith(".flatpak") || lower.endsWith(".zip"));
-    if (isUnexpectedInstaller) throw new Error(`Unexpected installer: ${file.relativePath}`);
-    if (!isExe && !isDeb && !isAppImage && !isDmg) continue;
-    if (!(Number(file.size) > 0)) throw new Error(`Empty installer: ${file.relativePath}`);
-    const folded = file.basename.toLowerCase();
-    if (seenBasenames.has(folded)) throw new Error(`Duplicate installer basename: ${file.basename}`);
-    seenBasenames.add(folded);
-    if (!file.basename.includes(version)) throw new Error(`Installer missing version ${version}: ${file.basename}`);
-    candidates.push(file);
+    const installerLike = lower.endsWith(".exe") || lower.endsWith(".deb") || lower.endsWith(".appimage")
+      || lower.endsWith(".dmg") || lower.endsWith(".msi") || lower.endsWith(".pkg")
+      || lower.endsWith(".rpm") || lower.endsWith(".snap") || lower.endsWith(".flatpak") || lower.endsWith(".zip");
+    if (installerLike) throw new Error(`Unexpected installer for ${version}: ${file.relativePath}`);
   }
-  const exe = candidates.filter(file => file.basename.toLowerCase().endsWith(".exe"));
-  const deb = candidates.filter(file => file.basename.toLowerCase().endsWith(".deb"));
-  const appimage = candidates.filter(file => file.basename.toLowerCase().endsWith(".appimage"));
-  const dmg = candidates.filter(file => file.basename.toLowerCase().endsWith(".dmg"));
-  if (exe.length !== 1) throw new Error(`Expected exactly 1 NSIS exe, got ${exe.length}`);
-  if (deb.length !== 1) throw new Error(`Expected exactly 1 deb, got ${deb.length}`);
-  if (appimage.length !== 1) throw new Error(`Expected exactly 1 AppImage, got ${appimage.length}`);
-  if (dmg.length !== 2) throw new Error(`Expected exactly 2 dmg files, got ${dmg.length}`);
-  if (candidates.length !== 5) throw new Error(`Expected exactly 5 installers, got ${candidates.length}`);
-  assertWindowsInstaller(exe[0]);
-  assertLinuxInstaller(deb[0], "deb");
-  assertLinuxInstaller(appimage[0], "AppImage");
-  const arm = dmg.filter(file => /(aarch64|arm64)/i.test(file.basename));
-  const intel = dmg.filter(file => /(x64|x86_64)/i.test(file.basename) && !/(aarch64|arm64)/i.test(file.basename));
-  if (arm.length !== 1 || intel.length !== 1) throw new Error(`DMG arch split ambiguous: ${dmg.map(file => file.basename).join(",")}`);
-  return [
-    { slot: "windows-nsis", ...exe[0] },
-    { slot: "linux-deb", ...deb[0] },
-    { slot: "linux-appimage", ...appimage[0] },
-    { slot: "mac-arm64-dmg", ...arm[0] },
-    { slot: "mac-x64-dmg", ...intel[0] },
-  ];
-}
-
-/** Require a Windows NSIS exe to carry its versioned x64 setup name. */
-export function assertWindowsInstaller(file) {
-  if (!/-setup\.exe$/i.test(file.basename)) throw new Error(`NSIS exe must end with -setup.exe: ${file.basename}`);
-  if (!/(x64|x86_64)/i.test(file.basename)) throw new Error(`NSIS exe missing x64 arch: ${file.basename}`);
-}
-
-/** Require a Linux package to carry its versioned x64 arch name. */
-export function assertLinuxInstaller(file, kind) {
-  if (!/(amd64|x64|x86_64)/i.test(file.basename)) throw new Error(`Linux ${kind} missing x64 arch: ${file.basename}`);
+  const missing = expected.filter(item => !found.has(item.basename)).map(item => item.basename);
+  if (missing.length > 0) throw new Error(`Missing installers for ${version}: ${missing.join(",")}`);
+  return expected.map(item => found.get(item.basename));
 }
 
 /** Format deterministic SHA256SUMS lines sorted by basename. */
@@ -282,15 +275,48 @@ export function buildReleaseNotes(input) {
   ].join("\n");
 }
 
-/** Decide draft creation or guarded recovery without touching published releases. */
+/** Report whether a gh release view failure means the release is absent. */
+export function isReleaseNotFound(stderr) {
+  return /release not found|not found.*404|\b404\b/i.test(String(stderr ?? ""));
+}
+
+/** Decide draft creation, failing closed on any existing release or draft. */
 export function decideReleaseAction(existing, input) {
   const { tag } = input;
   parseTag(tag);
   if (!existing) return "create";
   if (existing.tagName !== tag) throw new Error(`Existing release tag mismatch: ${existing.tagName}`);
-  if (!existing.isDraft) throw new Error(`Release already published, refusing to overwrite: ${tag}`);
-  if (existing.isPrerelease) throw new Error(`Existing draft is prerelease, refusing: ${tag}`);
-  return "recreate-draft";
+  throw new Error(`Release already exists for ${tag}, refusing automatic recovery`);
+}
+
+/** Extract the hex digest from a release asset digest field. */
+export function assetDigestHex(digest) {
+  const text = String(digest ?? "");
+  const match = /([0-9a-f]{64})/i.exec(text);
+  if (!match) throw new Error(`Bad asset digest: ${text}`);
+  return match[1].toLowerCase();
+}
+
+/** Require draft assets to match local files in name, size, and SHA-256. */
+export function assertDraftAssets(draft, locals, input) {
+  const { tag } = input;
+  parseTag(tag);
+  if (!draft || draft.tagName !== tag) throw new Error(`Draft tag mismatch: ${draft?.tagName}`);
+  if (!draft.isDraft) throw new Error(`Release already published: ${tag}`);
+  if (draft.isPrerelease) throw new Error(`Draft is prerelease: ${tag}`);
+  const remote = Array.isArray(draft.assets) ? draft.assets : [];
+  if (remote.length !== locals.length) throw new Error(`Draft asset count mismatch: ${remote.length} vs ${locals.length}`);
+  const byName = new Map(locals.map(item => [item.basename, item]));
+  if (byName.size !== locals.length) throw new Error("Duplicate local basenames");
+  for (const asset of remote) {
+    const local = byName.get(asset.name);
+    if (!local) throw new Error(`Unexpected draft asset: ${asset.name}`);
+    if (asset.state !== "uploaded") throw new Error(`Draft asset not uploaded: ${asset.name}`);
+    if (Number(asset.size) !== Number(local.size)) throw new Error(`Draft asset size mismatch: ${asset.name}`);
+    if (assetDigestHex(asset.digest) !== String(local.sha256).toLowerCase()) {
+      throw new Error(`Draft asset hash mismatch: ${asset.name}`);
+    }
+  }
 }
 
 /** Read one --name value from exact argv without shell interpolation. */
@@ -308,6 +334,13 @@ export function runCapture(command, args, options = {}) {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} failed (${result.status}): ${result.stderr ?? ""}`);
   return String(result.stdout ?? "").trim();
+}
+
+/** Call the GitHub REST API for reads with an explicit GET method. */
+export function ghApiGet(path, fields, options = {}) {
+  const args = ["api", "--method", "GET", path];
+  for (const [key, value] of fields) args.push("-f", `${key}=${value}`);
+  return runCapture("gh", args, options);
 }
 
 /** Collect regular files under a directory while marking symlinks for refusal. */
@@ -339,4 +372,68 @@ export function collectArtifactFiles(root) {
 /** Compute lowercase SHA-256 hex for one file using Node builtins. */
 export function sha256File(path) {
   return createHash("sha256").update(readBinarySync(path)).digest("hex");
+}
+
+import { appendFileSync } from "node:fs";
+import { dirname, resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** Run tag, version, release-absence, and CI checks, returning the validated source. */
+export function runValidate(argv, env, deps = {}) {
+  const tag = cliArg(argv, "tag");
+  const repo = cliArg(argv, "repo");
+  let root = deps.root ?? resolvePath(dirname(fileURLToPath(import.meta.url)), "..");
+  if (argv.includes("--root")) root = resolvePath(cliArg(argv, "root"));
+  if (argv.some(item => item.startsWith("--") && !["--tag", "--repo", "--root"].includes(item))) {
+    throw new Error(`Unknown argument in ${argv.join(" ")}`);
+  }
+  const version = parseTag(tag);
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) throw new Error(`Repository must be owner/repo: ${repo}`);
+  const tagSha = resolveTagCommit(tag, root);
+  const headSha = resolveHeadCommit(root);
+  if (tagSha !== headSha) throw new Error(`Tag ${tag} (${tagSha}) does not match HEAD (${headSha})`);
+  assertVersionConsistency(version, readVersionFiles(root));
+  const viewed = deps.viewRelease ? deps.viewRelease(tag, root) : defaultViewRelease(tag, root);
+  if (viewed.status === 0) {
+    decideReleaseAction(JSON.parse(String(viewed.stdout)), { tag });
+  } else if (!isReleaseNotFound(viewed.stderr)) {
+    throw new Error(`gh release view failed (${viewed.status}): ${viewed.stderr ?? ""}`);
+  }
+  const ghGet = deps.ghGet ?? ((path, fields) => ghApiGet(path, fields, { cwd: root }));
+  const runsJson = JSON.parse(ghGet(`repos/${repo}/actions/workflows/ci.yml/runs`, [
+    ["head_sha", tagSha],
+    ["branch", "main"],
+    ["event", "push"],
+    ["status", "completed"],
+    ["per_page", "20"],
+  ]));
+  assertCompleteList(runsJson.total_count, runsJson.workflow_runs ?? [], "workflow runs");
+  const run = selectWorkflowRun(runsJson.workflow_runs ?? [], {
+    sha: tagSha,
+    repo,
+    workflowPath: RELEASE_WORKFLOW_PATH,
+    headBranch: RELEASE_HEAD_BRANCH,
+    event: RELEASE_HEAD_EVENT,
+  });
+  if (run.name !== RELEASE_WORKFLOW_NAME) throw new Error(`Workflow must be ${RELEASE_WORKFLOW_NAME}, got ${run.name}`);
+  const jobsJson = JSON.parse(ghGet(`repos/${repo}/actions/runs/${run.id}/jobs`, [["per_page", "100"]]));
+  assertCompleteList(jobsJson.total_count, jobsJson.jobs ?? [], "jobs");
+  assertJobs(jobsJson.jobs ?? []);
+  const artifactsJson = JSON.parse(ghGet(`repos/${repo}/actions/runs/${run.id}/artifacts`, [["per_page", "100"]]));
+  assertCompleteList(artifactsJson.total_count, artifactsJson.artifacts ?? [], "artifacts");
+  assertArtifacts(artifactsJson.artifacts ?? []);
+  const output = env?.GITHUB_OUTPUT;
+  if (output) {
+    appendFileSync(output, `run-id=${run.id}\n`);
+    appendFileSync(output, `version=${version}\n`);
+    appendFileSync(output, `sha=${tagSha}\n`);
+  }
+  return { runId: run.id, version, sha: tagSha };
+}
+
+/** View one release without conflating missing releases with other failures. */
+export function defaultViewRelease(tag, cwd) {
+  const result = spawnSync("gh", ["release", "view", tag, "--json", "tagName,isDraft,isPrerelease"], { cwd, encoding: "utf8" });
+  if (result.error) throw result.error;
+  return { status: result.status, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
 }
