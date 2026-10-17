@@ -378,12 +378,17 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     finally { busyRef.current = false; setBusy(false); }
   }, [canOperate, isTargetCurrent, registry, workspaceGateway, docsRef, setDocs, setTabs, notify]);
 
-  /** Refresh crash-recovery entries or notice on failure. */
+  /** Refresh crash-recovery entries or notice on failure, hiding already-open documents. */
   const refreshRecovery = useCallback(async () => {
     if (!registry) return;
     try {
       const groups = await Promise.all(rootsRef.current.map((root) => workspaceGateway!.listRecovery(root.scope)));
-      setRecovery(groups.flat());
+      // Restored checkpoints stay on disk while their document is open; listing
+      // them again would offer 復元する for an open document and fail with
+      // AlreadyExists. Hide open documents so the dialog only offers
+      // unrestored entries, matching silent hot-exit restoration.
+      const open = new Set(Object.keys(docsRef.current));
+      setRecovery(groups.flat().filter((entry) => !open.has(entry.documentId)));
     } catch (cause) {
       setNotice(localizedFailure(cause, workspaceErrorText));
     }
@@ -773,6 +778,9 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
           setDocs((prev) => ({ ...prev, [doc.documentId]: doc }));
           setTabs((prev) => (prev.includes(doc.documentId) ? prev : [...prev, doc.documentId]));
           setActiveId(doc.documentId);
+          // Drop the restored entry immediately so the dialog never offers
+          // 復元する for the just-opened document, even before state flush.
+          setRecovery((prev) => prev.filter((entry) => entry.documentId !== doc.documentId));
         }
         await refreshRecovery();
       } catch (cause) {
