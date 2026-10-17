@@ -164,7 +164,7 @@ pub fn missing_binary_hint(command: &str) -> String {
     let lower = command.to_ascii_lowercase();
     let base = basename_of(&lower);
     if base.contains("codex-acp") {
-        "npm install -g @agentclientprotocol/codex-acp で導入し PATH を通してください（自動導入はしません）".into()
+        "npm install -g @agentclientprotocol/codex-acp で導入し PATH を通してください".into()
     } else if base.contains("opencode") {
         "opencode v2 を導入し PATH を通してください（例: npm の @opencode/cli、https://opencode.ai）".into()
     } else if base.contains("claude-agent-acp") {

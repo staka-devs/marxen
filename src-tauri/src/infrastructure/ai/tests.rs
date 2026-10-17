@@ -1985,6 +1985,42 @@ mod regression {
         ));
     }
 
+    /// Probe a synthetic npm prefix directory with the same strict candidate rules.
+    #[cfg(windows)]
+    #[test]
+    fn npm_prefix_directory_probes_direct_executables() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = root.path().join("marxen-fallback-probe.exe");
+        std::fs::write(&exe, b"fixture").unwrap();
+        let order = pathext_order();
+        let launch = resolve_launch_in_dir(root.path(), "marxen-fallback-probe", &[], &order)
+            .expect("direct executable in prefix");
+        assert_eq!(launch.program, std::path::absolute(&exe).unwrap());
+        assert!(launch.args.is_empty());
+        assert!(resolve_launch_in_dir(
+            root.path(),
+            "marxen-definitely-missing-binary",
+            &[],
+            &order
+        )
+        .is_none());
+    }
+
+    /// Probe a synthetic default Node.js prefix without touching `PATH`.
+    #[cfg(windows)]
+    #[test]
+    fn wellknown_node_prefix_resolves_bundled_node() {
+        let root = tempfile::tempdir().unwrap();
+        let node = root.path().join("nodejs").join("node.exe");
+        std::fs::create_dir_all(node.parent().unwrap()).unwrap();
+        std::fs::write(&node, b"fixture").unwrap();
+        assert_eq!(
+            wellknown_node_program(root.path()),
+            Some(std::path::absolute(&node).unwrap())
+        );
+        assert!(wellknown_node_program(root.path().join("elsewhere").as_path()).is_none());
+    }
+
     /// Refuse Claude Code commands during resolution before any process starts.
     #[test]
     fn resolve_refuses_claude_without_spawning() {
