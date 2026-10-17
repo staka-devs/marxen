@@ -2149,6 +2149,35 @@ mod regression {
         assert_eq!(launch.args[0], script.to_string_lossy());
     }
 
+    /// Resolve an explicit `claude-agent-acp.cmd` shim with spaces to `node <script>`
+    /// without a shell, keeping bundled script first and original args after.
+    #[cfg(windows)]
+    #[test]
+    fn resolve_explicit_claude_shim_with_space_path_to_node() {
+        let root = tempfile::tempdir().unwrap();
+        let npm_root = root.path().join("npm root with space");
+        let dist = npm_root
+            .join("node_modules")
+            .join("@agentclientprotocol")
+            .join("claude-agent-acp")
+            .join("dist");
+        std::fs::create_dir_all(&dist).unwrap();
+        let script = dist.join("index.js");
+        std::fs::write(&script, b"console.log(1)").unwrap();
+        let node = npm_root.join("node.exe");
+        std::fs::write(&node, b"fake").unwrap();
+        let shim = npm_root.join("claude-agent-acp.cmd");
+        std::fs::write(&shim, b"@ECHO off").unwrap();
+        let argv = AcpArgv {
+            command: shim.to_string_lossy().into_owned(),
+            args: vec![],
+        };
+        let launch = resolve_acp_launch(&argv).unwrap();
+        assert_eq!(launch.program, node);
+        assert_eq!(launch.args.len(), 1);
+        assert_eq!(launch.args[0], script.to_string_lossy());
+    }
+
     /// Keep a stale explicit shim without its bundled target as missing rather
     /// than falling back to an arbitrary shell.
     #[cfg(windows)]

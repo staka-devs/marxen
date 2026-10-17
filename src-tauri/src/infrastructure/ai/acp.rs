@@ -577,9 +577,37 @@ pub(super) fn wellknown_node_program(program_files: &Path) -> Option<PathBuf> {
         .flatten()
 }
 
+/// Resolve one official `@agentclientprotocol/*` adapter script to `node <script>`.
+/// The caller supplies the installed npm package name (for example `codex-acp`);
+/// a missing bundled script or Node.js executable yields `None` without a shell.
+fn agentclientprotocol_node_launch(
+    npm_root: &Path,
+    package: &str,
+    original_args: &[String],
+) -> Option<ResolvedAcpLaunch> {
+    let script = npm_root
+        .join("node_modules")
+        .join("@agentclientprotocol")
+        .join(package)
+        .join("dist")
+        .join("index.js");
+    if !script.is_file() {
+        return None;
+    }
+    let node = find_node_program(npm_root)?;
+    let mut args = Vec::with_capacity(1 + original_args.len());
+    args.push(script.to_string_lossy().into_owned());
+    args.extend_from_slice(original_args);
+    Some(ResolvedAcpLaunch {
+        program: node,
+        args,
+    })
+}
+
 /// Resolve a known official npm shim to its bundled target without a shell.
 /// `opencode` maps to `node_modules/@opencode/cli/bin/opencode.exe`;
 /// `codex-acp` maps to `node <npm>/node_modules/@agentclientprotocol/codex-acp/dist/index.js`.
+/// `claude-agent-acp` maps to `node <npm>/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js`.
 /// `codex` maps directly to the published native executable, avoiding a Node parent process.
 /// All other shims return `None` so callers keep searching or report missing.
 fn resolve_npm_shim_target(shim: &Path, original_args: &[String]) -> Option<ResolvedAcpLaunch> {
@@ -605,24 +633,9 @@ fn resolve_npm_shim_target(shim: &Path, original_args: &[String]) -> Option<Reso
             program,
             args: original_args.to_vec(),
         }),
-        "codex-acp" => {
-            let script = npm_root
-                .join("node_modules")
-                .join("@agentclientprotocol")
-                .join("codex-acp")
-                .join("dist")
-                .join("index.js");
-            if !script.is_file() {
-                return None;
-            }
-            let node = find_node_program(npm_root)?;
-            let mut args = Vec::with_capacity(1 + original_args.len());
-            args.push(script.to_string_lossy().into_owned());
-            args.extend_from_slice(original_args);
-            Some(ResolvedAcpLaunch {
-                program: node,
-                args,
-            })
+        "codex-acp" => agentclientprotocol_node_launch(npm_root, "codex-acp", original_args),
+        "claude-agent-acp" => {
+            agentclientprotocol_node_launch(npm_root, "claude-agent-acp", original_args)
         }
         _ => None,
     }
