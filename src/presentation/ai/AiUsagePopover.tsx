@@ -1,8 +1,8 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { BarChart3, Bot, RefreshCw, X } from "lucide-react";
-import type { AiUsageGateway, CodexAccountUsageGateway } from "../../application/ai/usage-ports";
-import type { CodexAccountUsage, ReportedUsage, UsageWindow } from "../../contracts/ai-contracts";
+import type { AiUsageGateway, CodexAccountUsageGateway, TranscriptUsageGateway } from "../../application/ai/usage-ports";
+import type { CodexAccountUsage, ReportedUsage, TranscriptAgent, TranscriptAgentUsage, TranscriptSession, TranscriptTokens, TranscriptUnavailableReason, UsageWindow } from "../../contracts/ai-contracts";
 import type { MessageKey } from "../../contracts/localization";
 import { contextOccupancy, type AgentUsage } from "../../domain/ai-usage";
 import { intlLocale } from "../../domain/language";
@@ -10,6 +10,7 @@ import type { ThemeId } from "../../domain/workspace-content";
 import { useI18n } from "../i18n/I18nProvider";
 import { useAiUsage } from "./useAiUsage";
 import { useCodexAccountUsage } from "./useCodexAccountUsage";
+import { useTranscriptUsage } from "./useTranscriptUsage";
 
 const TOKEN_FIELDS = [
   ["inputTokens", "入力トークン"], ["outputTokens", "出力トークン"], ["totalTokens", "合計トークン"],
@@ -97,9 +98,89 @@ function UsageRow({ agent, detailed }: { agent: AgentUsage; detailed: boolean })
   </article>;
 }
 
+/** Display names for locally scanned transcript agents. */
+const TRANSCRIPT_NAMES: Record<TranscriptAgent, string> = {
+  codex: "Codex",
+  claude: "Claude Code",
+  opencode: "OpenCode",
+  copilot: "GitHub Copilot",
+};
+
+/** Transcript token counters in display order, excluding wire-only totals. */
+const TRANSCRIPT_TOKEN_FIELDS = [
+  ["inputTokens", "入力トークン"], ["outputTokens", "出力トークン"],
+  ["cachedReadTokens", "キャッシュ読み取り"], ["cachedWriteTokens", "キャッシュ書き込み"], ["reasoningTokens", "推論トークン"],
+] as const satisfies readonly (readonly [keyof TranscriptTokens, MessageKey])[];
+
+/** Localized explanation for an empty transcript agent without inventing totals. */
+function transcriptReasonLabel(reason: TranscriptUnavailableReason, t: (key: MessageKey) => string): string {
+  switch (reason) {
+    case "store_missing": return t("記録がありません。");
+    case "no_token_data": return t("記録に数値がありません。");
+    case "scan_failed": return t("記録を読み取れませんでした。");
+  }
+}
+
+/** Sum reported session counters, keeping a field absent when no session reported it. */
+function sumTranscriptTokens(sessions: TranscriptSession[]): TranscriptTokens {
+/** Add one optional session counter, keeping the sum absent when nothing reported it. */
+  const add = (base: number | undefined, extra: number | undefined): number | undefined =>
+    extra === undefined ? base : (base ?? 0) + extra;
+  let inputTokens: number | undefined;
+  let outputTokens: number | undefined;
+  let cachedReadTokens: number | undefined;
+  let cachedWriteTokens: number | undefined;
+  let reasoningTokens: number | undefined;
+  for (const session of sessions) {
+    inputTokens = add(inputTokens, session.tokens.inputTokens);
+    outputTokens = add(outputTokens, session.tokens.outputTokens);
+    cachedReadTokens = add(cachedReadTokens, session.tokens.cachedReadTokens);
+    cachedWriteTokens = add(cachedWriteTokens, session.tokens.cachedWriteTokens);
+    reasoningTokens = add(reasoningTokens, session.tokens.reasoningTokens);
+  }
+  return { inputTokens, outputTokens, cachedReadTokens, cachedWriteTokens, reasoningTokens };
+}
+
+/** Show one transcript agent's measured totals without estimating quota or cost. */
+function TranscriptAgentRow({ agent, detailed }: { agent: TranscriptAgentUsage; detailed: boolean }) {
+  const { t, language } = useI18n();
+  const number = new Intl.NumberFormat(intlLocale(language));
+  const totals = sumTranscriptTokens(agent.sessions);
+  const entries = TRANSCRIPT_TOKEN_FIELDS.flatMap(([key, label]) => {
+    const value = totals[key];
+    return typeof value === "number" ? [{ key, label, value }] : [];
+  });
+  return <article className="border-b border-border px-3 py-3 last:border-b-0">
+    <div className="flex min-w-0 items-center gap-2">
+      <Bot size={16} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+      <h3 className="min-w-0 flex-1 truncate text-[13px] font-medium">{TRANSCRIPT_NAMES[agent.agent]}</h3>
+      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{t("セッション数")}: {number.format(agent.sessions.length)}</span>
+    </div>
+    {agent.sessions.length === 0 && agent.reason && <p className="mt-2 text-xs text-muted-foreground">{transcriptReasonLabel(agent.reason, t)}</p>}
+    {agent.sessions.length === 0 && !agent.reason && <p className="mt-2 text-xs text-muted-foreground">{t("未報告")}</p>}
+    {!detailed && entries.length > 0 && <p className="mt-2 text-xs text-muted-foreground">{entries.map(({ label, value }) => `${t(label)} ${number.format(value)}`).join(" · ")}</p>}
+    {detailed && entries.length > 0 && <dl className="mt-2 grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 text-xs">
+      {entries.map(({ key, label, value }) => <div key={key} className="contents"><dt className="text-muted-foreground">{t(label)}</dt><dd className="text-right tabular-nums">{number.format(value)}</dd></div>)}
+    </dl>}
+    {detailed && agent.sessions.map((session) => {
+      const sessionEntries = TRANSCRIPT_TOKEN_FIELDS.flatMap(([key, label]) => {
+        const value = session.tokens[key];
+        return typeof value === "number" ? [{ key, label, value }] : [];
+      });
+      const updated = session.updatedMs === undefined ? undefined : new Intl.DateTimeFormat(intlLocale(language), { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(session.updatedMs);
+      return <div key={session.sessionId} className="mt-2 border-t border-border pt-2 text-xs">
+        <p className="truncate text-muted-foreground" title={session.sessionId}>{session.title ?? session.model ?? session.sessionId}</p>
+        <p className="mt-1 text-muted-foreground">{sessionEntries.map(({ label, value }) => `${t(label)} ${number.format(value)}`).join(" · ")}</p>
+        {updated && <p className="mt-1 text-[10px] text-muted-foreground">{t("最終更新")} {updated}</p>}
+      </div>;
+    })}
+  </article>;
+}
+
 interface UsagePopupProps {
   gateway: AiUsageGateway;
   accountGateway?: CodexAccountUsageGateway;
+  transcriptGateway?: TranscriptUsageGateway;
   anchor: HTMLElement;
   id: string;
   theme?: ThemeId;
@@ -108,11 +189,12 @@ interface UsagePopupProps {
 }
 
 /** Read-only usage popup with explicit listener cleanup and keyboard dismissal. */
-function UsagePopup({ gateway, accountGateway, anchor, id, theme, onClose }: UsagePopupProps) {
+function UsagePopup({ gateway, accountGateway, transcriptGateway, anchor, id, theme, onClose }: UsagePopupProps) {
   const { t } = useI18n();
   const { agents, loading, failed, refresh } = useAiUsage(gateway);
   const account = useCodexAccountUsage(accountGateway);
-  const refreshing = loading || account.loading;
+  const transcript = useTranscriptUsage(transcriptGateway);
+  const refreshing = loading || account.loading || transcript.loading;
   const [detailed, setDetailed] = useState(true);
   const [position, setPosition] = useState(() => popupPosition(anchor));
   const panel = useRef<HTMLDivElement>(null);
@@ -143,7 +225,7 @@ function UsagePopup({ gateway, accountGateway, anchor, id, theme, onClose }: Usa
   return createPortal(<div ref={panel} id={id} data-theme={theme} role="dialog" aria-label={t("使用量")} tabIndex={-1} style={position} className="fixed z-50 flex flex-col overflow-hidden rounded-md border border-border bg-card text-foreground shadow-xl outline-none">
     <div className="flex shrink-0 items-center gap-1 px-3 py-2">
       <h2 className="flex-1 text-[13px] font-semibold">{t("使用量")}</h2>
-      <button type="button" aria-label={t("使用量を更新")} disabled={refreshing} className="rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-50" onClick={() => { void refresh(); void account.refresh(); }}><RefreshCw size={14} className={refreshing ? "animate-spin" : ""} aria-hidden="true" /></button>
+      <button type="button" aria-label={t("使用量を更新")} disabled={refreshing} className="rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-50" onClick={() => { void refresh(); void account.refresh(); void transcript.refresh(); }}><RefreshCw size={14} className={refreshing ? "animate-spin" : ""} aria-hidden="true" /></button>
       <button type="button" aria-label={t("使用量を閉じる")} className="rounded p-1 text-muted-foreground hover:bg-muted" onClick={() => { onClose(); anchor.focus(); }}><X size={14} aria-hidden="true" /></button>
     </div>
     <div className="mx-3 mb-2 flex shrink-0 rounded border border-border p-0.5">
@@ -153,6 +235,12 @@ function UsagePopup({ gateway, accountGateway, anchor, id, theme, onClose }: Usa
       {account.loading && !account.usage && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("Codex の利用枠を読み込み中…")}</p>}
       {account.failed && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("Codex の利用枠を取得できませんでした。")}</p>}
       {account.usage && <CodexQuota usage={account.usage} detailed={detailed} />}
+      {transcriptGateway && <section aria-label={t("ローカルの記録")}>
+        {transcript.loading && !transcript.report && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("使用量を読み込み中…")}</p>}
+        {transcript.failed && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("記録を読み取れませんでした。")}</p>}
+        {transcript.report && transcript.report.agents.length > 0 && <h3 className="border-b border-border px-3 py-1.5 text-[10px] text-muted-foreground">{t("ローカルの記録")}</h3>}
+        {transcript.report?.agents.map((agent) => <TranscriptAgentRow key={agent.agent} agent={agent} detailed={detailed} />)}
+      </section>}
       {failed && <p role="alert" className="px-3 py-2 text-xs text-destructive">{t("使用量を読み込めませんでした。")}</p>}
       {loading && agents.length === 0 && <p role="status" className="px-3 py-4 text-xs text-muted-foreground">{t("使用量を読み込み中…")}</p>}
       {!loading && !failed && agents.length === 0 && <p className="px-3 py-3 text-xs text-muted-foreground">{t("使用量の報告がありません。")}</p>}
@@ -163,13 +251,13 @@ function UsagePopup({ gateway, accountGateway, anchor, id, theme, onClose }: Usa
 }
 
 /** Open reported agent usage from the chat header without sending a prompt. */
-export function AiUsagePopover({ gateway, accountGateway, theme }: { gateway: AiUsageGateway; accountGateway?: CodexAccountUsageGateway; theme?: ThemeId }) {
+export function AiUsagePopover({ gateway, accountGateway, transcriptGateway, theme }: { gateway: AiUsageGateway; accountGateway?: CodexAccountUsageGateway; transcriptGateway?: TranscriptUsageGateway; theme?: ThemeId }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
   const id = useId();
   return <>
     <button ref={anchor} type="button" aria-label={t("使用量")} title={t("使用量")} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined} className="shrink-0 rounded-sm p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setOpen((value) => !value)}><BarChart3 size={15} aria-hidden="true" /></button>
-    {open && anchor.current && <UsagePopup gateway={gateway} accountGateway={accountGateway} anchor={anchor.current} id={id} theme={theme} onClose={() => setOpen(false)} />}
+    {open && anchor.current && <UsagePopup gateway={gateway} accountGateway={accountGateway} transcriptGateway={transcriptGateway} anchor={anchor.current} id={id} theme={theme} onClose={() => setOpen(false)} />}
   </>;
 }

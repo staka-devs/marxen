@@ -18,7 +18,7 @@ vi.mock("./infrastructure/tauri/ai-client", async (importOriginal) => {
 });
 // Unrelated native subscriptions and Vim operations are outside this composition test.
 vi.mock("./infrastructure/native/drop", () => ({ dropGateway: undefined }));
-vi.mock("./infrastructure/tauri/ai-usage", () => ({ aiUsageGateway: undefined, codexAccountUsageGateway: undefined }));
+vi.mock("./infrastructure/tauri/ai-usage", () => ({ aiUsageGateway: undefined, codexAccountUsageGateway: undefined, transcriptUsageGateway: undefined }));
 vi.mock("./infrastructure/vim-settings/tauri-vim-settings", () => ({ vimSettingsGateway: undefined }));
 
 beforeEach(() => {

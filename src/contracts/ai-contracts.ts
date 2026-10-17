@@ -1,5 +1,5 @@
 // Generated from src-tauri/src/contracts/ai.rs. Run npm run ai-contracts:generate.
-// Do not edit by hand. AI IPC schema version 7.
+// Do not edit by hand. AI IPC schema version 8.
 import type { DocumentId, Revision, Utf16Range, DocumentLocation } from "./contracts";
 export type AiProviderKind = "acp" | "openai_chat_completions" | "openai_responses" | "anthropic";
 export type AcpPreset = "codex" | "opencode" | "copilot" | "claude_code" | "devin" | "custom";
@@ -81,6 +81,24 @@ amount: string,
  * ISO 4217 code as reported (for example `"USD"`).
  */
 currency: string, };
+export type TranscriptAgent = "codex" | "claude" | "opencode" | "copilot";
+export type TranscriptUnavailableReason = "store_missing" | "no_token_data" | "scan_failed";
+export type TranscriptTokens = { inputTokens?: number, outputTokens?: number, cachedReadTokens?: number, cachedWriteTokens?: number, reasoningTokens?: number, };
+export type TranscriptSession = { sessionId: string, model?: string, title?: string, tokens: TranscriptTokens, 
+/**
+ * Unix milliseconds of the last transcript write, when the store reports it.
+ */
+updatedMs?: number, };
+export type TranscriptAgentUsage = { agent: TranscriptAgent, sessions: Array<TranscriptSession>, truncated: boolean, reason?: TranscriptUnavailableReason, 
+/**
+ * Transcript files or rows inspected for this agent.
+ */
+scannedFiles: number, };
+export type TranscriptUsageReport = { agents: Array<TranscriptAgentUsage>, 
+/**
+ * Unix milliseconds when Rust finished the scan.
+ */
+receivedMs: number, };
 export type ReportedUsage = { provider: AiProviderKind, 
 /**
  * ACP preset that produced the report, when the provider is ACP.

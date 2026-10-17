@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// Independent version of the AI IPC schema.
-pub const AI_CONTRACT_VERSION: u32 = 7;
+pub const AI_CONTRACT_VERSION: u32 = 8;
 
 /// OS credential store layout. Secrets are addressed, never transferred.
 pub const SECRET_SERVICE: &str = "dev.staka.marxen";
@@ -683,6 +683,96 @@ pub enum AiError {
     CredentialStoreFailed { detail: String },
 }
 
+/// Local transcript source for measured session totals. Only agents with a
+/// known on-disk session store appear here; network quota stays separate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptAgent {
+    Codex,
+    Claude,
+    Opencode,
+    Copilot,
+}
+
+/// Why one transcript agent contributes no session totals. Absent totals are
+/// never zero-filled or estimated; the popup renders the reason instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptUnavailableReason {
+    StoreMissing,
+    NoTokenData,
+    ScanFailed,
+}
+
+/// Measured token totals for one local session. Every counter is absent when
+/// the transcript did not report it, never zero-filled or estimated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TranscriptTokens {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub cached_read_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub cached_write_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub reasoning_tokens: Option<u64>,
+}
+
+/// One locally recorded session with measured totals. Costs are omitted:
+/// transcript stores report no currency, and amounts are never assumed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TranscriptSession {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    pub tokens: TranscriptTokens,
+    /// Unix milliseconds of the last transcript write, when the store reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub updated_ms: Option<u64>,
+}
+
+/// Measured transcript totals for one agent. Sessions arrive newest first and
+/// are bounded; `truncated` marks a dropped remainder. `reason` explains an
+/// empty session list without inventing totals.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TranscriptAgentUsage {
+    pub agent: TranscriptAgent,
+    pub sessions: Vec<TranscriptSession>,
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<TranscriptUnavailableReason>,
+    /// Transcript files or rows inspected for this agent.
+    #[ts(type = "number")]
+    pub scanned_files: u32,
+}
+
+/// Measured local transcript totals across agents, stamped at read time.
+/// Delivery is a read-only snapshot; it never starts an agent or inference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TranscriptUsageReport {
+    pub agents: Vec<TranscriptAgentUsage>,
+    /// Unix milliseconds when Rust finished the scan.
+    #[ts(type = "number")]
+    pub received_ms: u64,
+}
+
 /// Credential presence only. Values never cross the IPC boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -764,6 +854,12 @@ pub fn typescript() -> String {
         AcpUsageSource::decl(&cfg),
         AcpUsageScope::decl(&cfg),
         UsageCost::decl(&cfg),
+        TranscriptAgent::decl(&cfg),
+        TranscriptUnavailableReason::decl(&cfg),
+        TranscriptTokens::decl(&cfg),
+        TranscriptSession::decl(&cfg),
+        TranscriptAgentUsage::decl(&cfg),
+        TranscriptUsageReport::decl(&cfg),
         ReportedUsage::decl(&cfg),
         UsageWindow::decl(&cfg),
         UsageCredits::decl(&cfg),

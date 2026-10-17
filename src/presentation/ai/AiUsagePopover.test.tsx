@@ -3,12 +3,13 @@ import { expect, it, vi } from "vitest";
 import { AiUsagePopover } from "./AiUsagePopover";
 import { I18nProvider } from "../i18n/I18nProvider";
 import { createTranslator } from "../../infrastructure/localization/i18next-translator";
-import type { AiUsageGateway, CodexAccountUsageGateway } from "../../application/ai/usage-ports";
+import type { AiUsageGateway, CodexAccountUsageGateway, TranscriptUsageGateway } from "../../application/ai/usage-ports";
 import type { Language } from "../../contracts/language";
+import type { TranscriptUsageReport } from "../../contracts/ai-contracts";
 
 /** Render the actual popup through its injected translation and metadata ports. */
-function renderUsage(gateway: AiUsageGateway, accountGateway?: CodexAccountUsageGateway, language: Language = "ja-JP") {
-  return render(<I18nProvider language={language} createTranslator={createTranslator}><AiUsagePopover gateway={gateway} accountGateway={accountGateway} theme="dark" /></I18nProvider>);
+function renderUsage(gateway: AiUsageGateway, accountGateway?: CodexAccountUsageGateway, language: Language = "ja-JP", transcriptGateway?: TranscriptUsageGateway) {
+  return render(<I18nProvider language={language} createTranslator={createTranslator}><AiUsagePopover gateway={gateway} accountGateway={accountGateway} transcriptGateway={transcriptGateway} theme="dark" /></I18nProvider>);
 }
 
 it("distinguishes account quota from context and displays only reported counters", async () => {
@@ -80,4 +81,33 @@ it("reports a failed account read while retaining valid session observations", a
   await waitFor(() => expect(screen.getByRole("progressbar", { name: "コンテキスト使用率" })).toHaveAttribute("aria-valuenow", "0"));
   expect(screen.getByText("GitHub Copilot")).toBeVisible();
   expect(screen.queryByRole("progressbar", { name: "利用枠の使用率" })).not.toBeInTheDocument();
+});
+
+it("shows measured local transcript totals with honest gaps per agent", async () => {
+  const gateway: AiUsageGateway = {
+    /** Report no observed session usage. */
+    snapshot: vi.fn<AiUsageGateway["snapshot"]>(async () => []),
+    /** Return an inert listener cleanup. */
+    subscribe: vi.fn(async () => vi.fn()),
+  };
+  const report: TranscriptUsageReport = {
+    agents: [
+      { agent: "claude", sessions: [{ sessionId: "s1", model: "sonnet", tokens: { inputTokens: 100, outputTokens: 20 }, updatedMs: 1791635527568 }], truncated: false, scannedFiles: 2 },
+      { agent: "copilot", sessions: [], truncated: false, reason: "no_token_data", scannedFiles: 0 },
+      { agent: "opencode", sessions: [], truncated: false, reason: "store_missing", scannedFiles: 0 },
+    ],
+    receivedMs: 9,
+  };
+  const transcript: TranscriptUsageGateway = {
+    /** Report fixture transcript totals without touching native stores. */
+    read: vi.fn<TranscriptUsageGateway["read"]>(async () => report),
+  };
+  renderUsage(gateway, undefined, "ja-JP", transcript);
+  fireEvent.click(screen.getByRole("button", { name: "使用量" }));
+  const popup = await screen.findByRole("dialog", { name: "使用量" });
+  expect(await within(popup).findByText("ローカルの記録")).toBeVisible();
+  expect(within(popup).getByText("Claude Code")).toBeVisible();
+  expect(within(popup).getByText("記録に数値がありません。")).toBeVisible();
+  expect(within(popup).getByText("記録がありません。")).toBeVisible();
+  expect(transcript.read).toHaveBeenCalledOnce();
 });

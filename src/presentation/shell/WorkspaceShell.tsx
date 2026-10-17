@@ -10,7 +10,7 @@ import { CodeMirrorEditor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
 import AiPanel from "../ai-panel";
 import { AiUsagePopover } from "../ai/AiUsagePopover";
-import type { AiUsageGateway, CodexAccountUsageGateway } from "../../application/ai/usage-ports";
+import type { AiUsageGateway, CodexAccountUsageGateway, TranscriptUsageGateway } from "../../application/ai/usage-ports";
 import { AiModelControls } from "../ai-model-controls";
 import { useAiModels } from "./hooks/useAiModels";
 import { useAiViewPreferences } from "../ai/useAiViewPreferences";
@@ -121,6 +121,8 @@ export interface WorkspaceShellProps {
   aiUsageGateway?: AiUsageGateway;
   /** Read the authenticated Codex account's officially reported limits. */
   codexAccountUsageGateway?: CodexAccountUsageGateway;
+  /** Read locally measured transcript totals without starting inference. */
+  transcriptUsageGateway?: TranscriptUsageGateway;
   /** Native provider account storage and measured usage; secrets never enter browser storage. */
   providerAccountGateway?: ProviderAccountGateway;
   /** Isolation staging lifecycle pinned by Rust. */
@@ -222,6 +224,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     aiGateway,
     aiUsageGateway,
     codexAccountUsageGateway,
+    transcriptUsageGateway,
     providerAccountGateway,
     isolationGateway,
     runtimeGateway,
@@ -1369,7 +1372,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         <ResizableAiPane visible={showAi} width={aiView.preferences.chatPaneWidth} onWidth={(chatPaneWidth) => aiView.updatePreferences({ ...aiView.preferences, chatPaneWidth })}>
           <div className="flex min-h-0 flex-1 flex-col">
           <AiPanel
-            headerActions={aiUsageGateway ? <AiUsagePopover gateway={aiUsageGateway} accountGateway={codexAccountUsageGateway} theme={theme} /> : undefined}
+            headerActions={aiUsageGateway ? <AiUsagePopover gateway={aiUsageGateway} accountGateway={codexAccountUsageGateway} transcriptGateway={transcriptUsageGateway} theme={theme} /> : undefined}
             modelControls={modelControls}
             contexts={staging.aiContexts}
             staging={staging.staging}

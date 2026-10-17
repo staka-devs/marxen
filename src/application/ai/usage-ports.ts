@@ -1,4 +1,4 @@
-import type { CodexAccountUsage, ReportedUsage } from "../../contracts/ai-contracts";
+import type { CodexAccountUsage, ReportedUsage, TranscriptUsageReport } from "../../contracts/ai-contracts";
 
 /** Read reported usage without starting an agent or sending a prompt. */
 export interface AiUsageGateway {
@@ -12,4 +12,10 @@ export interface AiUsageGateway {
 export interface CodexAccountUsageGateway {
   /** Request official account metadata without creating a conversation or inference. */
   read(): Promise<CodexAccountUsage>;
+}
+
+/** Read locally measured transcript totals without starting an agent or inference. */
+export interface TranscriptUsageGateway {
+  /** Scan read-only local transcript stores and return the measured report. */
+  read(): Promise<TranscriptUsageReport>;
 }

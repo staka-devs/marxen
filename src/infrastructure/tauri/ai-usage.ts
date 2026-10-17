@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AiUsageGateway, CodexAccountUsageGateway } from "../../application/ai/usage-ports";
-import type { AiStreamEvent, CodexAccountUsage, ReportedUsage } from "../../contracts/ai-contracts";
+import type { AiUsageGateway, CodexAccountUsageGateway, TranscriptUsageGateway } from "../../application/ai/usage-ports";
+import type { AiStreamEvent, CodexAccountUsage, ReportedUsage, TranscriptUsageReport } from "../../contracts/ai-contracts";
 import { AI_STREAM_EVENT } from "../../domain/ai-config";
 import { requireDesktop } from "./ai-client";
 
@@ -27,5 +27,14 @@ export const codexAccountUsageGateway: CodexAccountUsageGateway = {
   async read() {
     requireDesktop();
     return invoke<CodexAccountUsage>("ai_codex_account_usage");
+  },
+};
+
+/** Read locally measured transcript totals through the native read-only scanner. */
+export const transcriptUsageGateway: TranscriptUsageGateway = {
+  /** Scan default transcript stores without starting an agent or handling credentials in JavaScript. */
+  async read() {
+    requireDesktop();
+    return invoke<TranscriptUsageReport>("ai_transcript_usage");
   },
 };

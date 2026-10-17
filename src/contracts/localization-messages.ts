@@ -847,6 +847,11 @@ export const japaneseMessages = {
   "折り返し行に沿って移動": "折り返し行に沿って移動",
   "提案": "提案",
   "使用量の報告がありません。": "使用量の報告がありません。",
+  "ローカルの記録": "ローカルの記録",
+  "記録がありません。": "記録がありません。",
+  "記録に数値がありません。": "記録に数値がありません。",
+  "記録を読み取れませんでした。": "記録を読み取れませんでした。",
+  "セッション数": "セッション数",
   "提案を却下しました。": "提案を却下しました。",
   "init.lua は設定コードで編集してください。": "init.lua は設定コードで編集してください。",
   "AI 機能はデスクトップアプリで利用できます。": "AI 機能はデスクトップアプリで利用できます。"
@@ -1701,6 +1706,11 @@ export const englishMessages = {
   "折り返し行に沿って移動": "Move by wrapped lines",
   "提案": "Proposal",
   "使用量の報告がありません。": "No usage reported yet.",
+  "ローカルの記録": "Local records",
+  "記録がありません。": "No local records found.",
+  "記録に数値がありません。": "The records carry no measured totals.",
+  "記録を読み取れませんでした。": "Could not read the local records.",
+  "セッション数": "Sessions",
   "提案を却下しました。": "Proposal rejected.",
   "init.lua は設定コードで編集してください。": "Edit init.lua in the configuration code editor.",
   "AI 機能はデスクトップアプリで利用できます。": "AI features are available in the desktop app."

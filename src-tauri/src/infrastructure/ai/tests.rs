@@ -2776,3 +2776,196 @@ mod regression {
         assert!(!matches!(roundtrip, AiStreamEvent::Done(_)));
     }
 }
+
+/// Local transcript scanning fixtures: Codex rollout JSONL, Claude project
+/// JSONL, and opencode SQLite rows. Shapes mirror the CLIs' on-disk records;
+/// no live home directory is ever touched.
+mod transcript_regression {
+    use crate::domain::transcript_usage::*;
+    use crate::infrastructure::ai::transcript_usage::*;
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Write one transcript file with the supplied lines.
+    fn transcript_file(dir: &Path, name: &str, lines: &[&str]) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, lines.join("\n")).unwrap();
+        path
+    }
+
+    /// Keep cumulative Codex totals at their maxima instead of summing restatements.
+    #[test]
+    fn codex_rollout_keeps_cumulative_maxima() {
+        let home = tempfile::tempdir().unwrap();
+        let sessions = home.path().join(".codex").join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        transcript_file(
+            &sessions,
+            "rollout-2026-10-17T10-00-00-0195b33e-4379-4d18-b39d-2d93f5669b5a.jsonl",
+            &[
+                r#"{"timestamp":"2026-10-17T10:00:00Z","type":"response_item","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":20,"cached_input_tokens":10,"cache_write_input_tokens":5,"reasoning_output_tokens":2,"total_tokens":120},"last_token_usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120},"model_context_window":200000}}}"#,
+                r#"{"timestamp":"2026-10-17T10:01:00Z","type":"response_item","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"output_tokens":40,"cached_input_tokens":10,"cache_write_input_tokens":5,"reasoning_output_tokens":2,"total_tokens":190},"last_token_usage":{"input_tokens":50,"output_tokens":20,"total_tokens":70},"model_context_window":200000}}}"#,
+                r#"{"timestamp":"2026-10-17T10:02:00Z","type":"event_msg","payload":{"type":"message"}}"#,
+                "not json",
+            ],
+        );
+        let agents = scan_transcript_stores(home.path());
+        let codex = agents
+            .iter()
+            .find(|usage| usage.agent == TranscriptAgent::Codex)
+            .expect("codex entry");
+        assert_eq!(codex.sessions.len(), 1);
+        assert_eq!(codex.reason, None);
+        let tokens = &codex.sessions[0].tokens;
+        assert_eq!(tokens.input_tokens, Some(150));
+        assert_eq!(tokens.output_tokens, Some(40));
+        assert_eq!(tokens.cached_read_tokens, Some(10));
+        assert_eq!(tokens.cached_write_tokens, Some(5));
+        assert_eq!(tokens.reasoning_tokens, Some(2));
+    }
+
+    /// Sum Claude per-message usage and skip rows without a usage object.
+    #[test]
+    fn claude_project_sums_message_usage() {
+        let home = tempfile::tempdir().unwrap();
+        let projects = home
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join("C--Users-takas-Develop-marxen");
+        std::fs::create_dir_all(&projects).unwrap();
+        transcript_file(
+            &projects,
+            "0195b33e-4379-4d18-b39d-2d93f5669b5a.jsonl",
+            &[
+                r#"{"type":"user","message":{"role":"user","content":"hi"},"sessionId":"s1"}"#,
+                r#"{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":10,"cache_creation_input_tokens":5}},"sessionId":"s1"}"#,
+                r#"{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":50,"output_tokens":7,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"sessionId":"s1"}"#,
+                r#"{"type":"assistant","message":{"role":"assistant"},"sessionId":"s1"}"#,
+            ],
+        );
+        let agents = scan_transcript_stores(home.path());
+        let claude = agents
+            .iter()
+            .find(|usage| usage.agent == TranscriptAgent::Claude)
+            .expect("claude entry");
+        assert_eq!(claude.sessions.len(), 1);
+        let tokens = &claude.sessions[0].tokens;
+        assert_eq!(tokens.input_tokens, Some(150));
+        assert_eq!(tokens.output_tokens, Some(27));
+        assert_eq!(tokens.cached_read_tokens, Some(10));
+        assert_eq!(tokens.cached_write_tokens, Some(5));
+        assert_eq!(tokens.reasoning_tokens, None);
+    }
+
+    /// Report store-missing for absent roots and no-token-data for Copilot events.
+    #[test]
+    fn missing_stores_report_reasons_without_totals() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".copilot").join("session-state")).unwrap();
+        let agents = scan_transcript_stores(home.path());
+        let entry = |agent: TranscriptAgent| {
+            agents
+                .iter()
+                .find(|usage| usage.agent == agent)
+                .expect("agent entry")
+        };
+        assert_eq!(entry(TranscriptAgent::Codex).reason, Some(TranscriptUnavailableReason::StoreMissing));
+        assert_eq!(entry(TranscriptAgent::Claude).reason, Some(TranscriptUnavailableReason::StoreMissing));
+        // Copilot session events carry lifecycle only, never token data.
+        assert_eq!(entry(TranscriptAgent::Copilot).reason, Some(TranscriptUnavailableReason::NoTokenData));
+        // The opencode store resolves through ambient `XDG_DATA_HOME`, so only
+        // consistency holds here: empty sessions always carry a reason.
+        let opencode = entry(TranscriptAgent::Opencode);
+        assert!(opencode.sessions.is_empty() == opencode.reason.is_some());
+        for usage in &agents {
+            if usage.agent != TranscriptAgent::Opencode {
+                assert!(usage.sessions.is_empty());
+            }
+        }
+    }
+
+    /// Read opencode session rows read-only, merging both tables by row ID.
+    #[test]
+    fn opencode_database_merges_session_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("opencode.db");
+        let connection = rusqlite::Connection::open(&db_path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE session (id TEXT PRIMARY KEY, model TEXT, title TEXT, tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER, time_updated INTEGER);
+                 CREATE TABLE session_v2 (id TEXT PRIMARY KEY, model TEXT, title TEXT, tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER, time_updated INTEGER);
+                 INSERT INTO session VALUES ('s1', 'gpt-5', 'first', 100, 20, 0, 10, 5, 1791635527568);
+                 INSERT INTO session_v2 VALUES ('s1', 'gpt-5', 'first', 150, 40, 1, 10, 5, 1791635528000);
+                 INSERT INTO session_v2 VALUES ('s2', NULL, '', NULL, NULL, NULL, NULL, NULL, 1791635529000);",
+            )
+            .unwrap();
+        drop(connection);
+        let opencode = scan_opencode_db(&db_path);
+        assert_eq!(opencode.reason, None);
+        // `s2` carries no counters and drops out; `s1` merges to the newest write.
+        assert_eq!(opencode.sessions.len(), 1);
+        let session = &opencode.sessions[0];
+        assert_eq!(session.session_id, "s1");
+        assert_eq!(session.model.as_deref(), Some("gpt-5"));
+        assert_eq!(session.tokens.input_tokens, Some(150));
+        assert_eq!(session.tokens.output_tokens, Some(40));
+        assert_eq!(session.tokens.reasoning_tokens, Some(1));
+        assert_eq!(session.updated_ms, Some(1791635528000));
+    }
+
+    /// Reject dishonest counters and fold maxima without summing restatements.
+    #[test]
+    fn transcript_folds_reject_dishonest_counters() {
+        assert_eq!(sqlite_counter(-1), None);
+        assert_eq!(sqlite_counter(i64::MAX), None);
+        assert_eq!(sqlite_counter(12), Some(12));
+        assert_eq!(fold_sum(Some(10), Some(5)), Some(15));
+        assert_eq!(fold_sum(None, Some(5)), Some(5));
+        assert_eq!(fold_sum(Some(10), None), Some(10));
+        assert_eq!(fold_max(Some(10), Some(5)), Some(10));
+        assert_eq!(fold_max(None, Some(5)), Some(5));
+        assert_eq!(normalize_opencode_time(1791635527568), Some(1791635527568));
+        assert_eq!(normalize_opencode_time(1791635527), Some(1791635527000));
+        assert_eq!(normalize_opencode_time(12), None);
+        assert_eq!(truncate_session_id(&"s".repeat(200)).chars().count(), 128);
+    }
+
+    /// Serialize transcript reports as JSON numbers with unreported fields omitted.
+    #[test]
+    fn transcript_ipc_counters_are_json_numbers() {
+        let report = TranscriptUsageReport {
+            agents: vec![TranscriptAgentUsage {
+                agent: TranscriptAgent::Codex,
+                sessions: vec![TranscriptSession {
+                    session_id: "rollout-1".into(),
+                    model: None,
+                    title: None,
+                    tokens: TranscriptTokens {
+                        input_tokens: Some(150),
+                        output_tokens: None,
+                        cached_read_tokens: None,
+                        cached_write_tokens: None,
+                        reasoning_tokens: None,
+                    },
+                    updated_ms: Some(1791635527568),
+                }],
+                truncated: false,
+                reason: None,
+                scanned_files: 1,
+            }],
+            received_ms: 7,
+        };
+        let value = serde_json::to_value(&report).unwrap();
+        assert_eq!(value["agents"][0]["agent"], "codex");
+        assert_eq!(value["agents"][0]["sessions"][0]["tokens"]["inputTokens"], 150);
+        assert!(value["agents"][0]["sessions"][0]["tokens"]
+            .get("outputTokens")
+            .is_none());
+        assert!(value["agents"][0].get("reason").is_none());
+        assert_eq!(
+            serde_json::from_value::<TranscriptUsageReport>(value).unwrap(),
+            report
+        );
+    }
+}
