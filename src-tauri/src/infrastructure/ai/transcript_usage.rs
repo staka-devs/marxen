@@ -304,7 +304,7 @@ pub(crate) fn scan_opencode_db(database: &Path) -> TranscriptAgentUsage {
         };
     }
     let connection = match rusqlite::Connection::open_with_flags(
-        &database,
+        database,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     ) {
         Ok(connection) => connection,

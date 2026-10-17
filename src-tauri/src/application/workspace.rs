@@ -589,7 +589,7 @@ impl Workspace {
                 result.limit = Some(SearchLimit::FileBytes);
                 continue;
             }
-            let mut outcome = self.services.searcher.search_replace(
+            let outcome = self.services.searcher.search_replace(
                 &text,
                 &pattern,
                 None,
@@ -689,7 +689,7 @@ impl Workspace {
         if snapshot.text.len() > MAX_TEXT_BYTES {
             return Err(WorkspaceError::SearchIncomplete);
         }
-        let mut outcome = self.services.searcher.search_replace(
+        let outcome = self.services.searcher.search_replace(
             &snapshot.text,
             &pattern,
             Some(&request.replacement),

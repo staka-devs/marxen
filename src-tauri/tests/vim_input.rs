@@ -531,7 +531,7 @@ fn command_line_tab_lists_completion_candidates() {
 #[test]
 /// Mirror a command-line vimgrep into the GUI quickfix list.
 fn cmdline_vimgrep_mirrors_quickfix_to_gui() {
-    use marxen_lib::application::ports::{BufferFactory, DocumentServices};
+    use marxen_lib::application::ports::DocumentServices;
     use marxen_lib::infrastructure::neovim::buffer::NativeBufferFactory;
     use std::sync::Arc;
     let home = tempfile::tempdir().unwrap();
