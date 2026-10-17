@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, FileText, Replace } from "lucide-react";
 import { searchGroupKey, rootFileLabel } from "../../domain/workspace-roots";
 import { useI18n } from "../i18n/I18nProvider";
 import type { SearchHitItem } from "../../domain/search-hit";
-import type { SearchLimit, SearchOptions } from "../../contracts/contracts";
+import type { ExReport, QuickfixEntry, QuickfixList, SearchCount, SearchLimit, SearchOptions } from "../../contracts/contracts";
 
 interface Props {
   query: string;
@@ -28,6 +28,16 @@ interface Props {
   searchLimit: SearchLimit | null;
   resultsReady: boolean;
   replacing: boolean;
+  /** Command-line quickfix results mirrored from Neovim. */
+  quickfix?: QuickfixList | null;
+  /** Open one quickfix entry in its workspace file. */
+  onQuickfixOpen?: (entry: QuickfixEntry) => void;
+  /** Discard the displayed quickfix results. */
+  onClearQuickfix?: () => void;
+  /** Executed command-line reports, newest last. */
+  exReports?: ExReport[];
+  /** Current `/` match position, if reported. */
+  searchCount?: SearchCount | null;
 }
 
 /** Group exact native hits by file, retaining first-seen order from the audited panel. */
@@ -55,7 +65,7 @@ function PreviewLine({ hit }: { hit: SearchHitItem }) {
 }
 
 /** Grouped search with visible-row navigation and guarded native replacement. */
-export function SearchPanel({ query, onQuery, hits, searching, canReplace, replaceText, onReplaceText, onJump, onReplaceOne, onReplaceAll, searchOptions, onSearchOptions, searchError, searchLimit, resultsReady, replacing }: Props) {
+export function SearchPanel({ query, onQuery, hits, searching, canReplace, replaceText, onReplaceText, onJump, onReplaceOne, onReplaceAll, searchOptions, onSearchOptions, searchError, searchLimit, resultsReady, replacing, quickfix, onQuickfixOpen, onClearQuickfix, exReports, searchCount }: Props) {
   const { t } = useI18n();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [replaceOpen, setReplaceOpen] = useState(false);
@@ -99,6 +109,30 @@ export function SearchPanel({ query, onQuery, hits, searching, canReplace, repla
       {searchError && <p role="alert" className="mt-2 text-xs text-destructive">{searchError}</p>}
       {searchLimit && <p role="status" className="mt-2 text-xs text-muted-foreground">{t("結果の一部を表示しています。一括置換には検索範囲を絞ってください。")}</p>}
       {query !== "" && <p className="mt-2 text-xs text-muted-foreground" role="status">{busy ? (replacing ? t("置換中…") : t("検索中…")) : searchLimit ? t("表示 {{count}} 件・{{files}} ファイル以上", { count: hits.length, files: groups.length }) : t("{{count}} 件・{{files}} ファイル", { count: hits.length, files: groups.length })}</p>}
+      {searchCount && <p className="mt-1 text-xs text-muted-foreground" role="status">{t("現在の一致: {{current}} / {{total}}", { current: searchCount.current, total: searchCount.total })}</p>}
+      {exReports && exReports.length > 0 && <div className="mt-2 border-t border-border pt-2" aria-label={t("コマンドの実行結果")}>
+        <p className="text-[11px] font-medium text-muted-foreground">{t("コマンドの実行結果")}</p>
+        <ul className="mt-1 space-y-1">
+          {exReports.map((report, index) => <li key={`${report.command}:${index}`} className="truncate font-mono text-[11px] text-muted-foreground" title={`${report.command} ${report.text}`}><span className="text-foreground/80">{report.command}</span> {report.text}</li>)}
+        </ul>
+      </div>}
+      {quickfix && quickfix.items.length > 0 && <div className="mt-2 border-t border-border pt-2" data-testid="search-quickfix">
+        <div className="flex items-center justify-between">
+          <p className="text-[11px] font-medium text-muted-foreground">{t("コマンドの検索結果")} ({quickfix.total})</p>
+          {onClearQuickfix && <button type="button" onClick={onClearQuickfix} aria-label={t("クリア")} className="rounded px-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground">{t("クリア")}</button>}
+        </div>
+        <ul className="mt-1 max-h-64 space-y-0.5 overflow-auto">
+          {quickfix.items.map((entry, index) => {
+            const base = entry.path.split(/[\\/]/).pop() ?? entry.path;
+            return <li key={`${entry.path}:${entry.line}:${entry.col}:${index}`}>
+              <button type="button" onClick={() => onQuickfixOpen?.(entry)} aria-label={t("{{path}} {{line}} 行目を開く", { path: base, line: entry.line })} title={`${entry.path}:${entry.line}`} className="flex w-full min-w-0 items-baseline gap-2 rounded px-1 py-1 text-left text-xs hover:bg-muted">
+                <span className="shrink-0 text-muted-foreground">{entry.line}</span>
+                <span className="min-w-0 flex-1 truncate font-mono">{entry.text || base}</span>
+              </button>
+            </li>;
+          })}
+        </ul>
+      </div>}
       <ul className="mt-2 space-y-1">
         {groups.map((group) => <li key={group.key}>
           <button type="button" aria-expanded={!collapsed.has(group.key)} aria-label={t("{{path}} の一致を折りたたむ", { path: group.path })} title={group.path} onClick={() => setCollapsed((previous) => { const next = new Set(previous); if (next.has(group.key)) next.delete(group.key); else next.add(group.key); return next; })} className="flex w-full items-center gap-1 rounded px-1 py-1 text-left text-xs hover:bg-muted">

@@ -11,7 +11,7 @@ import { useI18n } from "../../i18n/I18nProvider";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EditorSelection, ExternalCursor } from "../../editor/CodeMirrorEditor";
-import type { DocumentSnapshot, TextEdit, YankCopy, RootScope, WorkspaceInfo, VimCommandLine } from "../../../contracts/contracts";
+import type { DocumentSnapshot, TextEdit, YankCopy, RootScope, WorkspaceInfo, VimCommandLine, VimCompletion, QuickfixList, ExReport, SearchCount } from "../../../contracts/contracts";
 import { sameRoot } from "../../../domain/document-location";
 import { imageTabId, parseImageTabId } from "../../../domain/workspace-roots";
 import { SAMPLE_WORKSPACE } from "../../../domain/workspace-content";
@@ -80,6 +80,16 @@ export interface DocumentSession {
   vimMode: string;
   /** Native Ex/search input with its actual cursor position. */
   commandLine: VimCommandLine | null;
+  /** Native Tab-completion candidates, if Neovim is showing them. */
+  completion: VimCompletion | null;
+  /** Fresh quickfix results from a command-line search, sticky until replaced. */
+  quickfix: QuickfixList | null;
+  /** Discard the displayed quickfix results. */
+  clearQuickfix: () => void;
+  /** Executed command-line reports for the search tab. */
+  exReports: ExReport[];
+  /** Current `/` match position, if Neovim reported one. */
+  searchCount: SearchCount | null;
   /** Native command output or error. */
   vimMessage: string | null;
   /** Replace the Vim mode display. */
@@ -190,6 +200,16 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
   const [cursorEcho, setCursorEcho] = useState<Record<string, ExternalCursor>>({});
   const [vimMode, setVimMode] = useState("normal");
   const [commandLine, setCommandLine] = useState<VimCommandLine | null>(null);
+  /** Native completion popup mirrored from the latest mode update. */
+  const [completion, setCompletion] = useState<VimCompletion | null>(null);
+  /** Latest quickfix list from command-line search, kept until replaced. */
+  const [quickfix, setQuickfix] = useState<QuickfixList | null>(null);
+  /** Discard the displayed quickfix results. */
+  const clearQuickfix = useCallback(() => setQuickfix(null), []);
+  /** Executed command-line reports, newest last, capped for display. */
+  const [exReports, setExReports] = useState<ExReport[]>([]);
+  /** Latest reported `/` match position. */
+  const [searchCount, setSearchCount] = useState<SearchCount | null>(null);
   const [vimMessage, setVimMessage] = useState<string | null>(null);
   const vimCommand = useRef(args.onVimCommand);
   vimCommand.current = args.onVimCommand;
@@ -298,6 +318,13 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
         if (activeRef.current === id) {
           setVimMode(mode.mode);
           setCommandLine(mode.commandLine ?? null);
+          setCompletion(mode.completion ?? null);
+          if (mode.quickfix) setQuickfix(mode.quickfix);
+          if (mode.exReport) {
+            const report = mode.exReport;
+            setExReports((previous) => [...previous.slice(-4), report]);
+          }
+          if (mode.searchCount) setSearchCount(mode.searchCount);
           setVimMessage(mode.message ?? null);
         }
       } catch {
@@ -334,7 +361,16 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
         for (const command of update.commands ?? []) vimCommand.current?.(command);
         if (!isSelectionGenCurrent(id, gen)) return;
         mode = update.mode;
-        if (activeRef.current === id) { setVimMode(mode); setCommandLine(update.commandLine ?? null); setVimMessage(update.message ?? null); }
+        if (activeRef.current === id) {
+          setVimMode(mode); setCommandLine(update.commandLine ?? null); setCompletion(update.completion ?? null);
+          if (update.quickfix) setQuickfix(update.quickfix);
+          if (update.exReport) {
+            const report = update.exReport;
+            setExReports((previous) => [...previous.slice(-4), report]);
+          }
+          if (update.searchCount) setSearchCount(update.searchCount);
+          setVimMessage(update.message ?? null);
+        }
       } catch {
         return;
       }
@@ -697,6 +733,11 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
     echoCursor,
     vimMode,
     commandLine,
+    completion,
+    quickfix,
+    clearQuickfix,
+    exReports,
+    searchCount,
     vimMessage,
     setVimMode,
     vimModeRef,

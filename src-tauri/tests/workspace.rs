@@ -478,7 +478,7 @@ fn native_search_replacement_plans_are_exact_and_do_not_save() {
     assert!(snapshot.dirty);
     let refreshed = workspace
         .search_with_options(
-            r"cat|\$1",
+            r"cat\|\$1",
             &SearchOptions {
                 regex: true,
                 ..options.clone()
@@ -494,7 +494,7 @@ fn native_search_replacement_plans_are_exact_and_do_not_save() {
             scope: None,
             root: workspace.info().root,
             path: hit.path.clone(),
-            query: r"cat|\$1".into(),
+            query: r"cat\|\$1".into(),
             options: SearchOptions {
                 regex: true,
                 ..options
@@ -1046,4 +1046,56 @@ fn locked_windows_replacement_preserves_original_and_recovery() {
     drop(locked);
     actor.save(request(&changed)).unwrap();
     assert_eq!(fs::read(path).unwrap(), b"pending");
+}
+
+#[test]
+/// Evaluate GUI search with Vim regular-expression semantics and Vim-style replacement.
+fn native_search_uses_vim_semantics() {
+    let (root, _recovery, mut workspace) = setup();
+    fs::write(root.path().join("a.txt"), "scat cat\ndog\ncat").unwrap();
+    let root_string = workspace.info().root;
+    let vim = SearchOptions {
+        regex: true,
+        ..SearchOptions::default()
+    };
+    let found = workspace
+        .search_with_options(r"\vcat|dog", &vim, &root_string)
+        .unwrap();
+    assert_eq!(found.limit, None);
+    assert_eq!(found.matches.len(), 4);
+    let word = SearchOptions {
+        whole_word: true,
+        ..SearchOptions::default()
+    };
+    let found = workspace
+        .search_with_options("cat", &word, &root_string)
+        .unwrap();
+    assert_eq!(found.matches.len(), 2);
+    assert_eq!(
+        workspace
+            .search_with_options("\\(", &vim, &root_string)
+            .unwrap_err(),
+        WorkspaceError::SearchPattern
+    );
+    let hit = &workspace
+        .search_with_options("cat", &SearchOptions::default(), &root_string)
+        .unwrap()
+        .matches[1];
+    let plan = workspace
+        .plan_search_replacement(SearchReplaceRequest {
+            location: None,
+            document_id: None,
+            scope: None,
+            root: root_string,
+            path: hit.path.clone(),
+            query: "\\(c\\)\\(a\\)t".into(),
+            options: vim,
+            replacement: r"\1X".into(),
+            content_token: hit.content_token.clone(),
+            revision: hit.revision,
+            range: Some(hit.range.clone()),
+        })
+        .unwrap();
+    assert_eq!(plan.edits.len(), 1);
+    assert_eq!(plan.edits[0].text, "cX");
 }

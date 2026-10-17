@@ -182,6 +182,10 @@ fn validates_save_cursor_and_mode_against_exact_snapshot() {
         revision: Revision(6),
         mode: VimMode::Insert,
         command_line: None,
+        completion: None,
+        quickfix: None,
+        ex_report: None,
+        search_count: None,
         message: None,
         commands: None,
     };

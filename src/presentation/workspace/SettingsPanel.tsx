@@ -4,6 +4,7 @@ import { trapDialogTab } from "./dialogFocus";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Bell, Bot, Clipboard, Code2, Paintbrush, Search, Settings2, SlidersHorizontal, X, RotateCcw } from "lucide-react";
 import { THEMES, isSupportedConfigName, type ThemeId } from "../../domain/workspace-content";
+import { StyledSelect } from "../ui/select";
 import { COPY_LABELS } from "../../domain/clipboard-text";
 import { DEFAULT_EDITOR_PREFERENCES, NOTIFICATION_POSITIONS, type EditorPreferences } from "../../domain/editor-preferences";
 import "../settings-controls.css";
@@ -94,7 +95,6 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
       }}>
       <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-card px-4">
         <Settings2 size={16} className="text-muted-foreground" aria-hidden="true" /><h2 className="flex-1 text-sm font-medium">{t("設定")}</h2>
-        <span className="text-[11px] text-muted-foreground max-sm:hidden">{t("表示設定は自動で保存されます")}</span>
         <button type="button" aria-label={t("設定を閉じる")} onClick={onClose} className="rounded-sm p-1 hover:bg-muted"><X size={17} /></button>
       </header>
       <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
@@ -110,33 +110,32 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
             {visible.map(({ id, label }) => <section key={id} aria-label={t("{{value0}}設定", { value0: (label) })} className="marxen-settings-section border-b border-border py-5 last:border-b-0">
               <h3 className="mb-3 text-sm font-semibold">{label}</h3>
               {id === "appearance" && <>
-                <SettingRow label={t("言語")}><select aria-label={t("言語")} value={languagePreference} onChange={(event) => onLanguagePreference?.(event.target.value as import("../../contracts/language").LanguagePreference)} className={`${inputClass} w-52`}>
+                <SettingRow label={t("言語")}><StyledSelect label={t("言語")} value={languagePreference} onChange={(value) => onLanguagePreference?.(value as import("../../contracts/language").LanguagePreference)} className="w-52">
                   <option value="system">{t("システム設定に合わせる")}</option>
                   <option value="en-US">{t("英語 (米国)")}</option>
                   <option value="ja-JP">{t("日本語")}</option>
                   <option value="ja-JP-x-kansai">{t("関西弁 (大阪)")}</option>
-                  <option value="ja-JP-x-tokushima">{t("阿波弁 (徳島・鳴門)")}</option>
-                </select></SettingRow>
-                <SettingRow label={t("カラーテーマ")}><select aria-label={t("カラーテーマ")} className={`${inputClass} w-40`} value={theme} onChange={(event) => onTheme(event.target.value as ThemeId)}>{THEMES.map((item) => <option key={item.id} value={item.id}>{t(item.label as LabelKey)}</option>)}</select></SettingRow>
+                  <option value="ja-JP-x-tokushima">{t("阿波弁")}</option>
+                </StyledSelect></SettingRow>
+                <SettingRow label={t("カラーテーマ")}><StyledSelect label={t("カラーテーマ")} className="w-40" value={theme} onChange={(value) => onTheme(value as ThemeId)}>{THEMES.map((item) => <option key={item.id} value={item.id}>{t(item.label as LabelKey)}</option>)}</StyledSelect></SettingRow>
               </>}
               {id === "editor" && <>
                 <SettingRow label={t("文字サイズ")}><input aria-label={t("文字サイズ")} type="number" min={11} max={28} value={preferences.fontSize} onChange={(event) => { const n = event.currentTarget.valueAsNumber; if (Number.isFinite(n)) change("fontSize", Math.min(28, Math.max(11, n))); }} className={`${inputClass} w-20`} /><span className="text-xs text-muted-foreground">px</span></SettingRow>
-                <SettingRow label={t("行の高さ")}><select aria-label={t("行の高さ")} value={preferences.lineHeight} onChange={(event) => change("lineHeight", Number(event.target.value))} className={`${inputClass} w-24`}>{[1.2, 1.4, 1.5, 1.6, 1.7, 1.8, 2, 2.2, 2.4].map((height) => <option key={height} value={height}>{height}</option>)}</select></SettingRow>
+                <SettingRow label={t("行の高さ")}><StyledSelect label={t("行の高さ")} value={preferences.lineHeight} onChange={(value) => change("lineHeight", Number(value))} className="w-24">{[1.2, 1.4, 1.5, 1.6, 1.7, 1.8, 2, 2.2, 2.4].map((height) => <option key={height} value={height}>{height}</option>)}</StyledSelect></SettingRow>
                 {([["wordWrap", t("長い行を折り返す")], ["lineNumbers", t("Markdown の行番号を表示する")], ["highlightActiveLine", t("編集中の行を強調する")]] as const).map(([key, text]) => <SettingRow key={key} label={text}><input aria-label={text} type="checkbox" checked={preferences[key]} onChange={(event) => change(key, event.target.checked)} className="h-4 w-4" /></SettingRow>)}
                 <button type="button" onClick={() => onPreferences?.({ ...DEFAULT_EDITOR_PREFERENCES, theme, notificationPosition: preferences.notificationPosition })} className="mt-3 flex items-center gap-2 rounded-sm border border-border px-3 py-1.5 text-xs hover:bg-muted"><RotateCcw size={13} />{t("エディター設定をリセット")}</button>
               </>}
               {id === "notifications" && <>
-                <SettingRow label={t("通知の表示位置")}><select aria-label={t("通知の表示位置")} value={preferences.notificationPosition} onChange={(event) => change("notificationPosition", event.target.value as EditorPreferences["notificationPosition"])} className={`${inputClass} w-52`}>
+                <SettingRow label={t("通知の表示位置")}><StyledSelect label={t("通知の表示位置")} value={preferences.notificationPosition} onChange={(value) => change("notificationPosition", value as EditorPreferences["notificationPosition"])} className="w-52">
                   {NOTIFICATION_POSITIONS.map((position) => <option key={position} value={position}>{t(POSITION_LABELS[position])}</option>)}
-                </select></SettingRow>
+                </StyledSelect></SettingRow>
               </>}
               {id === "vim" && <div className="space-y-3">
                 <p className="text-[13px]">{t("Neovim 設定ファイル")}</p>
                 {!vimSettings && <div className="flex gap-2"><input value={configPath} onChange={(event) => onConfigPath(event.target.value)} placeholder={t("設定ファイルのパス")} aria-label={t("Neovim 設定ファイルのパス")} className={`${inputClass} min-w-0 flex-1`} />{onBrowseConfig && <button type="button" onClick={onBrowseConfig} aria-label={t("設定ファイルを参照する")} className="shrink-0 rounded-sm border border-border px-3 text-xs hover:bg-muted">{t("参照…")}</button>}</div>}
                 {currentConfig !== null && <p data-testid="current-config" className="break-all text-xs text-muted-foreground">{t("使用中:")}{currentConfig === "" ? t("Marxen の標準設定") : currentConfig}</p>}
                 {nameInvalid && <p role="alert" className="text-xs text-red-500">{t("vimrc / _vimrc / .vimrc / init.vim / init.lua を指定してください。")}</p>}{configError && <p role="alert" className="whitespace-pre-wrap text-xs text-red-500">{configError}</p>}
-                <button type="button" onClick={onApplyConfig} disabled={applyingConfig || nameInvalid} aria-label={t("設定を適用して再起動する")} className="rounded-sm bg-primary px-3 py-2 text-xs text-primary-foreground disabled:opacity-50">{applyingConfig ? t("適用中…") : t("設定を適用")}</button>
-                <p className="text-xs leading-5 text-muted-foreground">{t("Neovim を再起動して適用します。未保存の本文は保持し、Undo 履歴と Vim モードは初期化します。")}</p>
+                <button type="button" onClick={onApplyConfig} disabled={applyingConfig || nameInvalid} aria-label={t("設定を適用して再起動する")} title={t("Neovim を再起動して適用します。未保存の本文は保持し、Undo 履歴と Vim モードは初期化します。")} className="rounded-sm bg-primary px-3 py-2 text-xs text-primary-foreground disabled:opacity-50">{applyingConfig ? t("適用中…") : t("設定を適用")}</button>
                 {vimSettings}
               </div>}
               {id === "copy" && <div className="space-y-3">

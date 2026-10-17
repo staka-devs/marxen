@@ -399,6 +399,7 @@ fn persisted_vimrc_supports_space_leader_noremap_and_functions() {
         let services = DocumentServices {
             storage: defaults.storage,
             buffers: Arc::new(NativeBufferFactory::new(home.path().to_owned())),
+            searcher: defaults.searcher,
         };
         let actor =
             DocumentActor::open(DocumentId(id.into()), "first".into(), None, services).unwrap();
@@ -419,4 +420,190 @@ fn persisted_vimrc_supports_space_leader_noremap_and_functions() {
             "user mapping must beat app shortcut"
         );
     }
+}
+
+#[test]
+/// Skip bundled app shortcuts when vimrc opts out so every key stays vimrc-defined.
+fn vimrc_opt_out_disables_default_app_shortcuts() {
+    use marxen_lib::application::ports::{BufferFactory, DocumentServices};
+    use marxen_lib::infrastructure::neovim::buffer::NativeBufferFactory;
+    use std::sync::Arc;
+    let home = tempfile::tempdir().unwrap();
+    let config = home.path().join(".vimrc");
+    std::fs::write(&config, "let g:marxen_default_shortcuts = 0\n").unwrap();
+    NativeBufferFactory::new(home.path().to_owned())
+        .select_config(Some(&config))
+        .unwrap();
+    let defaults = marxen_lib::document_services();
+    let services = DocumentServices {
+        storage: defaults.storage,
+        buffers: Arc::new(NativeBufferFactory::new(home.path().to_owned())),
+        searcher: defaults.searcher,
+    };
+    let actor = DocumentActor::open(
+        DocumentId("opt-out-shortcuts".into()),
+        "first".into(),
+        None,
+        services,
+    )
+    .unwrap();
+    assert!(
+        actor.config_errors().is_empty(),
+        "{:?}",
+        actor.config_errors()
+    );
+    actor.input_via_nvim("<C-S-i>").unwrap();
+    assert!(
+        actor.current_mode().unwrap().commands.unwrap().is_empty(),
+        "opted-out defaults must not fire"
+    );
+    actor.input_via_nvim(":Marxen inline-chat<CR>").unwrap();
+    assert_eq!(
+        actor.current_mode().unwrap().commands.unwrap(),
+        ["inline-chat"]
+    );
+}
+
+#[test]
+/// Fire user-defined Marxen mappings with defaults off using the documented syntax.
+fn vimrc_defined_marxen_mappings_fire_without_defaults() {
+    use marxen_lib::application::ports::{BufferFactory, DocumentServices};
+    use marxen_lib::infrastructure::neovim::buffer::NativeBufferFactory;
+    use std::sync::Arc;
+    let home = tempfile::tempdir().unwrap();
+    let config = home.path().join(".vimrc");
+    std::fs::write(
+        &config,
+        "let g:marxen_default_shortcuts = 0\nnnoremap <C-s> <Cmd>Marxen file-save<CR>\n",
+    )
+    .unwrap();
+    NativeBufferFactory::new(home.path().to_owned())
+        .select_config(Some(&config))
+        .unwrap();
+    let defaults = marxen_lib::document_services();
+    let services = DocumentServices {
+        storage: defaults.storage,
+        buffers: Arc::new(NativeBufferFactory::new(home.path().to_owned())),
+        searcher: defaults.searcher,
+    };
+    let actor = DocumentActor::open(
+        DocumentId("vimrc-defined".into()),
+        "first".into(),
+        None,
+        services,
+    )
+    .unwrap();
+    assert!(
+        actor.config_errors().is_empty(),
+        "{:?}",
+        actor.config_errors()
+    );
+    actor.input_via_nvim("<C-s>").unwrap();
+    assert_eq!(
+        actor.current_mode().unwrap().commands.unwrap(),
+        ["file-save"]
+    );
+    actor.input_via_nvim("<C-S-p>").unwrap();
+    assert!(
+        actor.current_mode().unwrap().commands.unwrap().is_empty(),
+        "unmapped defaults must stay silent"
+    );
+}
+
+#[test]
+/// Show native Tab-completion candidates from the command line.
+fn command_line_tab_lists_completion_candidates() {
+    let actor =
+        marxen_lib::open_document(DocumentId("cmdline-tab".into()), "first".into(), None).unwrap();
+    actor.input_via_nvim(":color ").unwrap();
+    actor.input_via_nvim("<Tab>").unwrap();
+    let mode = actor.current_mode().unwrap();
+    let popup = mode.completion.expect("completion popup visible");
+    assert!(
+        !popup.items.is_empty(),
+        "Tab after :color must list candidates"
+    );
+    assert!(popup.items.iter().any(|item| !item.word.is_empty()));
+    actor.input_via_nvim("<Esc>").unwrap();
+    assert!(actor.current_mode().unwrap().completion.is_none());
+}
+
+#[test]
+/// Mirror a command-line vimgrep into the GUI quickfix list.
+fn cmdline_vimgrep_mirrors_quickfix_to_gui() {
+    use marxen_lib::application::ports::{BufferFactory, DocumentServices};
+    use marxen_lib::infrastructure::neovim::buffer::NativeBufferFactory;
+    use std::sync::Arc;
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.txt"), "cat\ndog\ncat bird").unwrap();
+    let file = dir
+        .path()
+        .join("a.txt")
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    let defaults = marxen_lib::document_services();
+    let services = DocumentServices {
+        storage: defaults.storage,
+        buffers: Arc::new(NativeBufferFactory::new(home.path().to_owned())),
+        searcher: defaults.searcher,
+    };
+    let actor = DocumentActor::open(
+        DocumentId("cmdline-qf".into()),
+        "cat\ndog\ncat bird".into(),
+        Some(dir.path().join("a.txt")),
+        services,
+    )
+    .unwrap();
+    actor
+        .input_via_nvim(&format!(":silent vimgrep /cat/ {file}<CR>"))
+        .unwrap();
+    let quickfix = actor
+        .current_mode()
+        .unwrap()
+        .quickfix
+        .expect("quickfix mirrored");
+    assert!(quickfix.total >= 2, "total={}", quickfix.total);
+    assert!(quickfix
+        .items
+        .iter()
+        .any(|entry| entry.line == 1 && entry.text.contains("cat")));
+    assert!(quickfix.items.iter().any(|entry| entry.line == 3));
+    assert!(actor.current_mode().unwrap().quickfix.is_none());
+}
+
+#[test]
+/// Report a command-line substitution and track `/` navigation counts.
+fn cmdline_substitute_reports_and_search_counts() {
+    let actor = marxen_lib::open_document(
+        DocumentId("cmdline-reports".into()),
+        "cat\ndog\ncat\ncat".into(),
+        None,
+    )
+    .unwrap();
+    actor.input_via_nvim(":%s/cat/dog/<CR>").unwrap();
+    let probe = actor.current_mode().unwrap();
+    let report = probe.ex_report.expect("substitute reported");
+    assert!(
+        report.command == ":%s/cat/dog/",
+        "command={}",
+        report.command
+    );
+    assert!(!report.text.is_empty());
+    actor.input_via_nvim("/dog<CR>").unwrap();
+    let count = actor
+        .current_mode()
+        .unwrap()
+        .search_count
+        .expect("search counted");
+    assert!(count.total >= 2, "total={}", count.total);
+    assert!(count.current >= 1, "current={}", count.current);
+    actor.input_via_nvim("n").unwrap();
+    let count = actor
+        .current_mode()
+        .unwrap()
+        .search_count
+        .expect("recounted after n");
+    assert!(count.total >= 2);
 }

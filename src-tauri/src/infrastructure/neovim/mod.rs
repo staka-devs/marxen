@@ -12,6 +12,7 @@ pub mod grid;
 pub mod mapping;
 pub mod mode;
 pub mod rpc;
+pub mod search;
 
 use crate::domain::coordinates::{join_lines, split_lines};
 use config::{argv_for, collect_errors, describe_source, ConfigReport, ConfigSource};
@@ -146,6 +147,10 @@ impl NeovimSession {
             vim.api.nvim_create_user_command('Marxen', function(opts)
                 vim.fn.rpcnotify(target, 'marxen:command', opts.args)
             end, {nargs = 1})
+            vim.api.nvim_create_autocmd('QuickFixCmdPost', {
+                group = vim.api.nvim_create_augroup('marxen_quickfix', {clear = true}),
+                callback = function() vim.fn.rpcnotify(target, 'marxen:quickfix') end,
+            })
             vim.g.mapleader = ' '
         "#,
                     ),
@@ -193,6 +198,10 @@ impl NeovimSession {
                 ['S-p'] = 'palette-open', [','] = 'palette-settings',
                 ['S-i'] = 'inline-chat', ['M-i'] = 'palette-ai',
             }
+            -- Vimrc-first: user mappings always win (mapcheck), and setting
+            -- g:marxen_default_shortcuts to 0 skips these defaults entirely
+            -- so every shortcut can be defined in vimrc instead.
+            if vim.g.marxen_default_shortcuts ~= 0 then
             for _, modifier in ipairs({'C', 'D'}) do
                 for key, command in pairs(shortcuts) do
                     local lhs = '<' .. modifier .. '-' .. key .. '>'
@@ -202,6 +211,7 @@ impl NeovimSession {
                         end
                     end
                 end
+            end
             end
         "#), rmpv::Value::Array(vec![])])
             .map_err(|cause| format!("Marxen shortcuts: {cause}"))?;
@@ -683,6 +693,101 @@ impl NeovimSession {
     /// Poll child-process status without issuing an RPC to a potentially exited peer.
     pub fn is_alive(&self) -> Result<bool, RpcError> {
         self.client.is_alive()
+    }
+
+    /// Read the session quickfix list for the GUI search tab, capped for display.
+    ///
+    /// Entries carry absolute paths; the GUI resolves workspace roots. Only
+    /// failures to reach Neovim surface; malformed entries are skipped.
+    pub fn read_quickfix(&self) -> Result<crate::contracts::QuickfixList, RpcError> {
+        use crate::contracts::{QuickfixEntry, QuickfixList};
+        let list = self.client.call(
+            "nvim_call_function",
+            vec![rmpv::Value::from("getqflist"), rmpv::Value::Array(vec![])],
+        )?;
+        let mut names: std::collections::HashMap<u64, String> = std::collections::HashMap::new();
+        let mut items = Vec::new();
+        let mut total = 0usize;
+        if let rmpv::Value::Array(entries) = &list {
+            total = entries.len();
+            for entry in entries.iter().take(200) {
+                let cell = |key: &str| {
+                    entry.as_map().and_then(|pairs| {
+                        pairs
+                            .iter()
+                            .find_map(|(name, value)| (name.as_str() == Some(key)).then_some(value))
+                    })
+                };
+                let bufnr = cell("bufnr").and_then(rmpv::Value::as_u64).unwrap_or(0);
+                let line = cell("lnum").and_then(rmpv::Value::as_u64).unwrap_or(0);
+                let col = cell("col").and_then(rmpv::Value::as_u64).unwrap_or(0);
+                let text = cell("text").and_then(rmpv::Value::as_str).unwrap_or("");
+                if line == 0 {
+                    continue;
+                }
+                let path = match names.get(&bufnr) {
+                    Some(name) => name.clone(),
+                    None => {
+                        let name = self
+                            .client
+                            .call("nvim_buf_get_name", vec![rmpv::Value::from(bufnr)])
+                            .ok()
+                            .and_then(|value| value.as_str().map(str::to_owned))
+                            .unwrap_or_default();
+                        names.insert(bufnr, name.clone());
+                        name
+                    }
+                };
+                let mut display = text.to_owned();
+                if display.len() > 500 {
+                    display.truncate(500);
+                }
+                items.push(QuickfixEntry {
+                    path,
+                    line: u32::try_from(line).unwrap_or(u32::MAX),
+                    col: u32::try_from(col).unwrap_or(u32::MAX),
+                    text: display,
+                });
+            }
+        }
+        Ok(QuickfixList { items, total })
+    }
+
+    /// Read the current `/` position via `searchcount()`; `None` without an active search.
+    pub fn search_count(&self) -> Result<Option<crate::contracts::SearchCount>, RpcError> {
+        use crate::contracts::SearchCount;
+        let options = vec![
+            (rmpv::Value::from("timeout"), rmpv::Value::from(100u64)),
+            (rmpv::Value::from("maxcount"), rmpv::Value::from(9999u64)),
+        ];
+        let result = self.client.call(
+            "nvim_call_function",
+            vec![
+                rmpv::Value::from("searchcount"),
+                rmpv::Value::Array(vec![rmpv::Value::Map(options)]),
+            ],
+        )?;
+        let cell = |key: &str| {
+            result.as_map().and_then(|pairs| {
+                pairs
+                    .iter()
+                    .find_map(|(name, value)| (name.as_str() == Some(key)).then_some(value))
+            })
+        };
+        let total = cell("total").and_then(rmpv::Value::as_u64).unwrap_or(0);
+        if total == 0 {
+            return Ok(None);
+        }
+        Ok(Some(SearchCount {
+            current: cell("current")
+                .and_then(rmpv::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or(0),
+            total: usize::try_from(total).unwrap_or(usize::MAX),
+            exact: !cell("incomplete")
+                .and_then(rmpv::Value::as_u64)
+                .is_some_and(|flag| flag != 0),
+        }))
     }
 
     /// Drain `marxen:save-requested` notifications queued since the last call.

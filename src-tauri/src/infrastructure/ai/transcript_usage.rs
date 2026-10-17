@@ -141,11 +141,7 @@ fn scan_codex_file(path: &Path) -> Option<TranscriptSession> {
         };
         // `token_count` rows restate cumulative totals; only the payload
         // marker matters, never the envelope type.
-        if row
-            .pointer("/payload/type")
-            .and_then(|kind| kind.as_str())
-            != Some("token_count")
-        {
+        if row.pointer("/payload/type").and_then(|kind| kind.as_str()) != Some("token_count") {
             continue;
         }
         if let Some(info) = row.pointer("/payload/info") {
@@ -226,9 +222,7 @@ fn scan_claude_file(path: &Path) -> Option<TranscriptSession> {
 /// becomes absent instead of a dishonest date.
 pub(crate) fn normalize_opencode_time(value: i64) -> Option<u64> {
     if (1_000_000_000..10_000_000_000).contains(&value) {
-        return u64::try_from(value)
-            .ok()?
-            .checked_mul(1_000);
+        return u64::try_from(value).ok()?.checked_mul(1_000);
     }
     if (1_000_000_000_000..9_000_000_000_000_000).contains(&value) {
         return u64::try_from(value).ok();
@@ -238,10 +232,7 @@ pub(crate) fn normalize_opencode_time(value: i64) -> Option<u64> {
 
 /// Read measured session rows from one opencode table.
 /// Unknown tables yield no rows; malformed rows are skipped individually.
-fn read_opencode_table(
-    connection: &rusqlite::Connection,
-    table: &str,
-) -> Vec<TranscriptSession> {
+fn read_opencode_table(connection: &rusqlite::Connection, table: &str) -> Vec<TranscriptSession> {
     if !matches!(table, "session" | "session_v2") {
         return Vec::new();
     }
@@ -335,7 +326,8 @@ pub(crate) fn scan_opencode_db(database: &Path) -> TranscriptAgentUsage {
         scanned_rows = scanned_rows.saturating_add(rows.len() as u32);
         for session in rows {
             match merged.get(&session.session_id) {
-                Some(known) if known.updated_ms.unwrap_or(0) >= session.updated_ms.unwrap_or(0) => {}
+                Some(known) if known.updated_ms.unwrap_or(0) >= session.updated_ms.unwrap_or(0) => {
+                }
                 _ => {
                     merged.insert(session.session_id.clone(), session);
                 }

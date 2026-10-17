@@ -2781,9 +2781,9 @@ mod regression {
 /// JSONL, and opencode SQLite rows. Shapes mirror the CLIs' on-disk records;
 /// no live home directory is ever touched.
 mod transcript_regression {
+    use super::*;
     use crate::domain::transcript_usage::*;
     use crate::infrastructure::ai::transcript_usage::*;
-    use super::*;
     use std::path::PathBuf;
 
     /// Write one transcript file with the supplied lines.
@@ -2870,10 +2870,19 @@ mod transcript_regression {
                 .find(|usage| usage.agent == agent)
                 .expect("agent entry")
         };
-        assert_eq!(entry(TranscriptAgent::Codex).reason, Some(TranscriptUnavailableReason::StoreMissing));
-        assert_eq!(entry(TranscriptAgent::Claude).reason, Some(TranscriptUnavailableReason::StoreMissing));
+        assert_eq!(
+            entry(TranscriptAgent::Codex).reason,
+            Some(TranscriptUnavailableReason::StoreMissing)
+        );
+        assert_eq!(
+            entry(TranscriptAgent::Claude).reason,
+            Some(TranscriptUnavailableReason::StoreMissing)
+        );
         // Copilot session events carry lifecycle only, never token data.
-        assert_eq!(entry(TranscriptAgent::Copilot).reason, Some(TranscriptUnavailableReason::NoTokenData));
+        assert_eq!(
+            entry(TranscriptAgent::Copilot).reason,
+            Some(TranscriptUnavailableReason::NoTokenData)
+        );
         // The opencode store resolves through ambient `XDG_DATA_HOME`, so only
         // consistency holds here: empty sessions always carry a reason.
         let opencode = entry(TranscriptAgent::Opencode);
@@ -2958,7 +2967,10 @@ mod transcript_regression {
         };
         let value = serde_json::to_value(&report).unwrap();
         assert_eq!(value["agents"][0]["agent"], "codex");
-        assert_eq!(value["agents"][0]["sessions"][0]["tokens"]["inputTokens"], 150);
+        assert_eq!(
+            value["agents"][0]["sessions"][0]["tokens"]["inputTokens"],
+            150
+        );
         assert!(value["agents"][0]["sessions"][0]["tokens"]
             .get("outputTokens")
             .is_none());

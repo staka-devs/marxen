@@ -16,6 +16,7 @@ pub fn document_services() -> DocumentServices {
     DocumentServices {
         storage: Arc::new(infrastructure::storage::NativeStorage),
         buffers: Arc::new(infrastructure::neovim::buffer::NativeBufferFactory::default()),
+        searcher: Arc::new(infrastructure::neovim::search::NativeVimSearch::new()),
     }
 }
 /// Construct the native vim-settings file adapter for guarded config access.

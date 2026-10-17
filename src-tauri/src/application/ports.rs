@@ -36,6 +36,8 @@ pub enum BufferNotification {
     SaveRequested,
     Redraw(serde_json::Value),
     Command(String),
+    /// A quickfix-producing command finished; read the list on next poll.
+    Quickfix,
 }
 /// Start row/byte column, exclusive end row/byte column and replacement text.
 /// Rows are zero-based; columns are UTF-8 byte offsets, never UTF-16 offsets.
@@ -68,6 +70,10 @@ pub trait Buffer: Send {
     fn redo(&self) -> Result<(), BufferError>;
     /// Read validated post-yank copy-format key bindings.
     fn copy_keys(&self) -> Result<BTreeMap<String, String>, BufferError>;
+    /// Read the session quickfix list for the GUI search tab.
+    fn read_quickfix(&self) -> Result<crate::contracts::QuickfixList, BufferError>;
+    /// Read the current `/` position; `None` without an active search.
+    fn search_count(&self) -> Result<Option<crate::contracts::SearchCount>, BufferError>;
     /// Read copy-format bindings together with configuration errors.
     fn copy_config(&self) -> Result<(BTreeMap<String, String>, Vec<String>), BufferError>;
     /// Compare key notation after native termcode normalization.
@@ -127,6 +133,24 @@ pub trait BufferFactory: Send + Sync {
 pub struct DocumentServices {
     pub storage: Arc<dyn DocumentStorage>,
     pub buffers: Arc<dyn BufferFactory>,
+    pub searcher: Arc<dyn VimSearch>,
+}
+/// Evaluate one text with Vim regular-expression semantics in embedded Neovim.
+///
+/// Matches arrive as byte ranges of the exact text with natively expanded
+/// replacements; budgets and revision guards stay with the caller.
+pub trait VimSearch: Send + Sync {
+    /// Match `text` with an already translated Vim pattern.
+    ///
+    /// `replacement` `None` skips substitution for display-only searches.
+    /// Returns hits in buffer order with truncation and timeout flags.
+    fn search_replace(
+        &self,
+        text: &str,
+        pattern: &str,
+        replacement: Option<&str>,
+        max_hits: usize,
+    ) -> Result<crate::domain::search::VimSearchOutcome, WorkspaceError>;
 }
 pub trait Clock: Send + Sync {
     /// Supply a process-local timestamp for collision-resistant temporary identifiers.

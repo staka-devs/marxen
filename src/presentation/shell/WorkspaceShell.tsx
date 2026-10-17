@@ -46,6 +46,7 @@ import { EditorMenu } from "../editor/EditorMenu";
 import { useEditorMenu } from "./hooks/useEditorMenu";
 import { useWorkbenchCommands } from "./hooks/useWorkbenchCommands";
 import { WorkbenchMenuBar } from "../workspace/WorkbenchMenuBar";
+import { StyledSelect } from "../ui/select";
 import type { RootScope } from "../../contracts/contracts";
 import { sameRoot } from "../../domain/document-location";
 import { rootFileLabel, type RootFile } from "../../domain/workspace-roots";
@@ -67,7 +68,7 @@ import {
   workspaceErrorText,
 } from "../../domain/document-errors";
 import { COPY_LABELS } from "../../domain/clipboard-text";
-import { offsetToLineCol } from "../../domain/coordinates/utf16";
+import { offsetToLineCol, lineColToOffset } from "../../domain/coordinates/utf16";
 import { DEFAULT_EDITOR_PREFERENCES, normalizeEditorPreferences, type EditorPreferences } from "../../domain/editor-preferences";
 import { entryKind } from "../../domain/workspace-files";
 import { docFromOpen, fileLabel } from "../../application/document/document-helpers";
@@ -871,6 +872,33 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               onJump={(hit) => void workspace.jumpToHit(hit)}
               onReplaceOne={(hit) => void workspace.replaceOne(hit)}
               onReplaceAll={() => void workspace.replaceAllMatches()}
+              quickfix={session.quickfix}
+              onClearQuickfix={session.clearQuickfix}
+              exReports={session.exReports}
+              searchCount={session.searchCount}
+              onQuickfixOpen={(entry) => {
+                const normalized = entry.path.replace(/\\/g, "/");
+                const owner = workspace.roots.find((candidate) => {
+                  const root = candidate.root.replace(/\\/g, "/").replace(/\/+$/, "");
+                  return normalized === root || normalized.startsWith(`${root}/`);
+                });
+                if (!owner) return;
+                const relative = normalized.slice(owner.root.replace(/\\/g, "/").replace(/\/+$/, "").length).replace(/^\/+/, "");
+                if (!relative) return;
+                void (async () => {
+                  await openFileForEditing(relative, owner.scope);
+                  const docs = session.docsRef.current;
+                  const doc = Object.values(docs).find((candidate) => candidate.path === relative && candidate.location && sameRoot(candidate.location.scope, owner.scope));
+                  const text = doc && "text" in doc ? (doc as { text: string }).text : undefined;
+                  if (!doc || text === undefined) return;
+                  try {
+                    const offset = lineColToOffset(text, entry.line - 1, 0);
+                    await session.jumpToOffset(doc.documentId, offset, offset);
+                  } catch {
+                    // Open file stays; out-of-range lines keep the top position.
+                  }
+                })();
+              }}
             />
           )}
           {sideView === "outline" && (
@@ -920,20 +948,20 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             </span>)}
           </nav>
           <label className="sr-only" htmlFor="view-mode-select">{t("表示モード")}</label>
-          <select
+          <StyledSelect
             id="view-mode-select"
+            label={t("表示モード")}
             value={effectiveViewMode}
             disabled={!activeIsMarkdown}
-            onChange={(event) => setViewMode(event.target.value as ViewMode)}
-            aria-label={t("表示モード")}
-            className="h-7 max-w-36 rounded bg-transparent px-1 text-xs text-muted-foreground hover:bg-muted"
+            onChange={(value) => setViewMode(value as ViewMode)}
+            className="marxen-select--bare max-w-36"
           >
             {(Object.keys(MODE_LABEL) as ViewMode[]).map((mode) => (
               <option key={mode} value={mode}>
                 {t(MODE_LABEL[mode] as LabelKey)}
               </option>
             ))}
-          </select>
+          </StyledSelect>
           <button
             type="button"
             onClick={() => setViewMode((mode) => mode === "split" ? "live" : "split")}
@@ -1267,6 +1295,16 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
 
         {desktop && active && (session.commandLine || session.vimMessage) && (
           <div data-testid="vim-command-line" role="status" className="max-h-40 shrink-0 overflow-auto whitespace-pre-wrap border-t border-border bg-card px-3 py-1 font-mono text-sm">
+            {session.completion && session.completion.items.length > 0 && (
+              <div role="listbox" aria-label={t("補完候補")} data-testid="vim-completion" className="mb-1 max-h-36 overflow-auto rounded-sm border border-border bg-background py-0.5 text-[13px]">
+                {session.completion.items.map((item, index) => (
+                  <div key={`${item.word}-${index}`} role="option" aria-selected={session.completion!.selected === index} className={`flex items-baseline gap-2 px-2 py-0.5 ${session.completion!.selected === index ? "bg-primary/15 text-foreground" : "text-muted-foreground"}`}>
+                    <span className="min-w-0 flex-1 truncate">{item.word}</span>
+                    {(item.kind || item.menu) && <span className="shrink-0 text-[11px] opacity-70">{[item.kind, item.menu].filter(Boolean).join(" ")}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
             {session.commandLine ? <>{session.commandLine.text.slice(0, session.commandLine.cursor)}<span className="bg-foreground text-background">{commandCursor}</span>{session.commandLine.text.slice(session.commandLine.cursor + commandCursor.length)}</> : session.vimMessage}
           </div>
         )}
@@ -1276,7 +1314,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           {cursorPos && <span data-testid="cursor" title={t("カーソル位置")}><span className="sr-only">{t("カーソル")}{" "}</span>{cursorPos}</span>}
           <span data-testid="dirty">{!active || active.dirty ? (active ? t("未保存") : "—") : t("保存済み")}</span>
           {desktop && session.copyReady === activeId && <span data-testid="copy-ready" className="min-w-0 max-w-72 truncate" title={Object.entries(workspace.copyKeys).map(([format, key]) => `${key} ${t(COPY_LABELS[format as keyof typeof COPY_LABELS] as LabelKey)}`).join(" / ")}>{t("コピー形式を選択")}</span>}
-          {!desktop && <span data-testid="readonly-note">{t("ブラウザ表示は読み取り専用です")}</span>}
+          {!desktop && <span data-testid="readonly-note" title={t("ブラウザ表示は読み取り専用です")} className="shrink-0 rounded-sm border border-border px-1.5 py-0.5 text-[10px]">{t("読み取り専用")}</span>}
           <span role="status" className="shrink-0">
             {workspace.runtime ? (workspace.runtime.connection === "disconnected" ? t("Neovim 未接続") : workspace.runtime.connection === "connected" ? t("Neovim 接続済み") : workspace.runtime.detail) : t("接続状態を確認中…")}
           </span>
@@ -1335,6 +1373,9 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         </WorkspaceDialog>}
         {helpOpen && <WorkspaceDialog theme={theme} label={t("キーボードショートカット")} onDismiss={() => setHelpOpen(false)}>
           <dl className="space-y-2">{workbench.commands.filter((item) => item.shortcut).map((item) => <div key={item.id} className="flex justify-between gap-3"><dt>{item.label}</dt><dd><kbd>{item.shortcut}</kbd></dd></div>)}</dl>
+          <h3 className="mt-4 text-sm font-semibold">{t("vimrcで定義する")}</h3>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">{t("アプリの操作は :Marxen <操作名> で呼び出せます。vimrcのマッピングが優先されます。")}</p>
+          <pre className="mt-2 overflow-x-auto rounded-sm border border-border bg-card p-2 font-mono text-[11px] leading-5">{"nnoremap <C-s> <Cmd>Marxen file-save<CR>\nnnoremap <C-p> <Cmd>Marxen palette-quickopen<CR>\nnnoremap <C-S-p> <Cmd>Marxen palette-open<CR>\nnoremap <C-,> <Cmd>Marxen palette-settings<CR>\nnoremap <C-S-i> <Cmd>Marxen inline-chat<CR>\nnoremap <M-i> <Cmd>Marxen palette-ai<CR>\n\" 既定を全部消してvimrcだけで定義する\nlet g:marxen_default_shortcuts = 0"}</pre>
         </WorkspaceDialog>}
         {settings && (
           <SettingsPanel

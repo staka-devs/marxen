@@ -495,11 +495,11 @@ impl Workspace {
         options: &SearchOptions,
         root: &str,
     ) -> Result<SearchResults, WorkspaceError> {
-        use crate::domain::search::{self, MatchPositions, Matcher, MAX_MATCHES, MAX_TEXT_BYTES};
+        use crate::domain::search::{self, MatchPositions, MAX_MATCHES, MAX_TEXT_BYTES};
         if self.info().root != root {
             return Err(WorkspaceError::StaleSearch);
         }
-        let matcher = Matcher::compile(query, options)?;
+        let pattern = search::translate_pattern(query, options)?;
         let began = self.clock.nanos();
         let mut result = SearchResults {
             matches: Vec::new(),
@@ -585,10 +585,25 @@ impl Workspace {
                 result.limit = Some(SearchLimit::WorkspaceBytes);
                 break;
             }
-            let found = matcher.find(&text, MAX_MATCHES - result.matches.len());
+            if text.len() > MAX_TEXT_BYTES {
+                result.limit = Some(SearchLimit::FileBytes);
+                continue;
+            }
+            let mut outcome = self.services.searcher.search_replace(
+                &text,
+                &pattern,
+                None,
+                MAX_MATCHES - result.matches.len(),
+            )?;
+            if outcome.timed_out {
+                result.limit = Some(SearchLimit::Time);
+                continue;
+            }
+            let found_ranges: Vec<std::ops::Range<usize>> =
+                outcome.hits.iter().map(|hit| hit.start..hit.end).collect();
             let content_token = storage::fingerprint(text.as_bytes()).0;
             let mut positions = MatchPositions::new();
-            for range in found.ranges {
+            for range in found_ranges {
                 if self.clock.nanos().saturating_sub(began) > 2_000_000_000 {
                     result.limit = Some(SearchLimit::Time);
                     break 'files;
@@ -608,12 +623,9 @@ impl Workspace {
                     content_token: content_token.clone(),
                 });
             }
-            if let Some(limit) = found.limit {
-                let stop = limit == SearchLimit::Matches;
-                result.limit = Some(limit);
-                if stop {
-                    break;
-                }
+            if outcome.truncated {
+                result.limit = Some(SearchLimit::Matches);
+                break;
             }
         }
         Ok(result)
@@ -624,7 +636,7 @@ impl Workspace {
         &mut self,
         request: SearchReplaceRequest,
     ) -> Result<SearchReplacePlan, WorkspaceError> {
-        use crate::domain::search::{MatchPositions, Matcher, MAX_MATCHES, MAX_TEXT_BYTES};
+        use crate::domain::search::{self, MatchPositions, MAX_MATCHES, MAX_TEXT_BYTES};
         if let Some(location) = &request.location {
             if location.path.as_ref() != Some(&request.path) {
                 return Err(WorkspaceError::StaleLocation);
@@ -646,7 +658,7 @@ impl Workspace {
         {
             return Err(WorkspaceError::StaleSearch);
         }
-        let matcher = Matcher::compile(&request.query, &request.options)?;
+        let pattern = search::translate_pattern(&request.query, &request.options)?;
         let target = self.storage.resolve(&self.root, &request.path)?;
         if !storage::text_family(&target) {
             return Err(WorkspaceError::NotText);
@@ -674,24 +686,37 @@ impl Workspace {
         {
             return Err(WorkspaceError::StaleSearch);
         }
-        let found = matcher.find(&snapshot.text, MAX_MATCHES);
-        if found.limit.is_some() && request.range.is_none() {
+        if snapshot.text.len() > MAX_TEXT_BYTES {
+            return Err(WorkspaceError::SearchIncomplete);
+        }
+        let mut outcome = self.services.searcher.search_replace(
+            &snapshot.text,
+            &pattern,
+            Some(&request.replacement),
+            MAX_MATCHES,
+        )?;
+        if outcome.timed_out || (outcome.truncated && request.range.is_none()) {
             return Err(WorkspaceError::SearchIncomplete);
         }
         let mut positions = MatchPositions::new();
-        let edits: Vec<TextEdit> = found
-            .ranges
+        let edits: Vec<TextEdit> = outcome
+            .hits
             .iter()
-            .map(|range| positions.next(&snapshot.text, range).0)
-            .filter(|range| {
+            .map(|hit| {
+                (
+                    positions.next(&snapshot.text, &(hit.start..hit.end)).0,
+                    hit.replacement.clone(),
+                )
+            })
+            .filter(|(range, _)| {
                 request
                     .range
                     .as_ref()
                     .is_none_or(|selected| selected == range)
             })
-            .map(|range| TextEdit {
+            .map(|(range, replacement)| TextEdit {
                 range,
-                text: request.replacement.clone(),
+                text: replacement,
             })
             .collect();
         if edits.is_empty() {

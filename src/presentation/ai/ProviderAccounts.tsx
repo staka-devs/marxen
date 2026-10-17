@@ -5,6 +5,7 @@ import type { LabelKey } from "../../contracts/localization";
 import { ACCOUNT_PROVIDERS, accountErrorKey, accountReasonKey, sameAccountHost } from "../../domain/provider-accounts";
 import { useI18n } from "../i18n/I18nProvider";
 import { Button } from "../ui/button";
+import { StyledSelect } from "../ui/select";
 
 interface Props {
   gateway?: ProviderAccountGateway;
@@ -104,16 +105,16 @@ export function ProviderAccountsSettings({ gateway, onSnapshot }: Props) {
     <Button size="sm" variant="outline" disabled={!gateway || busy} onClick={() => { void perform(async () => { const id = attempt.current; const updated = await gateway!.snapshot(); if (id === attempt.current) { setSnapshot(updated); onSnapshot?.(updated); setUsage(null); setPresence(null); } }); }}>{t("設定を再読み込み")}</Button>
     <p className="text-xs text-muted-foreground">{t("選択は次の ACP 起動に適用します。既存の会話は元のアカウントを維持します。")}</p>
     {!gateway && <p role="status">{t("AI 機能はデスクトップアプリで利用します。")}</p>}
-    <label className="block text-xs">{t("プロバイダーアカウント")}<select className="ml-2 rounded border bg-background p-1" value={provider} onChange={event => { resetView(); setProvider(event.target.value as AccountProvider); }}>
+    <label className="flex items-center gap-2 text-xs">{t("プロバイダーアカウント")}<StyledSelect label={t("プロバイダーアカウント")} value={provider} onChange={(value) => { resetView(); setProvider(value as AccountProvider); }}>
       {ACCOUNT_PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
-    </select></label>
-    <label className="block text-xs">{t("認証スコープ")}<select className="ml-2 rounded border bg-background p-1" value={hostKind} onChange={event => { resetView(); setHostKind(event.target.value as "local" | "wsl"); }}>
+    </StyledSelect></label>
+    <label className="flex items-center gap-2 text-xs">{t("認証スコープ")}<StyledSelect label={t("認証スコープ")} value={hostKind} onChange={(value) => { resetView(); setHostKind(value as "local" | "wsl"); }}>
       <option value="local">{t("ローカル OS")}</option><option value="wsl">Windows WSL</option>
-    </select></label>
+    </StyledSelect></label>
     {hostKind === "wsl" && <><label className="block text-xs">{t("WSL ディストリビューション")}<input className="ml-2 rounded border bg-background p-1" value={distribution} maxLength={128} onChange={event => { resetView(); setDistribution(event.target.value); }} /></label><p className="text-xs">{t(accountReasonKey("wsl_unsupported"))}</p></>}
-    <label className="block text-xs">{t("使用するアカウント")}<select className="ml-2 rounded border bg-background p-1" value={selectedId} disabled={!gateway || busy || !hostValid} onChange={event => { void perform(() => chooseAccount(event.target.value)); }}>
+    <label className="flex items-center gap-2 text-xs">{t("使用するアカウント")}<StyledSelect label={t("使用するアカウント")} value={selectedId} disabled={!gateway || busy || !hostValid} onChange={(value) => { void perform(() => chooseAccount(value)); }}>
       <option value="">{t("システム既定")}</option>{accounts.map(state => <option key={state.account.id} value={state.account.id}>{state.account.name}</option>)}
-    </select></label>
+    </StyledSelect></label>
     <p className="text-xs text-muted-foreground">{selected ? t(selected.hasCredential ? "認証情報あり（未検証）" : "認証情報なし") : t("システム既定のログインを使用します。認証状態は未確認です。")}</p>
     <p className="text-xs"><a className="underline" href={spec.docs} target="_blank" rel="noreferrer" onClick={gateway ? event => { event.preventDefault(); void perform(() => gateway.openSetup(provider)); } : undefined}>{t("公式の設定・使用量ページ")}</a></p>
     {spec.usage && provider !== "codex" && <p className="text-xs">{t("この使用量取得は公開保証のない API を使用します。形式が変わると取得できません。")}</p>}
@@ -133,7 +134,7 @@ export function ProviderAccountsSettings({ gateway, onSnapshot }: Props) {
       <legend className="text-xs">{draft?.id === "" ? t("アカウントを追加") : t("管理アカウントを編集")}</legend>
       {!spec.launch && <p className="text-xs">{t("保存した認証は使用量取得用です。この CLI の管理アカウントによる起動は未対応です。")}</p>}
       <label className="block text-xs">{t("アカウント名")}<input className="ml-2 rounded border bg-background p-1" maxLength={100} value={editing.name} onChange={event => setDraft({ ...editing, name: event.target.value })} /></label>
-      <label className="block text-xs">{t("使用量の接続先")}<select className="ml-2 max-w-full rounded border bg-background p-1" value={editing.endpoint} onChange={event => setDraft({ ...editing, endpoint: event.target.value })}>{spec.endpoints.map(endpoint => <option key={endpoint} value={endpoint}>{endpoint}</option>)}</select></label>
+      <label className="flex items-center gap-2 text-xs">{t("使用量の接続先")}<StyledSelect label={t("使用量の接続先")} value={editing.endpoint} onChange={(value) => setDraft({ ...editing, endpoint: value })}>{spec.endpoints.map(endpoint => <option key={endpoint} value={endpoint}>{endpoint}</option>)}</StyledSelect></label>
       {provider === "gemini" && <label className="block text-xs">{t("Google Cloud プロジェクト ID（任意）")}<input className="ml-2 rounded border bg-background p-1" value={editing.project} maxLength={200} onChange={event => setDraft({ ...editing, project: event.target.value })} /></label>}
       {provider === "minimax" && <><label className="block text-xs">{t("MiniMax グループ ID（任意）")}<input className="ml-2 rounded border bg-background p-1" maxLength={128} value={editing.groupId} onChange={event => setDraft({ ...editing, groupId: event.target.value })} /></label><label className="block text-xs">{t("MiniMax モデル（任意・1 行に1つ）")}<textarea className="ml-2 rounded border bg-background p-1" maxLength={5152} value={editing.models.join("\n")} onChange={event => setDraft({ ...editing, models: event.target.value.split("\n") })} /></label></>}
       {provider === "opencode_go" && <label className="block text-xs">{t("OpenCode ワークスペース ID（空欄で自動検出）")}<input className="ml-2 rounded border bg-background p-1" maxLength={132} value={editing.workspaceId} onChange={event => setDraft({ ...editing, workspaceId: event.target.value })} /></label>}

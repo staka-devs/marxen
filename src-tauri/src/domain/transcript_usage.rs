@@ -117,11 +117,7 @@ pub fn fold_codex_total_usage(fold: &mut TokenFold, info: &Value) {
         Some(usage) => usage,
         None => return,
     };
-    max_counter(
-        fold,
-        TokenField::Input,
-        counter(usage.get("input_tokens")),
-    );
+    max_counter(fold, TokenField::Input, counter(usage.get("input_tokens")));
     max_counter(
         fold,
         TokenField::Output,
@@ -207,12 +203,10 @@ pub fn truncate_title(title: Option<&str>) -> Option<String> {
 /// Order sessions newest first for display, keeping undated rows last.
 /// Ordering is a pure display concern and never invents timestamps.
 pub fn sort_sessions_newest_first(sessions: &mut [TranscriptSession]) {
-    sessions.sort_by(|left, right| {
-        match (left.updated_ms, right.updated_ms) {
-            (Some(a), Some(b)) => b.cmp(&a),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        }
+    sessions.sort_by(|left, right| match (left.updated_ms, right.updated_ms) {
+        (Some(a), Some(b)) => b.cmp(&a),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
     });
 }
