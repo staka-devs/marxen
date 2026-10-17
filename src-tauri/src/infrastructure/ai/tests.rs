@@ -2006,6 +2006,21 @@ mod regression {
         .is_none());
     }
 
+    /// Probe a synthetic default Node.js prefix without touching `PATH`.
+    #[cfg(windows)]
+    #[test]
+    fn wellknown_node_prefix_resolves_bundled_node() {
+        let root = tempfile::tempdir().unwrap();
+        let node = root.path().join("nodejs").join("node.exe");
+        std::fs::create_dir_all(node.parent().unwrap()).unwrap();
+        std::fs::write(&node, b"fixture").unwrap();
+        assert_eq!(
+            wellknown_node_program(root.path()),
+            Some(std::path::absolute(&node).unwrap())
+        );
+        assert!(wellknown_node_program(root.path().join("elsewhere").as_path()).is_none());
+    }
+
     /// Refuse Claude Code commands during resolution before any process starts.
     #[test]
     fn resolve_refuses_claude_without_spawning() {

@@ -544,15 +544,37 @@ fn resolve_explicit_launch(path: &Path, args: &[String]) -> Result<ResolvedAcpLa
 }
 
 /// Find the Node.js executable backing an official codex-acp npm shim.
-/// Prefers a `node.exe` sibling of the npm root, then PATH lookup.
+/// Prefers a `node.exe` sibling of the npm root, then PATH lookup, then the
+/// default install location for GUI launches with a reduced PATH.
 fn find_node_program(npm_root: &Path) -> Option<PathBuf> {
     let sibling = npm_root.join("node.exe");
     if sibling.is_file() {
         return Some(sibling);
     }
-    find_on_path("node")
+    if let Some(found) = find_on_path("node")
         .filter(|candidate| is_direct_windows_executable(candidate))
         .and_then(|candidate| std::path::absolute(candidate).ok())
+    {
+        return Some(found);
+    }
+    #[cfg(windows)]
+    if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        return wellknown_node_program(&PathBuf::from(program_files));
+    }
+    None
+}
+
+/// Probe the default Node.js install location without touching `PATH`.
+///
+/// Covers the official installer prefix only; other managers and custom
+/// prefixes stay the caller's explicit-path concern.
+#[cfg(windows)]
+pub(super) fn wellknown_node_program(program_files: &Path) -> Option<PathBuf> {
+    let candidate = program_files.join("nodejs").join("node.exe");
+    candidate
+        .is_file()
+        .then(|| std::path::absolute(&candidate).ok())
+        .flatten()
 }
 
 /// Resolve a known official npm shim to its bundled target without a shell.
