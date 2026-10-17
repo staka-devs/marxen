@@ -665,7 +665,7 @@ export class RegistryClient {
     return this.readMode(documentId).then((update) => {
       const commands = this.pendingCommands.get(documentId);
       this.pendingCommands.delete(documentId);
-      return { mode: update.mode, revision: update.revision, commandLine: update.commandLine, message: update.message, commands };
+      return { mode: update.mode, revision: update.revision, commandLine: update.commandLine, completion: update.completion, quickfix: update.quickfix, exReport: update.exReport, searchCount: update.searchCount, message: update.message, commands };
     });
   }
 

@@ -170,6 +170,14 @@ impl Buffer for NativeBuffer {
     fn copy_keys(&self) -> Result<BTreeMap<String, String>, BufferError> {
         Ok(self.0.copy_keys()?)
     }
+    /// Read the session quickfix list for the GUI search tab.
+    fn read_quickfix(&self) -> Result<crate::contracts::QuickfixList, BufferError> {
+        Ok(self.0.read_quickfix()?)
+    }
+    /// Read the current `/` position; `None` without an active search.
+    fn search_count(&self) -> Result<Option<crate::contracts::SearchCount>, BufferError> {
+        Ok(self.0.search_count()?)
+    }
     /// Return accepted copy selectors and diagnostics for invalid, reserved, or duplicate keys.
     fn copy_config(&self) -> Result<(BTreeMap<String, String>, Vec<String>), BufferError> {
         Ok(self.0.copy_config()?)
@@ -328,6 +336,7 @@ impl Buffer for NativeBuffer {
                     .first()
                     .and_then(rmpv::Value::as_str)
                     .map(|command| BufferNotification::Command(command.to_owned())),
+                "marxen:quickfix" => Some(BufferNotification::Quickfix),
                 "redraw" => serde_json::to_value(n.params)
                     .ok()
                     .map(BufferNotification::Redraw),

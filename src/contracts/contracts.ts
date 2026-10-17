@@ -33,11 +33,33 @@ editable: boolean, selectionToolbar: boolean, mappings: Array<EditorMapping>, };
 export type EditorContext = { cursor: CursorUpdate, mode: VimMode, presentation: EditorPresentation, };
 export type VimMode = "normal" | "insert" | "replace" | "visual" | "visual_line" | "visual_block" | "command_line" | "terminal";
 export type VimCommandLine = { text: string, cursor: number, };
+export type VimCompletionItem = { word: string, kind: string, menu: string, };
+export type VimCompletion = { items: Array<VimCompletionItem>, selected: number | null, };
+export type QuickfixEntry = { path: string, line: number, col: number, text: string, };
+export type QuickfixList = { items: Array<QuickfixEntry>, total: number, };
+export type ExReport = { command: string, text: string, };
+export type SearchCount = { current: number, total: number, exact: boolean, };
 export type ModeUpdate = { documentId: DocumentId, revision: Revision, mode: VimMode,
 /**
  * Native command line, including its prompt and UTF-16 cursor position.
  */
 commandLine?: VimCommandLine,
+/**
+ * Native completion popup (command-line Tab and friends), if visible.
+ */
+completion?: VimCompletion,
+/**
+ * Fresh quickfix results from a command-line search, taken once.
+ */
+quickfix?: QuickfixList,
+/**
+ * One command-line execution report (`:s`, `:g`, `/`), taken once.
+ */
+exReport?: ExReport,
+/**
+ * Current `/` match position, refreshed on search navigation.
+ */
+searchCount?: SearchCount,
 /**
  * Last native Ex output or error, without interpreting Vimscript in the GUI.
  */
@@ -65,7 +87,7 @@ previewRange: Utf16Range,
  */
 contentToken: string, };
 export type SearchOptions = { caseSensitive: boolean, wholeWord: boolean, regex: boolean, };
-export type SearchLimit = "matches" | "candidates" | "file_bytes" | "workspace_bytes" | "files" | "time";
+export type SearchLimit = "matches" | "file_bytes" | "workspace_bytes" | "files" | "time";
 export type SearchResults = { matches: Array<SearchMatch>, limit: SearchLimit | null, };
 export type SearchReplaceRequest = { location?: DocumentLocation, documentId?: DocumentId, scope?: RootScope, root: string, path: string, query: string, options: SearchOptions, replacement: string, contentToken: string, revision: Revision | null,
 /**

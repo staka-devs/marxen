@@ -186,3 +186,22 @@ it("groups equal relative paths by root and collapses only the chosen owner's ma
   fireEvent.click(screen.getByRole("button", { name: "beta/same.md 1 行目の一致へ移動" }));
   expect(props.onJump).toHaveBeenCalledExactlyOnceWith(scoped[1]);
 });
+
+it("shows command-line quickfix, execution reports, and the current match position", () => {
+  const { props } = setup({
+    hits: [],
+    quickfix: { items: [{ path: "/ws/a.txt", line: 3, col: 1, text: "cat bird" }], total: 2 },
+    onQuickfixOpen: vi.fn(),
+    onClearQuickfix: vi.fn(),
+    exReports: [{ command: ":%s/cat/dog/", text: "3 substitutions on 3 lines" }],
+    searchCount: { current: 2, total: 3, exact: true },
+  });
+  expect(screen.getByText("コマンドの検索結果 (2)")).toBeVisible();
+  const opener = screen.getByRole("button", { name: "a.txt 3 行目を開く" });
+  fireEvent.click(opener);
+  expect(props.onQuickfixOpen).toHaveBeenCalledExactlyOnceWith({ path: "/ws/a.txt", line: 3, col: 1, text: "cat bird" });
+  expect(screen.getByText(":%s/cat/dog/", { exact: false })).toBeVisible();
+  expect(screen.getByText("現在の一致: 2 / 3")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "クリア" }));
+  expect(props.onClearQuickfix).toHaveBeenCalledOnce();
+});

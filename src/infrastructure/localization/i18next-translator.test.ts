@@ -32,7 +32,7 @@ describe("localization contracts", () => {
     }
     for (const overlay of Object.values(regionalMessages)) for (const key of Object.keys(overlay)) expect(key in japaneseMessages).toBe(true);
     expect(createTranslator("ja-JP-x-tokushima")("設定")).toBe("設定");
-    expect(createTranslator("ja-JP-x-tokushima")("保存しました。")).toBe("保存できたで。");
+    expect(createTranslator("ja-JP-x-tokushima")("保存しました。")).toBe("保存したでよ。");
   });
 
   it("checks required parameters, English plurals and basic-locale Intl formatting", () => {

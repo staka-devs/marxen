@@ -161,6 +161,22 @@ pub struct ModeUpdate {
     #[serde(default)]
     #[ts(optional)]
     pub command_line: Option<VimCommandLine>,
+    /// Native completion popup (command-line Tab and friends), if visible.
+    #[serde(default)]
+    #[ts(optional)]
+    pub completion: Option<VimCompletion>,
+    /// Fresh quickfix results from a command-line search, taken once.
+    #[serde(default)]
+    #[ts(optional)]
+    pub quickfix: Option<QuickfixList>,
+    /// One command-line execution report (`:s`, `:g`, `/`), taken once.
+    #[serde(default)]
+    #[ts(optional)]
+    pub ex_report: Option<ExReport>,
+    /// Current `/` match position, refreshed on search navigation.
+    #[serde(default)]
+    #[ts(optional)]
+    pub search_count: Option<SearchCount>,
     /// Last native Ex output or error, without interpreting Vimscript in the GUI.
     #[serde(default)]
     #[ts(optional)]
@@ -176,6 +192,58 @@ pub struct ModeUpdate {
 pub struct VimCommandLine {
     pub text: String,
     pub cursor: u32,
+}
+
+/// One native completion candidate, reduced to display text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VimCompletionItem {
+    pub word: String,
+    pub kind: String,
+    pub menu: String,
+}
+
+/// Native popup-menu completion state (`ext_popupmenu` events).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VimCompletion {
+    pub items: Vec<VimCompletionItem>,
+    pub selected: Option<u32>,
+}
+
+/// One quickfix entry mirrored into the GUI search tab.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QuickfixEntry {
+    pub path: String,
+    pub line: u32,
+    pub col: u32,
+    pub text: String,
+}
+
+/// Bounded quickfix list with its untruncated total.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QuickfixList {
+    pub items: Vec<QuickfixEntry>,
+    pub total: usize,
+}
+
+/// One executed command-line report for the GUI search tab.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExReport {
+    pub command: String,
+    pub text: String,
+}
+
+/// Current `/` match position from `searchcount()`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SearchCount {
+    pub current: usize,
+    pub total: usize,
+    pub exact: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -352,7 +420,6 @@ impl Default for SearchOptions {
 #[serde(rename_all = "snake_case")]
 pub enum SearchLimit {
     Matches,
-    Candidates,
     FileBytes,
     WorkspaceBytes,
     Files,
@@ -533,6 +600,12 @@ pub fn typescript() -> String {
         EditorContext::decl(&cfg),
         VimMode::decl(&cfg),
         VimCommandLine::decl(&cfg),
+        VimCompletionItem::decl(&cfg),
+        VimCompletion::decl(&cfg),
+        QuickfixEntry::decl(&cfg),
+        QuickfixList::decl(&cfg),
+        ExReport::decl(&cfg),
+        SearchCount::decl(&cfg),
         ModeUpdate::decl(&cfg),
         DocumentEvent::decl(&cfg),
         ConnectionState::decl(&cfg),

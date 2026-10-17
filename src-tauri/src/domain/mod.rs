@@ -8,6 +8,7 @@ pub mod isolation;
 pub mod provider_accounts;
 pub mod search;
 pub mod storage;
+pub mod transcript_usage;
 pub mod validation;
 pub mod vim_settings;
 pub mod vim_ui;

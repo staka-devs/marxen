@@ -57,6 +57,31 @@ button:disabled, select:disabled { cursor: default; }
 button, input, select, textarea, summary { accent-color: var(--primary); }
 button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 1px solid var(--primary); outline-offset: 2px; }
 * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--foreground) 24%, transparent) transparent; }
+
+/* Unified native select trigger (StyledSelect): OS popup, app chrome. */
+.marxen-select { position: relative; display: inline-flex; align-items: stretch; min-width: 0; max-width: 100%; }
+.marxen-select select {
+  appearance: none; -webkit-appearance: none;
+  width: 100%; min-height: 32px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--card); color: var(--foreground);
+  font-size: 13px; line-height: 1.4;
+  padding: 6px 26px 6px 10px; margin: 0;
+  color-scheme: dark;
+}
+[data-theme="light"] .marxen-select select,
+[data-theme="contrast"] .marxen-select select { color-scheme: light; }
+.marxen-select select:hover { border-color: color-mix(in srgb, var(--primary) 55%, var(--border)); }
+.marxen-select select:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; border-color: var(--primary); }
+.marxen-select select:disabled { opacity: 0.5; }
+.marxen-select option { color: var(--foreground); background: var(--card); }
+.marxen-select-chevron {
+  position: absolute; right: 8px; top: 50%; translate: 0 -50%;
+  pointer-events: none; color: var(--muted-foreground); flex-shrink: 0;
+}
+.marxen-select select:disabled + .marxen-select-chevron { opacity: 0.5; }
+.marxen-select--bare select { border-color: transparent; background: transparent; min-height: 28px; font-size: 12px; color: var(--muted-foreground); }
+.marxen-select--bare select:hover { background: var(--muted); color: var(--foreground); }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--foreground) 24%, transparent); border-radius: 2px; }

@@ -57,10 +57,11 @@ GFM の表・task list・Alerts・脚注、highlight、数式、Mermaid、saniti
 Agent チャットの接続設定で、Codex ACP (`codex-acp`)、OpenCode ACP (`opencode acp`)、GitHub Copilot ACP (`copilot --acp --stdio`)、Claude Codeアダプター (`claude-agent-acp`)、Devin ACP (`devin acp`)、任意コマンドを選べます。「API を追加」からOpenAI Chat Completions、OpenAI Responses、Anthropic Messagesの通信形式とエンドポイント・モデルを指定し、名前付き接続先として登録します。未登録のAPI形式はチャットの候補に表示しません。 旧形式のAPI設定は自動移行せず、「API を追加」から登録し直します。ACP adapter は利用者が導入します。Anthropic は利用者の明示設定で有効にします。API 資格情報は OS ストアに保存します。
 
 Agent・インライン両チャットの入力欄で接続先とモデルを選びます。「モデルを選ぶ」は ACP エージェントに接続して公開されたモデル・推論強度の候補を取得します。送信前に選択値を設定し、エージェントの応答が一致することを確認します。候補を公開しないエージェントは CLI の設定を使います。直接APIは登録した接続先名で選択し、設定画面でモデルとエンドポイントを変更できます。接続設定はテーマを継承するダイアログで開き、Escape で閉じて元の操作へ戻れます。Windows の ACP プロセスは別のコンソール窓を表示せず、回答をチャットへ表示します。
+使用量ポップアップでは通信中の報告と Codex の利用枠に加え、利用者 PC 内のセッション記録（Codex / Claude / OpenCode）の実測トークンを読み取り専用で表示します。記録に数値がない提供元は取得不可と表示し、推計しません。
 
 Agent チャットでは質問・生成・選択書き換え・ワークスペース編集を選び、会話を続けられます。選択があればその範囲、選択がなければ現在のファイルを参照します。会話一覧から以前の会話へ戻れ、パネルを閉じても履歴を保持します。履歴はアプリを終了すると消えます。接続先やモデルの変更では会話を分離し、以前の履歴を別の接続先へ送りません。
 
-`Ctrl+Shift+I`（macOS は `Cmd+Shift+I`）で、選択範囲または現在の段落を対象にインラインチャットを開きます。編集位置の近くで指示と提案を確認でき、`Escape` で閉じて本文へ戻ります。Vim の `Ctrl+I` はそのまま使えます。エディターでは利用者のVimマッピングがアプリ既定より優先します。`.vimrc`から`nnoremap <Leader>a <Cmd>Marxen palette-ai<CR>`のようにアプリ操作を割り当てられます。
+`Ctrl+Shift+I`（macOS は `Cmd+Shift+I`）で、選択範囲または現在の段落を対象にインラインチャットを開きます。編集位置の近くで指示と提案を確認でき、`Escape` で閉じて本文へ戻ります。Vim の `Ctrl+I` はそのまま使えます。エディターでは利用者のVimマッピングがアプリ既定より優先します。`.vimrc`から`nnoremap <Leader>a <Cmd>Marxen palette-ai<CR>`のようにアプリ操作を割り当てられます。アプリ既定のショートカット（保存・クイックオープン・パレット・設定・インライン・AI）は`let g:marxen_default_shortcuts = 0`で無効化し、vimrcだけで定義し直せます。同じvimrcを単体のVimでも使う場合は`if exists(':Marxen')`で囲むと安全です。保存自体は Vim の `:w` が Rust の保存経路に統一されています。
 
 AI の回答は Markdown として表示します。編集の提案は隔離コピーの差分を確認し、承認して文書へ反映します。承認後もファイル保存は別操作です。取消は処理の終了が確認されてから確定します。revision やディスクの競合がある場合は対象範囲を指定し直します。隔離コピーは同一マシンの作業領域であり、OS sandbox ではありません。
 

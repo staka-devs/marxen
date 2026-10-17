@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { LabelKey } from "../../contracts/localization";
 import { useI18n } from "../i18n/I18nProvider";
 import { Bold, Italic, Strikethrough, Code, ListTodo, Table2, Link, Image, Undo2, Redo2, CornerDownLeft } from "lucide-react";
+import { StyledSelect } from "../ui/select";
 import type { FormatKind, TableAction, TableCellContext } from "../../domain/markdown-gui";
 
 interface Props {
@@ -71,7 +72,7 @@ export function GuiToolbar(props: Props) {
     </form>}
     {cell && <div role="toolbar" aria-label={t("表のセル操作")} className="flex flex-wrap items-center gap-0.5 px-2 pb-1" onMouseDown={(event) => { if ((event.target as HTMLElement).closest("button")) event.preventDefault(); }}>
       {actions.map(({ action, label }) => <button type="button" key={action} className={`${style} text-[11px]`} disabled={disabled || (action === "delete-row" && cell.lineIndex <= cell.startLine + 1)} onClick={() => props.onTableAction(action)}>{t(label)}</button>)}
-      <label className="ml-2 text-[11px]">{t("列の配置")}<select aria-label={t("列の配置")} disabled={disabled} value={cell.alignment} className="ml-1 rounded bg-background px-1" onChange={(event) => props.onTableAction(`align-${event.target.value}` as TableAction)}>{(["none", "left", "center", "right"] as const).map((alignment) => <option key={alignment} value={alignment}>{t(({ none: "指定なし", left: "左揃え", center: "中央揃え", right: "右揃え" } as const)[alignment])}</option>)}</select></label>
+      <label className="ml-2 flex items-center gap-1 text-[11px]">{t("列の配置")}<StyledSelect label={t("列の配置")} disabled={disabled} value={cell.alignment} onChange={(value) => props.onTableAction(`align-${value}` as TableAction)}>{(["none", "left", "center", "right"] as const).map((alignment) => <option key={alignment} value={alignment}>{t(({ none: "指定なし", left: "左揃え", center: "中央揃え", right: "右揃え" } as const)[alignment])}</option>)}</StyledSelect></label>
     </div>}
   </div>;
 }

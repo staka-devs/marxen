@@ -93,6 +93,7 @@ struct ActorState {
     commands: Vec<String>,
     saved: Vec<SaveResult>,
     save_requested: bool,
+    quickfix_pending: bool,
     last_cursor: (Utf16Offset, Utf16Offset),
     gui_virtualedit: Option<String>,
     /// One following command may choose a format for the last native yank.
@@ -169,6 +170,7 @@ impl DocumentActor {
                 commands: Vec::new(),
                 saved: Vec::new(),
                 save_requested: false,
+                quickfix_pending: false,
                 last_cursor: (Utf16Offset(0), Utf16Offset(0)),
                 gui_virtualedit: None,
                 ready_yank: None,
@@ -315,6 +317,7 @@ impl DocumentActor {
             .lock()
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         state.ready_yank = None;
+        Self::note_search_key(&mut state, keys);
         state.nvim.input(keys)?;
         Self::sync_locked(&mut state)?;
         Self::service_notifications(&mut state)?;
@@ -334,10 +337,18 @@ impl DocumentActor {
         Self::sync_locked(&mut state)?;
         validate_save(&state.snapshot, &request)?;
         state.ready_yank = None;
+        Self::note_search_key(&mut state, keys);
         state.nvim.input(keys)?;
         Self::sync_locked(&mut state)?;
         Self::service_notifications(&mut state)?;
         Ok(state.snapshot.clone())
+    }
+
+    /// Arm a one-shot searchcount read after search navigation keys.
+    fn note_search_key(state: &mut ActorState, keys: &str) {
+        if matches!(keys, "n" | "N" | "*" | "#") {
+            state.ui.arm_searchcount();
+        }
     }
 
     /// Native input and post-yank selectors share the actor lock. A selector
@@ -379,6 +390,8 @@ impl DocumentActor {
                 }
             }
         }
+        state.ready_yank = None;
+        Self::note_search_key(&mut state, keys);
         state.nvim.input(keys)?;
         Self::sync_locked(&mut state)?;
         Self::service_notifications(&mut state)?;
@@ -438,11 +451,26 @@ impl DocumentActor {
             .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
         let mode: VimMode = state.nvim.mode()?;
         Self::service_notifications(&mut state)?;
+        let quickfix = if state.quickfix_pending {
+            state.quickfix_pending = false;
+            state.nvim.read_quickfix().ok()
+        } else {
+            None
+        };
+        let search_count = if state.ui.take_searchcount() {
+            state.nvim.search_count().ok().flatten()
+        } else {
+            None
+        };
         Ok(ModeUpdate {
             document_id: state.snapshot.document_id.clone(),
             revision: state.snapshot.revision,
             mode,
             command_line: state.ui.command_line(),
+            completion: state.ui.completion(),
+            quickfix,
+            ex_report: state.ui.take_ex_report(),
+            search_count,
             message: state.ui.message.clone(),
             commands: Some(std::mem::take(&mut state.commands)),
         })
@@ -1072,6 +1100,7 @@ impl DocumentActor {
                     state.grid.push(value);
                 }
                 BufferNotification::Command(command) => state.commands.push(command),
+                BufferNotification::Quickfix => state.quickfix_pending = true,
             }
         }
         // Keep only a bounded backlog; grid() requests a full redraw.

@@ -1,92 +1,62 @@
-//! One native matching policy for workspace results and revision-bound replacement plans.
-use crate::contracts::{SearchLimit, SearchOptions, Utf16Offset, Utf16Range, WorkspaceError};
-use regex::{Regex, RegexBuilder};
+//! Vim-native matching policy for workspace results and revision-bound replacement plans.
+//!
+//! Patterns translate to Vim regular expressions here; evaluation itself runs
+//! inside embedded Neovim (`infrastructure::neovim::search`) so GUI search,
+//! `:substitute`, and `/` share one engine. Byte ranges map back to UTF-16,
+//! previews, and revision guards exactly as before.
+use crate::contracts::{SearchOptions, Utf16Offset, Utf16Range, WorkspaceError};
 
 pub const MAX_PATTERN_BYTES: usize = 4096;
 pub const MAX_TEXT_BYTES: usize = 1024 * 1024;
 pub const MAX_MATCHES: usize = 2000;
-const MAX_CANDIDATES: usize = 10_000;
 
-/// Compiled Unicode matcher, with context-based whole-word filtering.
-pub struct Matcher {
-    regex: Regex,
-    word: Regex,
-    whole_word: bool,
+/// One Vim-native match with its substituted replacement text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VimHit {
+    /// Byte range within the exact text that was sent to Neovim.
+    pub start: usize,
+    pub end: usize,
+    /// Replacement expanded by Vim (`\1`, `&`, `~` behave natively).
+    pub replacement: String,
 }
 
-/// Bounded non-overlapping authoritative byte ranges and an explicit incomplete reason.
-pub struct Matches {
-    pub ranges: Vec<std::ops::Range<usize>>,
-    pub limit: Option<SearchLimit>,
+/// Outcome of one buffer search: ordered hits with budget flags.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VimSearchOutcome {
+    pub hits: Vec<VimHit>,
+    pub truncated: bool,
+    pub timed_out: bool,
 }
 
-impl Matcher {
-    /// Compile literal or Rust regex syntax with bounded parser depth and automaton size.
-    pub fn compile(query: &str, options: &SearchOptions) -> Result<Self, WorkspaceError> {
-        if query.is_empty() || query.len() > MAX_PATTERN_BYTES {
-            return Err(WorkspaceError::SearchPattern);
-        }
-        let pattern = if options.regex {
-            query.to_owned()
-        } else {
-            regex::escape(query)
-        };
-        let regex = RegexBuilder::new(&pattern)
-            .case_insensitive(!options.case_sensitive)
-            .multi_line(true)
-            .unicode(true)
-            .nest_limit(64)
-            .size_limit(1024 * 1024)
-            .dfa_size_limit(1024 * 1024)
-            .build()
-            .map_err(|_| WorkspaceError::SearchPattern)?;
-        Ok(Self {
-            regex,
-            word: Regex::new(r"\A\w\z").map_err(|_| WorkspaceError::SearchPattern)?,
-            whole_word: options.whole_word,
-        })
+/// Translate a GUI query plus options into one Vim regular expression.
+///
+/// Literal queries escape Vim magic characters; case handling arrives as an
+/// explicit `\c`/`\C` prefix while the search session forces `ignorecase` off
+/// so user options cannot leak in. Whole words use Vim boundary assertions
+/// with `$` ordered first: `matchbufline()` rejects `$` directly before `\)`,
+/// so `\%($\|\W\)` is required instead of `\%(\W\|$)`. Only emptiness and
+/// size are rejected here; pattern validity is decided by Neovim itself.
+pub fn translate_pattern(query: &str, options: &SearchOptions) -> Result<String, WorkspaceError> {
+    if query.is_empty() || query.len() > MAX_PATTERN_BYTES {
+        return Err(WorkspaceError::SearchPattern);
     }
-
-    /// Test one Unicode scalar using the same Unicode word class as the native regex.
-    fn is_word(&self, scalar: Option<char>) -> bool {
-        scalar.is_some_and(|ch| self.word.is_match(ch.encode_utf8(&mut [0; 4])))
+    let pattern = if options.regex {
+        query.to_owned()
+    } else {
+        let mut escaped = String::with_capacity(query.len());
+        for scalar in query.chars() {
+            if matches!(scalar, '\\' | '^' | '$' | '.' | '*' | '[' | ']' | '~') {
+                escaped.push('\\');
+            }
+            escaped.push(scalar);
+        }
+        escaped
+    };
+    let flag = if options.case_sensitive { r"\C" } else { r"\c" };
+    if options.whole_word {
+        return Ok(format!(r"{flag}\%(^\|\W\)\zs\%({pattern}\)\ze\%($\|\W\)"));
     }
-
-    /// Search bounded input, counting accepted matches after whole-word filtering.
-    pub fn find(&self, text: &str, maximum: usize) -> Matches {
-        if text.len() > MAX_TEXT_BYTES {
-            return Matches {
-                ranges: vec![],
-                limit: Some(SearchLimit::FileBytes),
-            };
-        }
-        let mut ranges = Vec::new();
-        for (candidate, found) in self.regex.find_iter(text).enumerate() {
-            if candidate >= MAX_CANDIDATES {
-                return Matches {
-                    ranges,
-                    limit: Some(SearchLimit::Candidates),
-                };
-            }
-            if self.whole_word
-                && (self.is_word(text[..found.start()].chars().next_back())
-                    || self.is_word(text[found.end()..].chars().next()))
-            {
-                continue;
-            }
-            if ranges.len() >= maximum {
-                return Matches {
-                    ranges,
-                    limit: Some(SearchLimit::Matches),
-                };
-            }
-            ranges.push(found.range());
-        }
-        Matches {
-            ranges,
-            limit: None,
-        }
-    }
+    Ok(format!("{flag}{pattern}"))
 }
 
 /// Forward-only position scan for the matcher's ascending, non-overlapping byte ranges.
@@ -187,152 +157,33 @@ pub fn preview(
 mod tests {
     use super::*;
 
-    /// Build one expected range without confusing it with a vector of its member offsets.
-    fn one_range(range: std::ops::Range<usize>) -> Vec<std::ops::Range<usize>> {
-        std::iter::once(range).collect()
-    }
-
     #[test]
-    /// Match greedy continuations, alternations, line anchors, escapes and Unicode natively.
-    fn maintained_matching_fixtures() {
-        let options = SearchOptions {
-            regex: true,
+    /// Translate GUI queries to explicit Vim patterns without deciding validity.
+    fn translated_patterns_carry_case_word_and_literal_modes() {
+        let literal = SearchOptions {
+            regex: false,
             ..SearchOptions::default()
         };
-        for (pattern, text, expected) in [
-            ("a+a", "aaa", one_range(0..3)),
-            ("(a|ab)c", "abc", one_range(0..3)),
-            ("a.c", "ac abc", one_range(3..6)),
-            ("^foo$", "x\nfoo\n", one_range(2..5)),
-            (r"\x61", "a", one_range(0..1)),
-            (r"\w+", "😀𐐀_日本", one_range(4..15)),
-            (r"\d", "𝟚", one_range(0..4)),
-            ("σ", "ς Σ σ", vec![0..2, 3..5, 6..8]),
-            ("a.b", "a\rb", one_range(0..3)),
-        ] {
-            let found = Matcher::compile(pattern, &options)
-                .unwrap()
-                .find(text, MAX_MATCHES);
-            assert_eq!(found.ranges, expected, "{pattern:?} on {text:?}");
-            assert_eq!(found.limit, None);
-        }
+        assert_eq!(translate_pattern("a.c", &literal).as_deref(), Ok(r"\ca\.c"));
         let sensitive = SearchOptions {
             case_sensitive: true,
-            ..options
-        };
-        assert!(Matcher::compile("σ", &sensitive)
-            .unwrap()
-            .find("ς", MAX_MATCHES)
-            .ranges
-            .is_empty());
-    }
-
-    #[test]
-    /// Filter by adjacent Unicode word scalars before counting the accepted match limit.
-    fn unicode_whole_word_and_filtering() {
-        let options = SearchOptions {
-            whole_word: true,
-            ..SearchOptions::default()
-        };
-        assert_eq!(
-            Matcher::compile("日本", &options)
-                .unwrap()
-                .find("日本 語", MAX_MATCHES)
-                .ranges,
-            vec![0..6]
-        );
-        assert_eq!(
-            Matcher::compile("+", &options)
-                .unwrap()
-                .find("+", MAX_MATCHES)
-                .ranges,
-            vec![0..1]
-        );
-        assert!(Matcher::compile("日本", &options)
-            .unwrap()
-            .find("𐐀日本", MAX_MATCHES)
-            .ranges
-            .is_empty());
-        let text = format!("{}cat", "scat ".repeat(2000));
-        let found = Matcher::compile("cat", &options)
-            .unwrap()
-            .find(&text, MAX_MATCHES);
-        assert_eq!(found.ranges, vec![10000..10003]);
-        assert_eq!(found.limit, None);
-    }
-
-    #[test]
-    /// Reject unsupported and budgeted patterns explicitly and bound pathological inputs.
-    fn invalid_and_budgeted_patterns() {
-        let options = SearchOptions {
             regex: true,
             ..SearchOptions::default()
         };
-        for pattern in ["[", "(?=a)", r"(a)\1", "a{1000000}"] {
-            assert!(Matcher::compile(pattern, &options).is_err(), "{pattern}");
-        }
-        assert!(Matcher::compile(&"a".repeat(MAX_PATTERN_BYTES + 1), &options).is_err());
-        assert!(
-            Matcher::compile(&format!("{}a{}", "(".repeat(65), ")".repeat(65)), &options).is_err()
-        );
-        let failing = format!("{}!", "a".repeat(20000));
-        assert!(Matcher::compile("^(a+)+$", &options)
-            .unwrap()
-            .find(&failing, MAX_MATCHES)
-            .ranges
-            .is_empty());
-        let matcher = Matcher::compile("a", &options).unwrap();
-        assert_eq!(matcher.find("aa", 1).limit, Some(SearchLimit::Matches));
-        assert_eq!(matcher.find("a", 1).limit, None);
         assert_eq!(
-            matcher
-                .find(&"a".repeat(MAX_TEXT_BYTES + 1), MAX_MATCHES)
-                .limit,
-            Some(SearchLimit::FileBytes)
+            translate_pattern(r"\vfoo|bar", &sensitive).as_deref(),
+            Ok(r"\C\vfoo|bar")
         );
+        assert!(translate_pattern("", &literal).is_err());
+        assert!(translate_pattern(&"a".repeat(MAX_PATTERN_BYTES + 1), &literal).is_err());
         let word = SearchOptions {
             whole_word: true,
             ..SearchOptions::default()
         };
         assert_eq!(
-            Matcher::compile("a", &word)
-                .unwrap()
-                .find(&"ba ".repeat(10001), MAX_MATCHES)
-                .limit,
-            Some(SearchLimit::Candidates)
+            translate_pattern("cat", &word).as_deref(),
+            Ok(r"\c\%(^\|\W\)\zs\%(cat\)\ze\%($\|\W\)")
         );
-    }
-
-    #[test]
-    /// Preserve UTF-16 coordinates and highlight only this match's visible native portion.
-    fn utf16_preview_and_empty_matches() {
-        let text = "😀日本\n語";
-        assert_eq!(
-            utf16_range(text, &(4..10)),
-            Utf16Range {
-                start: Utf16Offset(2),
-                end: Utf16Offset(4)
-            }
-        );
-        let (context, span) = preview(text, &(4..14), 0);
-        assert_eq!(context, "😀日本");
-        assert_eq!(
-            span,
-            Utf16Range {
-                start: Utf16Offset(2),
-                end: Utf16Offset(4)
-            }
-        );
-        let found = Matcher::compile(
-            "^",
-            &SearchOptions {
-                regex: true,
-                ..SearchOptions::default()
-            },
-        )
-        .unwrap()
-        .find("x\ny", MAX_MATCHES);
-        assert_eq!(found.ranges, vec![0..0, 2..2]);
     }
 
     #[test]

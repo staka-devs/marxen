@@ -16,6 +16,7 @@ pub fn document_services() -> DocumentServices {
     DocumentServices {
         storage: Arc::new(infrastructure::storage::NativeStorage),
         buffers: Arc::new(infrastructure::neovim::buffer::NativeBufferFactory::default()),
+        searcher: Arc::new(infrastructure::neovim::search::NativeVimSearch::new()),
     }
 }
 /// Construct the native vim-settings file adapter for guarded config access.
@@ -99,6 +100,10 @@ pub fn run() {
         })
         .manage(application::ai::account_usage::AccountUsageService {
             reader: Arc::new(infrastructure::ai::account_usage::NativeAccountUsageReader),
+            clock: Arc::new(infrastructure::storage::SystemClock),
+        })
+        .manage(application::ai::transcript_usage::TranscriptUsageService {
+            reader: Arc::new(infrastructure::ai::transcript_usage::NativeTranscriptUsageReader),
             clock: Arc::new(infrastructure::storage::SystemClock),
         })
         .manage(accounts)
@@ -200,6 +205,7 @@ pub fn run() {
             presentation::ai::ai_permission_reply,
             presentation::ai::ai_usage_snapshot,
             presentation::ai::ai_codex_account_usage,
+            presentation::ai::ai_transcript_usage,
             presentation::provider_accounts::provider_accounts_snapshot,
             presentation::provider_accounts::provider_accounts_save,
             presentation::provider_accounts::provider_accounts_select,

@@ -2,6 +2,7 @@
 use super::{document::ActorState, isolation::IsolationState};
 use crate::application::ai::account_usage::AccountUsageService;
 use crate::application::ai::service::AiService;
+use crate::application::ai::transcript_usage::TranscriptUsageService;
 use crate::contracts::ai::*;
 use std::sync::Arc;
 use tauri::Emitter;
@@ -135,4 +136,13 @@ pub fn ai_codex_account_usage(
     service: tauri::State<'_, AccountUsageService>,
 ) -> Result<CodexAccountUsage, AiError> {
     service.read_codex()
+}
+
+#[tauri::command(async)]
+/// Read locally measured transcript totals without starting an agent or inference.
+/// The scan is read-only and bounded; per-agent gaps surface as reasons.
+pub fn ai_transcript_usage(
+    service: tauri::State<'_, TranscriptUsageService>,
+) -> TranscriptUsageReport {
+    service.read()
 }

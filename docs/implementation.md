@@ -59,7 +59,7 @@ Rust が Neovim RPC、保存、AI プロセス、HTTP を所有する。文書 I
 - AI 送信対象の表示、質問 / 生成 / 選択 rewrite / workspace 修正、隔離コピーと diff 承認、revision 競合・却下・取消。
 - Agent チャットは複数ターン、会話の切替、新規、再試行、取消、非表示中の保持に対応する。履歴は完了した会話だけを送り、接続先の変更で分離する。インラインチャットは選択または段落を対象に Ctrl+Shift+I / Cmd+Shift+I で開き、Vim の Ctrl+I と共存する。回答は共通 Markdown 描画を使う。
 - Agent の使用量は通信で確認できたコンテキスト、トークン、費用、利用枠を区別して表示し、課金やクレジットを推計しない。取得できない値は取得不可として表示する。
-- en-US / ja-JP と任意選択の ja-JP-x-kansai / ja-JP-x-tokushima に対応する。阿波弁は徳島市・鳴門周辺を基本に資料で用法を確認する。言語切替は文書・選択・未保存状態・実行中の AI を保持する。表現と検証の方針は [言語と地域の表現](localization.md) に従う。
+- en-US / ja-JP と任意選択の ja-JP-x-kansai / ja-JP-x-tokushima に対応する。阿波弁は徳島県全域を対象とし、特定の市周辺に限定しない。言語切替は文書・選択・未保存状態・実行中の AI を保持する。表現と検証の方針は [言語と地域の表現](localization.md) に従う。
 - Rust / TypeScript / Vitest / Playwright CI。AI モック、認証済みのみ実接続。Windows x64、macOS arm64 / x64、Linux x64 package と操作説明。
 - 各 OS 実 WebView / IME の確認結果を区別する。未実施を成功と記載しない。署名 / 公証は資格情報がある場合のみ。
 

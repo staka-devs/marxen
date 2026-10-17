@@ -31,6 +31,7 @@ export default function App() {
         aiGateway={composition.aiGateway}
         aiUsageGateway={composition.aiUsageGateway}
         codexAccountUsageGateway={composition.codexAccountUsageGateway}
+        transcriptUsageGateway={composition.transcriptUsageGateway}
         providerAccountGateway={composition.providerAccountGateway}
         isolationGateway={composition.isolationGateway}
         runtimeGateway={composition.runtimeGateway}
