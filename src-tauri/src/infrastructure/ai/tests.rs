@@ -2942,6 +2942,33 @@ mod transcript_regression {
         assert_eq!(session.updated_ms, Some(1791635528000));
     }
 
+    /// Keep the newest dated transcripts when the file cap is reached.
+    #[test]
+    fn capped_walk_keeps_the_newest_sessions() {
+        let home = tempfile::tempdir().unwrap();
+        for day in 1..=30 {
+            let dir = home
+                .path()
+                .join("2026")
+                .join("10")
+                .join(format!("{day:02}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            for index in 0..20 {
+                std::fs::write(dir.join(format!("rollout-{day:02}-{index:02}.jsonl")), "").unwrap();
+            }
+        }
+        let files = collect_files(home.path(), &|path| {
+            path.extension().is_some_and(|ext| ext == "jsonl")
+        });
+        assert_eq!(files.len(), MAX_TRANSCRIPT_FILES_PER_AGENT);
+        let names: Vec<_> = files
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"rollout-30-19.jsonl".to_owned()));
+        assert!(!names.contains(&"rollout-01-00.jsonl".to_owned()));
+    }
+
     /// Reject dishonest counters and fold maxima without summing restatements.
     #[test]
     fn transcript_folds_reject_dishonest_counters() {

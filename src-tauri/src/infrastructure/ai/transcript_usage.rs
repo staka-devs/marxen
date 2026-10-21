@@ -52,7 +52,7 @@ fn mtime_ms(path: &Path) -> Option<u64> {
 /// Collect transcript files below `root` up to the walk budgets.
 /// Symlinks are never followed; only regular files with a bounded depth
 /// and the caller's filename predicate qualify.
-fn collect_files(root: &Path, accept: &dyn Fn(&Path) -> bool) -> Vec<PathBuf> {
+pub(crate) fn collect_files(root: &Path, accept: &dyn Fn(&Path) -> bool) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![(root.to_path_buf(), 0usize)];
     let mut visited = 0usize;
@@ -60,19 +60,19 @@ fn collect_files(root: &Path, accept: &dyn Fn(&Path) -> bool) -> Vec<PathBuf> {
         if depth > MAX_WALK_DEPTH || visited >= MAX_WALK_ENTRIES {
             break;
         }
-        let entries = match fs::read_dir(&dir) {
-            Ok(entries) => entries,
+        let mut entries: Vec<_> = match fs::read_dir(&dir) {
+            Ok(entries) => entries.flatten().collect(),
             Err(_) => continue,
         };
+        // Date-named stores (e.g. sessions/YYYY/MM/DD) sort oldest first; walk them
+        // newest first so the caps drop old sessions, never the latest ones.
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.file_name()));
+        let mut dirs = Vec::new();
         for entry in entries {
             visited += 1;
             if visited > MAX_WALK_ENTRIES || out.len() >= MAX_TRANSCRIPT_FILES_PER_AGENT {
                 break;
             }
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(_) => continue,
-            };
             let kind = match entry.file_type() {
                 Ok(kind) => kind,
                 Err(_) => continue,
@@ -82,11 +82,13 @@ fn collect_files(root: &Path, accept: &dyn Fn(&Path) -> bool) -> Vec<PathBuf> {
             }
             let path = entry.path();
             if kind.is_dir() {
-                stack.push((path, depth + 1));
+                dirs.push((path, depth + 1));
             } else if kind.is_file() && accept(&path) {
                 out.push(path);
             }
         }
+        // The stack pops last-pushed first, so push the oldest directory first.
+        stack.extend(dirs.into_iter().rev());
     }
     out.sort();
     out
