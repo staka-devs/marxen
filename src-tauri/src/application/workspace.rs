@@ -831,6 +831,15 @@ impl Workspace {
         Ok(records)
     }
 
+    /// List recovery records not yet restored, so the restore prompt never offers open documents.
+    ///
+    /// Records of open documents stay on disk as live hot-exit checkpoints.
+    pub fn pending_recovery_entries(&self) -> Result<Vec<RecoveryEntry>, WorkspaceError> {
+        let mut entries = self.recovery_entries()?;
+        entries.retain(|entry| !self.actors.contains_key(&entry.document_id.0));
+        Ok(entries)
+    }
+
     /// List recoverable documents with current disk conflict information.
     pub fn recovery_entries(&self) -> Result<Vec<RecoveryEntry>, WorkspaceError> {
         self.records()?

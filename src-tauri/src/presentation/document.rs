@@ -448,7 +448,7 @@ mod desktop {
         state: tauri::State<'_, ActorState>,
         scope: RootScope,
     ) -> Result<Vec<RecoveryEntry>, WorkspaceError> {
-        with_workspace(&state, &scope, |w| w.recovery_entries())
+        with_workspace(&state, &scope, |w| w.pending_recovery_entries())
     }
     #[tauri::command(async)]
     /// Restore the selected recovery entry through the registry's containment and conflict checks.
