@@ -1117,30 +1117,41 @@ pub fn agent_handshake(
         timeout,
         &AccountLaunchEnvironment::default(),
     )
+    .map_err(|(error, _)| error)
 }
 
 /// Negotiate using one immutable account environment for the complete probe.
+///
+/// Failures carry the phase reached (起動 / initialize / session/new) for diagnostics.
 fn agent_handshake_with_environment(
     argv: &AcpArgv,
     staging_dir: &Path,
     timeout: Duration,
     environment: &AccountLaunchEnvironment,
-) -> Result<HandshakeInfo, AiError> {
-    validate_argv(argv)?;
-    let mut child = spawn_acp_with_environment(argv, staging_dir, environment)?;
-    let stdin = child.stdin.take().ok_or_else(|| AiError::SpawnFailed {
-        detail: "エージェントの標準入力を開けません".into(),
+) -> Result<HandshakeInfo, (AiError, &'static str)> {
+    let spawn_failed = |error: AiError| (error, "起動");
+    validate_argv(argv).map_err(spawn_failed)?;
+    let mut child =
+        spawn_acp_with_environment(argv, staging_dir, environment).map_err(spawn_failed)?;
+    let stdin = child.stdin.take().ok_or_else(|| {
+        spawn_failed(AiError::SpawnFailed {
+            detail: "エージェントの標準入力を開けません".into(),
+        })
     })?;
-    let stdout = child.stdout.take().ok_or_else(|| AiError::SpawnFailed {
-        detail: "エージェントの標準出力を開けません".into(),
+    let stdout = child.stdout.take().ok_or_else(|| {
+        spawn_failed(AiError::SpawnFailed {
+            detail: "エージェントの標準出力を開けません".into(),
+        })
     })?;
     let stderr_captured: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let (stderr_done, stderr_finished) = std::sync::mpsc::channel::<()>();
     if let Some(mut stderr) = child.stderr.take() {
         let captured = stderr_captured.clone();
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             let _ = stderr.read_to_end(&mut buf);
             *captured.lock().expect("stderr lock") = buf;
+            let _ = stderr_done.send(());
         });
     }
     // Local kill handle for the overall timeout (no run registry here).
@@ -1161,10 +1172,12 @@ fn agent_handshake_with_environment(
     let mut sink = |_: serde_json::Value| {
         notifications.set(notifications.get() + 1);
     };
+    let stage = std::cell::Cell::new("initialize");
     let outcome = (|| {
         let init_id = conn.fresh_id();
         let init = conn.roundtrip(acp_initialize(init_id), PermissionAnswer::Deny, &mut sink)?;
         let version = check_protocol_version(&init)?;
+        stage.set("session/new");
         let agent_name = init
             .pointer("/result/agentInfo/name")
             .and_then(|name| name.as_str())
@@ -1200,7 +1213,11 @@ fn agent_handshake_with_environment(
         let _ = child.kill();
         let _ = child.wait();
     }
-    outcome.map_err(|error| with_stderr(error, &stderr_captured))
+    if outcome.is_err() {
+        // The child is reaped, so stderr reaches EOF; bounded in case a grandchild keeps it open.
+        let _ = stderr_finished.recv_timeout(Duration::from_millis(500));
+    }
+    outcome.map_err(|error| (with_stderr(error, &stderr_captured), stage.get()))
 }
 
 /// Extract a structured ACP response error with a bounded human-readable detail.
@@ -1709,10 +1726,13 @@ pub(super) fn handshake_acp_with_environment(
                 info.protocol_version, info.session_id, info.notifications
             ),
         }),
-        Err(error) => Ok(AiTestResult {
+        Err((error, stage)) => Ok(AiTestResult {
             config_options: None,
             ok: false,
-            detail: format!("ハンドシェイクに失敗しました: {}", error_detail(&error)),
+            detail: format!(
+                "ハンドシェイクに失敗しました（{stage}）: {}",
+                error_detail(&error)
+            ),
         }),
     }
 }
