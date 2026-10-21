@@ -62,6 +62,9 @@ const backend = {
   editAfterSave: null as string | null,
   /** Replaces the approve reply (and skips the fake text change) when set. */
   approveOverride: null as unknown,
+  /** When set, the agent also creates this new file. */
+  createdFile: null as string | null,
+  trashed: [] as string[],
 };
 
 /** Reset the fake native backend to one sample document. */
@@ -74,6 +77,8 @@ function resetBackend() {
   backend.approveStaleOnce = false;
   backend.editAfterSave = null;
   backend.approveOverride = null;
+  backend.createdFile = null;
+  backend.trashed = [];
 }
 
 /** Install the fake Tauri backend answering workspace and isolation commands. */
@@ -171,9 +176,15 @@ function installBackend() {
         });
       }
       case "isolation_new_files":
-        return Promise.resolve([]);
-      case "isolation_import_new":
-        return Promise.resolve([]);
+        return Promise.resolve(backend.createdFile ? [{ rel: backend.createdFile, chars: 2, content: "AI" }] : []);
+      case "isolation_import_new": {
+        if (!backend.createdFile) return Promise.resolve([]);
+        backend.docs.set(backend.createdFile, { id: "doc_new", path: backend.createdFile, text: "AI", revision: 0, dirty: false });
+        return Promise.resolve([{ rel: backend.createdFile, snapshot: { documentId: "doc_new", revision: 0, text: "AI", dirty: false }, error: null }]);
+      }
+      case "trash_document":
+        backend.trashed.push(a.documentId as string);
+        return Promise.resolve();
       case "save_document": {
         const wantId = (a.documentId as string) ?? (a.request as { documentId: string } | undefined)?.documentId;
         const doc = [...backend.docs.values()].find((entry) => entry.id === wantId);
@@ -410,4 +421,19 @@ it("applies files an agent edited directly when its workspace reply is prose", a
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
   expect(await screen.findByRole("region", { name: "AI の変更" })).toBeVisible();
   expect(screen.queryByText(/patch ブロックがありません/)).not.toBeInTheDocument();
+});
+
+it("undo moves a file the AI created to the trash and closes its tab", async () => {
+  mockStream();
+  await openDocAndAi();
+  backend.createdFile = "メモ/新規.md";
+  await registerAndSend();
+  const bar = await screen.findByRole("region", { name: "AI の変更" });
+  expect(bar).toHaveTextContent("新規.md");
+  fireEvent.click(within(bar).getByRole("button", { name: "元に戻す" }));
+  await waitFor(() => expect(backend.trashed).toEqual(["doc_new"]));
+  expect(await screen.findAllByText(/ごみ箱へ移動しました/)).not.toHaveLength(0);
+  expect(mockedInvoke).toHaveBeenCalledWith("trash_document", expect.objectContaining({ documentId: "doc_new", baseRevision: 0 }));
+  await waitFor(() => expect(screen.queryByRole("tab", { name: /新規\.md/ })).not.toBeInTheDocument());
+  expect(backend.docs.get("メモ/a.md")!.text).toBe("# A\n");
 });

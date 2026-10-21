@@ -152,6 +152,8 @@ export interface DocumentSession {
   handleReload: () => Promise<void>;
   /** Close a tab, prompting for dirty documents via close dialog. */
   closeTab: (id: string) => Promise<void>;
+  /** Move an unedited document's file to the trash and drop its tab; throws when refused. */
+  trashDocument: (id: string, revision: number) => Promise<void>;
   /** Resolve the dirty-close dialog with save, discard, or cancel. */
   resolveCloseDecision: (action: "save" | "discard" | "cancel") => Promise<void>;
   /** Open a file by path through the registry with cursor refresh. */
@@ -638,6 +640,23 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
     [registry, workspaceGateway, notify],
   );
 
+  /** Move an unedited document's file to the trash and drop its tab; throws when refused. */
+  const trashDocument = useCallback(async (id: string, revision: number) => {
+    const current = docsRef.current[id];
+    if (!workspaceGateway?.trashDocument) throw new Error("trash is unavailable");
+    await workspaceGateway.trashDocument({ ...(current?.location ? { location: current.location } : {}), documentId: id, baseRevision: revision });
+    setTabs((prev) => {
+      const next = prev.filter((item) => item !== id);
+      if (activeRef.current === id) setActiveId(next[next.length - 1] ?? null);
+      return next;
+    });
+    setDocs((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, [workspaceGateway]);
+
   /** Resolve the dirty-close dialog with save, discard, or cancel. */
   const resolveCloseDecision = useCallback(
     async (action: "save" | "discard" | "cancel") => {
@@ -771,6 +790,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
     handleSave,
     handleReload,
     closeTab,
+    trashDocument,
     resolveCloseDecision,
     openFile,
     configureRoots,

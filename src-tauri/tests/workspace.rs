@@ -156,6 +156,21 @@ fn save_failure_keeps_original_dirty_text_and_recovery() {
     assert!(w.recovery_entries().unwrap().is_empty());
 }
 #[test]
+/// Issue #127: trash an unedited document's file, but never one edited since the given revision.
+fn trash_document_moves_only_unedited_files_to_the_trash() {
+    let (root, _recovery, mut w) = setup();
+    let kept = w.create("kept.md", "ai").unwrap();
+    let stale = request(&kept.snapshot);
+    edit(w.actor(&kept.snapshot.document_id.0).unwrap(), 0, 2, "user");
+    assert!(w.trash_document(stale).is_err());
+    assert!(root.path().join("kept.md").exists());
+
+    let created = w.create("created.md", "ai").unwrap();
+    w.trash_document(request(&created.snapshot)).unwrap();
+    assert!(!root.path().join("created.md").exists());
+    assert!(w.actor(&created.snapshot.document_id.0).is_err());
+}
+#[test]
 /// Keep the document open when closing is cancelled or the requested pre-close save fails.
 fn close_cancel_retains_buffer_and_save_failure_prevents_close() {
     let (root, _recovery, mut w) = setup();
