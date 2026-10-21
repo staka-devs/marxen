@@ -5,6 +5,7 @@ import type { LocalizedText } from "../../contracts/localization";
 import type { LabelKey } from "../../contracts/localization";
 import { useI18n } from "../i18n/I18nProvider";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { parseSubstituteCommand, SUBSTITUTE_SEARCH_OPTIONS } from "../../domain/search";
 import { MessageSquare, Files, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronRight, FileText, FilePlus2, FolderPlus, RefreshCw } from "lucide-react";
 import { CodeMirrorEditor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
@@ -619,6 +620,15 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   /** Current Vim mode label for display. */
   const vimMode = session.vimMode;
   const commandCursor = session.commandLine ? [...session.commandLine.text.slice(session.commandLine.cursor)][0] ?? " " : " ";
+  const typedSubstitute = session.commandLine ? parseSubstituteCommand(session.commandLine.text) : null;
+  // Issue #119: mirror a typed `:s/pat/rep` into the search panel so matches and counts show before Enter.
+  useEffect(() => {
+    if (!typedSubstitute) return;
+    workspace.setSearchOptions(SUBSTITUTE_SEARCH_OPTIONS);
+    workspace.setSearchQuery(typedSubstitute.pattern);
+    workspace.setReplaceText(typedSubstitute.replacement);
+    setSideView("search");
+  }, [typedSubstitute?.pattern, typedSubstitute?.replacement]);
 
   const effectiveViewMode: ViewMode = active && !activeIsMarkdown ? "source" : viewMode;
 
