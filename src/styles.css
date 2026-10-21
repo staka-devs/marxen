@@ -89,7 +89,7 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 
 .marxen-editor .cm-activeLine { background: color-mix(in srgb, var(--primary) 7%, transparent); box-shadow: inset 2px 0 color-mix(in srgb, var(--primary) 55%, transparent); }
 .marxen-editor .cm-activeLineGutter { color: var(--foreground); background: color-mix(in srgb, var(--primary) 8%, transparent); }
-.marxen-editor .cm-scroller { font-family: "Cascadia Code", "Consolas", "Noto Sans Mono", monospace; }
+.marxen-editor .cm-scroller { font-family: "Cascadia Code", "Consolas", "Noto Sans Mono", monospace; padding-inline: max(0px, calc((100% - 960px) / 2)); }
 .marxen-editor[data-live-preview="true"] .cm-scroller { font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif; padding-inline: max(32px, calc((100% - 760px) / 2)); }
 .marxen-editor .cm-content { padding: 32px 0 80px; }
 .marxen-editor .cm-line { padding-left: 12px; padding-right: 20px; }
