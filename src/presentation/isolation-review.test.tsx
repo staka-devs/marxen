@@ -12,26 +12,28 @@ function baseProps() {
     message: null as string | null,
     status: null as string | null,
     proposalText: "変更の提案" as string | null,
-    onFetchDiff: vi.fn(),
     onStageProposal: vi.fn() as (() => void) | null,
     onApprove: vi.fn(),
     onReject: vi.fn(),
-    onCancel: vi.fn(),
   };
 }
 
 describe("review panel", () => {
-  it("shows the proposed change and drives approve/reject/cancel", () => {
+  it("shows the change count and drives apply/discard", () => {
     const props = baseProps();
-    render(<ReviewPanel {...props} />);
+    render(<ReviewPanel {...props} newFiles={[{ rel: "new.md", chars: 3, content: "abc" }]} />);
     expect(screen.getByText("変更の提案")).toBeVisible();
+    expect(screen.getByText("1 件のファイル")).toBeVisible();
     expect(screen.queryByText("copy_08")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "適用して保存" }));
-    fireEvent.click(screen.getByRole("button", { name: "却下" }));
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    fireEvent.click(screen.getByRole("button", { name: "破棄" }));
     expect(props.onApprove).toHaveBeenCalledOnce();
     expect(props.onReject).toHaveBeenCalledOnce();
-    expect(props.onCancel).toHaveBeenCalledOnce();
+  });
+
+  it("does not offer apply before any file changed", () => {
+    render(<ReviewPanel {...baseProps()} />);
+    expect(screen.getByRole("button", { name: "適用して保存" })).toBeDisabled();
   });
 
   it("flags drifted scopes for resync and shows unified diffs", () => {
@@ -117,7 +119,7 @@ describe("review panel", () => {
       />,
     );
     expect(screen.queryByRole("button", { name: "適用して保存" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "却下" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "破棄" })).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("保存しました");
   });
 

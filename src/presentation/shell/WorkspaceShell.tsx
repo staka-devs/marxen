@@ -1443,10 +1443,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             aiGateway={aiGateway}
             connectionControls={connectionControls}
             sessionScopeKey={sessionScopeKey}
-          />
-          </div>
-          <div className="max-h-72 min-h-0 overflow-y-auto">
-            <ReviewPanel
+            review={<ReviewPanel
               documentLabels={contextLabels}
               copyId={staging.staging?.copyId ?? null}
               diffs={staging.diffs}
@@ -1458,13 +1455,12 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               message={staging.reviewMessage}
               status={staging.reviewStatus}
               proposalText={staging.aiProposal?.proposal.text ?? null}
-              onFetchDiff={() => void staging.fetchReviewDiff()}
               onStageProposal={staging.aiProposal && staging.aiProposal.mode !== "ask" && staging.staging && staging.reviewMessage ? () => void staging.stageStoredProposal() : null}
               onApprove={() => void staging.approveStaging()}
               onReject={() => void staging.rejectStaging()}
-              onCancel={() => void staging.cancelStaging()}
               onRetryImports={staging.importOutcomes.some((item) => !item.ok) ? () => void staging.retryImports() : null}
-            />
+            />}
+          />
           </div>
           {staging.aiDismissed && active && (
             <button type="button" onClick={() => staging.setAiDismissed(false)} className="mt-2 w-full rounded-md border border-border px-3 py-1.5 text-xs">

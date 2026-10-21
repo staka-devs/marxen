@@ -121,8 +121,6 @@ export interface AiStaging {
   approveStaging: () => Promise<void>;
   /** Reject the staged copy without touching disk. */
   rejectStaging: () => Promise<void>;
-  /** Cancel the copy after runs settle discarding staged text. */
-  cancelStaging: () => Promise<void>;
 }
 
 /**
@@ -590,24 +588,6 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     }
   }, [clearStaging, isolationGateway, notify]);
 
-  // Runs settle inside AiPanel.stop before this cleanup discards the copy.
-  /** Cancel the copy after runs settle discarding staged text. */
-  const cancelStaging = useCallback(async () => {
-    const copyId = stagingRef.current;
-    if (!copyId) return;
-    setReviewBusy(true);
-    try {
-      await isolationGateway!.cancelCopy(copyId);
-      clearStaging();
-      setAiProposal(null);
-      setNotice(message("取り消しました。"));
-    } catch (cause) {
-      setReviewMessage(localizedFailure(cause, describeIsolationError));
-    } finally {
-      setReviewBusy(false);
-    }
-  }, [clearStaging, isolationGateway, notify]);
-
   return {
     aiDismissed,
     setAiDismissed,
@@ -641,7 +621,6 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     clearStaging,
     approveStaging,
     rejectStaging,
-    cancelStaging,
   };
 }
 

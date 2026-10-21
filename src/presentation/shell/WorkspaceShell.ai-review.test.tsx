@@ -306,7 +306,9 @@ it("displays ask proposals without staging", async () => {
   mockStream();
   await openDocAndAi();
   const sidebar = screen.getByTestId("ai-sidebar");
-  // Default mode stays ask: proposal displays, stage is refused.
+  // Ask mode: proposal displays, stage is refused.
+  fireEvent.click(within(sidebar).getByRole("combobox", { name: "モード" }));
+  fireEvent.click(screen.getByRole("option", { name: /相談/ }));
   fireEvent.change(within(sidebar).getByLabelText("プロンプト"), { target: { value: "教えて" } });
   fireEvent.click(within(sidebar).getByRole("button", { name: "送信" }));
   await waitFor(() => expect(handler).not.toBeNull());
@@ -369,25 +371,15 @@ it("reports a rollback failure per document without all-or-nothing claims", asyn
   expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 0");
 });
 
-it("rejects without touching source or disk state", async () => {
+it("discards without touching source or disk state", async () => {
   mockStream();
   await openDocAndAi();
   await registerAndSend();
   await screen.findByTestId("ai-proposal");
-  fireEvent.click(screen.getByRole("button", { name: /^却下$/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^破棄$/ }));
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_reject", { copyId: "copy_1" }));
   expect(backend.docs.get("メモ/a.md")!.text).toBe("# A\n");
   expect(screen.queryByTestId("ai-proposal")).not.toBeInTheDocument();
-});
-
-it("cancels cleanup after the run settles", async () => {
-  mockStream();
-  await openDocAndAi();
-  await registerAndSend();
-  await screen.findByTestId("ai-proposal");
-  fireEvent.click(screen.getByRole("button", { name: /^取消$/ }));
-  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_cancel", { copyId: "copy_1" }));
-  expect(backend.docs.get("メモ/a.md")!.text).toBe("# A\n");
 });
 
 it("refuses stale approval and keeps text for resync", async () => {

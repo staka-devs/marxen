@@ -121,6 +121,8 @@ export interface AiPanelProps {
   modelControls?: ReactNode;
   /** Read-only actions placed beside the conversation and connection controls. */
   headerActions?: ReactNode;
+  /** Pending-change review shown directly above the composer, as agent chats do. */
+  review?: ReactNode;
 }
 
 const MODE_ORDER: PromptMode[] = ["ask", "generate", "rewrite", "workspace"];
@@ -228,6 +230,7 @@ export default function AiPanel({
   sessionScopeKey,
   modelControls,
   headerActions,
+  review,
 }: AiPanelProps) {
   const { t } = useI18n();
   /** Streaming transport: injected prop wins, otherwise the test fallback throws visibly. */
@@ -753,6 +756,7 @@ export default function AiPanel({
           <p className="ai-chat-message text-[11px] text-muted-foreground">{t("応答を生成しています…")}</p>
         )}
       </div>
+      {review && <div className="max-h-72 min-h-0 shrink-0 overflow-y-auto">{review}</div>}
       <div className="ai-chat-composer shrink-0 border-t border-border pt-1.5">
         <div className="ai-chat-composer-box px-1.5 pb-1.5 pt-1">
           <textarea
