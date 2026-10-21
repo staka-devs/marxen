@@ -11,16 +11,22 @@
   --color-border: var(--border);
 }
 
+/* Neutral surfaces follow VS Code Light/Dark Modern; the dark accent is a tonal (M3-style) light blue with dark text. */
 :root {
   color-scheme: light;
   --background: #ffffff;
-  --foreground: #30343b;
-  --card: #f6f7f9;
-  --primary: #2868b2;
+  --foreground: #3b3b3b;
+  --card: #f8f8f8;
+  --primary: #005fb8;
   --primary-foreground: #ffffff;
-  --muted: #e9ecf1;
-  --muted-foreground: #6b7280;
-  --border: #e2e5ea;
+  --muted: #ebebeb;
+  --muted-foreground: #616161;
+  --border: #e5e5e5;
+  --vim-normal: #005fb8;
+  --vim-insert: #2e7d32;
+  --vim-visual: #8250df;
+  --vim-replace: #c62828;
+  --vim-command: #8a5a00;
   font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -28,14 +34,19 @@
 
 [data-theme="dark"] {
   color-scheme: dark;
-  --background: #1e1f23;
-  --foreground: #cdd0d8;
-  --card: #191a1e;
-  --primary: #8ab4f8;
-  --primary-foreground: #152238;
-  --muted: #2b2d34;
-  --muted-foreground: #8e939f;
-  --border: #2c2e35;
+  --background: #1f1f1f;
+  --foreground: #cccccc;
+  --card: #181818;
+  --primary: #4daafc;
+  --primary-foreground: #0b1d2e;
+  --muted: #2b2b2b;
+  --muted-foreground: #9d9d9d;
+  --border: #2b2b2b;
+  --vim-normal: #4daafc;
+  --vim-insert: #73c991;
+  --vim-visual: #c5a5ff;
+  --vim-replace: #f48771;
+  --vim-command: #e2c08d;
 }
 
 [data-theme="contrast"] {
@@ -88,6 +99,8 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 ::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--foreground) 38%, transparent); }
 
 .marxen-editor .cm-activeLine { background: color-mix(in srgb, var(--primary) 7%, transparent); box-shadow: inset 2px 0 color-mix(in srgb, var(--primary) 55%, transparent); }
+/* Live preview reads as a document: mark the current line without filling it. */
+.marxen-editor[data-live-preview="true"] .cm-activeLine { background: transparent; }
 .marxen-editor .cm-activeLineGutter { color: var(--foreground); background: color-mix(in srgb, var(--primary) 8%, transparent); }
 .marxen-editor .cm-scroller { font-family: "Cascadia Code", "Consolas", "Noto Sans Mono", monospace; }
 .marxen-editor[data-live-preview="true"] .cm-scroller { font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif; padding-inline: max(24px, calc((100% - 960px) / 2)); }
@@ -207,13 +220,20 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 
 /* Stable document typography while the active block exposes editable syntax. */
 .marxen-workspace { font-size: 13px; }
-.marxen-activity { background: color-mix(in srgb, var(--card) 88%, black); }
+.marxen-activity { background: var(--card); }
 .marxen-activity button { transition: color 120ms, background-color 120ms; }
 .marxen-activity button[aria-pressed="true"] { background: color-mix(in srgb, var(--primary) 6%, transparent); }
 .marxen-activity button:hover { background: var(--muted); }
 .marxen-context-bar { background: var(--background); }
 .marxen-context-bar select { font-size: 11px; }
-.marxen-status { font-size: 10px; }
+.marxen-status { font-size: 11px; }
+/* Vim mode chip: solid, color-coded per mode like VS Code's left status indicator. */
+.marxen-vim-mode { background: var(--vim-normal); color: var(--background); }
+.marxen-vim-mode[data-mode="insert"] { background: var(--vim-insert); }
+.marxen-vim-mode[data-mode^="visual"] { background: var(--vim-visual); }
+.marxen-vim-mode[data-mode="replace"] { background: var(--vim-replace); }
+.marxen-vim-mode[data-mode="command_line"] { background: var(--vim-command); }
+[data-theme="contrast"] .marxen-vim-mode { background: #000; color: #fff; }
 .marxen-editor[data-live-preview="true"] .cm-line,
 .marxen-editor[data-live-preview="true"] .marxen-live-widget { padding-inline: 0; }
 .marxen-editor .cm-line.marxen-live-gap { line-height: 12px; }
