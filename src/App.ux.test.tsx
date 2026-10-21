@@ -45,12 +45,12 @@ it("dismisses operations with Escape and outside pointer events and restores tri
   expect(screen.queryByRole("dialog", { name: "エディター操作" })).not.toBeInTheDocument();
 });
 
-it("resizes the explorer by keyboard and shows source line numbers only in Markdown mode", async () => {
+it("resizes the explorer by keyboard and shows source line numbers in live and Markdown modes", async () => {
   render(<App />); const editor = await screen.findByTestId("editor-primary");
   const handle = screen.getByRole("separator", { name: "サイドバーの幅" });
   fireEvent.keyDown(handle, { key: "ArrowRight" });
   expect(handle).toHaveAttribute("aria-valuenow", "250");
-  expect(editor.querySelector(".cm-lineNumbers")).toBeNull();
+  expect(editor.querySelector(".cm-lineNumbers")).not.toBeNull();
   fireEvent.change(screen.getByLabelText("表示モード"), { target: { value: "source" } });
   expect(screen.getByTestId("editor-primary").querySelector(".cm-lineNumbers")).not.toBeNull();
   expect(screen.getByTestId("editor-primary").textContent).toContain("# はじめに");

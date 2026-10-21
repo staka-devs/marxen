@@ -378,7 +378,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({ effects: appearanceRef.current.reconfigure([
-      ...(preferences.lineNumbers && !livePreview ? [lineNumbers()] : []),
+      ...(preferences.lineNumbers ? [lineNumbers()] : []),
       ...(preferences.wordWrap ? [EditorView.lineWrapping] : []),
       ...(preferences.highlightActiveLine ? [highlightActiveLine(), highlightActiveLineGutter()] : []),
       EditorView.theme({

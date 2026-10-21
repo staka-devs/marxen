@@ -20,7 +20,7 @@ export interface EditorPreferences {
   fontSize: number;
   lineHeight: number;
   wordWrap: boolean;
-  /** Show source line numbers in Markdown and split editors; live preview omits them. */
+  /** Show source line numbers in every editor mode, live preview included. */
   lineNumbers: boolean;
   highlightActiveLine: boolean;
   /** Add Markdown hard-break spaces on Insert-mode prose-line Enter. */
