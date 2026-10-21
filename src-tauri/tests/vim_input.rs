@@ -227,9 +227,12 @@ fn native_line_selection_includes_line_breaks_and_block_is_not_a_contiguous_scop
 #[test]
 /// Install an Alt+drag GUI rectangle as native blockwise Visual so `d` removes exactly the block.
 fn gui_block_selection_installs_native_visual_block() {
-    let actor =
-        marxen_lib::open_document(DocumentId("gui-block".into()), "abcd\nefgh\nijkl".into(), None)
-            .unwrap();
+    let actor = marxen_lib::open_document(
+        DocumentId("gui-block".into()),
+        "abcd\nefgh\nijkl".into(),
+        None,
+    )
+    .unwrap();
     // Half-open corners: row 0 col 1 to row 2 col 3 select columns b..c on every line.
     let update = actor
         .set_block_cursor(marxen_lib::contracts::CursorUpdate {
@@ -242,7 +245,10 @@ fn gui_block_selection_installs_native_visual_block() {
     assert_eq!((update.anchor.0, update.head.0), (1, 13));
     assert_eq!(actor.current_mode().unwrap().mode, VimMode::VisualBlock);
     let cursor = actor.cursor().unwrap();
-    assert_eq!(cursor.anchor, cursor.head, "a rectangle never widens a contiguous scope");
+    assert_eq!(
+        cursor.anchor, cursor.head,
+        "a rectangle never widens a contiguous scope"
+    );
     // A plain GUI drag while in block mode returns to characterwise Visual.
     let plain = |anchor, head| marxen_lib::contracts::CursorUpdate {
         document_id: actor.snapshot().document_id,

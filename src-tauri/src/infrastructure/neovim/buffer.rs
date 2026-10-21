@@ -272,7 +272,8 @@ impl Buffer for NativeBuffer {
         };
         self.0.exec_lua(&format!("vim.cmd('normal! ' .. string.char(27)); local ve = vim.wo.virtualedit; if not ve:find('onemore', 1, true) and not ve:find('all', 1, true) then vim.wo.virtualedit = ve == '' and 'onemore' or ve .. ',onemore' end; vim.api.nvim_win_set_cursor(0, {{{}, {}}}); vim.cmd('normal! ' .. {}); vim.api.nvim_win_set_cursor(0, {{{}, {}}})",anchor.0+1,anchor.1,kind,head.0+1,head.1))?;
         Ok(())
-    }    /// Send unmapped Escape via `normal!` to leave visual selection.
+    }
+    /// Send unmapped Escape via `normal!` to leave visual selection.
     fn exit_visual(&self) -> Result<(), BufferError> {
         self.0.exec_lua("vim.cmd('normal! ' .. string.char(27))")?;
         Ok(())

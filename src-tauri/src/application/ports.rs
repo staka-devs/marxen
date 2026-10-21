@@ -105,7 +105,8 @@ pub trait Buffer: Send {
         anchor: (u32, u32),
         head: (u32, u32),
         kind: VisualKind,
-    ) -> Result<(), BufferError>;    /// Leave the native Visual selection before changing the GUI cursor.
+    ) -> Result<(), BufferError>;
+    /// Leave the native Visual selection before changing the GUI cursor.
     fn exit_visual(&self) -> Result<(), BufferError>;
     /// Move the native cursor using a zero-based row and UTF-8 byte column.
     fn set_cursor(&self, row: u32, col: u32) -> Result<(), BufferError>;

@@ -952,7 +952,11 @@ impl DocumentActor {
     }
 
     /// Shared GUI selection install for character/line (`block == false`) and block ranges.
-    fn install_cursor(&self, update: CursorUpdate, block: bool) -> Result<CursorUpdate, ActorError> {
+    fn install_cursor(
+        &self,
+        update: CursorUpdate,
+        block: bool,
+    ) -> Result<CursorUpdate, ActorError> {
         let mut state = self
             .state
             .lock()
@@ -968,14 +972,19 @@ impl DocumentActor {
             mode,
             VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
         );
-        let install_selection = update.anchor != update.head
-            && (mode == VimMode::Normal || visual);
+        let install_selection = update.anchor != update.head && (mode == VimMode::Normal || visual);
         if install_selection && block {
             let anchor = global_utf16_to_line_byte(&state.snapshot.text, update.anchor)?;
-            let (head_row, head_col) = global_utf16_to_line_byte(&state.snapshot.text, update.head)?;
+            let (head_row, head_col) =
+                global_utf16_to_line_byte(&state.snapshot.text, update.head)?;
             // GUI corners are half-open in columns; inclusive Vim ends on the last character.
             let head_col = if head_col > anchor.1 && !state.nvim.selection_exclusive()? {
-                let line = state.snapshot.text.split('\n').nth(head_row as usize).unwrap_or("");
+                let line = state
+                    .snapshot
+                    .text
+                    .split('\n')
+                    .nth(head_row as usize)
+                    .unwrap_or("");
                 line[..(head_col as usize).min(line.len())]
                     .chars()
                     .next_back()

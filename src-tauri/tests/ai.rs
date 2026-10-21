@@ -1686,8 +1686,20 @@ fn configured_http_endpoints_preserve_query_parameters() {
 #[test]
 /// Issue #111: a handshake failure names the phase reached and keeps the agent's stderr.
 fn handshake_failure_reports_phase_and_agent_stderr() {
-    let result = handshake_acp(&mock_agent_argv(&["--stderr-exit", "please run codex login"])).unwrap();
+    let result = handshake_acp(&mock_agent_argv(&[
+        "--stderr-exit",
+        "please run codex login",
+    ]))
+    .unwrap();
     assert!(!result.ok);
-    assert!(result.detail.contains("（initialize）"), "{}", result.detail);
-    assert!(result.detail.contains("please run codex login"), "{}", result.detail);
+    assert!(
+        result.detail.contains("（initialize）"),
+        "{}",
+        result.detail
+    );
+    assert!(
+        result.detail.contains("please run codex login"),
+        "{}",
+        result.detail
+    );
 }
