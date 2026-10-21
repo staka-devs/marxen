@@ -4,7 +4,8 @@ import { localizedFailure } from "../../domain/localization";
 import type { LocalizedText } from "../../contracts/localization";
 import type { LabelKey } from "../../contracts/localization";
 import { useI18n } from "../i18n/I18nProvider";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { schemeStylesheet } from "../../domain/color-scheme";
 import { parseSubstituteCommand, SUBSTITUTE_SEARCH_OPTIONS } from "../../domain/search";
 import { MessageSquare, Files, GitBranch, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronRight, FileText, FilePlus2, FolderPlus, RefreshCw } from "lucide-react";
 import { SourceControlPanel } from "../workspace/SourceControlPanel";
@@ -507,6 +508,14 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     }
   });
   const theme = preferences.theme;
+  // Generated after styles.css so the seed palette overrides the static light/dark tokens, portals included.
+  useLayoutEffect(() => {
+    const style = document.createElement("style");
+    style.dataset.marxenScheme = "";
+    style.textContent = schemeStylesheet(preferences.seedColor);
+    document.head.append(style);
+    return () => style.remove();
+  }, [preferences.seedColor]);
   /**
    * Normalize and persist editor preferences, noticing once on failure.
    *

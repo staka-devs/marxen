@@ -8,6 +8,7 @@ import { StyledSelect } from "../ui/select";
 import { COPY_LABELS } from "../../domain/clipboard-text";
 import { DEFAULT_EDITOR_PREFERENCES, NOTIFICATION_POSITIONS, type EditorPreferences } from "../../domain/editor-preferences";
 import "../settings-controls.css";
+import { SeedColorPicker } from "./SeedColorPicker";
 
 interface Props {
   languagePreference?: import("../../contracts/language").LanguagePreference;
@@ -43,7 +44,7 @@ interface Props {
   onClose: () => void;
 }
 const CATEGORIES = [
-  { id: "appearance", label: "外観", icon: Paintbrush, search: "テーマ カラー 色 ライト ダーク ハイコントラスト theme appearance language locale region 言語 地域" },
+  { id: "appearance", label: "外観", icon: Paintbrush, search: "テーマ カラー 色 配色 基調色 色相 濃さ Material ライト ダーク ハイコントラスト theme appearance color seed palette language locale region 言語 地域" },
   { id: "editor", label: "エディター", icon: SlidersHorizontal, search: "文字サイズ フォント 行の高さ 折り返す 行番号 編集中 強調 editor font wrap" },
   { id: "notifications", label: "通知", icon: Bell, search: "通知 位置 上 下 左 右 中央 notification toast position top bottom left center right" },
   { id: "vim", label: "Vim", icon: Code2, search: "Neovim 設定ファイル vimrc _vimrc .vimrc init.vim init.lua パス 再起動" },
@@ -118,12 +119,16 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
                   <option value="ja-JP-x-tokushima">{t("阿波弁")}</option>
                 </StyledSelect></SettingRow>
                 <SettingRow label={t("カラーテーマ")}><StyledSelect label={t("カラーテーマ")} className="w-40" value={theme} onChange={(value) => onTheme(value as ThemeId)}>{THEMES.map((item) => <option key={item.id} value={item.id}>{t(item.label as LabelKey)}</option>)}</StyledSelect></SettingRow>
+                <div role="group" aria-label={t("配色の基調色")} className="marxen-setting-row">
+                  <span className="marxen-setting-label">{t("配色の基調色")}<span className="mt-1 block text-[11px] font-normal text-muted-foreground">{theme === "contrast" ? t("ハイコントラストでは使いません。") : t("Material 3 の配色をこの色から作ります。")}</span></span>
+                  <span className="marxen-setting-control"><SeedColorPicker value={preferences.seedColor} onChange={(color) => change("seedColor", color)} /></span>
+                </div>
               </>}
               {id === "editor" && <>
                 <SettingRow label={t("文字サイズ")}><input aria-label={t("文字サイズ")} type="number" min={11} max={28} value={preferences.fontSize} onChange={(event) => { const n = event.currentTarget.valueAsNumber; if (Number.isFinite(n)) change("fontSize", Math.min(28, Math.max(11, n))); }} className={`${inputClass} w-20`} /><span className="text-xs text-muted-foreground">px</span></SettingRow>
                 <SettingRow label={t("行の高さ")}><StyledSelect label={t("行の高さ")} value={preferences.lineHeight} onChange={(value) => change("lineHeight", Number(value))} className="w-24">{[1.2, 1.4, 1.5, 1.6, 1.7, 1.8, 2, 2.2, 2.4].map((height) => <option key={height} value={height}>{height}</option>)}</StyledSelect></SettingRow>
                 {([["wordWrap", t("長い行を折り返す")], ["lineNumbers", t("Markdown の行番号を表示する")], ["highlightActiveLine", t("編集中の行を強調する")]] as const).map(([key, text]) => <SettingRow key={key} label={text}><input aria-label={text} type="checkbox" checked={preferences[key]} onChange={(event) => change(key, event.target.checked)} className="h-4 w-4" /></SettingRow>)}
-                <button type="button" onClick={() => onPreferences?.({ ...DEFAULT_EDITOR_PREFERENCES, theme, notificationPosition: preferences.notificationPosition })} className="mt-3 flex items-center gap-2 rounded-sm border border-border px-3 py-1.5 text-xs hover:bg-muted"><RotateCcw size={13} />{t("エディター設定をリセット")}</button>
+                <button type="button" onClick={() => onPreferences?.({ ...DEFAULT_EDITOR_PREFERENCES, theme, seedColor: preferences.seedColor, notificationPosition: preferences.notificationPosition })} className="mt-3 flex items-center gap-2 rounded-sm border border-border px-3 py-1.5 text-xs hover:bg-muted"><RotateCcw size={13} />{t("エディター設定をリセット")}</button>
               </>}
               {id === "notifications" && <>
                 <SettingRow label={t("通知の表示位置")}><StyledSelect label={t("通知の表示位置")} value={preferences.notificationPosition} onChange={(value) => change("notificationPosition", value as EditorPreferences["notificationPosition"])} className="w-52">
