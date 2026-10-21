@@ -89,8 +89,8 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 
 .marxen-editor .cm-activeLine { background: color-mix(in srgb, var(--primary) 7%, transparent); box-shadow: inset 2px 0 color-mix(in srgb, var(--primary) 55%, transparent); }
 .marxen-editor .cm-activeLineGutter { color: var(--foreground); background: color-mix(in srgb, var(--primary) 8%, transparent); }
-.marxen-editor .cm-scroller { font-family: "Cascadia Code", "Consolas", "Noto Sans Mono", monospace; padding-inline: max(0px, calc((100% - 960px) / 2)); }
-.marxen-editor[data-live-preview="true"] .cm-scroller { font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif; padding-inline: max(32px, calc((100% - 760px) / 2)); }
+.marxen-editor .cm-scroller { font-family: "Cascadia Code", "Consolas", "Noto Sans Mono", monospace; }
+.marxen-editor[data-live-preview="true"] .cm-scroller { font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif; padding-inline: max(32px, calc((100% - 680px) / 2)); }
 .marxen-editor .cm-content { padding: 32px 0 80px; }
 .marxen-editor .cm-line { padding-left: 12px; padding-right: 20px; }
 .marxen-editor .cm-gutterElement { min-width: 32px; padding-right: 8px; }
@@ -223,7 +223,7 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 .marxen-editor .cm-line.marxen-live-heading[data-heading-level="3"] { font-size: 1.15em; }
 .marxen-editor .marxen-live-heading-marker { color: var(--muted-foreground); font-weight: 400; }
 .marxen-editor .cm-line.marxen-live-code-line { font-family: "Cascadia Code", "Consolas", monospace; font-size: 0.87em; background: var(--muted); }
-article.marxen-md { padding: 32px max(32px, calc((100% - 760px) / 2)) 80px; }
+article.marxen-md { padding: 32px max(32px, calc((100% - 680px) / 2)) 80px; }
 .marxen-md > :first-child { margin-top: 0; }
 .marxen-live-body ul.contains-task-list { padding-left: 0; }
 .marxen-md .task-list-item input { margin-right: 0.4em; vertical-align: -0.05em; }
