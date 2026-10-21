@@ -8,6 +8,8 @@ use std::process::{Command, Output, Stdio};
 
 /// Diffs beyond this size are cut so one huge file cannot stall the view.
 const MAX_DIFF_BYTES: usize = 1024 * 1024;
+/// HEAD texts beyond this size are not compared in the editor gutter.
+const MAX_HEAD_BYTES: usize = 4 * 1024 * 1024;
 
 /// Runs the user's `git` without a shell.
 pub struct NativeGit;
@@ -103,5 +105,17 @@ impl SourceControl for NativeGit {
             text.push_str("\n… (差分が大きいため省略しました)\n");
         }
         Ok(text)
+    }
+
+    /// Read the committed blob without filters, so no repository-configured program runs.
+    fn head_text(&self, root: &Path, path: &str) -> Result<Option<String>, WorkspaceError> {
+        let mut command = git(root);
+        command.args(["cat-file", "blob", &format!("HEAD:./{path}")]);
+        let output = run(command)?;
+        // Untracked, unborn HEAD or outside a repository: nothing to compare against.
+        if !output.status.success() || output.stdout.len() > MAX_HEAD_BYTES {
+            return Ok(None);
+        }
+        Ok(String::from_utf8(output.stdout).ok())
     }
 }

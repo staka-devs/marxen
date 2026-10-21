@@ -149,3 +149,15 @@ it("highlights lines changed by the latest AI change against its baseline", () =
   rendered.rerender(<CodeMirrorEditor value={"# T\nnew line\nend"} ariaLabel="editor" aiBaseline={null} />);
   expect(rendered.container.querySelector(".marxen-ai-added")).toBeNull();
 });
+
+it("marks added, modified and deleted lines against the Git HEAD text, ignoring CRLF", () => {
+  const head = "# T\r\nkeep\r\nold\r\ngone\r\nend\r\n";
+  const rendered = render(<CodeMirrorEditor value={"# T\r\nkeep\r\nnew\r\nend\r\nextra\r\n"} ariaLabel="editor" gitBaseline={head} />);
+  expect(rendered.container.querySelectorAll(".marxen-git-modified")).toHaveLength(1);
+  expect(rendered.container.querySelectorAll(".marxen-git-added")).toHaveLength(1);
+  rendered.rerender(<CodeMirrorEditor value={"# T\r\nkeep\r\nend\r\n"} ariaLabel="editor" gitBaseline={head} />);
+  expect(rendered.container.querySelectorAll(".marxen-git-deleted")).toHaveLength(1);
+  expect(rendered.container.querySelector(".marxen-git-added")).toBeNull();
+  rendered.rerender(<CodeMirrorEditor value={"# T\r\nkeep\r\nend\r\n"} ariaLabel="editor" gitBaseline={null} />);
+  expect(rendered.container.querySelector(".marxen-git-gutter")).toBeNull();
+});

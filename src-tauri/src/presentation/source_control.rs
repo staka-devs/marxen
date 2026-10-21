@@ -18,7 +18,7 @@ impl SourceControlState {
 #[cfg(feature = "desktop")]
 mod desktop {
     use super::*;
-    use crate::application::source_control::change_diff;
+    use crate::application::source_control::{change_diff, head_text};
     use crate::contracts::{GitStatus, RootScope, WorkspaceError};
     use crate::presentation::document::ActorState;
     use std::path::PathBuf;
@@ -56,6 +56,17 @@ mod desktop {
             &path,
             &status,
         )
+    }
+
+    #[tauri::command(async)]
+    /// Return one root-relative file's text at HEAD for the editor's change gutter.
+    pub fn git_head_text(
+        actors: tauri::State<'_, ActorState>,
+        state: tauri::State<'_, SourceControlState>,
+        scope: RootScope,
+        path: String,
+    ) -> Result<Option<String>, WorkspaceError> {
+        head_text(state.git.as_ref(), &root_of(&actors, &scope)?, &path)
     }
 }
 

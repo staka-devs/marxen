@@ -641,6 +641,20 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     setSideView("search");
   }, [typedSubstitute?.pattern, typedSubstitute?.replacement]);
 
+  // Issue #124: HEAD text of the active file for the change gutter; refreshed on open and save.
+  const [gitHead, setGitHead] = useState<{ documentId: string; text: string | null } | null>(null);
+  const gitScope = active?.location?.scope;
+  useEffect(() => {
+    if (!active?.path || !gitScope || !workspaceGateway?.gitHeadText) { setGitHead(null); return; }
+    let current = true;
+    const documentId = active.documentId;
+    workspaceGateway.gitHeadText(gitScope, active.path)
+      .then((text) => { if (current) setGitHead({ documentId, text }); })
+      .catch(() => { if (current) setGitHead(null); });
+    return () => { current = false; };
+  }, [active?.documentId, active?.path, active?.dirty, gitScope?.rootId, gitScope?.generation, workspaceGateway]);
+  const gitBaseline = gitHead && gitHead.documentId === active?.documentId ? gitHead.text : null;
+
   /** Text before the latest AI change to the active document, for the inline diff. */
   const aiBaseline = active ? staging.aiChanges.find((change) => change.documentId === active.documentId)?.before ?? null : null;
 
@@ -1217,6 +1231,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   ariaLabel={t("{{value0}}の{{value1}}エディタ", { value0: (active.path ?? active.documentId), value1: (activeIsMarkdown ? "Markdown" : t("テキスト")) })}
                   testId="editor-primary"
                   aiBaseline={aiBaseline}
+                  gitBaseline={gitBaseline}
                   onEditorMenu={(point) => void editorMenu.open(point)}
                   focusRequest={editorFocus?.path === active.path ? editorFocus.sequence : 0}
                   initialSelection={selections[active.documentId] ?? null}
@@ -1249,6 +1264,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   ariaLabel={t("{{value0}}の{{value1}}エディタ", { value0: (active.path ?? active.documentId), value1: (activeIsMarkdown ? "Markdown" : t("テキスト")) })}
                   testId="editor-primary"
                   aiBaseline={aiBaseline}
+                  gitBaseline={gitBaseline}
                   onEditorMenu={(point) => void editorMenu.open(point)}
                   focusRequest={editorFocus?.path === active.path ? editorFocus.sequence : 0}
                   preferences={preferences}
