@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { SearchMatch, SearchOptions, SearchResults, WorkspaceInfo, SearchMatch as NativeMatch } from "../../../contracts/contracts";
+import type { RootScope, SearchMatch, SearchOptions, SearchResults, WorkspaceInfo, SearchMatch as NativeMatch } from "../../../contracts/contracts";
 import type { LocalizedText } from "../../../contracts/localization";
 import type { WorkspaceGateway } from "../../../application/ports";
 import { sameRoot } from "../../../domain/document-location";
@@ -23,10 +23,12 @@ interface Args {
   session: DocumentSession;
   /** Surface localized search and partial replacement outcomes. */
   notify: (notice: LocalizedText | null) => void;
+  /** Limit results to one file (the in-file find bar); the whole workspace when absent. */
+  only?: { path: string; scope?: RootScope } | null;
 }
 
 /** Debounced native search with context fences and serialized, revision-bound replacement. */
-export function useWorkspaceSearch({ desktop, root, roots, gateway, session, notify }: Args) {
+export function useWorkspaceSearch({ desktop, root, roots, gateway, session, notify, only = null }: Args) {
   const { t, message } = useI18n();
   const [query, setQuery] = useState("");
   const [options, setOptions] = useState<SearchOptions>(DEFAULT_SEARCH_OPTIONS);
@@ -38,7 +40,7 @@ export function useWorkspaceSearch({ desktop, root, roots, gateway, session, not
   const [refresh, setRefresh] = useState(0);
   const lifecycle = useRef({ identity: "", epoch: 0, request: 0, mounted: true, locked: false, suspended: 0, root });
   const rootIdentity = roots?.map((owner) => `${owner.scope.rootId}:${owner.scope.generation}`).join("|") ?? root;
-  const identity = searchIdentity(rootIdentity ?? null, query, options);
+  const identity = searchIdentity(only ? `${rootIdentity}|${only.path}` : rootIdentity ?? null, query, options);
   /** Resolve native result ownership without consulting the active document. */
   const rootFor = (hit: NativeMatch) => roots?.find((owner) => sameRoot(owner.scope, hit.scope))?.root ?? root!;
   if (lifecycle.current.identity !== identity) {
@@ -91,7 +93,7 @@ export function useWorkspaceSearch({ desktop, root, roots, gateway, session, not
     const epoch = state.epoch;
     setResults(null);
     setError(null);
-    if (!desktop || !root || !gateway || query === "" || state.locked || state.suspended) {
+    if (!desktop || !root || !gateway || query === "" || state.locked || state.suspended || only?.path === "") {
       setSearching(false);
       return;
     }
@@ -99,8 +101,10 @@ export function useWorkspaceSearch({ desktop, root, roots, gateway, session, not
     /** Accept only the active lifecycle and request, including catch/finally callbacks. */
     const current = () => state.mounted && state.epoch === epoch && state.request === request;
     const timer = window.setTimeout(() => {
-      Promise.all((roots?.length ? roots.map((owner) => owner.root) : [root]).map((path) => gateway.searchWorkspace(query, options, path)))
-        .then((groups): SearchResults => { const matches = groups.flatMap((group) => group.matches); return { matches: matches.slice(0, 2000), limit: groups.find((group) => group.limit)?.limit ?? (matches.length > 2000 ? "matches" : null) }; })
+      const owner = only ? roots?.find((item) => sameRoot(item.scope, only.scope)) : undefined;
+      // shortcut: the in-file bar searches its root and keeps one file's hits; add a per-file native search if roots get large.
+      Promise.all((owner ? [owner.root] : roots?.length ? roots.map((item) => item.root) : [root]).map((path) => gateway.searchWorkspace(query, options, path)))
+        .then((groups): SearchResults => { const matches = groups.flatMap((group) => group.matches).filter((match) => !only || match.path === only.path); return { matches: matches.slice(0, 2000), limit: groups.find((group) => group.limit)?.limit ?? (matches.length > 2000 ? "matches" : null) }; })
         .then((value) => { if (current()) setResults({ identity, epoch, value }); })
         .catch((cause: unknown) => { if (current()) setError(localizedFailure(cause, workspaceErrorText)); })
         .finally(() => { if (current()) setSearching(false); });

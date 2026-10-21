@@ -196,7 +196,7 @@ impl NeovimSession {
             local shortcuts = {
                 ['s'] = 'file-save', ['p'] = 'palette-quickopen',
                 ['S-p'] = 'palette-open', [','] = 'palette-settings',
-                ['S-i'] = 'inline-chat', ['M-i'] = 'palette-ai',
+                ['S-i'] = 'inline-chat', ['M-i'] = 'palette-ai', ['f'] = 'find-file',
             }
             -- Vimrc-first: user mappings always win (mapcheck), and setting
             -- g:marxen_default_shortcuts to 0 skips these defaults entirely

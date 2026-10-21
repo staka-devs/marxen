@@ -10,6 +10,8 @@ import { parseSubstituteCommand, SUBSTITUTE_SEARCH_OPTIONS } from "../../domain/
 import { MessageSquare, Files, GitBranch, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronRight, FileText, FilePlus2, FolderPlus, RefreshCw } from "lucide-react";
 import { SourceControlPanel } from "../workspace/SourceControlPanel";
 import { AiChangesBar } from "../ai/AiChangesBar";
+import { FindBar } from "../editor/FindBar";
+import { useWorkspaceSearch } from "./hooks/useWorkspaceSearch";
 import { CodeMirrorEditor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
 import AiPanel from "../ai-panel";
@@ -641,6 +643,13 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     setSideView("search");
   }, [typedSubstitute?.pattern, typedSubstitute?.replacement]);
 
+  // Issue #125: in-file find bar over the same native search, limited to the active file; idle while closed.
+  const [findOpen, setFindOpen] = useState(false);
+  const fileSearch = useWorkspaceSearch({ desktop, root: workspace.wsRoot, roots: workspace.roots, gateway: workspaceGateway, session, notify: setNotice,
+    only: { path: findOpen ? active?.path ?? "" : "", scope: active?.location?.scope } });
+  /** Close the find bar and hand the keyboard back to the editor. */
+  const closeFind = () => { setFindOpen(false); document.querySelector<HTMLElement>('[data-testid="editor-primary"] .cm-content')?.focus(); };
+
   /** Text before the latest AI change to the active document, for the inline diff. */
   const aiBaseline = active ? staging.aiChanges.find((change) => change.documentId === active.documentId)?.before ?? null : null;
 
@@ -705,6 +714,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       "view-outline": () => setSideView(value => value === "outline" ? null : "outline"),
       /** Open the existing search and replacement controls. */
       "edit-find": () => setSideView("search"),
+      /** Open the in-file find bar. */
+      "find-file": () => setFindOpen(true),
       /** Open the supported-file picker. */
       "palette-quickopen": () => setQuickOpen(true),
       /** Open the shared command picker. */
@@ -749,7 +760,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       const mod = event.ctrlKey || event.metaKey;
       if (!mod || event.isComposing || event.defaultPrevented || (event.target instanceof Element && event.target.closest('[role="dialog"],input,textarea,select'))) return;
       const key = event.key.toLowerCase();
-      const id = key === "p" ? (event.shiftKey ? "palette-open" : "palette-quickopen") : key === "s" ? "file-save" : key === "," ? "palette-settings" : key === "i" && event.shiftKey ? "inline-chat" : key === "i" && event.altKey ? "palette-ai" : null;
+      const id = key === "p" ? (event.shiftKey ? "palette-open" : "palette-quickopen") : key === "f" && !event.shiftKey ? "find-file" : key === "s" ? "file-save" : key === "," ? "palette-settings" : key === "i" && event.shiftKey ? "inline-chat" : key === "i" && event.altKey ? "palette-ai" : null;
       if (id && workbench.command(id)?.enabled) { event.preventDefault(); if (id === "inline-chat") event.stopPropagation(); void workbench.run(id); }
     };
     window.addEventListener("keydown", onKey);
@@ -1199,10 +1210,14 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           )}
 
         <main
-          className="grid min-h-0 min-w-0 flex-1 overflow-hidden"
+          className="relative grid min-h-0 min-w-0 flex-1 overflow-hidden"
           style={{ gridTemplateColumns: effectiveViewMode === "split" && activeIsMarkdown && active ? `minmax(0, ${splitRatio}fr) 5px minmax(0, ${100 - splitRatio}fr)` : "minmax(0, 1fr)" }}
           aria-label={t("編集領域")}
         >
+          {findOpen && active && <FindBar query={fileSearch.searchQuery} onQuery={fileSearch.setSearchQuery} options={fileSearch.searchOptions} onOptions={fileSearch.setSearchOptions}
+            hits={fileSearch.registryHits} searching={fileSearch.searching} ready={fileSearch.resultsReady} error={fileSearch.searchError}
+            replaceText={fileSearch.replaceText} onReplaceText={fileSearch.setReplaceText}
+            onJump={(hit) => void fileSearch.jumpToHit(hit)} onReplaceOne={(hit) => void fileSearch.replaceOne(hit)} onReplaceAll={() => void fileSearch.replaceAllMatches()} onClose={closeFind} />}
           {/* One editor-primary at a time: live owns the inline preview
               pane, source/split own the raw pane. Selections live in shell
               state so scroll/cursor survive mode switches. */}
