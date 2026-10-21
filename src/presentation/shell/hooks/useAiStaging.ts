@@ -286,7 +286,21 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
       }
       setReviewBusy(true);
       try {
-        const staged = await stageNonAskCopy(copyId, proposal, mode);
+        let staged: Awaited<ReturnType<typeof stageNonAskCopy>>;
+        try {
+          staged = await stageNonAskCopy(copyId, proposal, mode);
+        } catch (cause: unknown) {
+          // Agents in workspace mode edit the copy's files themselves and reply in prose without
+          // patch blocks; apply what they wrote instead of failing on the narration.
+          if (mode !== "workspace" || !isolationGateway) throw cause;
+          const written = await isolationGateway.fetchDiff(copyId);
+          const files = await isolationGateway.fetchNewFiles(copyId).catch(() => []);
+          if (!written.some((diff) => diff.changed) && files.length === 0) throw cause;
+          staged = { diffs: written, newFiles: files, drifted: written.some((diff) => diff.drifted) };
+          setDiffs(written);
+          setNewFiles(files);
+          setReviewMessage(null);
+        }
         // Like other agents, write the change into the file right away; the editor shows the diff and offers undo.
         if (!staged.drifted && (staged.diffs.some((diff) => diff.changed) || staged.newFiles.length > 0)) {
           await applyRef.current(copyId, staged.diffs, staged.newFiles);

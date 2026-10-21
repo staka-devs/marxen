@@ -126,6 +126,7 @@ function installBackend() {
         const proposal = a.proposal as { text: string; baseContexts: Array<{ documentId: string; revision: number }> };
         const mode = a.mode as string;
         if (mode === "ask") throw { code: "io", detail: "質問モードは表示のみです。" };
+        if (mode === "workspace") throw { code: "invalid_scope", detail: "workspace 提案に patch ブロックがありません" };
         if (!proposal || typeof proposal.text !== "string") throw { code: "io", detail: "提案が不正です。" };
         return Promise.resolve({ copyId: a.copyId, updated: [copy.documentId], chars: proposal.text.length });
       }
@@ -394,4 +395,19 @@ it("refuses a stale apply and keeps the document for resync", async () => {
   await screen.findByText(/再登録/);
   expect(backend.docs.get("メモ/a.md")!.text).toBe("# A\n");
   expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 0");
+});
+
+it("applies files an agent edited directly when its workspace reply is prose", async () => {
+  mockStream();
+  await openDocAndAi();
+  const sidebar = screen.getByTestId("ai-sidebar");
+  fireEvent.click(within(sidebar).getByRole("combobox", { name: "モード" }));
+  fireEvent.click(screen.getByRole("option", { name: /文書編集/ }));
+  fireEvent.change(within(sidebar).getByLabelText("プロンプト"), { target: { value: "直して" } });
+  fireEvent.click(within(sidebar).getByRole("button", { name: "送信" }));
+  await waitFor(() => expect(handler).not.toBeNull());
+  emitDone();
+  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
+  expect(await screen.findByRole("region", { name: "AI の変更" })).toBeVisible();
+  expect(screen.queryByText(/patch ブロックがありません/)).not.toBeInTheDocument();
 });
