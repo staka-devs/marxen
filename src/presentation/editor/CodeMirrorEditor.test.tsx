@@ -141,3 +141,11 @@ describe("composition commit", () => {
   });
 });
 
+
+it("highlights lines changed by the latest AI change against its baseline", () => {
+  const rendered = render(<CodeMirrorEditor value={"# T\nnew line\nend"} ariaLabel="editor" aiBaseline={"# T\nold line\nend"} />);
+  expect(rendered.container.querySelector(".marxen-ai-added")).toHaveTextContent("new line");
+  expect(rendered.container.querySelector(".marxen-ai-removed")).toHaveTextContent("old line");
+  rendered.rerender(<CodeMirrorEditor value={"# T\nnew line\nend"} ariaLabel="editor" aiBaseline={null} />);
+  expect(rendered.container.querySelector(".marxen-ai-added")).toBeNull();
+});

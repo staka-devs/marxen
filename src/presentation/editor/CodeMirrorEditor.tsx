@@ -6,6 +6,7 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import type { DocumentSnapshot, TextEdit } from "../../contracts/contracts";
 import { createLivePreview, type LivePreviewCallbacks } from "./livePreview";
+import { aiDiff } from "./aiDiff";
 import { blockCursorWidth } from "./cursorWidth";
 import type { ImageResolver } from "../../domain/image-sources";
 import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../domain/editor-preferences";
@@ -76,6 +77,8 @@ interface Props {
   allowTextInput?: boolean;
   /** Positive ticket to focus a committed pane after file navigation. */
   focusRequest?: number;
+  /** Text before the latest AI change; when set, changed lines are highlighted inline. */
+  aiBaseline?: string | null;
 }
 
 /** Common prefix/suffix diff as a single wire range edit. */
@@ -124,7 +127,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   return [{ range: { start, end: endBefore }, text: after.slice(start, endAfter) }];
 }
 
-/** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, snapshot, shouldUseNativeCursor, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true, focusRequest = 0, onEditorMenu }: Props) {
+/** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, snapshot, shouldUseNativeCursor, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true, focusRequest = 0, onEditorMenu, aiBaseline = null }: Props) {
   const { t, language } = useI18n();
   const languageRef = useRef(language);
   languageRef.current = language;
@@ -136,6 +139,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   const liveRef = useRef(new Compartment());
   const appearanceRef = useRef(new Compartment());
   const accessibilityRef = useRef(new Compartment());
+  const aiDiffRef = useRef(new Compartment());
   const syncing = useRef(false);
   const composing = useRef(false);
   const printableKey = useRef<string | undefined>(undefined);
@@ -206,6 +210,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
           appearanceRef.current.of([]),
           editableRef.current.of(EditorView.editable.of(editableRefValue.current)),
           liveRef.current.of([]),
+          aiDiffRef.current.of(aiDiff(aiBaseline)),
           accessibilityRef.current.of(EditorView.contentAttributes.of({ "aria-label": ariaLabel, role: "textbox", tabindex: "0" })),
           EditorView.theme({
             "&": { backgroundColor: "transparent", fontSize: "14px", height: "100%" },
@@ -392,6 +397,10 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
       effects: liveRef.current.reconfigure(livePreview ? createLivePreview(getLiveCallbacks) : []),
     });
   }, [livePreview, getLiveCallbacks, t, language]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: aiDiffRef.current.reconfigure(aiDiff(aiBaseline)) });
+  }, [aiBaseline]);
 
   // Vim cursor echo: apply once per sequence token without disturbing
   // composition or the user's active selection gestures. The programmatic

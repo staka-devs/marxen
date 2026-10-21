@@ -60,6 +60,8 @@ const backend = {
   copySeq: 0,
   approveStaleOnce: false,
   editAfterSave: null as string | null,
+  /** Replaces the approve reply (and skips the fake text change) when set. */
+  approveOverride: null as unknown,
 };
 
 /** Reset the fake native backend to one sample document. */
@@ -71,6 +73,7 @@ function resetBackend() {
   backend.copySeq = 0;
   backend.approveStaleOnce = false;
   backend.editAfterSave = null;
+  backend.approveOverride = null;
 }
 
 /** Install the fake Tauri backend answering workspace and isolation commands. */
@@ -152,6 +155,10 @@ function installBackend() {
           backend.approveStaleOnce = false;
           throw { code: "contract", error: { code: "stale_revision", expected: 5, received: 4 } };
         }
+        if (backend.approveOverride) {
+          backend.copies.delete(a.copyId as string);
+          return Promise.resolve(backend.approveOverride);
+        }
         const doc = [...backend.docs.values()].find((entry) => entry.id === copy.documentId)!;
         doc.text += "[適用]";
         doc.revision += 1;
@@ -178,6 +185,15 @@ function installBackend() {
           doc.dirty = true;
         }
         return Promise.resolve({ documentId: doc.id, revision: savedRevision, dirty: false });
+      }
+      case "apply_gui_edits": {
+        const doc = [...backend.docs.values()].find((entry) => entry.id === a.documentId)!;
+        for (const edit of a.edits as Array<{ range: { start: number; end: number }; text: string }>) {
+          doc.text = doc.text.slice(0, edit.range.start) + edit.text + doc.text.slice(edit.range.end);
+        }
+        doc.revision += 1;
+        doc.dirty = true;
+        return Promise.resolve({ documentId: doc.id, revision: doc.revision, text: doc.text, dirty: doc.dirty });
       }
       case "isolation_reject":
       case "isolation_cancel":
@@ -243,7 +259,7 @@ let handler: ((event: AiStreamEvent) => void) | null = null;
   emitDone();
 }
 
-it("registers exact scope, stages the proposal, diffs, and applies with per-doc outcomes", async () => {
+it("writes the AI change into the document, saves it, and shows it for keep or undo", async () => {
   mockStream();
   await openDocAndAi();
   expect(within(screen.getByTestId("ai-sidebar")).getByText("a.md")).toBeVisible();
@@ -255,49 +271,61 @@ it("registers exact scope, stages the proposal, diffs, and applies with per-doc 
   const request = mockedStartPrompt.mock.calls[0][0];
   expect(request.staging).toEqual({ copyId: "copy_1" });
   expect(request.mode).toBe("rewrite");
-  expect(await screen.findByTestId("ai-proposal")).toHaveTextContent("提案文");
-  await waitFor(() =>
-    expect(mockedInvoke).toHaveBeenCalledWith(
-      "isolation_stage_proposal",
-      expect.objectContaining({ copyId: "copy_1", mode: "rewrite" }),
-    ),
-  );
-  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_diff", { copyId: "copy_1" }));
-  expect(await screen.findByText(/変更あり/)).toBeVisible();
-  expect(await screen.findByText(/取り込みました/)).toBeVisible();
-  fireEvent.click(screen.getByRole("button", { name: "適用して保存" }));
+  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_stage_proposal", expect.objectContaining({ copyId: "copy_1", mode: "rewrite" })));
+  // No approval click: the change lands in the file like other agents.
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
   await waitFor(() => expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 1"));
-  expect(await screen.findByLabelText("承認結果")).toHaveTextContent(/a\.md.*適用/);
-  expect(screen.queryByTestId("ai-proposal")).not.toBeInTheDocument();
+  await waitFor(() => expect(screen.getByTestId("dirty")).toHaveTextContent("保存済み"));
   expect(backend.docs.get("メモ/a.md")!.text).toContain("[適用]");
+  const bar = await screen.findByRole("region", { name: "AI の変更" });
+  expect(bar).toHaveTextContent("a.md");
+  expect(screen.queryByText("提案文")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "適用して保存" })).not.toBeInTheDocument();
 });
 
-it("shows Saved in the footer after a successful AI apply-and-save", async () => {
+it("keeps the change and clears the highlight", async () => {
   mockStream();
   await openDocAndAi();
   await registerAndSend();
-  await screen.findByTestId("ai-proposal");
-  fireEvent.click(screen.getByRole("button", { name: "適用して保存" }));
-  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
-  const saved = await screen.findAllByText(/保存しました/);
-  expect(saved.length).toBeGreaterThan(0);
+  const bar = await screen.findByRole("region", { name: "AI の変更" });
+  fireEvent.click(within(bar).getByRole("button", { name: "保持" }));
+  expect(screen.queryByRole("region", { name: "AI の変更" })).not.toBeInTheDocument();
+  expect(backend.docs.get("メモ/a.md")!.text).toBe("# A\n[適用]");
+});
+
+it("undoes the change by restoring and saving the original text", async () => {
+  mockStream();
+  await openDocAndAi();
+  await registerAndSend();
+  const bar = await screen.findByRole("region", { name: "AI の変更" });
+  fireEvent.click(within(bar).getByRole("button", { name: "元に戻す" }));
+  await waitFor(() => expect(backend.docs.get("メモ/a.md")!.text).toBe("# A\n"));
   await waitFor(() => expect(screen.getByTestId("dirty")).toHaveTextContent("保存済み"));
-  expect(screen.queryByRole("button", { name: "適用して保存" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "AI の変更" })).not.toBeInTheDocument();
+  expect(await screen.findAllByText("AI の変更を元に戻しました。")).not.toHaveLength(0);
+});
+
+it("never undoes over an edit made after the change", async () => {
+  mockStream();
+  await openDocAndAi();
+  await registerAndSend();
+  const bar = await screen.findByRole("region", { name: "AI の変更" });
+  const doc = backend.docs.get("メモ/a.md")!;
+  doc.text += "[user]";
+  doc.revision += 1;
+  fireEvent.click(within(bar).getByRole("button", { name: "元に戻す" }));
+  expect(await screen.findAllByText(/編集後のため戻していません/)).not.toHaveLength(0);
+  expect(doc.text).toBe("# A\n[適用][user]");
 });
 
 it("keeps a concurrent later user edit dirty after AI save", async () => {
   mockStream();
   await openDocAndAi();
-  await registerAndSend();
-  await screen.findByTestId("ai-proposal");
   // A user edit landing between the AI save and the post-save snapshot must
   // survive with its newer revision instead of being overwritten as clean.
   backend.editAfterSave = "[user]";
-  fireEvent.click(screen.getByRole("button", { name: "適用して保存" }));
+  await registerAndSend();
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
-  const saved = await screen.findAllByText(/保存しました/);
-  expect(saved.length).toBeGreaterThan(0);
   await waitFor(() => expect(screen.getByTestId("dirty")).toHaveTextContent("未保存"));
   expect(screen.getByTestId("editor-primary")).toHaveTextContent("[user]");
 });
@@ -322,45 +350,32 @@ it("displays ask proposals without staging", async () => {
 it("treats an unchanged scope as success alongside an applied document", async () => {
   mockStream();
   await openDocAndAi();
-  await registerAndSend();
-  await screen.findByTestId("ai-proposal");
-  // Simulate the applied buffer moving; the unchanged scope stays put.
-  const doc = backend.docs.get("メモ/a.md")!;
-  doc.text += "[適用]";
-  doc.revision += 1;
-  doc.dirty = true;
-  mockedInvoke.mockResolvedValueOnce({
+  backend.approveOverride = {
     copyId: "copy_1",
     outcomes: [
       { documentId: "doc_a", applied: true, revision: 1, error: null, rolledBack: false, rollbackError: null },
       { documentId: "doc_b", applied: false, revision: 0, error: null, rolledBack: false, rollbackError: null },
     ],
-  });
-  fireEvent.click(screen.getByRole("button", { name: "適用して保存" }));
+  };
+  await registerAndSend();
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
   const results = await screen.findByLabelText("承認結果");
   expect(results).toHaveTextContent(/a\.md.*適用/);
   expect(results).toHaveTextContent(/文書.*変更なし/);
-  // Unchanged is success: no failure text, no false all-or-nothing label.
   expect(screen.queryByText(/未適用/)).not.toBeInTheDocument();
   expect(screen.queryByText(/all-or-nothing/i)).not.toBeInTheDocument();
-  // Single apply-and-save retires actions; outcomes list carries per-doc results.
-  await waitFor(() => expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 1"));
 });
 
 it("reports a rollback failure per document without all-or-nothing claims", async () => {
   mockStream();
   await openDocAndAi();
-  await registerAndSend();
-  await screen.findByTestId("ai-proposal");
-  mockedInvoke.mockResolvedValueOnce({
+  backend.approveOverride = {
     copyId: "copy_1",
     outcomes: [
       { documentId: "doc_a", applied: false, revision: 0, error: "neovim error", rolledBack: true, rollbackError: "rollback failed" },
     ],
-  });
-  fireEvent.click(screen.getByRole("button", { name: "適用して保存" }));
-  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
+  };
+  await registerAndSend();
   const results = await screen.findByLabelText("承認結果");
   expect(results).toHaveTextContent(/a\.md.*未適用/);
   expect(results).toHaveTextContent(/ロールバック済み/);
@@ -368,31 +383,15 @@ it("reports a rollback failure per document without all-or-nothing claims", asyn
   expect(await screen.findByText(/1 文書が未適用/)).toBeVisible();
   expect(screen.queryByText(/all-or-nothing/i)).not.toBeInTheDocument();
   expect(backend.docs.get("メモ/a.md")!.text).toBe("# A\n");
-  expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 0");
+  expect(screen.queryByRole("region", { name: "AI の変更" })).not.toBeInTheDocument();
 });
 
-it("discards without touching source or disk state", async () => {
+it("refuses a stale apply and keeps the document for resync", async () => {
   mockStream();
   await openDocAndAi();
-  await registerAndSend();
-  await screen.findByTestId("ai-proposal");
-  fireEvent.click(screen.getByRole("button", { name: /^破棄$/ }));
-  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_reject", { copyId: "copy_1" }));
-  expect(backend.docs.get("メモ/a.md")!.text).toBe("# A\n");
-  expect(screen.queryByTestId("ai-proposal")).not.toBeInTheDocument();
-});
-
-it("refuses stale approval and keeps text for resync", async () => {
-  mockStream();
-  await openDocAndAi();
-  await registerAndSend();
-  await screen.findByTestId("ai-proposal");
   backend.approveStaleOnce = true;
-  fireEvent.click(screen.getByRole("button", { name: "適用して保存" }));
+  await registerAndSend();
   await screen.findByText(/再登録/);
   expect(backend.docs.get("メモ/a.md")!.text).toBe("# A\n");
   expect(screen.getByTestId("revision")).toHaveTextContent("リビジョン 0");
 });
-
-
-

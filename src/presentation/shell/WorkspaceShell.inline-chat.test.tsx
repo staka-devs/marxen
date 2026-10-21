@@ -172,7 +172,7 @@ let handler: ((event: AiStreamEvent) => void) | null = null;
   await screen.findByTestId("ai-sidebar");
 }
 
-it("opens inline chat with Ctrl+Shift+I on the paragraph target and reviews the proposal", async () => {
+it("opens inline chat with Ctrl+Shift+I on the paragraph target and hands the rewrite to the document", async () => {
   mockStream();
   await openDocAndAi();
   fireEvent.keyDown(window, { key: "i", ctrlKey: true, shiftKey: true });
@@ -193,17 +193,16 @@ it("opens inline chat with Ctrl+Shift+I on the paragraph target and reviews the 
       sent: [{ documentId: "doc_a", revision: 0, ranges: [{ start: 0, end: 3 }], chars: 4 }],
     },
   });
-  expect(await within(inline).findByText("短い案")).toBeVisible();
+  // The widget closes so the rewrite shows in the editor instead of as text in the box.
+  await waitFor(() => expect(screen.queryByTestId("inline-chat")).not.toBeInTheDocument());
+  expect(screen.queryByText("短い案")).not.toBeInTheDocument();
   const request = mockedStartPrompt.mock.calls[0][0];
   expect(request.mode).toBe("rewrite");
   expect(request.contexts[0]).toMatchObject({ documentId: "doc_a", revision: 0 });
   // Inline target (paragraph [0,3)) stays separate from the agent selection scope.
   expect(request.contexts[0].ranges).toEqual([{ start: 0, end: 3 }]);
   expect(request.contexts[0].text).toBe("# A");
-  expect(await screen.findByTestId("ai-proposal")).toHaveTextContent("短い案");
-  fireEvent.click(inlineBox.getByRole("button", { name: "差分を確認" }));
-  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_diff", expect.objectContaining({ copyId: expect.any(String) })));
-  expect(await screen.findByText(/変更あり/)).toBeVisible();
+  await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_stage_proposal", expect.objectContaining({ mode: "rewrite" })));
 });
 
 it("ignores plain Ctrl+I so native Vim input keeps the key", async () => {

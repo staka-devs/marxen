@@ -92,12 +92,8 @@ export default function ReviewPanel({
         </>)}
       </div>
       {proposalText !== null && onStageProposal !== null && !applied && (
-        <div className="mt-2 rounded-sm border border-border p-2">
-          <p className="text-xs font-semibold text-muted-foreground">{t("取り込み待ちの提案")}</p>
-          <p className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap text-xs">{proposalText}</p>
-          <Button variant="outline" size="sm" className="mt-2" onClick={onStageProposal} disabled={!copyId || busy}>
-            {t("提案を作業コピーに取り込む")}</Button>
-        </div>
+        <Button variant="outline" size="sm" className="mt-2" onClick={onStageProposal} disabled={!copyId || busy}>
+          {t("提案を作業コピーに取り込む")}</Button>
       )}
       {message && (
         <p role="alert" className="mt-2 text-sm font-medium text-red-600">

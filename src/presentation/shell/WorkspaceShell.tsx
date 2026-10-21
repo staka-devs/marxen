@@ -9,6 +9,7 @@ import { schemeStylesheet } from "../../domain/color-scheme";
 import { parseSubstituteCommand, SUBSTITUTE_SEARCH_OPTIONS } from "../../domain/search";
 import { MessageSquare, Files, GitBranch, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronRight, FileText, FilePlus2, FolderPlus, RefreshCw } from "lucide-react";
 import { SourceControlPanel } from "../workspace/SourceControlPanel";
+import { AiChangesBar } from "../ai/AiChangesBar";
 import { CodeMirrorEditor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
 import AiPanel from "../ai-panel";
@@ -640,6 +641,9 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     setSideView("search");
   }, [typedSubstitute?.pattern, typedSubstitute?.replacement]);
 
+  /** Text before the latest AI change to the active document, for the inline diff. */
+  const aiBaseline = active ? staging.aiChanges.find((change) => change.documentId === active.documentId)?.before ?? null : null;
+
   const effectiveViewMode: ViewMode = active && !activeIsMarkdown ? "source" : viewMode;
 
   // Snapshot merge, stale resync, cursor refresh, and selection follow-up
@@ -1004,6 +1008,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           </button>
 
         </div>}
+        <AiChangesBar changes={staging.aiChanges} labels={contextLabels} activeId={activeId}
+          onOpen={(documentId) => session.setActiveId(documentId)} onKeep={staging.keepAiChanges} onUndo={() => void staging.undoAiChanges()} />
         {activeIsMarkdown && effectiveViewMode !== "read" && <GuiToolbar
           onFormat={(kind: FormatKind) => vim.guiAtSelection((text, start, end) => formatRange(text, start, end, kind), kind === "bold" || kind === "strike" ? 2 : 1)}
           onCheckbox={() => vim.guiAtSelection((text, _start, end) => toggleCheckbox(text, end))}
@@ -1210,6 +1216,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   editable={desktop}
                   ariaLabel={t("{{value0}}の{{value1}}エディタ", { value0: (active.path ?? active.documentId), value1: (activeIsMarkdown ? "Markdown" : t("テキスト")) })}
                   testId="editor-primary"
+                  aiBaseline={aiBaseline}
                   onEditorMenu={(point) => void editorMenu.open(point)}
                   focusRequest={editorFocus?.path === active.path ? editorFocus.sequence : 0}
                   initialSelection={selections[active.documentId] ?? null}
@@ -1241,6 +1248,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   editable={desktop}
                   ariaLabel={t("{{value0}}の{{value1}}エディタ", { value0: (active.path ?? active.documentId), value1: (activeIsMarkdown ? "Markdown" : t("テキスト")) })}
                   testId="editor-primary"
+                  aiBaseline={aiBaseline}
                   onEditorMenu={(point) => void editorMenu.open(point)}
                   focusRequest={editorFocus?.path === active.path ? editorFocus.sequence : 0}
                   preferences={preferences}
@@ -1367,8 +1375,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               provider={aiProvider}
               disabled={staging.agentBusy}
               onBusyChange={staging.setInlineChatBusy}
-              onProposal={staging.handleProposal}
-              onReview={() => { setShowAi(true); void staging.fetchReviewDiff(); }}
+              onProposal={(proposal, sent, mode) => { void staging.handleProposal(proposal, sent, mode); staging.closeInlineChat(); }}
               onClose={staging.closeInlineChat}
               startPrompt={aiGateway?.startPrompt}
               aiGateway={aiGateway}
@@ -1466,21 +1473,6 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           {staging.aiDismissed && active && (
             <button type="button" onClick={() => staging.setAiDismissed(false)} className="mt-2 w-full rounded-md border border-border px-3 py-1.5 text-xs">
               {t("現在の選択を送る")}</button>
-          )}
-          {staging.aiProposal && staging.aiProposal.mode !== "ask" && (
-            <details data-testid="ai-proposal" className="mt-3 max-h-48 min-h-0 overflow-y-auto border-t border-border pt-2 text-xs">
-              <summary className="cursor-pointer text-muted-foreground">{t("提案の Markdown")}</summary>
-              <p className="font-medium">{t("AI の提案")}</p>
-              <p className="mt-1 whitespace-pre-wrap">{staging.aiProposal.proposal.text}</p>
-              <p
-                className="mt-1 text-muted-foreground"
-                title={staging.aiProposal.proposal.baseContexts.map((ref) => `rev ${ref.revision}`).join(", ")}
-              >
-                {t("対象:")}{staging.aiProposal.proposal.baseContexts.map((ref) => contextLabels[ref.documentId] ?? t("現在の文書")).join(", ")}
-              </p>
-              <button type="button" onClick={() => staging.setAiProposal(null)} className="mt-2 w-full rounded-md border border-border px-3 py-1.5">
-                {t("却下する")}</button>
-            </details>
           )}
         </ResizableAiPane>
       )}

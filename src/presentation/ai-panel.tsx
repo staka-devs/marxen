@@ -196,6 +196,11 @@ function AssistantSteps({ message, onChoose }: {
       return permission ? <PermissionCard key={`permission:${permission.requestId}`} permission={permission} onChoose={(optionId) => onChoose(permission, optionId)} /> : null;
     }
     const testId = index === lastText ? `chat-response-${message.id}` : `chat-response-${message.id}-${index}`;
+    // Write/rewrite replies are document content that lands in the file; the chat only reports it.
+    if (message.mode === "generate" || message.mode === "rewrite") {
+      if (index !== lastText) return null;
+      return <p key={`text:${index}`} data-testid={testId} className="mt-0.5 text-xs text-muted-foreground">{message.state === "done" ? t("文書に反映しました。変更はエディターで確認できます。") : t("文書を書き換えています…")}</p>;
+    }
     return message.state === "done"
       ? <div key={`text:${index}`} className="marxen-chat-body mt-1"><MarkdownPreview text={step.text} label={t("AI の回答")} testId={testId} /></div>
       : <p key={`text:${index}`} className="ai-chat-text mt-0.5 whitespace-pre-wrap leading-6">{step.text}</p>;

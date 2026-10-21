@@ -22,7 +22,9 @@ describe("review panel", () => {
   it("shows the change count and drives apply/discard", () => {
     const props = baseProps();
     render(<ReviewPanel {...props} newFiles={[{ rel: "new.md", chars: 3, content: "abc" }]} />);
-    expect(screen.getByText("変更の提案")).toBeVisible();
+    // The raw proposal text is never echoed; only the retry action remains.
+    expect(screen.queryByText("変更の提案")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "提案を作業コピーに取り込む" })).toBeVisible();
     expect(screen.getByText("1 件のファイル")).toBeVisible();
     expect(screen.queryByText("copy_08")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "適用して保存" }));

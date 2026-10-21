@@ -38,6 +38,17 @@ import {
 import { docFromOpen } from "../../../application/document/document-helpers";
 import type { IsolationGateway } from "../../../application/ports";
 import type { DocumentSession } from "./useDocumentSession";
+import { singleEditFromDiff } from "../../editor/CodeMirrorEditor";
+import { workspaceErrorText } from "../../../domain/document-errors";
+
+/** One document an AI run rewrote and saved, with its text from just before. */
+export interface AiChange {
+  documentId: string;
+  /** Text before the AI change; drives the inline diff and undo. */
+  before: string;
+  /** Revision right after the change was saved; undo only applies while unchanged. */
+  revision: number;
+}
 
 /** Injected ports for AI review and inline flow. */
 export interface AiStagingArgs {
@@ -121,6 +132,12 @@ export interface AiStaging {
   approveStaging: () => Promise<void>;
   /** Reject the staged copy without touching disk. */
   rejectStaging: () => Promise<void>;
+  /** Documents the latest AI run rewrote, kept until the user keeps or undoes them. */
+  aiChanges: AiChange[];
+  /** Accept the applied AI changes and clear their inline highlights. */
+  keepAiChanges: () => void;
+  /** Restore and save each changed document's text from before the AI change. */
+  undoAiChanges: () => Promise<void>;
 }
 
 /**
@@ -186,6 +203,7 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewMessage, setReviewMessage] = useState<LocalizedText | null>(null);
   const [reviewStatus, setReviewStatus] = useState<LocalizedText | null>(null);
+  const [aiChanges, setAiChanges] = useState<AiChange[]>([]);
 
   // Exact AI scope: the active document at its live revision with the GUI
   // selection as the single range. Dismissed per document; questions never
@@ -221,13 +239,16 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     setReviewMessage(null);
     setReviewStatus(result.drifted ? message("文書が更新されています。選択範囲を指定し直してください。") : result.statusMessage);
     setDiffs(result.diffs);
+    let files: import("../../../contracts/isolation-contracts").StagedNewFile[] = [];
     try {
-      setNewFiles(await isolationGateway.fetchNewFiles(copyId));
+      files = await isolationGateway.fetchNewFiles(copyId);
     } catch {
-      setNewFiles([]);
+      files = [];
     }
+    setNewFiles(files);
     setImportOutcomes([]);
     setApplied(false);
+    return { diffs: result.diffs, newFiles: files, drifted: result.drifted };
   }
 
   /**
@@ -265,7 +286,11 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
       }
       setReviewBusy(true);
       try {
-        await stageNonAskCopy(copyId, proposal, mode);
+        const staged = await stageNonAskCopy(copyId, proposal, mode);
+        // Like other agents, write the change into the file right away; the editor shows the diff and offers undo.
+        if (!staged.drifted && (staged.diffs.some((diff) => diff.changed) || staged.newFiles.length > 0)) {
+          await applyRef.current(copyId, staged.diffs, staged.newFiles);
+        }
       } catch (cause: unknown) {
         setReviewMessage(localizedFailure(cause, describeIsolationError));
         try {
@@ -468,16 +493,16 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
    * Applied changes retire approval actions; partial and new-only import
    * failures report as failures with a retry that never reapplies edits.
    */
-  const approveStaging = useCallback(async () => {
-    const copyId = stagingRef.current;
-    if (!copyId) return;
-    if (diffs.some((diff) => diff.drifted)) {
+  async function applyStaged(copyId: string, stagedDiffs: IsolationDiff[], stagedFiles: typeof newFiles) {
+    if (stagedDiffs.some((diff) => diff.drifted)) {
       setReviewMessage(message("文書が更新されています。選択範囲を指定し直してください。"));
       return;
     }
     setReviewBusy(true);
     try {
       if (!isolationGateway || !registry) throw new LocalizedError(READONLY_MESSAGE);
+      const changedIds = [...new Set(stagedDiffs.filter((diff) => diff.changed).map((diff) => diff.documentId))];
+      const before = await Promise.all(changedIds.map(async (documentId) => ({ documentId, text: (await registry.fetchSnapshot(documentId)).text })));
       const applied = await approveAndSaveStagedCopy(
         reviewPorts(
           (id) => isolationGateway.approveCopy(id),
@@ -488,9 +513,15 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
       );
       for (const snapshot of applied.snapshots) mergeSnapshot(snapshot);
       if (activeRef.current) await refreshModeCursor(activeRef.current);
-      const imports = newFiles.length > 0
-        ? await importStagedFiles(isolationGateway, copyId, newFiles)
+      const imports = stagedFiles.length > 0
+        ? await importStagedFiles(isolationGateway, copyId, stagedFiles)
         : [];
+      const savedIds = new Set(applied.saved.filter((entry) => entry.saved).map((entry) => entry.documentId));
+      setAiChanges(await Promise.all(before.filter((item) => savedIds.has(item.documentId)).map(async (item) => ({
+        documentId: item.documentId,
+        before: item.text,
+        revision: (await registry.fetchSnapshot(item.documentId)).revision,
+      }))));
       registerImports(imports);
       const summary = summarizeApproveResult(applied.approve, t);
       const saved = summarizeSavedResult(applied.saved);
@@ -531,7 +562,46 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     } finally {
       setReviewBusy(false);
     }
+  }
+  const applyRef = useRef(applyStaged);
+  applyRef.current = applyStaged;
+
+  /** Apply and save the staged copy in one natural action, then resync views. */
+  const approveStaging = useCallback(async () => {
+    const copyId = stagingRef.current;
+    if (copyId) await applyStaged(copyId, diffs, newFiles);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diffs, newFiles, registry, mergeSnapshot, refreshModeCursor, registerImports, isolationGateway, activeRef, notify]);
+
+  /** Accept the applied AI changes and clear their inline highlights. */
+  const keepAiChanges = useCallback(() => setAiChanges([]), []);
+
+  /**
+   * Restore each changed document to its text from before the AI change, then save.
+   *
+   * A document edited since the change is left alone so the user's own edits are never lost.
+   */
+  const undoAiChanges = useCallback(async () => {
+    if (!registry) return;
+    let skipped = 0;
+    for (const change of aiChanges) {
+      try {
+        const current = await registry.fetchSnapshot(change.documentId);
+        if (current.revision !== change.revision) { skipped += 1; continue; }
+        const edits = singleEditFromDiff(current.text, change.before);
+        const restored = edits ? await registry.applyEdits({ documentId: change.documentId, baseRevision: current.revision }, edits) : current;
+        mergeSnapshot(restored);
+        await registry.save({ documentId: change.documentId, baseRevision: restored.revision });
+        mergeSnapshot(await registry.fetchSnapshot(change.documentId));
+      } catch (cause) {
+        skipped += 1;
+        setNotice(localizedFailure(cause, workspaceErrorText));
+      }
+    }
+    setAiChanges([]);
+    if (skipped > 0) setNotice(message("{{value0}} 件は編集後のため戻していません。Vim の u で取り消せます。", { value0: skipped }));
+    else setNotice(message("AI の変更を元に戻しました。"));
+  }, [aiChanges, registry, mergeSnapshot, notify]);
 
   /**
    * Retry failed new-file imports without reapplying document edits.
@@ -619,6 +689,9 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     fetchReviewDiff,
     retryImports,
     clearStaging,
+    aiChanges,
+    keepAiChanges,
+    undoAiChanges,
     approveStaging,
     rejectStaging,
   };

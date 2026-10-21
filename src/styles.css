@@ -266,3 +266,8 @@ article.marxen-md { padding: 32px max(24px, calc((100% - 960px) / 2)) 80px; }
 
 [data-theme="contrast"] [data-file-icon="folder"],
 [data-theme="contrast"] [data-file-icon="folder-open"] { color: var(--foreground); }
+
+/* Inline diff of the latest AI change (kept until Keep / Undo). */
+.marxen-editor .cm-line.marxen-ai-added { background: var(--diff-add); box-shadow: inset 3px 0 #2ea043; }
+.marxen-editor .marxen-ai-removed { background: var(--diff-del); box-shadow: inset 3px 0 #f85149; color: var(--muted-foreground); text-decoration: line-through; padding-left: 12px; white-space: pre-wrap; }
+.marxen-ai-bar { background: color-mix(in srgb, var(--primary) 8%, var(--background)); }
