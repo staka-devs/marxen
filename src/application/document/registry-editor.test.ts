@@ -105,12 +105,27 @@ describe("serialized editor Enter and table navigation", () => {
   it("navigates source cells only when Insert Tab is unmapped", async () => {
     const text = "| A | B |\n| --- | --- |\n| A\\|B | `x|y` |";
     const plain = fixture(text);
-    const result = await plain.client.routeTableTab("doc", false, text.indexOf(" A |"), text);
+    plain.transport.fetchCursor.mockResolvedValue({ documentId: "doc", revision: 4, anchor: text.indexOf(" A |"), head: text.indexOf(" A |") });
+    const result = await plain.client.routeTableTab("doc", false);
     expect(result).toHaveProperty("cursor.head", text.indexOf("B"));
     expect(plain.transport.inputWithCopy).not.toHaveBeenCalled();
     const mapped = fixture(text, "insert", true);
-    await mapped.client.routeTableTab("doc", false, 0, text);
+    await mapped.client.routeTableTab("doc", false);
     expect(mapped.events).toEqual(["key:<Tab>@4"]);
+  });
+  it("indents and outdents a list item with Vim's indent keys instead of a literal tab", async () => {
+    const text = "- one\n- two";
+    const indent = fixture(text);
+    indent.transport.fetchCursor.mockResolvedValue({ documentId: "doc", revision: 4, anchor: text.indexOf("two"), head: text.indexOf("two") });
+    await indent.client.routeTableTab("doc", false);
+    expect(indent.events).toEqual(["key:<C-t>@4"]);
+    const outdent = fixture(text);
+    outdent.transport.fetchCursor.mockResolvedValue({ documentId: "doc", revision: 4, anchor: text.indexOf("two"), head: text.indexOf("two") });
+    await outdent.client.routeTableTab("doc", true);
+    expect(outdent.events).toEqual(["key:<C-d>@4"]);
+    const prose = fixture("plain text");
+    await prose.client.routeTableTab("doc", false);
+    expect(prose.events).toEqual(["key:<Tab>@4"]);
   });
   it("rejects a context-menu action after a newer queued edit", async () => {
     const { client, transport } = fixture();
@@ -131,7 +146,7 @@ describe("serialized editor Enter and table navigation", () => {
     transport.inputWithCopy.mockResolvedValueOnce({ snapshot: { documentId: "doc", revision: 4, text: "prose", dirty: false }, copyReady: false, copy: { format: "markdown", text: "copied" } });
     /** Hold clipboard publication to prove that subsequent keys stay queued. */
     const copy = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
-    const tab = client.routeTableTab("doc", false, 0, "prose", copy);
+    const tab = client.routeTableTab("doc", false, copy);
     const next = client.vimInputWithCopy("doc", "<Esc>", vi.fn());
     await vi.waitFor(() => expect(copy).toHaveBeenCalledOnce());
     expect(events).toEqual([]);
@@ -143,7 +158,7 @@ describe("serialized editor Enter and table navigation", () => {
     const source = "| A | B |\n| --- | --- |\n| a | b |";
     const { client, events } = fixture(source);
     const gui = client.applyGuiEdits({ documentId: "doc", baseRevision: 4 }, source, [{ range: { start: 3, end: 3 }, text: "x" }], { anchor: 4, head: 4 });
-    const tab = client.routeTableTab("doc", false, 3, source);
+    const tab = client.routeTableTab("doc", false);
     await gui;
     expect(await tab).toHaveProperty("cursor.head", source.indexOf("B") + 1);
     expect(events).toEqual(["edit:4", "cursor:4@5", "cursor:7@5"]);

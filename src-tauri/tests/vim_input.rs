@@ -646,3 +646,25 @@ fn cmdline_substitute_reports_and_search_counts() {
         .expect("recounted after n");
     assert!(count.total >= 2);
 }
+
+#[test]
+/// Insert-mode Tab through the app's input path writes indentation into the buffer.
+fn insert_mode_tab_inserts_indentation() {
+    let actor =
+        marxen_lib::open_document(DocumentId("insert-tab".into()), "ab".into(), None).unwrap();
+    key(&actor, "i");
+    let snapshot = actor.snapshot();
+    // The app renders the snapshot this call returns, so it must already contain the indent.
+    let result = actor
+        .input_with_copy(
+            SaveRequest {
+                location: None,
+                document_id: snapshot.document_id,
+                base_revision: snapshot.revision,
+            },
+            "<Tab>",
+        )
+        .unwrap();
+    assert_ne!(result.snapshot.text, "ab", "Tab inserted nothing");
+    assert_eq!(actor.current_mode().unwrap().mode, VimMode::Insert);
+}

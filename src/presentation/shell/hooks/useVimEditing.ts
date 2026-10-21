@@ -280,7 +280,7 @@ export function useVimEditing(args: VimEditingArgs): VimEditing {
         // order against successive acknowledgements.
         const range = takeRange(id).range;
         if ((keys === "<Tab>" || keys === "<S-Tab>") && isMarkdownPath(docsRef.current[id].path)) {
-          const result = await registry.routeTableTab(id, keys === "<S-Tab>", range.end, takeRange(id).fullText, (copy) => writeYankToClipboard(copy, id));
+          const result = await registry.routeTableTab(id, keys === "<S-Tab>", (copy) => writeYankToClipboard(copy, id));
           if ("cursor" in result) {
             if (isSelectionGenCurrent(id, gen)) {
               setCopyReady(null);

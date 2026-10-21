@@ -86,7 +86,7 @@ export interface DocumentGateway {
   /** Route Enter with an optional Markdown hard break at the queued native cursor. */
   routeEditorEnter(documentId: DocumentId, hardBreak: boolean, hasSelection: boolean, onCopy: (copy: YankCopy) => Promise<void>): Promise<VimInputResult>;
   /** Navigate source table cells in Insert mode while preserving actual Tab mappings. */
-  routeTableTab(documentId: DocumentId, backwards: boolean, offset: number, beforeText: string, onCopy?: (copy: YankCopy) => Promise<void>): Promise<VimInputResult | { cursor: CursorUpdate }>;
+  routeTableTab(documentId: DocumentId, backwards: boolean, onCopy?: (copy: YankCopy) => Promise<void>): Promise<VimInputResult | { cursor: CursorUpdate }>;
   /** Route one printable char using native mode and optional captured GUI source. */
   routeCharKey(
     documentId: DocumentId,

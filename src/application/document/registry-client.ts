@@ -31,7 +31,7 @@ import type {
 } from "../../contracts/contracts";
 import { isStaleError, READONLY_MESSAGE, StaleResync } from "../../domain/document-errors";
 import { applyTextEdits } from "../../domain/coordinates/utf16";
-import { adjacentTableCell, formatRange, hardBreakSpaces, type FormatKind } from "../../domain/markdown-gui";
+import { adjacentTableCell, formatRange, hardBreakSpaces, isListItemAt, type FormatKind } from "../../domain/markdown-gui";
 import type { DocumentTransport, EditorAction } from "../ports";
 import { supportsEditorSelection } from "../../domain/editor-menu";
 
@@ -382,29 +382,31 @@ export class RegistryClient {
     });
   }
 
-  /** Move to the next source cell in the same queue, yielding to user mappings and other modes. */
-  routeTableTab(documentId: DocumentId, backwards: boolean, offset: number, beforeText: string, onCopy?: (copy: YankCopy) => Promise<void>): Promise<VimInputResult | { cursor: CursorUpdate }> {
+  /** Insert-mode Tab in Markdown: next table cell, list indent/outdent, else native Tab; user mappings and other modes win. */
+  routeTableTab(documentId: DocumentId, backwards: boolean, onCopy?: (copy: YankCopy) => Promise<void>): Promise<VimInputResult | { cursor: CursorUpdate }> {
     return this.enqueue(documentId, async () => {
       const revision = this.rev.get(documentId) ?? 0;
       const key = backwards ? "<S-Tab>" : "<Tab>";
+      let nativeKey = key;
       try {
         const mode = await this.readMode(documentId);
         if (mode.revision !== revision) return this.resync(documentId);
-        if (mode.mode === "insert" && !this.pendingPrefix.get(documentId) && !await this.transport.hasMapping(documentId, "i", key, this.location(documentId))) {
+        // Ask Neovim, not the cached prefix: it reports a mapping only while one is really pending.
+        if (mode.mode === "insert" && !await this.transport.hasMapping(documentId, "i", key, this.location(documentId))) {
           const source = this.source.get(documentId);
           if (source === undefined) return this.resync(documentId);
-          let at = offset;
-          if (source !== beforeText) {
-            // A preceding queued GUI commit owns the new cursor; never reuse the old display offset.
-            const cursor = await this.transport.fetchCursor(documentId, this.location(documentId));
-            if (cursor.revision !== revision) return this.resync(documentId);
-            at = cursor.head;
-          }
+          // Insert-mode typing flows through CodeMirror and Neovim, so the shell's recorded
+          // selection can lag (e.g. after `o`); only Neovim's cursor says which line Tab acts on.
+          const cursor = await this.transport.fetchCursor(documentId, this.location(documentId));
+          if (cursor.revision !== revision) return this.resync(documentId);
+          const at = cursor.head;
           const next = adjacentTableCell(source, at, backwards);
           if (next) return { cursor: await this.transport.reportCursor({ documentId, revision, anchor: next.anchor, head: next.anchor }, this.location(documentId)) };
+          // A literal tab in a list item is invisible Markdown; nest or lift the item with Vim's own indent keys.
+          if (isListItemAt(source, at)) nativeKey = backwards ? "<C-d>" : "<C-t>";
         }
         this.pendingPrefix.delete(documentId);
-        const result = await this.transport.inputWithCopy(this.request(documentId, revision), key);
+        const result = await this.transport.inputWithCopy(this.request(documentId, revision), nativeKey);
         this.bump(result.snapshot);
         if (result.copy && onCopy) await onCopy(result.copy);
         return result;
