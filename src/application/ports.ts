@@ -331,6 +331,14 @@ export interface ClipboardGateway {
   copyYank(copy: YankCopy, documentId: string): Promise<void>;
 }
 
+/** Finished chat conversations kept across restarts (Issue #128). */
+export interface ChatHistoryStore {
+  /** Load stored conversations, or none when storage is missing or corrupt. */
+  load(): import("../domain/conversation/ai-conversation").ChatConversation[];
+  /** Persist the storable part of the conversations; false when storage refused. */
+  save(conversations: import("../domain/conversation/ai-conversation").ChatConversation[]): boolean;
+}
+
 /** Non-secret AI profile store. */
 export interface AiProfileStore {
   /** Load the sanitized profile or defaults. */
