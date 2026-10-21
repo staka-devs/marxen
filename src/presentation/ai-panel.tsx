@@ -45,6 +45,9 @@ import {
   truncatePrompt,
   upsertToolCall,
   type ChatConversation,
+  type ChatMessage,
+  type ChatPermission,
+  type ChatSegment,
 } from "../domain/conversation/ai-conversation";
 import type {
   AiError,
@@ -161,6 +164,42 @@ function loadSavedProfile(store: AiProfileStore | undefined): AiProfile {
   }
 }
 
+/** Steps of a turn in arrival order; turns recorded before segments existed keep the old grouping. */
+function stepsOf(message: ChatMessage): ChatSegment[] {
+  return message.segments ?? [
+    { type: "plan" },
+    ...(message.tools ?? []).map((tool) => ({ type: "tool" as const, id: tool.id })),
+    ...(message.permissions ?? []).map((permission) => ({ type: "permission" as const, id: permission.requestId })),
+    ...(message.text ? [{ type: "text" as const, text: message.text }] : []),
+  ];
+}
+
+/** Render an assistant turn chronologically: text, plan, tool and permission steps as they arrived. */
+function AssistantSteps({ message, onChoose }: {
+  message: ChatMessage;
+  /** Reply to a permission request with the chosen option ID. */
+  onChoose: (permission: ChatPermission, optionId: string) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const steps = stepsOf(message);
+  const lastText = steps.map((step) => step.type).lastIndexOf("text");
+  return <>{steps.map((step, index) => {
+    if (step.type === "plan") return message.plan && message.plan.length > 0 ? <PlanCard key="plan" entries={message.plan} /> : null;
+    if (step.type === "tool") {
+      const tool = message.tools?.find((item) => item.id === step.id);
+      return tool ? <ToolCard key={`tool:${tool.id}`} tool={tool} /> : null;
+    }
+    if (step.type === "permission") {
+      const permission = message.permissions?.find((item) => item.requestId === step.id);
+      return permission ? <PermissionCard key={`permission:${permission.requestId}`} permission={permission} onChoose={(optionId) => onChoose(permission, optionId)} /> : null;
+    }
+    const testId = index === lastText ? `chat-response-${message.id}` : `chat-response-${message.id}-${index}`;
+    return message.state === "done"
+      ? <div key={`text:${index}`} className="marxen-chat-body mt-1"><MarkdownPreview text={step.text} label={t("AI の回答")} testId={testId} /></div>
+      : <p key={`text:${index}`} className="ai-chat-text mt-0.5 whitespace-pre-wrap leading-6">{step.text}</p>;
+  })}</>;
+}
+
 /**
  * Agent multi-turn chat with staging, history, and fenced runs.
  *
@@ -204,7 +243,10 @@ export default function AiPanel({
   // selector instead of destroying them. Nothing persists to storage.
   const [conversations, setConversations] = useState<ChatConversation[]>(() => [createConversation(providerKey)]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [mode, setMode] = useState<PromptMode>("ask");
+  // Agents edit in an isolated copy reviewed before apply, so they start ready to work; HTTP replies are text only.
+  const defaultMode: PromptMode = provider.kind === "acp" ? "workspace" : "ask";
+  const [mode, setMode] = useState<PromptMode>(defaultMode);
+  useEffect(() => setMode(defaultMode), [defaultMode]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [streamError, setStreamError] = useState<AiError | null>(null);
@@ -293,7 +335,7 @@ export default function AiPanel({
     if (node && typeof node.scrollTo === "function") {
       node.scrollTo({ top: node.scrollHeight });
     }
-  }, [conversation?.messages.length]);
+  }, [conversation?.messages.length, conversation?.messages.at(-1)?.text.length, conversation?.messages.at(-1)?.segments?.length]);
 
   const running = (conversation ? isBusy(conversation.messages) : false) || resolving || ownedBusy;
   const differentProvider = conversation?.providerKey !== providerKey;
@@ -695,20 +737,7 @@ export default function AiPanel({
                 <p className="ai-chat-role text-[11px] text-muted-foreground">
                   AI{message.state === "streaming" ? t("・生成中…") : message.state === "cancelled" ? t("・取消済み") : message.state === "error" ? t("・失敗") : ""}
                 </p>
-                {message.plan && message.plan.length > 0 && <PlanCard entries={message.plan} />}
-                {(message.tools ?? []).map((tool) => (
-                  <ToolCard key={tool.id} tool={tool} />
-                ))}
-                {(message.permissions ?? []).map((permission) => (
-                  <PermissionCard
-                    key={permission.requestId}
-                    permission={permission}
-                    onChoose={(optionId) => handlePermissionChoice(message.id, permission.runId, permission.requestId, optionId)}
-                  />
-                ))}
-                {message.text && (message.state === "done"
-                  ? <div className="marxen-chat-body mt-1"><MarkdownPreview text={message.text} label={t("AI の回答")} testId={`chat-response-${message.id}`} /></div>
-                  : <p className="ai-chat-text mt-0.5 whitespace-pre-wrap leading-6">{message.text}</p>)}
+                <AssistantSteps message={message} onChoose={(permission, optionId) => handlePermissionChoice(message.id, permission.runId, permission.requestId, optionId)} />
                 {message.state === "error" && message.error && (
                   <p role="alert" className="mt-1 text-xs font-medium text-red-600">{describeAiError(message.error, t)}</p>
                 )}
@@ -732,7 +761,13 @@ export default function AiPanel({
             rows={3}
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
-            placeholder={t("AI への指示を書きます")}
+            onKeyDown={(event) => {
+              // Enter sends, Shift+Enter breaks the line; IME confirmation Enter never sends.
+              if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return;
+              event.preventDefault();
+              if (canSend) void handleSend();
+            }}
+            placeholder={t("AI への指示を書きます（Enter で送信、Shift+Enter で改行）")}
           />
           <div className="mt-1 flex flex-wrap items-center gap-1">
             <div role="group" aria-label={t("プロンプトの種類")} className="min-w-0 shrink-0">

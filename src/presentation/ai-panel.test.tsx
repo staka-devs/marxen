@@ -41,6 +41,43 @@ const labels = { doc_01: "a.md" };
 }
 
 describe("agent chat", () => {
+  it("sends on Enter but not on Shift+Enter or IME confirmation", async () => {
+    mockStartPrompt.mockImplementation(async () => ({
+      runId: "enter",
+      /** Stop the pending mock run. */
+      stop: async () => undefined,
+    }));
+    render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} />);
+    const input = screen.getByLabelText("プロンプト");
+    fireEvent.change(input, { target: { value: "改行して" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+    expect(mockStartPrompt).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter" });
+    await vi.waitFor(() => expect(mockStartPrompt).toHaveBeenCalledOnce());
+  });
+
+  it("shows text, tools and text again in arrival order", async () => {
+    mockStartPrompt.mockImplementation(async (_request, onEvent) => {
+      onEvent({ type: "chunk", payload: { runId: "order", text: "読みます。" } } as AiStreamEvent);
+      onEvent({ type: "tool_call", payload: { runId: "order", toolCall: { toolCallId: "t1", title: "a.md を読む", kind: "read", status: "completed" } } } as AiStreamEvent);
+      onEvent({ type: "chunk", payload: { runId: "order", text: "直しました。" } } as AiStreamEvent);
+      return {
+        runId: "order",
+        /** Stop the pending mock run. */
+        stop: async () => undefined,
+      };
+    });
+    render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "直して" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    const after = await screen.findByText("直しました。");
+    const tool = screen.getByText("a.md を読む");
+    const before = screen.getByText("読みます。");
+    expect(before.compareDocumentPosition(tool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(tool.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("keeps a completed conversation on its original root and requires a new chat after a switch", async () => {
     const first = { ...contexts[0], location: { scope: { rootId: "root-a", generation: "1" }, path: "same.md", position: 0 } };
     const second = { ...contexts[0], documentId: "doc-b", location: { scope: { rootId: "root-b", generation: "2" }, path: "same.md", position: 0 } };
