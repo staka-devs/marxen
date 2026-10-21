@@ -31,7 +31,7 @@ it("distinguishes account quota from context and displays only reported counters
   const trigger = screen.getByRole("button", { name: "使用量" });
   fireEvent.click(trigger);
   const popup = await screen.findByRole("dialog", { name: "使用量" });
-  expect(await within(popup).findByText("OpenCode")).toBeVisible();
+  expect(await within(popup).findByRole("heading", { name: "OpenCode" })).toBeVisible();
   expect(within(popup).getByRole("progressbar", { name: "コンテキスト使用率" })).toHaveAttribute("aria-valuenow", "25");
   expect(within(popup).getByRole("progressbar", { name: "利用枠の使用率" })).toHaveAttribute("aria-valuenow", "58");
   expect(within(popup).getByText("0.0012 USD")).toBeVisible();
@@ -79,7 +79,7 @@ it("reports a failed account read while retaining valid session observations", a
   fireEvent.click(screen.getByRole("button", { name: "使用量" }));
   expect(await screen.findByText("Codex の利用枠を取得できませんでした。")).toBeVisible();
   await waitFor(() => expect(screen.getByRole("progressbar", { name: "コンテキスト使用率" })).toHaveAttribute("aria-valuenow", "0"));
-  expect(screen.getByText("GitHub Copilot")).toBeVisible();
+  expect(screen.getByRole("heading", { name: "GitHub Copilot" })).toBeVisible();
   expect(screen.queryByRole("progressbar", { name: "利用枠の使用率" })).not.toBeInTheDocument();
 });
 
@@ -105,9 +105,11 @@ it("shows measured local transcript totals with honest gaps per agent", async ()
   renderUsage(gateway, undefined, "ja-JP", transcript);
   fireEvent.click(screen.getByRole("button", { name: "使用量" }));
   const popup = await screen.findByRole("dialog", { name: "使用量" });
-  expect(await within(popup).findByText("ローカルの記録")).toBeVisible();
-  expect(within(popup).getByText("Claude Code")).toBeVisible();
-  expect(within(popup).getByText("記録に数値がありません。")).toBeVisible();
+  expect(await within(popup).findByText("アプリ内の利用")).toBeVisible();
+  // Claude Code appears as an unavailable quota and as an in-app transcript row.
+  expect(within(popup).getAllByText("Claude Code")).toHaveLength(2);
+  expect(within(popup).getAllByText("利用枠: 取得不可")).toHaveLength(3);
+  expect(within(popup).getByText("アプリ内で使った記録はありません。")).toBeVisible();
   expect(within(popup).getByText("記録がありません。")).toBeVisible();
   expect(transcript.read).toHaveBeenCalledOnce();
 });

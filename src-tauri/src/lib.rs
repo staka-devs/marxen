@@ -64,6 +64,10 @@ pub fn open_workspace(root: &Path, recovery: &Path) -> Result<Workspace, Workspa
         Arc::new(infrastructure::storage::SystemClock),
     )
 }
+/// Folder every isolated copy, and so every agent prompt, runs in.
+pub fn staging_root() -> std::path::PathBuf {
+    std::env::temp_dir().join("marxen-staging")
+}
 /// Open a native exact-scope staging manager with process-local copy identifiers.
 pub fn open_isolation(root: &Path) -> Result<IsolationManager, WorkspaceError> {
     IsolationManager::open(
@@ -83,7 +87,7 @@ pub fn run() {
             std::sync::Arc::new(infrastructure::clipboard::NativeClipboard::default()),
         ))
         .manage(presentation::isolation::IsolationState::new(
-            open_isolation(&std::env::temp_dir().join("marxen-staging")).expect("staging dir"),
+            open_isolation(&staging_root()).expect("staging dir"),
         ))
         .manage(presentation::vim_settings::VimSettingsState::new(
             vim_settings_files(),
@@ -106,7 +110,11 @@ pub fn run() {
             clock: Arc::new(infrastructure::storage::SystemClock),
         })
         .manage(application::ai::transcript_usage::TranscriptUsageService {
-            reader: Arc::new(infrastructure::ai::transcript_usage::NativeTranscriptUsageReader),
+            reader: Arc::new(
+                infrastructure::ai::transcript_usage::NativeTranscriptUsageReader {
+                    staging_root: staging_root(),
+                },
+            ),
             clock: Arc::new(infrastructure::storage::SystemClock),
         })
         .manage(accounts)

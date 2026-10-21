@@ -2786,6 +2786,14 @@ mod transcript_regression {
     use crate::infrastructure::ai::transcript_usage::*;
     use std::path::PathBuf;
 
+    /// Staging folder the app runs prompts in for these fixtures.
+    const APP: &str = "/app/marxen-staging";
+
+    /// Roots accepted as in-app for these fixtures.
+    fn app_roots() -> Vec<String> {
+        vec![APP.to_owned()]
+    }
+
     /// Write one transcript file with the supplied lines.
     fn transcript_file(dir: &Path, name: &str, lines: &[&str]) -> PathBuf {
         let path = dir.join(name);
@@ -2803,13 +2811,23 @@ mod transcript_regression {
             &sessions,
             "rollout-2026-10-17T10-00-00-0195b33e-4379-4d18-b39d-2d93f5669b5a.jsonl",
             &[
+                r#"{"type":"session_meta","payload":{"id":"s","cwd":"/app/marxen-staging/copy-1"}}"#,
                 r#"{"timestamp":"2026-10-17T10:00:00Z","type":"response_item","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":20,"cached_input_tokens":10,"cache_write_input_tokens":5,"reasoning_output_tokens":2,"total_tokens":120},"last_token_usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120},"model_context_window":200000}}}"#,
                 r#"{"timestamp":"2026-10-17T10:01:00Z","type":"response_item","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"output_tokens":40,"cached_input_tokens":10,"cache_write_input_tokens":5,"reasoning_output_tokens":2,"total_tokens":190},"last_token_usage":{"input_tokens":50,"output_tokens":20,"total_tokens":70},"model_context_window":200000}}}"#,
                 r#"{"timestamp":"2026-10-17T10:02:00Z","type":"event_msg","payload":{"type":"message"}}"#,
                 "not json",
             ],
         );
-        let agents = scan_transcript_stores(home.path());
+        // Issue #120: a session the user ran elsewhere never counts as app usage.
+        transcript_file(
+            &sessions,
+            "rollout-2026-10-17T11-00-00-outside.jsonl",
+            &[
+                r#"{"type":"session_meta","payload":{"id":"o","cwd":"/home/me/project"}}"#,
+                r#"{"type":"response_item","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":999}}}}"#,
+            ],
+        );
+        let agents = scan_transcript_stores(home.path(), &app_roots());
         let codex = agents
             .iter()
             .find(|usage| usage.agent == TranscriptAgent::Codex)
@@ -2838,13 +2856,13 @@ mod transcript_regression {
             &projects,
             "0195b33e-4379-4d18-b39d-2d93f5669b5a.jsonl",
             &[
-                r#"{"type":"user","message":{"role":"user","content":"hi"},"sessionId":"s1"}"#,
+                r#"{"type":"user","message":{"role":"user","content":"hi"},"sessionId":"s1","cwd":"/app/marxen-staging/copy-2"}"#,
                 r#"{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":10,"cache_creation_input_tokens":5}},"sessionId":"s1"}"#,
                 r#"{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":50,"output_tokens":7,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"sessionId":"s1"}"#,
                 r#"{"type":"assistant","message":{"role":"assistant"},"sessionId":"s1"}"#,
             ],
         );
-        let agents = scan_transcript_stores(home.path());
+        let agents = scan_transcript_stores(home.path(), &app_roots());
         let claude = agents
             .iter()
             .find(|usage| usage.agent == TranscriptAgent::Claude)
@@ -2863,7 +2881,7 @@ mod transcript_regression {
     fn missing_stores_report_reasons_without_totals() {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(home.path().join(".copilot").join("session-state")).unwrap();
-        let agents = scan_transcript_stores(home.path());
+        let agents = scan_transcript_stores(home.path(), &app_roots());
         let entry = |agent: TranscriptAgent| {
             agents
                 .iter()
@@ -2902,17 +2920,18 @@ mod transcript_regression {
         let connection = rusqlite::Connection::open(&db_path).unwrap();
         connection
             .execute_batch(
-                "CREATE TABLE session (id TEXT PRIMARY KEY, model TEXT, title TEXT, tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER, time_updated INTEGER);
-                 CREATE TABLE session_v2 (id TEXT PRIMARY KEY, model TEXT, title TEXT, tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER, time_updated INTEGER);
-                 INSERT INTO session VALUES ('s1', 'gpt-5', 'first', 100, 20, 0, 10, 5, 1791635527568);
-                 INSERT INTO session_v2 VALUES ('s1', 'gpt-5', 'first', 150, 40, 1, 10, 5, 1791635528000);
-                 INSERT INTO session_v2 VALUES ('s2', NULL, '', NULL, NULL, NULL, NULL, NULL, 1791635529000);",
+                "CREATE TABLE session (id TEXT PRIMARY KEY, model TEXT, title TEXT, tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER, time_updated INTEGER, directory TEXT);
+                 CREATE TABLE session_v2 (id TEXT PRIMARY KEY, model TEXT, title TEXT, tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER, time_updated INTEGER, directory TEXT);
+                 INSERT INTO session VALUES ('s1', 'gpt-5', 'first', 100, 20, 0, 10, 5, 1791635527568, '/app/marxen-staging/copy-3');
+                 INSERT INTO session_v2 VALUES ('s1', 'gpt-5', 'first', 150, 40, 1, 10, 5, 1791635528000, '/app/marxen-staging/copy-3');
+                 INSERT INTO session_v2 VALUES ('s2', NULL, '', NULL, NULL, NULL, NULL, NULL, 1791635529000, '/app/marxen-staging/copy-4');
+                 INSERT INTO session_v2 VALUES ('s3', 'gpt-5', 'outside', 900, 90, 0, 0, 0, 1791635530000, '/home/me/project');",
             )
             .unwrap();
         drop(connection);
-        let opencode = scan_opencode_db(&db_path);
+        let opencode = scan_opencode_db(&db_path, &app_roots());
         assert_eq!(opencode.reason, None);
-        // `s2` carries no counters and drops out; `s1` merges to the newest write.
+        // `s2` carries no counters and `s3` ran outside the app; `s1` merges to the newest write.
         assert_eq!(opencode.sessions.len(), 1);
         let session = &opencode.sessions[0];
         assert_eq!(session.session_id, "s1");

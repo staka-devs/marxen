@@ -50,6 +50,22 @@ function CodexQuota({ usage, detailed }: { usage: CodexAccountUsage; detailed: b
   </section>;
 }
 
+/** Agents without an official way to read account quota; listed as unavailable, never estimated. */
+const QUOTA_UNAVAILABLE = ["Claude Code", "OpenCode", "GitHub Copilot"] as const;
+
+/** List quota rows that cannot be read so their absence is explicit rather than silent. */
+function UnavailableQuotas({ detailed }: { detailed: boolean }) {
+  const { t } = useI18n();
+  return <section aria-label={t("その他の利用枠")} className="border-b border-border px-3 py-2">
+    {QUOTA_UNAVAILABLE.map((name) => <p key={name} className="flex items-center gap-2 py-0.5 text-xs">
+      <Bot size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate">{name}</span>
+      <span className="shrink-0 text-muted-foreground">{t("利用枠: 取得不可")}</span>
+    </p>)}
+    {detailed && <p className="mt-1 text-[10px] text-muted-foreground">{t("公式の取得手段がないため表示しません。推計もしません。")}</p>}
+  </section>;
+}
+
 /** Position the popup within the viewport while keeping the chat header visible. */
 function popupPosition(anchor: HTMLElement) {
   const bounds = anchor.getBoundingClientRect();
@@ -116,7 +132,7 @@ const TRANSCRIPT_TOKEN_FIELDS = [
 function transcriptReasonLabel(reason: TranscriptUnavailableReason, t: (key: MessageKey) => string): string {
   switch (reason) {
     case "store_missing": return t("記録がありません。");
-    case "no_token_data": return t("記録に数値がありません。");
+    case "no_token_data": return t("アプリ内で使った記録はありません。");
     case "scan_failed": return t("記録を読み取れませんでした。");
   }
 }
@@ -235,10 +251,11 @@ function UsagePopup({ gateway, accountGateway, transcriptGateway, anchor, id, th
       {account.loading && !account.usage && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("Codex の利用枠を読み込み中…")}</p>}
       {account.failed && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("Codex の利用枠を取得できませんでした。")}</p>}
       {account.usage && <CodexQuota usage={account.usage} detailed={detailed} />}
-      {transcriptGateway && <section aria-label={t("ローカルの記録")}>
+      <UnavailableQuotas detailed={detailed} />
+      {transcriptGateway && <section aria-label={t("アプリ内の利用")}>
         {transcript.loading && !transcript.report && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("使用量を読み込み中…")}</p>}
         {transcript.failed && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("記録を読み取れませんでした。")}</p>}
-        {transcript.report && transcript.report.agents.length > 0 && <h3 className="border-b border-border px-3 py-1.5 text-[10px] text-muted-foreground">{t("ローカルの記録")}</h3>}
+        {transcript.report && transcript.report.agents.length > 0 && <h3 className="border-b border-border px-3 py-1.5 text-[10px] text-muted-foreground">{t("アプリ内の利用")}</h3>}
         {transcript.report?.agents.map((agent) => <TranscriptAgentRow key={agent.agent} agent={agent} detailed={detailed} />)}
       </section>}
       {failed && <p role="alert" className="px-3 py-2 text-xs text-destructive">{t("使用量を読み込めませんでした。")}</p>}
