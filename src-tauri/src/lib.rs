@@ -88,6 +88,9 @@ pub fn run() {
         .manage(presentation::vim_settings::VimSettingsState::new(
             vim_settings_files(),
         ))
+        .manage(presentation::source_control::SourceControlState::new(
+            Arc::new(infrastructure::git::NativeGit),
+        ))
         .manage(application::ai::service::AiService {
             keyring: Arc::new(infrastructure::ai::credentials::OsKeyring),
             connection_keyring: Arc::new(infrastructure::ai::credentials::OsKeyring),
@@ -224,7 +227,9 @@ pub fn run() {
             presentation::document::configure_document,
             presentation::vim_settings::vim_settings_read,
             presentation::vim_settings::vim_settings_write_managed,
-            presentation::vim_settings::vim_settings_write_raw
+            presentation::vim_settings::vim_settings_write_raw,
+            presentation::source_control::git_status,
+            presentation::source_control::git_diff
         ])
         .run(tauri::generate_context!())
         .expect("Marxen desktop runtime failed");

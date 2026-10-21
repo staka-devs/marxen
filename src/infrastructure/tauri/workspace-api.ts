@@ -17,6 +17,7 @@ import type {
   DocumentId,
   DocumentSnapshot,
   GridUpdate,
+  GitStatus,
   ImageData,
   ModeUpdate,
   NvimConfig,
@@ -189,6 +190,10 @@ export const workspaceApi = {
   planSearchReplacement: (request: SearchReplaceRequest) => rootInvoke<SearchReplacePlan>("plan_search_replacement", { request }, request.scope ?? rootScopes.get(request.root)),
   /** Poll queued workspace events for reconnecting consumers. */
   pollEvents: (scope?: RootScope) => { const active = scope ?? currentScope; return rootInvoke<RootEvent[]>("poll_workspace_events", {}, active).then((events) => eventsForScope(events, active)); },
+  /** Read Git status for a registered root. */
+  gitStatus: (scope: RootScope) => invoke<GitStatus>("git_status", { scope }),
+  /** Read one change's diff against HEAD. */
+  gitDiff: (scope: RootScope, path: string, status: string) => invoke<string>("git_diff", { scope, path, status }),
   /** List crash-recovery entries. */
   listRecovery: (scope?: RootScope) => rootInvoke<RecoveryEntry[]>("list_recovery", {}, scope ?? currentScope).then((entries) => { for (const entry of entries) recoveryLocations.set(entry.documentId, entry.location); return entries; }),
   /** Restore a crash-recovery entry into an open document. */

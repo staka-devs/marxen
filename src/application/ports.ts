@@ -236,6 +236,10 @@ export interface WorkspaceGateway {
   pollEvents(scope?: import("../contracts/contracts").RootScope): Promise<WorkspaceEvent[]>;
   /** List crash-recovery entries. */
   listRecovery(scope?: import("../contracts/contracts").RootScope): Promise<RecoveryEntry[]>;
+  /** Read the Git branch and working-tree changes of one registered root; desktop only. */
+  gitStatus?(scope: import("../contracts/contracts").RootScope): Promise<import("../contracts/contracts").GitStatus>;
+  /** Read one reported change's unified diff against HEAD; desktop only. */
+  gitDiff?(scope: import("../contracts/contracts").RootScope, path: string, status: string): Promise<string>;
   /** Restore a recovery entry. */
   restoreRecovery(documentId: DocumentId): Promise<OpenDocument>;
   /** Discard a recovery entry. */

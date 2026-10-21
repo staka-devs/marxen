@@ -2,6 +2,7 @@
 pub mod ai;
 #[cfg(feature = "desktop")]
 pub mod clipboard;
+pub mod git;
 pub mod neovim;
 pub mod staging;
 pub mod storage;

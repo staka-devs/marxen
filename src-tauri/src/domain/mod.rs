@@ -4,6 +4,7 @@ pub mod ai_account_usage;
 #[cfg(any(all(feature = "desktop", windows), test))]
 pub mod clipboard_format;
 pub mod coordinates;
+pub mod git;
 pub mod isolation;
 pub mod provider_accounts;
 pub mod search;

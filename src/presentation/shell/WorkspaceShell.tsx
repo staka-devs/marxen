@@ -6,7 +6,8 @@ import type { LabelKey } from "../../contracts/localization";
 import { useI18n } from "../i18n/I18nProvider";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { parseSubstituteCommand, SUBSTITUTE_SEARCH_OPTIONS } from "../../domain/search";
-import { MessageSquare, Files, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronRight, FileText, FilePlus2, FolderPlus, RefreshCw } from "lucide-react";
+import { MessageSquare, Files, GitBranch, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronRight, FileText, FilePlus2, FolderPlus, RefreshCw } from "lucide-react";
+import { SourceControlPanel } from "../workspace/SourceControlPanel";
 import { CodeMirrorEditor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
 import AiPanel from "../ai-panel";
@@ -814,6 +815,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           [
             { id: "explorer", label: t("エクスプローラー"), icon: <Files size={19} aria-hidden="true" /> },
             { id: "search", label: t("検索"), icon: <Search size={19} aria-hidden="true" /> },
+            ...(desktop && workspaceGateway?.gitStatus ? [{ id: "scm" as const, label: t("ソース管理"), icon: <GitBranch size={19} aria-hidden="true" /> }] : []),
             { id: "outline", label: t("アウトライン"), icon: <ListTree size={19} aria-hidden="true" /> },
           ] as Array<{ id: SideView; label: string; icon: ReactNode }>
         ).map((item) => (
@@ -909,6 +911,14 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   }
                 })();
               }}
+            />
+          )}
+          {sideView === "scm" && workspaceGateway && (
+            <SourceControlPanel
+              roots={workspace.roots}
+              gateway={workspaceGateway}
+              refreshKey={Object.values(session.docs).map((doc) => `${doc.documentId}:${doc.dirty}`).join("|")}
+              onOpen={(path, scope) => void openFileForEditing(path, scope)}
             />
           )}
           {sideView === "outline" && (

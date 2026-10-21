@@ -233,5 +233,16 @@ article.marxen-md { padding: 32px max(24px, calc((100% - 960px) / 2)) 80px; }
 }
 .marxen-picker-input:focus-visible { outline: none; }
 
+/* Source Control status letters and diff lines (VS Code gitDecoration colors). */
+:root { --scm-modified: #895503; --scm-added: #007100; --scm-deleted: #ad0707; --scm-conflict: #ad0707; --diff-add: color-mix(in srgb, #2ea043 18%, transparent); --diff-del: color-mix(in srgb, #f85149 18%, transparent); }
+[data-theme="dark"] { --scm-modified: #e2c08d; --scm-added: #73c991; --scm-deleted: #c74e39; --scm-conflict: #e4676b; }
+.marxen-scm-status[data-status="M"], .marxen-scm-status[data-status="R"] { color: var(--scm-modified); }
+.marxen-scm-status[data-status="A"], .marxen-scm-status[data-status="?"] { color: var(--scm-added); }
+.marxen-scm-status[data-status="D"] { color: var(--scm-deleted); }
+.marxen-scm-status[data-status="U"] { color: var(--scm-conflict); }
+.marxen-diff-add { background: var(--diff-add); }
+.marxen-diff-del { background: var(--diff-del); }
+.marxen-diff-hunk { color: var(--primary); }
+
 [data-theme="contrast"] [data-file-icon="folder"],
 [data-theme="contrast"] [data-file-icon="folder-open"] { color: var(--foreground); }
