@@ -22,6 +22,13 @@ impl ConfigReport {
         !self.errors.is_empty()
     }
 }
+/// Native Visual selection kind installed for a GUI range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisualKind {
+    Char,
+    Line,
+    Block,
+}
 #[derive(Debug)]
 pub struct BufferError(pub String);
 impl std::fmt::Display for BufferError {
@@ -92,14 +99,13 @@ pub trait Buffer: Send {
     fn virtualedit(&self) -> Result<String, BufferError>;
     /// Restore the captured native virtual cursor configuration.
     fn restore_virtualedit(&self, original: &str) -> Result<(), BufferError>;
-    /// Install zero-based GUI row/byte anchor and head as a native character or line selection.
+    /// Install zero-based GUI row/byte anchor and head as a native character, line or block selection.
     fn install_selection(
         &self,
         anchor: (u32, u32),
         head: (u32, u32),
-        linewise: bool,
-    ) -> Result<(), BufferError>;
-    /// Leave the native Visual selection before changing the GUI cursor.
+        kind: VisualKind,
+    ) -> Result<(), BufferError>;    /// Leave the native Visual selection before changing the GUI cursor.
     fn exit_visual(&self) -> Result<(), BufferError>;
     /// Move the native cursor using a zero-based row and UTF-8 byte column.
     fn set_cursor(&self, row: u32, col: u32) -> Result<(), BufferError>;

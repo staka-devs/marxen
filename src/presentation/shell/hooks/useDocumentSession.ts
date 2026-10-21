@@ -374,6 +374,8 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       } catch {
         return;
       }
+      // The GUI keeps drawing its Alt+drag rectangle; Rust never reports block corners as a range.
+      if (mode === "visual_block" && reported.block) return;
       if (mode === "insert" || mode === "replace") {
         if (!isSelectionGenCurrent(id, gen)) return;
         setSelections((prev) => ({ ...prev, [id]: { anchor: reported.anchor, head: reported.head } }));
@@ -398,7 +400,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       // gestures keep their anchor; the follow-up refresh preserves the
       // exact range in Insert/Replace and exposes real Visual otherwise.
       void registry
-        .stageCursor(id, selection.anchor, selection.head)
+        .stageCursor(id, selection.anchor, selection.head, selection.block)
         .then(() => {
           void refreshModeAfterSelection(id, selection, gen);
         })

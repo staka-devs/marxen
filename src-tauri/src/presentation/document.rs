@@ -637,14 +637,21 @@ mod desktop {
         revision: u32,
         anchor: u32,
         head: u32,
+        block: Option<bool>,
     ) -> Result<CursorUpdate, WorkspaceError> {
         with_document(&state, document_id.clone(), &location, |w| {
-            Ok(w.actor(&document_id)?.set_cursor(CursorUpdate {
+            let actor = w.actor(&document_id)?;
+            let update = CursorUpdate {
                 document_id: DocumentId(document_id),
                 revision: Revision(revision),
                 anchor: Utf16Offset(anchor),
                 head: Utf16Offset(head),
-            })?)
+            };
+            Ok(if block == Some(true) {
+                actor.set_block_cursor(update)?
+            } else {
+                actor.set_cursor(update)?
+            })
         })
     }
     #[tauri::command(async)]

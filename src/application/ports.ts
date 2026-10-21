@@ -129,7 +129,7 @@ export interface DocumentGateway {
   /** Fetch the native cursor. */
   fetchCursor(documentId: DocumentId): Promise<CursorUpdate>;
   /** Stage a GUI selection, coalescing rapid gestures. */
-  stageCursor(documentId: DocumentId, anchor: number, head: number): Promise<CursorUpdate | null>;
+  stageCursor(documentId: DocumentId, anchor: number, head: number, block?: boolean): Promise<CursorUpdate | null>;
   /** Report an explicit jump at the execution revision. */
   reportCursorNow(documentId: DocumentId, anchor: number, head: number): Promise<CursorUpdate>;
   /** Report a cursor update directly without queueing. */
@@ -168,8 +168,8 @@ export interface DocumentTransport {
   hasMapping(documentId: DocumentId, mode: string, lhs: string, location?: DocumentLocation): Promise<boolean>;
   /** Fetch the authoritative snapshot for a document ID. */
   fetchSnapshot(documentId: DocumentId, location?: DocumentLocation): Promise<DocumentSnapshot>;
-  /** Report a GUI selection to the native cursor tracker. */
-  reportCursor(update: CursorUpdate, location?: DocumentLocation): Promise<CursorUpdate>;
+  /** Report a GUI selection to the native cursor tracker; `block` installs blockwise Visual. */
+  reportCursor(update: CursorUpdate, location?: DocumentLocation, block?: boolean): Promise<CursorUpdate>;
   /** Fetch the last known native cursor for a document. */
   fetchCursor(documentId: DocumentId, location?: DocumentLocation): Promise<CursorUpdate>;
   /** Undo through the native undo stack. */

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import { Compartment, EditorState } from "@codemirror/state";
-import { EditorView, lineNumbers, drawSelection, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
+import { EditorView, lineNumbers, drawSelection, highlightActiveLine, highlightActiveLineGutter, rectangularSelection, crosshairCursor } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
@@ -15,6 +15,20 @@ import type { EditorMenuPoint } from "./EditorMenu";
 export interface EditorSelection {
   anchor: number;
   head: number;
+  /** Alt+drag rectangle: anchor is the first line's start corner, head the last line's end corner. */
+  block?: boolean;
+}
+
+/** Report the main range, or an Alt+drag rectangle as its two corners. */
+function reportedSelection(selection: EditorState["selection"]): EditorSelection {
+  // shortcut: corners come from the first/last line ranges, so a short first/last line clips the
+  // block width; tracking the drag's virtual columns would fix that if it matters.
+  if (selection.ranges.length > 1) {
+    const first = selection.ranges[0];
+    const last = selection.ranges[selection.ranges.length - 1];
+    return { anchor: first.anchor, head: last.head, block: true };
+  }
+  return { anchor: selection.main.anchor, head: selection.main.head };
 }
 
 /**
@@ -183,6 +197,11 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
             { tag: tags.monospace, fontFamily: '"Cascadia Code", "Consolas", monospace' },
           ])),
           drawSelection({ cursorBlinkRate: 0 }),
+          // Alt+drag draws a rectangle that Neovim receives as blockwise Visual; no other multi-cursor gestures.
+          EditorState.allowMultipleSelections.of(true),
+          EditorView.clickAddsSelectionRange.of(() => false),
+          rectangularSelection(),
+          crosshairCursor(),
           blockCursorWidth,
           appearanceRef.current.of([]),
           editableRef.current.of(EditorView.editable.of(editableRefValue.current)),
@@ -215,8 +234,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
             // Text changes carry their own final cursor in the same queued
             // commit; selection-only gestures use the staged cursor path.
             if (update.selectionSet && !update.docChanged) {
-              const sel = update.state.selection.main;
-              callbacks.current.onSelectionChange?.({ anchor: sel.anchor, head: sel.head });
+              callbacks.current.onSelectionChange?.(reportedSelection(update.state.selection));
             }
           }),
         ],

@@ -943,6 +943,16 @@ impl DocumentActor {
 
     /// Validate GUI selection revision and install its native anchor and head positions.
     pub fn set_cursor(&self, update: CursorUpdate) -> Result<CursorUpdate, ActorError> {
+        self.install_cursor(update, false)
+    }
+
+    /// Install a GUI rectangular (Alt+drag) range as native blockwise Visual between its corners.
+    pub fn set_block_cursor(&self, update: CursorUpdate) -> Result<CursorUpdate, ActorError> {
+        self.install_cursor(update, true)
+    }
+
+    /// Shared GUI selection install for character/line (`block == false`) and block ranges.
+    fn install_cursor(&self, update: CursorUpdate, block: bool) -> Result<CursorUpdate, ActorError> {
         let mut state = self
             .state
             .lock()
@@ -954,17 +964,39 @@ impl DocumentActor {
             state.ready_yank = None;
         }
         let (mode, _) = state.nvim.mode_state()?;
-        if mode == VimMode::VisualBlock && update.anchor != update.head {
-            return Err(ActorError::Nvim(
-                "矩形選択は Neovim 画面で操作してください".into(),
-            ));
-        }
-        let visual = matches!(mode, VimMode::Visual | VimMode::VisualLine);
+        let visual = matches!(
+            mode,
+            VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
+        );
         let install_selection = update.anchor != update.head
-            && matches!(
-                mode,
-                VimMode::Normal | VimMode::Visual | VimMode::VisualLine
-            );
+            && (mode == VimMode::Normal || visual);
+        if install_selection && block {
+            let anchor = global_utf16_to_line_byte(&state.snapshot.text, update.anchor)?;
+            let (head_row, head_col) = global_utf16_to_line_byte(&state.snapshot.text, update.head)?;
+            // GUI corners are half-open in columns; inclusive Vim ends on the last character.
+            let head_col = if head_col > anchor.1 && !state.nvim.selection_exclusive()? {
+                let line = state.snapshot.text.split('\n').nth(head_row as usize).unwrap_or("");
+                line[..(head_col as usize).min(line.len())]
+                    .chars()
+                    .next_back()
+                    .map_or(head_col, |c| head_col - c.len_utf8() as u32)
+            } else {
+                head_col
+            };
+            if state.gui_virtualedit.is_none() {
+                state.gui_virtualedit = Some(state.nvim.virtualedit()?);
+            }
+            state
+                .nvim
+                .install_selection(anchor, (head_row, head_col), VisualKind::Block)?;
+            state.last_cursor = (update.anchor, update.head);
+            return Ok(update);
+        }
+        let mode = if mode == VimMode::VisualBlock {
+            VimMode::Visual
+        } else {
+            mode
+        };
         if install_selection {
             // GUI ranges are half-open. Native exclusive regions end after
             // the selected text; inclusive regions end on its last character.
@@ -998,7 +1030,11 @@ impl DocumentActor {
             state.nvim.install_selection(
                 (anchor_row, anchor_col),
                 (head_row, head_col),
-                mode == VimMode::VisualLine,
+                if mode == VimMode::VisualLine {
+                    VisualKind::Line
+                } else {
+                    VisualKind::Char
+                },
             )?;
             state.last_cursor = (update.anchor, update.head);
             return Ok(update);

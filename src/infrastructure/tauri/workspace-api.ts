@@ -212,7 +212,7 @@ export const workspaceApi = {
   /** Fetch the last known native cursor for a document. */
   fetchCursor: (documentId: DocumentId, location?: DocumentLocation) => documentInvoke<CursorUpdate>("fetch_cursor", { documentId, location }),
   /** Report a GUI selection to the native cursor tracker. */
-  reportCursor: (update: CursorUpdate, location?: DocumentLocation) => documentInvoke<CursorUpdate>("report_cursor", { ...update, location }),
+  reportCursor: (update: CursorUpdate, location?: DocumentLocation, block?: boolean) => documentInvoke<CursorUpdate>("report_cursor", { ...update, location, block }),
   /** Fetch a Neovim grid screen batch. */
   fetchGrid: (documentId: DocumentId, width = 80, height = 24) => documentInvoke<GridUpdate>("fetch_grid", { documentId, width, height }),
   /** Undo through the native undo stack. */

@@ -57,7 +57,7 @@ export class RegistryClient {
   private queues = new Map<DocumentId, Promise<unknown>>();
   private rev = new Map<DocumentId, number>();
   private source = new Map<DocumentId, string>();
-  private cursorStaged = new Map<DocumentId, Array<{ anchor: number; head: number }>>();
+  private cursorStaged = new Map<DocumentId, Array<{ anchor: number; head: number; block?: boolean }>>();
   /** Insert-mode mapping prefix per document, owned inside the serial queue. */
   private pendingPrefix = new Map<DocumentId, string>();
 
@@ -685,9 +685,9 @@ export class RegistryClient {
    * cannot interleave with mutations or echo back. Failures stay silent and
    * the editor keeps its own selection.
    */
-  stageCursor(documentId: DocumentId, anchor: number, head: number): Promise<CursorUpdate | null> {
+  stageCursor(documentId: DocumentId, anchor: number, head: number, block?: boolean): Promise<CursorUpdate | null> {
     const staged = this.cursorStaged.get(documentId) ?? [];
-    staged.push({ anchor, head });
+    staged.push({ anchor, head, block });
     this.cursorStaged.set(documentId, staged);
     return this.enqueue(documentId, async () => {
       const queue = this.cursorStaged.get(documentId) ?? [];
@@ -696,7 +696,7 @@ export class RegistryClient {
       if (!latest) return null;
       const revision = this.rev.get(documentId) ?? 0;
       try {
-        return await this.transport.reportCursor({ documentId, revision, anchor: latest.anchor, head: latest.head }, this.location(documentId));
+        return await this.transport.reportCursor({ documentId, revision, anchor: latest.anchor, head: latest.head }, this.location(documentId), latest.block);
       } catch {
         return null;
       }

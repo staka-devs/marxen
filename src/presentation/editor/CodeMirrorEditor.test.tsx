@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
+import { EditorSelection } from "@codemirror/state";
 import { CodeMirrorEditor, singleEditFromDiff } from "./CodeMirrorEditor";
 import { applyTextEdits } from "../../domain/coordinates/utf16";
 
@@ -24,6 +25,14 @@ describe("native snapshot newline coordinates", () => {
     rendered.rerender(<CodeMirrorEditor value={source} ariaLabel="editor" externalCursor={{ anchor: source.length, head: source.length, seq: 1 }} />);
     expect(view.state.doc.toString()).toBe(source);
     expect(view.state.selection.main.head).toBe(source.length);
+  });
+
+  it("reports an Alt+drag rectangle as block corners for blockwise Visual", () => {
+    const selection = vi.fn();
+    const rendered = render(<CodeMirrorEditor value={"abcd\nefgh\nijkl"} ariaLabel="editor" onSelectionChange={selection} />);
+    const view = EditorView.findFromDOM(rendered.container.querySelector<HTMLElement>(".cm-content")!)!;
+    act(() => view.dispatch({ selection: EditorSelection.create([EditorSelection.range(1, 3), EditorSelection.range(6, 8), EditorSelection.range(11, 13)]) }));
+    expect(selection).toHaveBeenLastCalledWith({ anchor: 1, head: 13, block: true });
   });
 
   it("resynchronizes a rejected first character at a mixed-newline document end without unmounting", () => {
