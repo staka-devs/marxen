@@ -4,12 +4,15 @@ import { localizedFailure } from "../../domain/localization";
 import type { LocalizedText } from "../../contracts/localization";
 import type { LabelKey } from "../../contracts/localization";
 import { useI18n } from "../i18n/I18nProvider";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { schemeStylesheet } from "../../domain/color-scheme";
 import { parseSubstituteCommand, SUBSTITUTE_SEARCH_OPTIONS } from "../../domain/search";
-import { MessageSquare, Files, GitBranch, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronRight, FileText, FilePlus2, FolderPlus, RefreshCw } from "lucide-react";
+import { MessageSquare, Save, Search, Ellipsis, PanelsLeftRight, ChevronRight, FileText, FilePlus2, FolderPlus, RefreshCw } from "lucide-react";
 import { SourceControlPanel } from "../workspace/SourceControlPanel";
 import { AiChangesBar } from "../ai/AiChangesBar";
+import { ActivityBar } from "./ActivityBar";
+import { StatusBar } from "./StatusBar";
+import { useGitHead } from "./hooks/useGitHead";
 import { FindBar } from "../editor/FindBar";
 import { useWorkspaceSearch } from "./hooks/useWorkspaceSearch";
 import { CodeMirrorEditor } from "../editor/CodeMirrorEditor";
@@ -55,7 +58,7 @@ import { WorkbenchMenuBar } from "../workspace/WorkbenchMenuBar";
 import { StyledSelect } from "../ui/select";
 import type { RootScope } from "../../contracts/contracts";
 import { sameRoot } from "../../domain/document-location";
-import { rootFileLabel, type RootFile } from "../../domain/workspace-roots";
+import { rootFileLabel, type RootFile, rootRelativePath } from "../../domain/workspace-roots";
 import type { ExplorerTarget } from "../../contracts/workbench";
 import type { TreeNode } from "../workspace/FileTree";
 import { NotificationToast, WorkspaceDialog, type Notice, type NoticeKind } from "../workspace/Notifications";
@@ -73,7 +76,6 @@ import type { ThemeId } from "../../domain/workspace-content";
 import {
   workspaceErrorText,
 } from "../../domain/document-errors";
-import { COPY_LABELS } from "../../domain/clipboard-text";
 import { offsetToLineCol, lineColToOffset } from "../../domain/coordinates/utf16";
 import { DEFAULT_EDITOR_PREFERENCES, normalizeEditorPreferences, type EditorPreferences } from "../../domain/editor-preferences";
 import { entryKind } from "../../domain/workspace-files";
@@ -161,17 +163,6 @@ export interface WorkspaceShellProps {
   /** True on desktop; browser demo stays read-only. */
   desktop?: boolean;
 }
-
-const MODE_JA: Record<string, string> = {
-  normal: "ノーマル",
-  insert: "挿入",
-  replace: "置換",
-  visual: "選択",
-  visual_line: "行選択",
-  visual_block: "矩形選択",
-  command_line: "コマンド",
-  terminal: "ターミナル",
-};
 
 const MODE_LABEL: Record<ViewMode, string> = {
   live: "ライブプレビュー",
@@ -646,19 +637,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     setSideView("search");
   }, [typedSubstitute?.pattern, typedSubstitute?.replacement]);
 
-  // Issue #124: HEAD text of the active file for the change gutter; refreshed on open and save.
-  const [gitHead, setGitHead] = useState<{ documentId: string; text: string | null } | null>(null);
-  const gitScope = active?.location?.scope;
-  useEffect(() => {
-    if (!active?.path || !gitScope || !workspaceGateway?.gitHeadText) { setGitHead(null); return; }
-    let current = true;
-    const documentId = active.documentId;
-    workspaceGateway.gitHeadText(gitScope, active.path)
-      .then((text) => { if (current) setGitHead({ documentId, text }); })
-      .catch(() => { if (current) setGitHead(null); });
-    return () => { current = false; };
-  }, [active?.documentId, active?.path, active?.dirty, gitScope?.rootId, gitScope?.generation, workspaceGateway]);
-  const gitBaseline = gitHead && gitHead.documentId === active?.documentId ? gitHead.text : null;
+  const gitBaseline = useGitHead(active ?? null, workspaceGateway);
 
   // Issue #125: in-file find bar over the same native search, limited to the active file; idle while closed.
   const [findOpen, setFindOpen] = useState(false);
@@ -851,37 +830,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     <div data-theme={theme} data-testid="workspace-shell" style={{ "--editor-font-size": `${preferences.fontSize}px`, "--editor-line-height": preferences.lineHeight } as CSSProperties} className="marxen-workspace relative flex h-dvh flex-col overflow-hidden bg-background text-foreground">
       <WorkbenchMenuBar theme={theme} commands={workbench.commands} onRun={(id) => void workbench.run(id)} onPrepare={(origin) => void workbench.prepareEditor(origin)} />
       <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
-      <nav aria-label={t("アクティビティ")} className="marxen-activity flex w-12 shrink-0 flex-col items-center border-r border-border bg-card py-1">
-        {(
-          [
-            { id: "explorer", label: t("エクスプローラー"), icon: <Files size={19} aria-hidden="true" /> },
-            { id: "search", label: t("検索"), icon: <Search size={19} aria-hidden="true" /> },
-            ...(desktop && workspaceGateway?.gitStatus ? [{ id: "scm" as const, label: t("ソース管理"), icon: <GitBranch size={19} aria-hidden="true" /> }] : []),
-            { id: "outline", label: t("アウトライン"), icon: <ListTree size={19} aria-hidden="true" /> },
-          ] as Array<{ id: SideView; label: string; icon: ReactNode }>
-        ).map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => setSideView((current) => (current === item.id ? null : item.id))}
-            aria-pressed={sideView === item.id}
-            aria-label={item.label}
-            title={item.label}
-            className={`relative flex h-11 w-full items-center justify-center border-l-2 hover:text-foreground ${sideView === item.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}
-          >
-            {item.icon}
-          </button>
-        ))}
-        <button
-          type="button"
-          onClick={() => setSettings(true)}
-          aria-label={t("設定表示切替")}
-          title={t("設定")}
-          className="mt-auto flex h-11 w-full items-center justify-center text-muted-foreground hover:text-foreground"
-        >
-          <SettingsIcon size={19} aria-hidden="true" />
-        </button>
-      </nav>
+      <ActivityBar sideView={sideView} onSideView={setSideView} showScm={desktop && !!workspaceGateway?.gitStatus} onSettings={() => setSettings(true)} />
       {sideView && (
         <WorkspaceSidebar>
           {sideView === "explorer" && (
@@ -930,14 +879,9 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               exReports={session.exReports}
               searchCount={session.searchCount}
               onQuickfixOpen={(entry) => {
-                const normalized = entry.path.replace(/\\/g, "/");
-                const owner = workspace.roots.find((candidate) => {
-                  const root = candidate.root.replace(/\\/g, "/").replace(/\/+$/, "");
-                  return normalized === root || normalized.startsWith(`${root}/`);
-                });
-                if (!owner) return;
-                const relative = normalized.slice(owner.root.replace(/\\/g, "/").replace(/\/+$/, "").length).replace(/^\/+/, "");
-                if (!relative) return;
+                const target = rootRelativePath(workspace.roots, entry.path);
+                if (!target) return;
+                const { owner, relative } = target;
                 void (async () => {
                   await openFileForEditing(relative, owner.scope);
                   const docs = session.docsRef.current;
@@ -1513,24 +1457,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       )}
       {aiVisibilityOpen && <AiVisibilityDialog preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} connections={apiConnections.connections} saveFailed={aiView.saveFailed} onClose={closeAiVisibility} />}
       </div>
-      <footer className="marxen-status flex h-6 shrink-0 items-center gap-3 whitespace-nowrap border-t border-border bg-card px-3 text-[11px] text-muted-foreground">
-        {desktop && active && <span data-testid="vim-footer-mode" data-mode={vimMode} className="marxen-vim-mode -ml-3 flex h-6 shrink-0 items-center px-3 font-semibold">{MODE_JA[vimMode] ? t(MODE_JA[vimMode] as LabelKey) : vimMode}</span>}
-        <span className="min-w-0 flex-1 truncate">{workspace.wsRoot?.split(/[\\/]/).filter(Boolean).at(-1) ?? ""}</span>
-        {cursorPos && <span data-testid="cursor" title={t("カーソル位置")}><span className="sr-only">{t("カーソル")}{" "}</span>{cursorPos}</span>}
-        <span data-testid="dirty">{!active || active.dirty ? (active ? t("未保存") : "—") : t("保存済み")}</span>
-        {desktop && session.copyReady === activeId && <span data-testid="copy-ready" className="min-w-0 max-w-72 truncate" title={Object.entries(workspace.copyKeys).map(([format, key]) => `${key} ${t(COPY_LABELS[format as keyof typeof COPY_LABELS] as LabelKey)}`).join(" / ")}>{t("コピー形式を選択")}</span>}
-        {!desktop && <span data-testid="readonly-note" title={t("ブラウザ表示は読み取り専用です")} className="shrink-0 rounded-sm border border-border px-1.5 py-0.5 text-[10px]">{t("読み取り専用")}</span>}
-        <span role="status" className="shrink-0">
-          {workspace.runtime ? (workspace.runtime.connection === "disconnected" ? t("Neovim 未接続") : workspace.runtime.connection === "connected" ? t("Neovim 接続済み") : workspace.runtime.detail) : t("接続状態を確認中…")}
-        </span>
-        <details className="relative shrink-0">
-          <summary aria-label={t("エディターの接続情報")} title={t("エディターの接続情報")} className="flex cursor-pointer list-none items-center rounded-sm p-0.5 hover:bg-muted"><Info size={13} aria-hidden="true" /></summary>
-          <div className="absolute bottom-7 right-0 z-20 min-w-44 rounded border border-border bg-card p-3 shadow-lg">
-        <span data-testid="revision" className="block">{t("リビジョン {{value0}}", { value0: active?.revision ?? "—" })}</span>
-            {desktop && session.vimKeys !== "" && <span data-testid="vim-keys" className="mt-1 block">{t("Vim入力 {{value0}}", { value0: session.vimKeys })}</span>}
-          </div>
-        </details>
-      </footer>
+      <StatusBar desktop={desktop} active={active ?? null} vimMode={vimMode} rootName={workspace.wsRoot?.split(/[\\/]/).filter(Boolean).at(-1) ?? ""} cursorPos={cursorPos}
+        copyReady={session.copyReady === activeId} copyKeys={workspace.copyKeys} runtime={workspace.runtime} vimKeys={session.vimKeys} />
     </div>
   );
 }

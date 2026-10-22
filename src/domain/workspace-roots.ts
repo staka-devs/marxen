@@ -58,3 +58,14 @@ export function rootFileLabel(root: string, path: string): string {
   const base = root.split(/[\\/]/).filter(Boolean).at(-1) ?? root;
   return `${base}/${path}`;
 }
+
+/** Map an absolute path (e.g. a quickfix entry) to the root containing it and its root-relative path. */
+export function rootRelativePath<T extends { root: string }>(roots: T[], absolute: string): { owner: T; relative: string } | null {
+  const normalized = absolute.replace(/\\/g, "/");
+  /** A root path with `/` separators and no trailing slash. */
+  const base = (root: string) => root.replace(/\\/g, "/").replace(/\/+$/, "");
+  const owner = roots.find((candidate) => normalized === base(candidate.root) || normalized.startsWith(`${base(candidate.root)}/`));
+  if (!owner) return null;
+  const relative = normalized.slice(base(owner.root).length).replace(/^\/+/, "");
+  return relative ? { owner, relative } : null;
+}

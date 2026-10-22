@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { imageTabId, parseImageTabId, rootFileLabel, searchGroupKey } from "./workspace-roots";
+import { imageTabId, parseImageTabId, rootFileLabel, rootRelativePath, searchGroupKey } from "./workspace-roots";
 
 describe("workspace roots", () => {
   it("keys image tabs by root and path", () => {
@@ -21,4 +21,14 @@ describe("workspace roots", () => {
     expect(rootFileLabel("/tmp/alpha", "same.md")).toBe("alpha/same.md");
   });
 
+});
+
+describe("rootRelativePath", () => {
+  it("finds the containing root with either separator and rejects siblings and the root itself", () => {
+    const roots = [{ root: "C:\\work\\notes\\" }, { root: "/home/me/docs" }];
+    expect(rootRelativePath(roots, "C:/work/notes/sub/a.md")).toEqual({ owner: roots[0], relative: "sub/a.md" });
+    expect(rootRelativePath(roots, "/home/me/docs/b.md")?.relative).toBe("b.md");
+    expect(rootRelativePath(roots, "C:/work/notes-old/a.md")).toBeNull();
+    expect(rootRelativePath(roots, "/home/me/docs")).toBeNull();
+  });
 });
