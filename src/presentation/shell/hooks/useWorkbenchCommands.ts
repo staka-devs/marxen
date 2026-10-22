@@ -31,7 +31,7 @@ const DEFINITIONS: Array<[string, WorkbenchMenu, LabelKey, string?]> = [
   ["folder-add", "file", "ワークスペースにフォルダーを追加"], ["file-save", "file", "保存", "Ctrl/Cmd+S"],
   ["file-rename", "file", "名前を変更"], ["file-reload", "file", "再読込"], ["file-close", "file", "閉じる"],
   ["edit-undo", "edit", "元に戻す"], ["edit-redo", "edit", "やり直す"], ["edit-cut", "edit", "選択範囲を切り取る"],
-  ["edit-copy", "edit", "選択範囲をコピー"], ["edit-paste", "edit", "クリップボードから貼り付け"], ["edit-find", "edit", "検索"],
+  ["edit-copy", "edit", "選択範囲をコピー"], ["edit-paste", "edit", "クリップボードから貼り付け"], ["find-file", "edit", "ファイル内を検索", "Ctrl/Cmd+F"], ["edit-find", "edit", "検索"],
   ["selection-all", "selection", "すべて選択"],
   ["view-live", "view", "ライブプレビュー"], ["view-source", "view", "Markdown"], ["view-read", "view", "プレビュー"], ["view-split", "view", "分割表示"],
   ["view-explorer", "view", "エクスプローラー"], ["view-search", "view", "検索"], ["view-outline", "view", "アウトライン"],
@@ -115,7 +115,7 @@ export function useWorkbenchCommands(args: Args) {
         }
       }
     }
-    if (["file-save", "file-reload", "palette-raw-refresh", "inline-chat"].includes(id)) enabled = native && !!doc;
+    if (["file-save", "file-reload", "palette-raw-refresh", "inline-chat", "find-file"].includes(id)) enabled = native && !!doc;
     if (id === "palette-raw") enabled = !!doc && (!desktop || native);
     if (["view-live", "view-source", "view-read", "view-split", "nav-display", "nav-source"].includes(id)) enabled = !!doc && (id === "view-source" || id.startsWith("nav-") || doc.path === null || /\.(md|markdown)$/i.test(doc.path));
     if (id === "file-close") enabled = native && !!session.activeRef.current;
