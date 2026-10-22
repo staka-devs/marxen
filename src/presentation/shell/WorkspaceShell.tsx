@@ -144,6 +144,8 @@ export interface WorkspaceShellProps {
   clipboardGateway?: ClipboardGateway;
   /** Non-secret AI profile persistence. */
   aiProfileStore?: AiProfileStore;
+  /** Finished chat conversations kept across restarts. */
+  chatHistoryStore?: import("../../application/ports").ChatHistoryStore;
   /** Non-secret named API connection persistence. */
   apiConnectionStore?: ApiConnectionStore;
   /** Per-connection OS credential gateway. */
@@ -239,6 +241,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     dropGateway,
     clipboardGateway,
     aiProfileStore,
+    chatHistoryStore,
     apiConnectionStore,
     apiConnectionGateway,
     editorPreferencesStore,
@@ -1479,6 +1482,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             onProposal={staging.handleProposal}
             startPrompt={aiGateway?.startPrompt}
             profileStore={aiProfileStore}
+            historyStore={chatHistoryStore}
             aiGateway={aiGateway}
             connectionControls={connectionControls}
             sessionScopeKey={sessionScopeKey}

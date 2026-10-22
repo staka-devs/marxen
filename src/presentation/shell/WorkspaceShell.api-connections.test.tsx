@@ -156,7 +156,7 @@ async function retainConversation(pane: HTMLElement, prompt: string) {
 /** Restore one historical provider through the real chat history controls. */
 function selectHistory(pane: HTMLElement, prompt: string) {
   fireEvent.click(within(pane).getByRole("button", { name: "履歴を開く" }));
-  fireEvent.click(within(pane).getByRole("button", { name: new RegExp(prompt) }));
+  fireEvent.click(within(pane).getByRole("button", { name: new RegExp(`${prompt}.*件の依頼`) }));
 }
 
 beforeEach(() => {

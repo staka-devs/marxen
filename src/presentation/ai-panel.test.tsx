@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AiPanel from "./ai-panel";
+import { restoredConversations, storedConversations } from "../domain/conversation/chat-history";
 import { setCredential, testConnection } from "../infrastructure/tauri/ai-client";
 import type { AiStreamEvent, PromptContext, StagingTarget } from "../contracts/ai-contracts";
 import type { AiGateway } from "../application/ports";
@@ -282,7 +283,7 @@ describe("agent chat", () => {
     expect(screen.queryByText("回答")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "履歴を開く" }));
     expect(screen.getByRole("searchbox", { name: "履歴を検索" })).toHaveFocus();
-    fireEvent.click(screen.getByRole("button", { name: /質問/ }));
+    fireEvent.click(screen.getByRole("button", { name: /質問.*件の依頼/ }));
     expect(await screen.findByText("回答")).toBeVisible();
     // The fresh conversation starts with empty history.
     fireEvent.click(screen.getByRole("button", { name: "新しい会話" }));
@@ -578,3 +579,33 @@ describe("agent chat", () => {
 
 
 
+
+describe("chat history persistence", () => {
+  it("saves finished chats, restores them after a restart and deletes them", async () => {
+    let saved: unknown = [];
+    const store = {
+      /** Return what the last save wrote. */
+      load: () => restoredConversations(JSON.parse(JSON.stringify(saved))),
+      /** Keep the storable part like the real store. */
+      save: vi.fn((list: Parameters<typeof storedConversations>[0]) => { saved = storedConversations(list); return true; }),
+    };
+    mockStartPrompt.mockImplementation(async (_request, onEvent) => {
+      onEvent({ type: "done", payload: { runId: "h", proposal: { text: "保存される回答", baseContexts: [] }, sent: [] } });
+      return {
+        runId: "h",
+        /** Stop the completed mock run. */
+        stop: async () => undefined,
+      };
+    });
+    const first = render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} historyStore={store} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "覚えておく質問" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(JSON.stringify(saved)).toContain("保存される回答"));
+    first.unmount();
+    render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} historyStore={store} />);
+    fireEvent.click(screen.getByRole("button", { name: "履歴を開く" }));
+    expect(screen.getByRole("button", { name: /覚えておく質問.*件の依頼/ })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "覚えておく質問を削除" }));
+    await vi.waitFor(() => expect(saved).toEqual([]));
+  });
+});

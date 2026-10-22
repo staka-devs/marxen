@@ -61,7 +61,7 @@ import type {
   ProposalText,
   StagingTarget,
 } from "../contracts/ai-contracts";
-import type { AiGateway, AiProfileStore } from "../application/ports";
+import type { AiGateway, AiProfileStore, ChatHistoryStore } from "../application/ports";
 import type { ApiConnectionControls } from "./ai/ApiConnections";
 
 export interface AiPanelProps {
@@ -121,6 +121,8 @@ export interface AiPanelProps {
   modelControls?: ReactNode;
   /** Read-only actions placed beside the conversation and connection controls. */
   headerActions?: ReactNode;
+  /** Finished conversations kept across restarts; in memory only when absent. */
+  historyStore?: ChatHistoryStore;
   /** Pending-change review shown directly above the composer, as agent chats do. */
   review?: ReactNode;
 }
@@ -234,6 +236,7 @@ export default function AiPanel({
   sessionScopeKey,
   modelControls,
   headerActions,
+  historyStore,
   review,
 }: AiPanelProps) {
   const { t } = useI18n();
@@ -248,7 +251,12 @@ export default function AiPanel({
   const providerKeyRef = useRef(providerKey);
   // In-memory conversation list: 新規 preserves prior conversations in the
   // selector instead of destroying them. Nothing persists to storage.
-  const [conversations, setConversations] = useState<ChatConversation[]>(() => [createConversation(providerKey)]);
+  // A fresh conversation stays first (and active); stored ones follow in the history list.
+  const [conversations, setConversations] = useState<ChatConversation[]>(() => [createConversation(providerKey), ...(historyStore?.load() ?? [])]);
+  useEffect(() => {
+    // Saving per streamed chunk would rewrite storage constantly; save once turns settle.
+    if (historyStore && !conversations.some((item) => isBusy(item.messages))) historyStore.save(conversations);
+  }, [conversations, historyStore]);
   const [activeId, setActiveId] = useState<string | null>(null);
   // Agents edit in an isolated copy reviewed before apply, so they start ready to work; HTTP replies are text only.
   const defaultMode: PromptMode = provider.kind === "acp" ? "workspace" : "ask";
@@ -630,6 +638,26 @@ export default function AiPanel({
     await sendWith(last.prompt, last.mode, last.contexts, history);
   }
 
+  /** Delete one conversation; deleting the open one starts a fresh chat. */ function handleDeleteConversation(id: string) {
+    if (id === conversationId) {
+      fenceRun();
+      const next = createConversation(providerKey);
+      setConversations((previous) => [next, ...previous.filter((item) => item.id !== id)]);
+      setActiveId(next.id);
+      setStreamError(null);
+      return;
+    }
+    setConversations((previous) => previous.filter((item) => item.id !== id));
+  }
+
+  /** Delete every stored conversation and start a fresh chat. */ function handleDeleteAllConversations() {
+    fenceRun();
+    const next = createConversation(providerKey);
+    setConversations([next]);
+    setActiveId(next.id);
+    setStreamError(null);
+  }
+
   /** Start a new conversation fencing the old run. */ function handleNewConversation() {
     fenceRun();
     const next = createConversation(providerKey);
@@ -688,7 +716,7 @@ export default function AiPanel({
           </button>
         )}
       </div>
-      {historyOpen ? <ChatHistory conversations={conversations} activeId={conversationId} onSelect={(id) => { handleSelectConversation(id); setHistoryOpen(false); }} /> : <>
+      {historyOpen ? <ChatHistory conversations={conversations} activeId={conversationId} onSelect={(id) => { handleSelectConversation(id); setHistoryOpen(false); }} onDelete={handleDeleteConversation} onDeleteAll={handleDeleteAllConversations} /> : <>
       <div className="ai-chat-chips flex shrink-0 flex-wrap items-center gap-1" aria-label={t("送信対象")}>
         {contexts.length === 0 ? (
           <span className="text-[11px] text-muted-foreground">{t("送信対象がありません。")}</span>
