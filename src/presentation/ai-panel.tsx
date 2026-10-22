@@ -201,9 +201,8 @@ function AssistantSteps({ message, onChoose }: {
       if (index !== lastText) return null;
       return <p key={`text:${index}`} data-testid={testId} className="mt-0.5 text-xs text-muted-foreground">{message.state === "done" ? t("文書に反映しました。変更はエディターで確認できます。") : t("文書を書き換えています…")}</p>;
     }
-    return message.state === "done"
-      ? <div key={`text:${index}`} className="marxen-chat-body mt-1"><MarkdownPreview text={step.text} label={t("AI の回答")} testId={testId} /></div>
-      : <p key={`text:${index}`} className="ai-chat-text mt-0.5 whitespace-pre-wrap leading-6">{step.text}</p>;
+    // shortcut: renders on every chunk (the preview keeps prior HTML, so no flicker); batch chunks if long replies feel slow.
+    return <div key={`text:${index}`} className="marxen-chat-body mt-1"><MarkdownPreview text={step.text} label={t("AI の回答")} testId={testId} /></div>;
   })}</>;
 }
 
