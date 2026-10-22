@@ -194,6 +194,8 @@ export const workspaceApi = {
   gitStatus: (scope: RootScope) => invoke<GitStatus>("git_status", { scope }),
   /** Read one change's diff against HEAD. */
   gitDiff: (scope: RootScope, path: string, status: string) => invoke<string>("git_diff", { scope, path, status }),
+  /** Read one file's text at HEAD for the change gutter. */
+  gitHeadText: (scope: RootScope, path: string) => invoke<string | null>("git_head_text", { scope, path }),
   /** List crash-recovery entries. */
   listRecovery: (scope?: RootScope) => rootInvoke<RecoveryEntry[]>("list_recovery", {}, scope ?? currentScope).then((entries) => { for (const entry of entries) recoveryLocations.set(entry.documentId, entry.location); return entries; }),
   /** Restore a crash-recovery entry into an open document. */

@@ -1,5 +1,5 @@
 //! Issue #121: the native Git adapter against a real temporary repository.
-use marxen_lib::application::source_control::{change_diff, SourceControl};
+use marxen_lib::application::source_control::{change_diff, head_text, SourceControl};
 use marxen_lib::contracts::WorkspaceError;
 use marxen_lib::infrastructure::git::NativeGit;
 use std::path::Path;
@@ -49,6 +49,16 @@ fn status_and_diffs_follow_the_work_tree() {
     assert!(untracked.contains("+hello"), "{untracked}");
     assert!(matches!(
         change_diff(&NativeGit, root, "../outside.md", "M"),
+        Err(WorkspaceError::InvalidPath)
+    ));
+    // Issue #124: the editor gutter compares against the committed text.
+    assert_eq!(
+        head_text(&NativeGit, root, "a.md").unwrap().as_deref(),
+        Some("old\n")
+    );
+    assert_eq!(head_text(&NativeGit, root, "docs/新規.md").unwrap(), None);
+    assert!(matches!(
+        head_text(&NativeGit, root, "../a.md"),
         Err(WorkspaceError::InvalidPath)
     ));
 }

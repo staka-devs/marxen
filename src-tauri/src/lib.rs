@@ -237,7 +237,8 @@ pub fn run() {
             presentation::vim_settings::vim_settings_write_managed,
             presentation::vim_settings::vim_settings_write_raw,
             presentation::source_control::git_status,
-            presentation::source_control::git_diff
+            presentation::source_control::git_diff,
+            presentation::source_control::git_head_text
         ])
         .run(tauri::generate_context!())
         .expect("Marxen desktop runtime failed");

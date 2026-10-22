@@ -240,6 +240,8 @@ export interface WorkspaceGateway {
   gitStatus?(scope: import("../contracts/contracts").RootScope): Promise<import("../contracts/contracts").GitStatus>;
   /** Read one reported change's unified diff against HEAD; desktop only. */
   gitDiff?(scope: import("../contracts/contracts").RootScope, path: string, status: string): Promise<string>;
+  /** Read one root-relative file's text at HEAD, or null when it is not committed; desktop only. */
+  gitHeadText?(scope: import("../contracts/contracts").RootScope, path: string): Promise<string | null>;
   /** Restore a recovery entry. */
   restoreRecovery(documentId: DocumentId): Promise<OpenDocument>;
   /** Discard a recovery entry. */
