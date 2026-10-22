@@ -45,6 +45,9 @@ import {
   truncatePrompt,
   upsertToolCall,
   type ChatConversation,
+  type ChatMessage,
+  type ChatPermission,
+  type ChatSegment,
 } from "../domain/conversation/ai-conversation";
 import type {
   AiError,
@@ -58,7 +61,7 @@ import type {
   ProposalText,
   StagingTarget,
 } from "../contracts/ai-contracts";
-import type { AiGateway, AiProfileStore } from "../application/ports";
+import type { AiGateway, AiProfileStore, ChatHistoryStore } from "../application/ports";
 import type { ApiConnectionControls } from "./ai/ApiConnections";
 
 export interface AiPanelProps {
@@ -118,6 +121,10 @@ export interface AiPanelProps {
   modelControls?: ReactNode;
   /** Read-only actions placed beside the conversation and connection controls. */
   headerActions?: ReactNode;
+  /** Finished conversations kept across restarts; in memory only when absent. */
+  historyStore?: ChatHistoryStore;
+  /** Pending-change review shown directly above the composer, as agent chats do. */
+  review?: ReactNode;
 }
 
 const MODE_ORDER: PromptMode[] = ["ask", "generate", "rewrite", "workspace"];
@@ -161,6 +168,46 @@ function loadSavedProfile(store: AiProfileStore | undefined): AiProfile {
   }
 }
 
+/** Steps of a turn in arrival order; turns recorded before segments existed keep the old grouping. */
+function stepsOf(message: ChatMessage): ChatSegment[] {
+  return message.segments ?? [
+    { type: "plan" },
+    ...(message.tools ?? []).map((tool) => ({ type: "tool" as const, id: tool.id })),
+    ...(message.permissions ?? []).map((permission) => ({ type: "permission" as const, id: permission.requestId })),
+    ...(message.text ? [{ type: "text" as const, text: message.text }] : []),
+  ];
+}
+
+/** Render an assistant turn chronologically: text, plan, tool and permission steps as they arrived. */
+function AssistantSteps({ message, onChoose }: {
+  message: ChatMessage;
+  /** Reply to a permission request with the chosen option ID. */
+  onChoose: (permission: ChatPermission, optionId: string) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const steps = stepsOf(message);
+  const lastText = steps.map((step) => step.type).lastIndexOf("text");
+  return <>{steps.map((step, index) => {
+    if (step.type === "plan") return message.plan && message.plan.length > 0 ? <PlanCard key="plan" entries={message.plan} /> : null;
+    if (step.type === "tool") {
+      const tool = message.tools?.find((item) => item.id === step.id);
+      return tool ? <ToolCard key={`tool:${tool.id}`} tool={tool} /> : null;
+    }
+    if (step.type === "permission") {
+      const permission = message.permissions?.find((item) => item.requestId === step.id);
+      return permission ? <PermissionCard key={`permission:${permission.requestId}`} permission={permission} onChoose={(optionId) => onChoose(permission, optionId)} /> : null;
+    }
+    const testId = index === lastText ? `chat-response-${message.id}` : `chat-response-${message.id}-${index}`;
+    // Write/rewrite replies are document content that lands in the file; the chat only reports it.
+    if (message.mode === "generate" || message.mode === "rewrite") {
+      if (index !== lastText) return null;
+      return <p key={`text:${index}`} data-testid={testId} className="mt-0.5 text-xs text-muted-foreground">{message.state === "done" ? t("文書に反映しました。変更はエディターで確認できます。") : t("文書を書き換えています…")}</p>;
+    }
+    // shortcut: renders on every chunk (the preview keeps prior HTML, so no flicker); batch chunks if long replies feel slow.
+    return <div key={`text:${index}`} className="marxen-chat-body mt-1"><MarkdownPreview text={step.text} label={t("AI の回答")} testId={testId} /></div>;
+  })}</>;
+}
+
 /**
  * Agent multi-turn chat with staging, history, and fenced runs.
  *
@@ -189,6 +236,8 @@ export default function AiPanel({
   sessionScopeKey,
   modelControls,
   headerActions,
+  historyStore,
+  review,
 }: AiPanelProps) {
   const { t } = useI18n();
   /** Streaming transport: injected prop wins, otherwise the test fallback throws visibly. */
@@ -202,9 +251,17 @@ export default function AiPanel({
   const providerKeyRef = useRef(providerKey);
   // In-memory conversation list: 新規 preserves prior conversations in the
   // selector instead of destroying them. Nothing persists to storage.
-  const [conversations, setConversations] = useState<ChatConversation[]>(() => [createConversation(providerKey)]);
+  // A fresh conversation stays first (and active); stored ones follow in the history list.
+  const [conversations, setConversations] = useState<ChatConversation[]>(() => [createConversation(providerKey), ...(historyStore?.load() ?? [])]);
+  useEffect(() => {
+    // Saving per streamed chunk would rewrite storage constantly; save once turns settle.
+    if (historyStore && !conversations.some((item) => isBusy(item.messages))) historyStore.save(conversations);
+  }, [conversations, historyStore]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [mode, setMode] = useState<PromptMode>("ask");
+  // Agents edit in an isolated copy reviewed before apply, so they start ready to work; HTTP replies are text only.
+  const defaultMode: PromptMode = provider.kind === "acp" ? "workspace" : "ask";
+  const [mode, setMode] = useState<PromptMode>(defaultMode);
+  useEffect(() => setMode(defaultMode), [defaultMode]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [streamError, setStreamError] = useState<AiError | null>(null);
@@ -293,7 +350,7 @@ export default function AiPanel({
     if (node && typeof node.scrollTo === "function") {
       node.scrollTo({ top: node.scrollHeight });
     }
-  }, [conversation?.messages.length]);
+  }, [conversation?.messages.length, conversation?.messages.at(-1)?.text.length, conversation?.messages.at(-1)?.segments?.length]);
 
   const running = (conversation ? isBusy(conversation.messages) : false) || resolving || ownedBusy;
   const differentProvider = conversation?.providerKey !== providerKey;
@@ -581,6 +638,26 @@ export default function AiPanel({
     await sendWith(last.prompt, last.mode, last.contexts, history);
   }
 
+  /** Delete one conversation; deleting the open one starts a fresh chat. */ function handleDeleteConversation(id: string) {
+    if (id === conversationId) {
+      fenceRun();
+      const next = createConversation(providerKey);
+      setConversations((previous) => [next, ...previous.filter((item) => item.id !== id)]);
+      setActiveId(next.id);
+      setStreamError(null);
+      return;
+    }
+    setConversations((previous) => previous.filter((item) => item.id !== id));
+  }
+
+  /** Delete every stored conversation and start a fresh chat. */ function handleDeleteAllConversations() {
+    fenceRun();
+    const next = createConversation(providerKey);
+    setConversations([next]);
+    setActiveId(next.id);
+    setStreamError(null);
+  }
+
   /** Start a new conversation fencing the old run. */ function handleNewConversation() {
     fenceRun();
     const next = createConversation(providerKey);
@@ -639,7 +716,7 @@ export default function AiPanel({
           </button>
         )}
       </div>
-      {historyOpen ? <ChatHistory conversations={conversations} activeId={conversationId} onSelect={(id) => { handleSelectConversation(id); setHistoryOpen(false); }} /> : <>
+      {historyOpen ? <ChatHistory conversations={conversations} activeId={conversationId} onSelect={(id) => { handleSelectConversation(id); setHistoryOpen(false); }} onDelete={handleDeleteConversation} onDeleteAll={handleDeleteAllConversations} /> : <>
       <div className="ai-chat-chips flex shrink-0 flex-wrap items-center gap-1" aria-label={t("送信対象")}>
         {contexts.length === 0 ? (
           <span className="text-[11px] text-muted-foreground">{t("送信対象がありません。")}</span>
@@ -695,20 +772,7 @@ export default function AiPanel({
                 <p className="ai-chat-role text-[11px] text-muted-foreground">
                   AI{message.state === "streaming" ? t("・生成中…") : message.state === "cancelled" ? t("・取消済み") : message.state === "error" ? t("・失敗") : ""}
                 </p>
-                {message.plan && message.plan.length > 0 && <PlanCard entries={message.plan} />}
-                {(message.tools ?? []).map((tool) => (
-                  <ToolCard key={tool.id} tool={tool} />
-                ))}
-                {(message.permissions ?? []).map((permission) => (
-                  <PermissionCard
-                    key={permission.requestId}
-                    permission={permission}
-                    onChoose={(optionId) => handlePermissionChoice(message.id, permission.runId, permission.requestId, optionId)}
-                  />
-                ))}
-                {message.text && (message.state === "done"
-                  ? <div className="marxen-chat-body mt-1"><MarkdownPreview text={message.text} label={t("AI の回答")} testId={`chat-response-${message.id}`} /></div>
-                  : <p className="ai-chat-text mt-0.5 whitespace-pre-wrap leading-6">{message.text}</p>)}
+                <AssistantSteps message={message} onChoose={(permission, optionId) => handlePermissionChoice(message.id, permission.runId, permission.requestId, optionId)} />
                 {message.state === "error" && message.error && (
                   <p role="alert" className="mt-1 text-xs font-medium text-red-600">{describeAiError(message.error, t)}</p>
                 )}
@@ -724,6 +788,7 @@ export default function AiPanel({
           <p className="ai-chat-message text-[11px] text-muted-foreground">{t("応答を生成しています…")}</p>
         )}
       </div>
+      {review && <div className="max-h-72 min-h-0 shrink-0 overflow-y-auto">{review}</div>}
       <div className="ai-chat-composer shrink-0 border-t border-border pt-1.5">
         <div className="ai-chat-composer-box px-1.5 pb-1.5 pt-1">
           <textarea
@@ -732,7 +797,13 @@ export default function AiPanel({
             rows={3}
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
-            placeholder={t("AI への指示を書きます")}
+            onKeyDown={(event) => {
+              // Enter sends, Shift+Enter breaks the line; IME confirmation Enter never sends.
+              if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return;
+              event.preventDefault();
+              if (canSend) void handleSend();
+            }}
+            placeholder={t("AI への指示を書きます（Enter で送信、Shift+Enter で改行）")}
           />
           <div className="mt-1 flex flex-wrap items-center gap-1">
             <div role="group" aria-label={t("プロンプトの種類")} className="min-w-0 shrink-0">

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatRange, insertImage, insertLink, insertTable, tableAddColumn, tableAddRow, tableDeleteRow, toggleCheckbox } from "./markdown-gui";
+import { formatRange, insertImage, insertLink, insertTable, isListItemAt, tableAddColumn, tableAddRow, tableDeleteRow, toggleCheckbox } from "./markdown-gui";
 import { applyTextEdits } from "./coordinates/utf16";
 
 describe("markdown GUI range patches", () => {
@@ -41,5 +41,20 @@ describe("markdown GUI range patches", () => {
     const text = "a😀日本語";
     const out = applyTextEdits(text, formatRange(text, 1, 3, "bold"));
     expect(out).toBe("a**😀**日本語");
+  });
+});
+
+describe("isListItemAt", () => {
+  it("detects bullet, ordered and task items but not prose or fenced code", () => {
+    const text = "intro\n- a\n  * b\n12. c\n- [ ] d\n```\n- code\n```\n-not";
+    /** Offset of the first occurrence of a needle. */
+    const at = (needle: string) => text.indexOf(needle);
+    expect(isListItemAt(text, at("intro"))).toBe(false);
+    expect(isListItemAt(text, at("a"))).toBe(true);
+    expect(isListItemAt(text, at("b"))).toBe(true);
+    expect(isListItemAt(text, at("c"))).toBe(true);
+    expect(isListItemAt(text, at("d"))).toBe(true);
+    expect(isListItemAt(text, at("code"))).toBe(false);
+    expect(isListItemAt(text, at("not"))).toBe(false);
   });
 });

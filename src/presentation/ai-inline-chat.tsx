@@ -3,7 +3,6 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { Send, Square, X } from "lucide-react";
 import { Button } from "./ui/button";
 import "./ai-chat.css";
-import { MarkdownPreview } from "./preview/MarkdownPreview";
 import { describeAiError } from "../domain/ai-config";
 import {
   claudeRefusalError,
@@ -44,8 +43,6 @@ export interface InlineChatProps {
   onBusyChange?: (busy: boolean) => void;
   /** Forward the completed proposal with its mode for review staging. */
   onProposal: (proposal: ProposalText, sent: ContextSummary[], mode: PromptMode) => void;
-  /** Reveal the staged diff for review. */
-  onReview: () => void;
   /** Close the composer, cancelling the owned run. */
   onClose: () => void;
   /** Caret anchor for floating placement, if available. */
@@ -78,7 +75,6 @@ export default function InlineChat({
   disabled,
   onBusyChange,
   onProposal,
-  onReview,
   onClose,
   anchor,
   startPrompt: startPromptProp,
@@ -402,10 +398,6 @@ export default function InlineChat({
               <Square size={12} aria-hidden="true" />
               {t("取消")}</Button>
           )}
-          {proposal && (
-            <Button variant="outline" size="sm" aria-label={t("差分を確認")} title={t("差分を確認")} onClick={onReview} className="ai-chat-action shrink-0">
-              {t("差分を確認")}</Button>
-          )}
         </div>
       </div>
       {disabled && <p className="mt-1 text-[11px] text-muted-foreground">{t("他の応答を生成しています。")}</p>}
@@ -426,12 +418,7 @@ export default function InlineChat({
         {error && (
           <p role="alert" className="text-xs font-medium text-red-600">{describeAiError(error, t)}</p>
         )}
-        {proposal && (
-          <div className="py-0.5">
-            <p className="text-[11px] text-muted-foreground">{t("提案")}</p>
-            <div className="marxen-chat-body mt-1 max-h-48 overflow-y-auto"><MarkdownPreview text={proposal.text} label={t("インラインの提案")} testId="inline-response" /></div>
-          </div>
-        )}
+        {proposal && <p data-testid="inline-response" role="status" className="text-xs text-muted-foreground">{t("文書に反映しました。変更はエディターで確認できます。")}</p>}
       </div>
     </div>
   );

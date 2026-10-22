@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AiPanel from "./ai-panel";
+import { restoredConversations, storedConversations } from "../domain/conversation/chat-history";
 import { setCredential, testConnection } from "../infrastructure/tauri/ai-client";
 import type { AiStreamEvent, PromptContext, StagingTarget } from "../contracts/ai-contracts";
 import type { AiGateway } from "../application/ports";
@@ -41,6 +42,43 @@ const labels = { doc_01: "a.md" };
 }
 
 describe("agent chat", () => {
+  it("sends on Enter but not on Shift+Enter or IME confirmation", async () => {
+    mockStartPrompt.mockImplementation(async () => ({
+      runId: "enter",
+      /** Stop the pending mock run. */
+      stop: async () => undefined,
+    }));
+    render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} />);
+    const input = screen.getByLabelText("プロンプト");
+    fireEvent.change(input, { target: { value: "改行して" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+    expect(mockStartPrompt).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter" });
+    await vi.waitFor(() => expect(mockStartPrompt).toHaveBeenCalledOnce());
+  });
+
+  it("shows text, tools and text again in arrival order", async () => {
+    mockStartPrompt.mockImplementation(async (_request, onEvent) => {
+      onEvent({ type: "chunk", payload: { runId: "order", text: "読みます。" } } as AiStreamEvent);
+      onEvent({ type: "tool_call", payload: { runId: "order", toolCall: { toolCallId: "t1", title: "a.md を読む", kind: "read", status: "completed" } } } as AiStreamEvent);
+      onEvent({ type: "chunk", payload: { runId: "order", text: "直しました。" } } as AiStreamEvent);
+      return {
+        runId: "order",
+        /** Stop the pending mock run. */
+        stop: async () => undefined,
+      };
+    });
+    render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "直して" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    const after = await screen.findByText("直しました。");
+    const tool = screen.getByText("a.md を読む");
+    const before = screen.getByText("読みます。");
+    expect(before.compareDocumentPosition(tool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(tool.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("keeps a completed conversation on its original root and requires a new chat after a switch", async () => {
     const first = { ...contexts[0], location: { scope: { rootId: "root-a", generation: "1" }, path: "same.md", position: 0 } };
     const second = { ...contexts[0], documentId: "doc-b", location: { scope: { rootId: "root-b", generation: "2" }, path: "same.md", position: 0 } };
@@ -245,7 +283,7 @@ describe("agent chat", () => {
     expect(screen.queryByText("回答")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "履歴を開く" }));
     expect(screen.getByRole("searchbox", { name: "履歴を検索" })).toHaveFocus();
-    fireEvent.click(screen.getByRole("button", { name: /質問/ }));
+    fireEvent.click(screen.getByRole("button", { name: /質問.*件の依頼/ }));
     expect(await screen.findByText("回答")).toBeVisible();
     // The fresh conversation starts with empty history.
     fireEvent.click(screen.getByRole("button", { name: "新しい会話" }));
@@ -541,3 +579,33 @@ describe("agent chat", () => {
 
 
 
+
+describe("chat history persistence", () => {
+  it("saves finished chats, restores them after a restart and deletes them", async () => {
+    let saved: unknown = [];
+    const store = {
+      /** Return what the last save wrote. */
+      load: () => restoredConversations(JSON.parse(JSON.stringify(saved))),
+      /** Keep the storable part like the real store. */
+      save: vi.fn((list: Parameters<typeof storedConversations>[0]) => { saved = storedConversations(list); return true; }),
+    };
+    mockStartPrompt.mockImplementation(async (_request, onEvent) => {
+      onEvent({ type: "done", payload: { runId: "h", proposal: { text: "保存される回答", baseContexts: [] }, sent: [] } });
+      return {
+        runId: "h",
+        /** Stop the completed mock run. */
+        stop: async () => undefined,
+      };
+    });
+    const first = render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} historyStore={store} />);
+    fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "覚えておく質問" } });
+    fireEvent.click(screen.getByRole("button", { name: "送信" }));
+    await vi.waitFor(() => expect(JSON.stringify(saved)).toContain("保存される回答"));
+    first.unmount();
+    render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} historyStore={store} />);
+    fireEvent.click(screen.getByRole("button", { name: "履歴を開く" }));
+    expect(screen.getByRole("button", { name: /覚えておく質問.*件の依頼/ })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "覚えておく質問を削除" }));
+    await vi.waitFor(() => expect(saved).toEqual([]));
+  });
+});

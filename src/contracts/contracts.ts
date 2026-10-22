@@ -115,3 +115,9 @@ export type YankCopy = { format: CopyFormat,
 text: string, };
 export type VimInputResult = { snapshot: DocumentSnapshot, copy: YankCopy | null, copyReady: boolean, };
 export type GridUpdate = { documentId: DocumentId, revision: Revision, updates: unknown[], };
+export type GitChange = { path: string,
+/**
+ * Porcelain code: `M` modified, `A` added, `D` deleted, `R` renamed, `U` conflicted, `?` untracked.
+ */
+status: string, };
+export type GitStatus = { repository: boolean, branch: string | null, changes: Array<GitChange>, };

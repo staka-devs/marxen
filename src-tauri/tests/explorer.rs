@@ -67,6 +67,9 @@ fn utf8_text_edits_vim_write_undo_and_recovery_use_real_neovim() {
     let mut restored = marxen_lib::open_workspace(root.path(), recovery.path()).unwrap();
     let record = restored.recovery_entries().unwrap().remove(0);
     let doc = restored.restore(&record.document_id.0).unwrap();
+    // Issue #110: the restored record stays as a live checkpoint but is no longer offered.
+    assert_eq!(restored.recovery_entries().unwrap().len(), 1);
+    assert!(restored.pending_recovery_entries().unwrap().is_empty());
     assert_eq!(doc.snapshot.text, opened.snapshot.text);
     assert!(doc.snapshot.dirty);
     restored

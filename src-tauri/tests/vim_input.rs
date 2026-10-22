@@ -225,6 +225,45 @@ fn native_line_selection_includes_line_breaks_and_block_is_not_a_contiguous_scop
 }
 
 #[test]
+/// Install an Alt+drag GUI rectangle as native blockwise Visual so `d` removes exactly the block.
+fn gui_block_selection_installs_native_visual_block() {
+    let actor = marxen_lib::open_document(
+        DocumentId("gui-block".into()),
+        "abcd\nefgh\nijkl".into(),
+        None,
+    )
+    .unwrap();
+    // Half-open corners: row 0 col 1 to row 2 col 3 select columns b..c on every line.
+    let update = actor
+        .set_block_cursor(marxen_lib::contracts::CursorUpdate {
+            document_id: actor.snapshot().document_id,
+            revision: Revision(0),
+            anchor: Utf16Offset(1),
+            head: Utf16Offset(13),
+        })
+        .unwrap();
+    assert_eq!((update.anchor.0, update.head.0), (1, 13));
+    assert_eq!(actor.current_mode().unwrap().mode, VimMode::VisualBlock);
+    let cursor = actor.cursor().unwrap();
+    assert_eq!(
+        cursor.anchor, cursor.head,
+        "a rectangle never widens a contiguous scope"
+    );
+    // A plain GUI drag while in block mode returns to characterwise Visual.
+    let plain = |anchor, head| marxen_lib::contracts::CursorUpdate {
+        document_id: actor.snapshot().document_id,
+        revision: actor.snapshot().revision,
+        anchor: Utf16Offset(anchor),
+        head: Utf16Offset(head),
+    };
+    actor.set_cursor(plain(0, 2)).unwrap();
+    assert_eq!(actor.current_mode().unwrap().mode, VimMode::Visual);
+    actor.set_block_cursor(plain(1, 13)).unwrap();
+    key(&actor, "d");
+    assert_eq!(actor.snapshot().text, "ad\neh\nil");
+}
+
+#[test]
 /// Revalidate a cached cursor after text changes so it cannot land inside a newly inserted surrogate pair.
 fn pending_cursor_cache_never_splits_a_new_surrogate_pair() {
     let actor =
@@ -606,4 +645,26 @@ fn cmdline_substitute_reports_and_search_counts() {
         .search_count
         .expect("recounted after n");
     assert!(count.total >= 2);
+}
+
+#[test]
+/// Insert-mode Tab through the app's input path writes indentation into the buffer.
+fn insert_mode_tab_inserts_indentation() {
+    let actor =
+        marxen_lib::open_document(DocumentId("insert-tab".into()), "ab".into(), None).unwrap();
+    key(&actor, "i");
+    let snapshot = actor.snapshot();
+    // The app renders the snapshot this call returns, so it must already contain the indent.
+    let result = actor
+        .input_with_copy(
+            SaveRequest {
+                location: None,
+                document_id: snapshot.document_id,
+                base_revision: snapshot.revision,
+            },
+            "<Tab>",
+        )
+        .unwrap();
+    assert_ne!(result.snapshot.text, "ab", "Tab inserted nothing");
+    assert_eq!(actor.current_mode().unwrap().mode, VimMode::Insert);
 }

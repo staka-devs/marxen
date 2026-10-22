@@ -5,6 +5,7 @@ pub mod document;
 pub mod isolation;
 pub mod ports;
 pub mod root_registry;
+pub mod source_control;
 pub mod vim_settings;
 pub mod workspace;
 

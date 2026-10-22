@@ -26,15 +26,11 @@ export interface ReviewPanelProps {
   message: string | null;
   status: string | null;
   proposalText: string | null;
-  /** Refetch diffs for the staged copy. */
-  onFetchDiff: () => void;
   onStageProposal: (() => void) | null;
   /** Apply and save the staged copy in one natural action. */
   onApprove: () => void;
-  /** Reject the staged copy without touching disk. */
+  /** Discard the staged copy without touching the document or disk. */
   onReject: () => void;
-  /** Cancel the copy after runs settle. */
-  onCancel: () => void;
   /** Retry failed new-file imports without reapplying document edits. */
   onRetryImports?: (() => void) | null;
   documentLabels?: Record<string, string>;
@@ -52,11 +48,9 @@ export default function ReviewPanel({
   message,
   status,
   proposalText,
-  onFetchDiff,
   onStageProposal,
   onApprove,
   onReject,
-  onCancel,
   onRetryImports,
   documentLabels,
 }: ReviewPanelProps) {
@@ -64,7 +58,8 @@ export default function ReviewPanel({
   /** Map a document ID to its visible label without internal IDs. */
   const label = (documentId: string) => documentLabels ? documentLabels[documentId] ?? t("文書") : documentId;
   const failedImports = importOutcomes.filter((item) => !item.ok);
-  const hasChanges = diffs.some((diff) => diff.changed) || newFiles.length > 0;
+  const changedCount = diffs.filter((diff) => diff.changed).length + newFiles.length;
+  const hasChanges = changedCount > 0;
   if (!hasChanges && outcomes.length === 0 && failedImports.length === 0 && !message && !onStageProposal) {
     return null;
   }
@@ -83,27 +78,22 @@ export default function ReviewPanel({
     </section>;
   }
   return (
-    <section aria-labelledby="review-panel-title" className="border-t border-border px-3 py-3">
-      <h2 id="review-panel-title" className="text-xs font-semibold">{t("変更の確認")}</h2>
-      {proposalText !== null && onStageProposal !== null && !applied && (
-        <div className="mt-2 rounded-sm border border-border p-2">
-          <p className="text-xs font-semibold text-muted-foreground">{t("取り込み待ちの提案")}</p>
-          <p className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap text-xs">{proposalText}</p>
-          <Button variant="outline" size="sm" className="mt-2" onClick={onStageProposal} disabled={!copyId || busy}>
-            {t("提案を作業コピーに取り込む")}</Button>
-        </div>
-      )}
-      {!applied && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          <Button variant="outline" size="sm" onClick={onFetchDiff} disabled={!copyId || busy}>
-            {t("差分を確認")}</Button>
-          <Button size="sm" onClick={onApprove} disabled={!copyId || busy}>
+    <section aria-labelledby="review-panel-title" className="ai-review-bar border-t border-border px-2 py-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <h2 id="review-panel-title" className="min-w-0 flex-1 truncate text-xs font-semibold">
+          {t("変更の確認")}
+          {hasChanges && <span className="ml-1.5 font-normal text-muted-foreground">{t("{{count}} 件のファイル", { count: changedCount })}</span>}
+        </h2>
+        {!applied && (<>
+          <Button size="sm" onClick={onApprove} disabled={!copyId || busy || !hasChanges}>
             {t("適用して保存")}</Button>
           <Button variant="outline" size="sm" onClick={onReject} disabled={!copyId || busy}>
-            {t("却下")}</Button>
-          <Button variant="outline" size="sm" onClick={onCancel} disabled={!copyId || busy}>
-            {t("取消")}</Button>
-        </div>
+            {t("破棄")}</Button>
+        </>)}
+      </div>
+      {proposalText !== null && onStageProposal !== null && !applied && (
+        <Button variant="outline" size="sm" className="mt-2" onClick={onStageProposal} disabled={!copyId || busy}>
+          {t("提案を作業コピーに取り込む")}</Button>
       )}
       {message && (
         <p role="alert" className="mt-2 text-sm font-medium text-red-600">

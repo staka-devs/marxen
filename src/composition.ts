@@ -15,6 +15,7 @@ import { dialogGateway } from "./infrastructure/native/dialog";
 import { dropGateway } from "./infrastructure/native/drop";
 import { clipboardGateway } from "./infrastructure/clipboard/clipboard-writer";
 import { aiProfileStore } from "./infrastructure/storage/ai-profile-store";
+import { chatHistoryStore } from "./infrastructure/storage/chat-history-store";
 import { apiConnectionStore } from "./infrastructure/storage/api-connections-store";
 import { createAiViewPreferencesStore } from "./infrastructure/storage/ai-view-preferences-store";
 import { editorPreferencesStore } from "./infrastructure/storage/editor-preferences-store";
@@ -64,6 +65,7 @@ export function createComposition() {
     dropGateway,
     clipboardGateway,
     aiProfileStore,
+    chatHistoryStore,
     apiConnectionStore,
     apiConnectionGateway: desktop ? apiConnectionGateway : undefined,
     aiViewPreferencesStore,

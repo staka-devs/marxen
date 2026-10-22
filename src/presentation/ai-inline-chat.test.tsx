@@ -32,7 +32,6 @@ const provider = { kind: "acp", acp: { preset: "codex", argv: null }, openai: nu
       ensureStaging={vi.fn(async () => ({ copyId: "copy_inline" }))}
       provider={{ ...provider }}
       onProposal={() => undefined}
-      onReview={() => undefined}
       onClose={() => undefined}
       startPrompt={mockStartPrompt}
       {...extra}
@@ -104,8 +103,7 @@ describe("inline chat", () => {
       return { runId: "run_inline", stop: vi.fn() };
     });
     const onProposal = vi.fn();
-    const onReview = vi.fn();
-    renderInline({ onProposal, onReview });
+    renderInline({ onProposal });
     expect(screen.getByTestId("inline-chat")).toHaveTextContent(/選択/);
     expect(screen.getByText("a.md")).toBeVisible();
     expect(screen.getByText("本文")).toBeVisible();
@@ -122,11 +120,10 @@ describe("inline chat", () => {
         sent: [{ documentId: "doc_a", revision: 3, ranges: [{ start: 4, end: 9 }], chars: 6 }],
       },
     });
-    expect(await screen.findByText("短い案")).toBeVisible();
+    // The rewrite lands in the document; the chat only reports it, never echoing the proposal text.
+    expect(await screen.findByTestId("inline-response")).toHaveTextContent("文書に反映しました");
+    expect(screen.queryByText("短い案")).not.toBeInTheDocument();
     expect(onProposal).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText(/Markdownを変更しました/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "差分を確認" }));
-    expect(onReview).toHaveBeenCalledTimes(1);
   });
 
   it("cancels the inline run without touching the document", async () => {

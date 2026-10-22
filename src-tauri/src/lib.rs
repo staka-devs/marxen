@@ -64,6 +64,10 @@ pub fn open_workspace(root: &Path, recovery: &Path) -> Result<Workspace, Workspa
         Arc::new(infrastructure::storage::SystemClock),
     )
 }
+/// Folder every isolated copy, and so every agent prompt, runs in.
+pub fn staging_root() -> std::path::PathBuf {
+    std::env::temp_dir().join("marxen-staging")
+}
 /// Open a native exact-scope staging manager with process-local copy identifiers.
 pub fn open_isolation(root: &Path) -> Result<IsolationManager, WorkspaceError> {
     IsolationManager::open(
@@ -83,10 +87,13 @@ pub fn run() {
             std::sync::Arc::new(infrastructure::clipboard::NativeClipboard::default()),
         ))
         .manage(presentation::isolation::IsolationState::new(
-            open_isolation(&std::env::temp_dir().join("marxen-staging")).expect("staging dir"),
+            open_isolation(&staging_root()).expect("staging dir"),
         ))
         .manage(presentation::vim_settings::VimSettingsState::new(
             vim_settings_files(),
+        ))
+        .manage(presentation::source_control::SourceControlState::new(
+            Arc::new(infrastructure::git::NativeGit),
         ))
         .manage(application::ai::service::AiService {
             keyring: Arc::new(infrastructure::ai::credentials::OsKeyring),
@@ -103,7 +110,11 @@ pub fn run() {
             clock: Arc::new(infrastructure::storage::SystemClock),
         })
         .manage(application::ai::transcript_usage::TranscriptUsageService {
-            reader: Arc::new(infrastructure::ai::transcript_usage::NativeTranscriptUsageReader),
+            reader: Arc::new(
+                infrastructure::ai::transcript_usage::NativeTranscriptUsageReader {
+                    staging_root: staging_root(),
+                },
+            ),
             clock: Arc::new(infrastructure::storage::SystemClock),
         })
         .manage(accounts)
@@ -180,6 +191,7 @@ pub fn run() {
             presentation::document::rename_folder,
             presentation::document::reload_document,
             presentation::document::close_document,
+            presentation::document::trash_document,
             presentation::document::search_workspace,
             presentation::document::plan_search_replacement,
             presentation::document::poll_workspace_events,
@@ -224,7 +236,10 @@ pub fn run() {
             presentation::document::configure_document,
             presentation::vim_settings::vim_settings_read,
             presentation::vim_settings::vim_settings_write_managed,
-            presentation::vim_settings::vim_settings_write_raw
+            presentation::vim_settings::vim_settings_write_raw,
+            presentation::source_control::git_status,
+            presentation::source_control::git_diff,
+            presentation::source_control::git_head_text
         ])
         .run(tauri::generate_context!())
         .expect("Marxen desktop runtime failed");

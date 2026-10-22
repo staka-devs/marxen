@@ -35,7 +35,7 @@ export function MarkdownPreview({ text, label, testId = "preview", resolveImage 
 
   useEffect(() => {
     let cancelled = false;
-    setResult(null);
+    // The previous HTML stays until the new render lands (no flash, scroll kept).
     // Superseded renders are discarded: only the latest text wins, so a
     // slow pass can never overwrite newer HTML (stale-result guard).
     const pipeline = renderMarkdownDocument(text, t);

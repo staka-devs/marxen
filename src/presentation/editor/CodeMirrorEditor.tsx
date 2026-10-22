@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import { Compartment, EditorState } from "@codemirror/state";
-import { EditorView, lineNumbers, drawSelection, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
+import { EditorView, lineNumbers, drawSelection, highlightActiveLine, highlightActiveLineGutter, rectangularSelection, crosshairCursor } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import type { DocumentSnapshot, TextEdit } from "../../contracts/contracts";
 import { createLivePreview, type LivePreviewCallbacks } from "./livePreview";
+import { aiDiff } from "./aiDiff";
+import { gitGutter } from "./gitGutter";
 import { blockCursorWidth } from "./cursorWidth";
 import type { ImageResolver } from "../../domain/image-sources";
 import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../domain/editor-preferences";
@@ -15,6 +17,20 @@ import type { EditorMenuPoint } from "./EditorMenu";
 export interface EditorSelection {
   anchor: number;
   head: number;
+  /** Alt+drag rectangle: anchor is the first line's start corner, head the last line's end corner. */
+  block?: boolean;
+}
+
+/** Report the main range, or an Alt+drag rectangle as its two corners. */
+function reportedSelection(selection: EditorState["selection"]): EditorSelection {
+  // shortcut: corners come from the first/last line ranges, so a short first/last line clips the
+  // block width; tracking the drag's virtual columns would fix that if it matters.
+  if (selection.ranges.length > 1) {
+    const first = selection.ranges[0];
+    const last = selection.ranges[selection.ranges.length - 1];
+    return { anchor: first.anchor, head: last.head, block: true };
+  }
+  return { anchor: selection.main.anchor, head: selection.main.head };
 }
 
 /**
@@ -62,6 +78,10 @@ interface Props {
   allowTextInput?: boolean;
   /** Positive ticket to focus a committed pane after file navigation. */
   focusRequest?: number;
+  /** Text before the latest AI change; when set, changed lines are highlighted inline. */
+  aiBaseline?: string | null;
+  /** The file's text at Git HEAD; when set, the gutter marks lines changed since then. */
+  gitBaseline?: string | null;
 }
 
 /** Common prefix/suffix diff as a single wire range edit. */
@@ -110,7 +130,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   return [{ range: { start, end: endBefore }, text: after.slice(start, endAfter) }];
 }
 
-/** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, snapshot, shouldUseNativeCursor, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true, focusRequest = 0, onEditorMenu }: Props) {
+/** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, snapshot, shouldUseNativeCursor, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true, focusRequest = 0, onEditorMenu, aiBaseline = null, gitBaseline = null }: Props) {
   const { t, language } = useI18n();
   const languageRef = useRef(language);
   languageRef.current = language;
@@ -122,6 +142,8 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   const liveRef = useRef(new Compartment());
   const appearanceRef = useRef(new Compartment());
   const accessibilityRef = useRef(new Compartment());
+  const aiDiffRef = useRef(new Compartment());
+  const gitGutterRef = useRef(new Compartment());
   const syncing = useRef(false);
   const composing = useRef(false);
   const printableKey = useRef<string | undefined>(undefined);
@@ -183,10 +205,17 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
             { tag: tags.monospace, fontFamily: '"Cascadia Code", "Consolas", monospace' },
           ])),
           drawSelection({ cursorBlinkRate: 0 }),
+          // Alt+drag draws a rectangle that Neovim receives as blockwise Visual; no other multi-cursor gestures.
+          EditorState.allowMultipleSelections.of(true),
+          EditorView.clickAddsSelectionRange.of(() => false),
+          rectangularSelection(),
+          crosshairCursor(),
           blockCursorWidth,
           appearanceRef.current.of([]),
+          gitGutterRef.current.of(gitGutter(gitBaseline)),
           editableRef.current.of(EditorView.editable.of(editableRefValue.current)),
           liveRef.current.of([]),
+          aiDiffRef.current.of(aiDiff(aiBaseline)),
           accessibilityRef.current.of(EditorView.contentAttributes.of({ "aria-label": ariaLabel, role: "textbox", tabindex: "0" })),
           EditorView.theme({
             "&": { backgroundColor: "transparent", fontSize: "14px", height: "100%" },
@@ -215,8 +244,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
             // Text changes carry their own final cursor in the same queued
             // commit; selection-only gestures use the staged cursor path.
             if (update.selectionSet && !update.docChanged) {
-              const sel = update.state.selection.main;
-              callbacks.current.onSelectionChange?.({ anchor: sel.anchor, head: sel.head });
+              callbacks.current.onSelectionChange?.(reportedSelection(update.state.selection));
             }
           }),
         ],
@@ -355,7 +383,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({ effects: appearanceRef.current.reconfigure([
-      ...(preferences.lineNumbers && !livePreview ? [lineNumbers()] : []),
+      ...(preferences.lineNumbers ? [lineNumbers()] : []),
       ...(preferences.wordWrap ? [EditorView.lineWrapping] : []),
       ...(preferences.highlightActiveLine ? [highlightActiveLine(), highlightActiveLineGutter()] : []),
       EditorView.theme({
@@ -374,6 +402,14 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
       effects: liveRef.current.reconfigure(livePreview ? createLivePreview(getLiveCallbacks) : []),
     });
   }, [livePreview, getLiveCallbacks, t, language]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: aiDiffRef.current.reconfigure(aiDiff(aiBaseline)) });
+  }, [aiBaseline]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: gitGutterRef.current.reconfigure(gitGutter(gitBaseline)) });
+  }, [gitBaseline]);
 
   // Vim cursor echo: apply once per sequence token without disturbing
   // composition or the user's active selection gestures. The programmatic

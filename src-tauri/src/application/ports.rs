@@ -22,6 +22,13 @@ impl ConfigReport {
         !self.errors.is_empty()
     }
 }
+/// Native Visual selection kind installed for a GUI range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisualKind {
+    Char,
+    Line,
+    Block,
+}
 #[derive(Debug)]
 pub struct BufferError(pub String);
 impl std::fmt::Display for BufferError {
@@ -92,12 +99,12 @@ pub trait Buffer: Send {
     fn virtualedit(&self) -> Result<String, BufferError>;
     /// Restore the captured native virtual cursor configuration.
     fn restore_virtualedit(&self, original: &str) -> Result<(), BufferError>;
-    /// Install zero-based GUI row/byte anchor and head as a native character or line selection.
+    /// Install zero-based GUI row/byte anchor and head as a native character, line or block selection.
     fn install_selection(
         &self,
         anchor: (u32, u32),
         head: (u32, u32),
-        linewise: bool,
+        kind: VisualKind,
     ) -> Result<(), BufferError>;
     /// Leave the native Visual selection before changing the GUI cursor.
     fn exit_visual(&self) -> Result<(), BufferError>;
@@ -211,6 +218,8 @@ pub trait DocumentStorage: FileReader {
     fn hard_link(&self, source: &Path, target: &Path) -> Result<(), WorkspaceError>;
     /// Remove one guarded file after its replacement or rename succeeds.
     fn remove_file(&self, path: &Path) -> Result<(), WorkspaceError>;
+    /// Move one file to the OS trash so the user can still restore it.
+    fn move_to_trash(&self, path: &Path) -> Result<(), WorkspaceError>;
     /// Reject unsafe save destinations and paths outside an optional workspace root.
     fn check_target(&self, root: Option<&Path>, path: &Path) -> Result<(), WorkspaceError>;
     /// Replace a file atomically only if its fingerprint matches the expected baseline.

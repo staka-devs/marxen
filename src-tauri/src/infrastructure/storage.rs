@@ -366,6 +366,13 @@ impl DocumentStorage for NativeStorage {
         Ok(fs::remove_file(path)?)
     }
 
+    /// Move one file to the platform trash (Recycle Bin, Trash, freedesktop trash).
+    fn move_to_trash(&self, path: &Path) -> Result<(), WorkspaceError> {
+        trash::delete(path).map_err(|error| WorkspaceError::Io {
+            detail: format!("ごみ箱へ移動できません: {error}"),
+        })
+    }
+
     /// Create a non-overwriting link and retain the structured AlreadyExists error.
     fn hard_link(&self, source: &Path, target: &Path) -> Result<(), WorkspaceError> {
         fs::hard_link(source, target).map_err(|e| {

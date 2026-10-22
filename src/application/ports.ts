@@ -86,7 +86,7 @@ export interface DocumentGateway {
   /** Route Enter with an optional Markdown hard break at the queued native cursor. */
   routeEditorEnter(documentId: DocumentId, hardBreak: boolean, hasSelection: boolean, onCopy: (copy: YankCopy) => Promise<void>): Promise<VimInputResult>;
   /** Navigate source table cells in Insert mode while preserving actual Tab mappings. */
-  routeTableTab(documentId: DocumentId, backwards: boolean, offset: number, beforeText: string, onCopy?: (copy: YankCopy) => Promise<void>): Promise<VimInputResult | { cursor: CursorUpdate }>;
+  routeTableTab(documentId: DocumentId, backwards: boolean, onCopy?: (copy: YankCopy) => Promise<void>): Promise<VimInputResult | { cursor: CursorUpdate }>;
   /** Route one printable char using native mode and optional captured GUI source. */
   routeCharKey(
     documentId: DocumentId,
@@ -129,7 +129,7 @@ export interface DocumentGateway {
   /** Fetch the native cursor. */
   fetchCursor(documentId: DocumentId): Promise<CursorUpdate>;
   /** Stage a GUI selection, coalescing rapid gestures. */
-  stageCursor(documentId: DocumentId, anchor: number, head: number): Promise<CursorUpdate | null>;
+  stageCursor(documentId: DocumentId, anchor: number, head: number, block?: boolean): Promise<CursorUpdate | null>;
   /** Report an explicit jump at the execution revision. */
   reportCursorNow(documentId: DocumentId, anchor: number, head: number): Promise<CursorUpdate>;
   /** Report a cursor update directly without queueing. */
@@ -168,8 +168,8 @@ export interface DocumentTransport {
   hasMapping(documentId: DocumentId, mode: string, lhs: string, location?: DocumentLocation): Promise<boolean>;
   /** Fetch the authoritative snapshot for a document ID. */
   fetchSnapshot(documentId: DocumentId, location?: DocumentLocation): Promise<DocumentSnapshot>;
-  /** Report a GUI selection to the native cursor tracker. */
-  reportCursor(update: CursorUpdate, location?: DocumentLocation): Promise<CursorUpdate>;
+  /** Report a GUI selection to the native cursor tracker; `block` installs blockwise Visual. */
+  reportCursor(update: CursorUpdate, location?: DocumentLocation, block?: boolean): Promise<CursorUpdate>;
   /** Fetch the last known native cursor for a document. */
   fetchCursor(documentId: DocumentId, location?: DocumentLocation): Promise<CursorUpdate>;
   /** Undo through the native undo stack. */
@@ -228,6 +228,8 @@ export interface WorkspaceGateway {
   renameFolder(source: string, dest: string, scope?: import("../contracts/contracts").RootScope): Promise<WorkspaceEntry>;
   /** Close a document with an explicit decision. */
   closeDocument(request: SaveRequest, action: CloseAction): Promise<boolean>;
+  /** Close an unedited document and move its file to the OS trash; refused if edited since the revision. */
+  trashDocument?(request: SaveRequest): Promise<void>;
   /** Native full-text search. */
   searchWorkspace(query: string, options: SearchOptions, root: string): Promise<SearchResults>;
   /** Prepare authoritative match edits only for unchanged searched content and root. */
@@ -236,6 +238,12 @@ export interface WorkspaceGateway {
   pollEvents(scope?: import("../contracts/contracts").RootScope): Promise<WorkspaceEvent[]>;
   /** List crash-recovery entries. */
   listRecovery(scope?: import("../contracts/contracts").RootScope): Promise<RecoveryEntry[]>;
+  /** Read the Git branch and working-tree changes of one registered root; desktop only. */
+  gitStatus?(scope: import("../contracts/contracts").RootScope): Promise<import("../contracts/contracts").GitStatus>;
+  /** Read one reported change's unified diff against HEAD; desktop only. */
+  gitDiff?(scope: import("../contracts/contracts").RootScope, path: string, status: string): Promise<string>;
+  /** Read one root-relative file's text at HEAD, or null when it is not committed; desktop only. */
+  gitHeadText?(scope: import("../contracts/contracts").RootScope, path: string): Promise<string | null>;
   /** Restore a recovery entry. */
   restoreRecovery(documentId: DocumentId): Promise<OpenDocument>;
   /** Discard a recovery entry. */
@@ -325,6 +333,14 @@ export interface DropGateway {
 export interface ClipboardGateway {
   /** Copy a yank through Rust without browser activation permission. */
   copyYank(copy: YankCopy, documentId: string): Promise<void>;
+}
+
+/** Finished chat conversations kept across restarts (Issue #128). */
+export interface ChatHistoryStore {
+  /** Load stored conversations, or none when storage is missing or corrupt. */
+  load(): import("../domain/conversation/ai-conversation").ChatConversation[];
+  /** Persist the storable part of the conversations; false when storage refused. */
+  save(conversations: import("../domain/conversation/ai-conversation").ChatConversation[]): boolean;
 }
 
 /** Non-secret AI profile store. */

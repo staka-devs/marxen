@@ -664,6 +664,10 @@ fn main() {
     if has_flag("--exit-early") {
         std::process::exit(1);
     }
+    if let Some(message) = flag_value("--stderr-exit") {
+        eprintln!("{message}");
+        std::process::exit(1);
+    }
     if has_flag("--codex-account-usage") {
         serve_account_usage();
         return;

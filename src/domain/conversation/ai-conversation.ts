@@ -64,6 +64,23 @@ export interface ChatMessage {
   plan?: PlanEntry[];
   /** Surfaced permission requests with actual option IDs. */
   permissions?: ChatPermission[];
+  /** Arrival order of text, tools, plan and permissions so the turn reads chronologically. */
+  segments?: ChatSegment[];
+}
+
+/** One step of an assistant turn; tools and permissions refer to their records by ID. */
+export type ChatSegment =
+  | { type: "text"; text: string }
+  | { type: "tool"; id: string }
+  | { type: "permission"; id: string }
+  | { type: "plan" };
+
+/** Append a non-text step once, keeping the first arrival position. */
+function addSegment(message: ChatMessage, segment: Exclude<ChatSegment, { type: "text" }>): ChatSegment[] {
+  const segments = message.segments ?? [];
+  /** Identity of a step: its type, plus the record ID for tools and permissions. */
+  const key = (item: ChatSegment) => ("id" in item ? `${item.type}:${item.id}` : item.type);
+  return segments.some((item) => key(item) === key(segment)) ? segments : [...segments, segment];
 }
 
 export interface ChatConversation {
@@ -121,7 +138,7 @@ export function createUserMessage(prompt: string, mode: PromptMode, contexts: Pr
  */
 export function createStreamingAssistant(): ChatMessage {
   messageSeq += 1;
-  return { id: `msg_${Date.now()}_${messageSeq}`, role: "assistant", text: "", state: "streaming", tools: [], plan: [], permissions: [] };
+  return { id: `msg_${Date.now()}_${messageSeq}`, role: "assistant", text: "", state: "streaming", tools: [], plan: [], permissions: [], segments: [] };
 }
 
 /**
@@ -144,7 +161,7 @@ export function upsertToolCall(messages: ChatMessage[], assistantId: string, too
     const index = tools.findIndex((item) => item.id === record.id);
     if (index >= 0) tools[index] = { ...tools[index], ...record };
     else tools.push(record);
-    return { ...message, tools };
+    return { ...message, tools, segments: addSegment(message, { type: "tool", id: record.id }) };
   });
 }
 
@@ -179,7 +196,7 @@ export function applyToolUpdate(messages: ChatMessage[], assistantId: string, up
 export function setChatPlan(messages: ChatMessage[], assistantId: string, entries: PlanEntry[]): ChatMessage[] {
   return messages.map((message) =>
     message.id === assistantId && message.role === "assistant"
-      ? { ...message, plan: entries.map((entry) => ({ ...entry })) }
+      ? { ...message, plan: entries.map((entry) => ({ ...entry })), segments: addSegment(message, { type: "plan" }) }
       : message,
   );
 }
@@ -212,7 +229,7 @@ export function addChatPermission(
       state: mode,
       interactive: mode === "pending",
     });
-    return { ...message, permissions };
+    return { ...message, permissions, segments: addSegment(message, { type: "permission", id: permission.requestId }) };
   });
 }
 
@@ -327,9 +344,24 @@ export function retryHistory(messages: ChatMessage[]): ChatHistoryMessage[] {
 export function appendStreamingText(messages: ChatMessage[], assistantId: string, chunk: string): ChatMessage[] {
   return messages.map((message) =>
     message.id === assistantId && message.role === "assistant"
-      ? { ...message, text: message.text + chunk }
+      ? { ...message, text: message.text + chunk, segments: appendTextSegment(message.segments ?? [], chunk) }
       : message,
   );
+}
+
+/** Extend the trailing text step, or start a new one after a tool/plan/permission. */
+function appendTextSegment(segments: ChatSegment[], chunk: string): ChatSegment[] {
+  const last = segments[segments.length - 1];
+  return last?.type === "text"
+    ? [...segments.slice(0, -1), { type: "text", text: last.text + chunk }]
+    : [...segments, { type: "text", text: chunk }];
+}
+
+/** Keep streamed steps when they spell the final text; otherwise show the final text after the steps. */
+function finalSegments(segments: ChatSegment[], text: string): ChatSegment[] {
+  const streamed = segments.map((item) => (item.type === "text" ? item.text : "")).join("");
+  if (streamed === text) return segments;
+  return [...segments.filter((item) => item.type !== "text"), ...(text ? [{ type: "text" as const, text }] : [])];
 }
 
 /**
@@ -345,7 +377,7 @@ export function finalizeAssistant(
 ): ChatMessage[] {
   return messages.map((message) =>
     message.id === assistantId
-      ? { ...message, text: proposal.text, state: "done" as const, proposal, sent, error: null }
+      ? { ...message, text: proposal.text, segments: finalSegments(message.segments ?? [], proposal.text), state: "done" as const, proposal, sent, error: null }
       : message,
   );
 }

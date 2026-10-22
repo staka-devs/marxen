@@ -200,6 +200,33 @@ pub fn truncate_title(title: Option<&str>) -> Option<String> {
     })
 }
 
+/// Whether a transcript's recorded working directory lies inside one of the app's staging roots.
+///
+/// Marxen runs every agent prompt inside its own staging folder, so this is how
+/// sessions started from the app are told apart from the user's other sessions.
+pub fn in_app_directory(cwd: &str, roots: &[String]) -> bool {
+    let cwd = normalize_directory(cwd);
+    roots.iter().any(|root| {
+        let root = normalize_directory(root);
+        !root.is_empty() && (cwd == root || cwd.starts_with(&format!("{root}/")))
+    })
+}
+
+/// Compare paths with `/` separators, without a Windows verbatim prefix or trailing slash.
+fn normalize_directory(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    let path = path
+        .strip_prefix("//?/")
+        .unwrap_or(&path)
+        .trim_end_matches('/');
+    // Windows paths are case-insensitive; elsewhere case is significant.
+    if cfg!(windows) {
+        path.to_lowercase()
+    } else {
+        path.to_owned()
+    }
+}
+
 /// Order sessions newest first for display, keeping undated rows last.
 /// Ordering is a pure display concern and never invents timestamps.
 pub fn sort_sessions_newest_first(sessions: &mut [TranscriptSession]) {
@@ -209,4 +236,25 @@ pub fn sort_sessions_newest_first(sessions: &mut [TranscriptSession]) {
         (None, Some(_)) => std::cmp::Ordering::Greater,
         (None, None) => std::cmp::Ordering::Equal,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    /// Accept the staging root and its children, rejecting siblings that only share a prefix.
+    fn in_app_directory_matches_staging_children_only() {
+        let roots = vec!["/tmp/marxen-staging".to_owned()];
+        assert!(in_app_directory("/tmp/marxen-staging/copy-1", &roots));
+        assert!(in_app_directory("/tmp/marxen-staging/", &roots));
+        assert!(!in_app_directory("/tmp/marxen-staging-other/x", &roots));
+        assert!(!in_app_directory("/home/me/project", &roots));
+        assert!(!in_app_directory("/home/me/project", &[String::new()]));
+        let windows = vec![r"C:\Users\me\AppData\Local\Temp\marxen-staging".to_owned()];
+        assert!(in_app_directory(
+            r"\\?\C:\Users\me\AppData\Local\Temp\marxen-staging\copy-2",
+            &windows
+        ));
+    }
 }

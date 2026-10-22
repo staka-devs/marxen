@@ -3,7 +3,7 @@ import type { Translator } from "../../contracts/localization";
 import { japaneseTranslator } from "../../domain/localization";
 import { useI18n } from "../i18n/I18nProvider";
 import { useEffect, useRef, useState } from "react";
-import { MessageSquare, Search } from "lucide-react";
+import { MessageSquare, Search, Trash2 } from "lucide-react";
 import { conversationTitle, isBusy, type ChatConversation } from "../../domain/conversation/ai-conversation";
 
 interface Props {
@@ -11,6 +11,10 @@ interface Props {
   activeId: string;
   /** Open the selected conversation and retain its completed turns. */
   onSelect: (id: string) => void;
+  /** Delete one conversation from the history. */
+  onDelete?: (id: string) => void;
+  /** Delete every conversation. */
+  onDeleteAll?: () => void;
 }
 
 /** Classify sessions by local calendar day without using internal IDs as labels. */
@@ -21,7 +25,7 @@ function dateGroup(timestamp: number, t: Translator = japaneseTranslator): strin
 }
 
 /** Searchable conversation list with meaningful titles, recency, and a current marker. */
-export function ChatHistory({ conversations, activeId, onSelect }: Props) {
+export function ChatHistory({ conversations, activeId, onSelect, onDelete, onDeleteAll }: Props) {
   const { t, language } = useI18n();
   const [query, setQuery] = useState("");
   const search = useRef<HTMLInputElement>(null);
@@ -38,11 +42,17 @@ export function ChatHistory({ conversations, activeId, onSelect }: Props) {
     <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
       {visible.length === 0 && <p role="status" className="px-2 py-6 text-xs text-muted-foreground">{t("一致するチャットがありません。")}</p>}
       {[...groups].map(([group, items]) => <div key={group} className="mb-3"><h3 className="px-2 py-1 text-[11px] font-medium text-muted-foreground">{group}</h3>
-        <ul>{items.map((item) => <li key={item.id}><button type="button" aria-current={item.id === activeId ? "true" : undefined} onClick={() => onSelect(item.id)}
+        <ul>{items.map((item) => <li key={item.id} className="group relative"><button type="button" aria-current={item.id === activeId ? "true" : undefined} onClick={() => onSelect(item.id)}
           className={`flex w-full items-start gap-2 rounded-sm px-2 py-2 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-primary ${item.id === activeId ? "bg-muted" : ""}`}>
           <MessageSquare size={14} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden="true" /><span className="min-w-0 flex-1"><span className="block truncate text-xs" title={conversationTitle(item, t)}>{conversationTitle(item, t)}</span><span className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground"><time dateTime={new Date(item.updatedAt).toISOString()}>{new Intl.DateTimeFormat(intlLocale(language), { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(item.updatedAt)}</time><span>{isBusy(item.messages) ? t("応答中") : item.id === activeId ? t("現在のチャット") : t("{{count}} 件の依頼", { count: (item.messages.filter((message) => message.role === "user").length) })}</span></span></span>
-        </button></li>)}</ul></div>)}
+        </button>
+          {onDelete && item.messages.length > 0 && <button type="button" aria-label={t("{{value0}}を削除", { value0: conversationTitle(item, t) })} title={t("削除")} onClick={() => onDelete(item.id)}
+            className="absolute right-1 top-1.5 hidden rounded-sm p-1 text-muted-foreground hover:bg-background hover:text-foreground group-hover:block group-focus-within:block"><Trash2 size={13} aria-hidden="true" /></button>}
+        </li>)}</ul></div>)}
     </div>
-    <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">{t("履歴はアプリ終了まで保持されます。")}</p>
+    <div className="flex items-center gap-2 border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+      <p className="min-w-0 flex-1">{onDelete ? t("完了したチャットはこのコンピューターに保存されます。") : t("履歴はアプリ終了まで保持されます。")}</p>
+      {onDeleteAll && conversations.some((item) => item.messages.length > 0) && <button type="button" onClick={onDeleteAll} className="shrink-0 rounded-sm px-1.5 py-0.5 hover:bg-muted hover:text-foreground">{t("すべて削除")}</button>}
+    </div>
   </section>;
 }

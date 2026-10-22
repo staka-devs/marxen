@@ -292,6 +292,16 @@ export function adjacentTableCell(text: string, offset: number, backwards: boole
   return { anchor, head: Math.max(anchor, start + span.end - /\s*$/.exec(raw)![0].length) };
 }
 
+/** Whether the line at `offset` is a Markdown list item (bullet, ordered or task), outside fenced code. */
+export function isListItemAt(text: string, offset: number): boolean {
+  const before = text.slice(0, offset);
+  const fences = before.match(/^ {0,3}(```|~~~)/gm)?.length ?? 0;
+  if (fences % 2 === 1) return false;
+  const start = before.lastIndexOf("\n") + 1;
+  const end = text.indexOf("\n", offset);
+  return /^[ \t]*([-*+]|\d{1,9}[.)])[ \t]/.test(text.slice(start, end < 0 ? text.length : end));
+}
+
 /** Structural actions supported by the contextual table controls. */
 export type TableAction = "row-above" | "row-below" | "column-left" | "column-right" | "delete-row" | "delete-column" | "align-none" | "align-left" | "align-center" | "align-right";
 

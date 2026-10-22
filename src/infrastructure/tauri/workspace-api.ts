@@ -17,6 +17,7 @@ import type {
   DocumentId,
   DocumentSnapshot,
   GridUpdate,
+  GitStatus,
   ImageData,
   ModeUpdate,
   NvimConfig,
@@ -183,12 +184,20 @@ export const workspaceApi = {
   reloadDocument: (request: SaveRequest) => documentInvoke<DocumentSnapshot>("reload_document", { ...request }),
   /** Close a document with an explicit save/discard/cancel decision. */
   closeDocument: (request: SaveRequest, action: CloseAction) => documentInvoke<boolean>("close_document", { ...request, action }),
+  /** Move an unedited document's file to the OS trash. */
+  trashDocument: (request: SaveRequest) => documentInvoke<void>("trash_document", { ...request }),
   /** Full-text workspace search through the native index. */
   searchWorkspace: (query: string, options: SearchOptions, root: string) => rootInvoke<SearchResults>("search_workspace", { query, options, root }, rootScopes.get(root)),
   /** Request native revision-bound literal edits over authoritative search ranges. */
   planSearchReplacement: (request: SearchReplaceRequest) => rootInvoke<SearchReplacePlan>("plan_search_replacement", { request }, request.scope ?? rootScopes.get(request.root)),
   /** Poll queued workspace events for reconnecting consumers. */
   pollEvents: (scope?: RootScope) => { const active = scope ?? currentScope; return rootInvoke<RootEvent[]>("poll_workspace_events", {}, active).then((events) => eventsForScope(events, active)); },
+  /** Read Git status for a registered root. */
+  gitStatus: (scope: RootScope) => invoke<GitStatus>("git_status", { scope }),
+  /** Read one change's diff against HEAD. */
+  gitDiff: (scope: RootScope, path: string, status: string) => invoke<string>("git_diff", { scope, path, status }),
+  /** Read one file's text at HEAD for the change gutter. */
+  gitHeadText: (scope: RootScope, path: string) => invoke<string | null>("git_head_text", { scope, path }),
   /** List crash-recovery entries. */
   listRecovery: (scope?: RootScope) => rootInvoke<RecoveryEntry[]>("list_recovery", {}, scope ?? currentScope).then((entries) => { for (const entry of entries) recoveryLocations.set(entry.documentId, entry.location); return entries; }),
   /** Restore a crash-recovery entry into an open document. */
@@ -212,7 +221,7 @@ export const workspaceApi = {
   /** Fetch the last known native cursor for a document. */
   fetchCursor: (documentId: DocumentId, location?: DocumentLocation) => documentInvoke<CursorUpdate>("fetch_cursor", { documentId, location }),
   /** Report a GUI selection to the native cursor tracker. */
-  reportCursor: (update: CursorUpdate, location?: DocumentLocation) => documentInvoke<CursorUpdate>("report_cursor", { ...update, location }),
+  reportCursor: (update: CursorUpdate, location?: DocumentLocation, block?: boolean) => documentInvoke<CursorUpdate>("report_cursor", { ...update, location, block }),
   /** Fetch a Neovim grid screen batch. */
   fetchGrid: (documentId: DocumentId, width = 80, height = 24) => documentInvoke<GridUpdate>("fetch_grid", { documentId, width, height }),
   /** Undo through the native undo stack. */

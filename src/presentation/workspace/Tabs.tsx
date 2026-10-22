@@ -35,7 +35,7 @@ interface Props {
           </button>
           <button type="button" onClick={() => onClose(tab.id)} aria-label={t("{{value0}}を閉じる", { value0: (tab.label) })} className="group/close relative flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted">
             {tab.dirty && <span aria-hidden="true" className="absolute h-1.5 w-1.5 rounded-full bg-foreground group-hover:hidden" />}
-            <X size={13} aria-hidden="true" className={tab.dirty ? "opacity-0 group-hover:opacity-100 group-focus-visible/close:opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"} />
+            <X size={13} aria-hidden="true" className={tab.dirty ? "opacity-0 group-hover:opacity-100 group-focus-visible/close:opacity-100" : activeId === tab.id ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"} />
           </button>
         </div>
       ))}

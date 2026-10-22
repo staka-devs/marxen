@@ -39,6 +39,7 @@ export default function App() {
         dropGateway={composition.dropGateway}
         clipboardGateway={composition.clipboardGateway}
         aiProfileStore={composition.aiProfileStore}
+        chatHistoryStore={composition.chatHistoryStore}
         apiConnectionStore={composition.apiConnectionStore}
         apiConnectionGateway={composition.apiConnectionGateway}
         aiViewPreferencesStore={composition.aiViewPreferencesStore}

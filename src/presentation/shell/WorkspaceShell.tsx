@@ -4,8 +4,14 @@ import { localizedFailure } from "../../domain/localization";
 import type { LocalizedText } from "../../contracts/localization";
 import type { LabelKey } from "../../contracts/localization";
 import { useI18n } from "../i18n/I18nProvider";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { MessageSquare, Files, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronRight, FileText, FilePlus2, FolderPlus, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { schemeStylesheet } from "../../domain/color-scheme";
+import { parseSubstituteCommand, SUBSTITUTE_SEARCH_OPTIONS } from "../../domain/search";
+import { MessageSquare, Files, GitBranch, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronRight, FileText, FilePlus2, FolderPlus, RefreshCw } from "lucide-react";
+import { SourceControlPanel } from "../workspace/SourceControlPanel";
+import { AiChangesBar } from "../ai/AiChangesBar";
+import { FindBar } from "../editor/FindBar";
+import { useWorkspaceSearch } from "./hooks/useWorkspaceSearch";
 import { CodeMirrorEditor } from "../editor/CodeMirrorEditor";
 import { MarkdownPreview } from "../preview/MarkdownPreview";
 import AiPanel from "../ai-panel";
@@ -138,6 +144,8 @@ export interface WorkspaceShellProps {
   clipboardGateway?: ClipboardGateway;
   /** Non-secret AI profile persistence. */
   aiProfileStore?: AiProfileStore;
+  /** Finished chat conversations kept across restarts. */
+  chatHistoryStore?: import("../../application/ports").ChatHistoryStore;
   /** Non-secret named API connection persistence. */
   apiConnectionStore?: ApiConnectionStore;
   /** Per-connection OS credential gateway. */
@@ -233,6 +241,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     dropGateway,
     clipboardGateway,
     aiProfileStore,
+    chatHistoryStore,
     apiConnectionStore,
     apiConnectionGateway,
     editorPreferencesStore,
@@ -505,6 +514,14 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     }
   });
   const theme = preferences.theme;
+  // Generated after styles.css so the seed palette overrides the static light/dark tokens, portals included.
+  useLayoutEffect(() => {
+    const style = document.createElement("style");
+    style.dataset.marxenScheme = "";
+    style.textContent = schemeStylesheet(preferences.seedColor);
+    document.head.append(style);
+    return () => style.remove();
+  }, [preferences.seedColor]);
   /**
    * Normalize and persist editor preferences, noticing once on failure.
    *
@@ -619,6 +636,39 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   /** Current Vim mode label for display. */
   const vimMode = session.vimMode;
   const commandCursor = session.commandLine ? [...session.commandLine.text.slice(session.commandLine.cursor)][0] ?? " " : " ";
+  const typedSubstitute = session.commandLine ? parseSubstituteCommand(session.commandLine.text) : null;
+  // Issue #119: mirror a typed `:s/pat/rep` into the search panel so matches and counts show before Enter.
+  useEffect(() => {
+    if (!typedSubstitute) return;
+    workspace.setSearchOptions(SUBSTITUTE_SEARCH_OPTIONS);
+    workspace.setSearchQuery(typedSubstitute.pattern);
+    workspace.setReplaceText(typedSubstitute.replacement);
+    setSideView("search");
+  }, [typedSubstitute?.pattern, typedSubstitute?.replacement]);
+
+  // Issue #124: HEAD text of the active file for the change gutter; refreshed on open and save.
+  const [gitHead, setGitHead] = useState<{ documentId: string; text: string | null } | null>(null);
+  const gitScope = active?.location?.scope;
+  useEffect(() => {
+    if (!active?.path || !gitScope || !workspaceGateway?.gitHeadText) { setGitHead(null); return; }
+    let current = true;
+    const documentId = active.documentId;
+    workspaceGateway.gitHeadText(gitScope, active.path)
+      .then((text) => { if (current) setGitHead({ documentId, text }); })
+      .catch(() => { if (current) setGitHead(null); });
+    return () => { current = false; };
+  }, [active?.documentId, active?.path, active?.dirty, gitScope?.rootId, gitScope?.generation, workspaceGateway]);
+  const gitBaseline = gitHead && gitHead.documentId === active?.documentId ? gitHead.text : null;
+
+  // Issue #125: in-file find bar over the same native search, limited to the active file; idle while closed.
+  const [findOpen, setFindOpen] = useState(false);
+  const fileSearch = useWorkspaceSearch({ desktop, root: workspace.wsRoot, roots: workspace.roots, gateway: workspaceGateway, session, notify: setNotice,
+    only: { path: findOpen ? active?.path ?? "" : "", scope: active?.location?.scope } });
+  /** Close the find bar and hand the keyboard back to the editor. */
+  const closeFind = () => { setFindOpen(false); document.querySelector<HTMLElement>('[data-testid="editor-primary"] .cm-content')?.focus(); };
+
+  /** Text before the latest AI change to the active document, for the inline diff. */
+  const aiBaseline = active ? staging.aiChanges.find((change) => change.documentId === active.documentId)?.before ?? null : null;
 
   const effectiveViewMode: ViewMode = active && !activeIsMarkdown ? "source" : viewMode;
 
@@ -681,6 +731,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       "view-outline": () => setSideView(value => value === "outline" ? null : "outline"),
       /** Open the existing search and replacement controls. */
       "edit-find": () => setSideView("search"),
+      /** Open the in-file find bar. */
+      "find-file": () => setFindOpen(true),
       /** Open the supported-file picker. */
       "palette-quickopen": () => setQuickOpen(true),
       /** Open the shared command picker. */
@@ -725,7 +777,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       const mod = event.ctrlKey || event.metaKey;
       if (!mod || event.isComposing || event.defaultPrevented || (event.target instanceof Element && event.target.closest('[role="dialog"],input,textarea,select'))) return;
       const key = event.key.toLowerCase();
-      const id = key === "p" ? (event.shiftKey ? "palette-open" : "palette-quickopen") : key === "s" ? "file-save" : key === "," ? "palette-settings" : key === "i" && event.shiftKey ? "inline-chat" : key === "i" && event.altKey ? "palette-ai" : null;
+      const id = key === "p" ? (event.shiftKey ? "palette-open" : "palette-quickopen") : key === "f" && !event.shiftKey ? "find-file" : key === "s" ? "file-save" : key === "," ? "palette-settings" : key === "i" && event.shiftKey ? "inline-chat" : key === "i" && event.altKey ? "palette-ai" : null;
       if (id && workbench.command(id)?.enabled) { event.preventDefault(); if (id === "inline-chat") event.stopPropagation(); void workbench.run(id); }
     };
     window.addEventListener("keydown", onKey);
@@ -804,6 +856,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           [
             { id: "explorer", label: t("エクスプローラー"), icon: <Files size={19} aria-hidden="true" /> },
             { id: "search", label: t("検索"), icon: <Search size={19} aria-hidden="true" /> },
+            ...(desktop && workspaceGateway?.gitStatus ? [{ id: "scm" as const, label: t("ソース管理"), icon: <GitBranch size={19} aria-hidden="true" /> }] : []),
             { id: "outline", label: t("アウトライン"), icon: <ListTree size={19} aria-hidden="true" /> },
           ] as Array<{ id: SideView; label: string; icon: ReactNode }>
         ).map((item) => (
@@ -901,6 +954,14 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               }}
             />
           )}
+          {sideView === "scm" && workspaceGateway && (
+            <SourceControlPanel
+              roots={workspace.roots}
+              gateway={workspaceGateway}
+              refreshKey={Object.values(session.docs).map((doc) => `${doc.documentId}:${doc.dirty}`).join("|")}
+              onOpen={(path, scope) => void openFileForEditing(path, scope)}
+            />
+          )}
           {sideView === "outline" && (
             <Outline
               text={active?.text ?? ""}
@@ -975,6 +1036,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           </button>
 
         </div>}
+        <AiChangesBar changes={staging.aiChanges} labels={contextLabels} activeId={activeId}
+          onOpen={(documentId) => session.setActiveId(documentId)} onKeep={staging.keepAiChanges} onUndo={() => void staging.undoAiChanges()} />
         {activeIsMarkdown && effectiveViewMode !== "read" && <GuiToolbar
           onFormat={(kind: FormatKind) => vim.guiAtSelection((text, start, end) => formatRange(text, start, end, kind), kind === "bold" || kind === "strike" ? 2 : 1)}
           onCheckbox={() => vim.guiAtSelection((text, _start, end) => toggleCheckbox(text, end))}
@@ -1164,10 +1227,14 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           )}
 
         <main
-          className="grid min-h-0 min-w-0 flex-1 overflow-hidden"
+          className="relative grid min-h-0 min-w-0 flex-1 overflow-hidden"
           style={{ gridTemplateColumns: effectiveViewMode === "split" && activeIsMarkdown && active ? `minmax(0, ${splitRatio}fr) 5px minmax(0, ${100 - splitRatio}fr)` : "minmax(0, 1fr)" }}
           aria-label={t("編集領域")}
         >
+          {findOpen && active && <FindBar query={fileSearch.searchQuery} onQuery={fileSearch.setSearchQuery} options={fileSearch.searchOptions} onOptions={fileSearch.setSearchOptions}
+            hits={fileSearch.registryHits} searching={fileSearch.searching} ready={fileSearch.resultsReady} error={fileSearch.searchError}
+            replaceText={fileSearch.replaceText} onReplaceText={fileSearch.setReplaceText}
+            onJump={(hit) => void fileSearch.jumpToHit(hit)} onReplaceOne={(hit) => void fileSearch.replaceOne(hit)} onReplaceAll={() => void fileSearch.replaceAllMatches()} onClose={closeFind} />}
           {/* One editor-primary at a time: live owns the inline preview
               pane, source/split own the raw pane. Selections live in shell
               state so scroll/cursor survive mode switches. */}
@@ -1181,6 +1248,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   editable={desktop}
                   ariaLabel={t("{{value0}}の{{value1}}エディタ", { value0: (active.path ?? active.documentId), value1: (activeIsMarkdown ? "Markdown" : t("テキスト")) })}
                   testId="editor-primary"
+                  aiBaseline={aiBaseline}
+                  gitBaseline={gitBaseline}
                   onEditorMenu={(point) => void editorMenu.open(point)}
                   focusRequest={editorFocus?.path === active.path ? editorFocus.sequence : 0}
                   initialSelection={selections[active.documentId] ?? null}
@@ -1212,6 +1281,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   editable={desktop}
                   ariaLabel={t("{{value0}}の{{value1}}エディタ", { value0: (active.path ?? active.documentId), value1: (activeIsMarkdown ? "Markdown" : t("テキスト")) })}
                   testId="editor-primary"
+                  aiBaseline={aiBaseline}
+                  gitBaseline={gitBaseline}
                   onEditorMenu={(point) => void editorMenu.open(point)}
                   focusRequest={editorFocus?.path === active.path ? editorFocus.sequence : 0}
                   preferences={preferences}
@@ -1308,24 +1379,6 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             {session.commandLine ? <>{session.commandLine.text.slice(0, session.commandLine.cursor)}<span className="bg-foreground text-background">{commandCursor}</span>{session.commandLine.text.slice(session.commandLine.cursor + commandCursor.length)}</> : session.vimMessage}
           </div>
         )}
-        <footer className="marxen-status flex h-6 shrink-0 items-center gap-3 whitespace-nowrap border-t border-border bg-card px-3 text-[11px] text-muted-foreground">
-          {desktop && active && <span data-testid="vim-footer-mode" className="flex h-5 shrink-0 items-center rounded-sm bg-primary/10 px-1.5 font-medium text-primary">{MODE_JA[vimMode] ? t(MODE_JA[vimMode] as LabelKey) : vimMode}</span>}
-          <span className="min-w-0 flex-1 truncate">{workspace.wsRoot?.split(/[\\/]/).filter(Boolean).at(-1) ?? ""}</span>
-          {cursorPos && <span data-testid="cursor" title={t("カーソル位置")}><span className="sr-only">{t("カーソル")}{" "}</span>{cursorPos}</span>}
-          <span data-testid="dirty">{!active || active.dirty ? (active ? t("未保存") : "—") : t("保存済み")}</span>
-          {desktop && session.copyReady === activeId && <span data-testid="copy-ready" className="min-w-0 max-w-72 truncate" title={Object.entries(workspace.copyKeys).map(([format, key]) => `${key} ${t(COPY_LABELS[format as keyof typeof COPY_LABELS] as LabelKey)}`).join(" / ")}>{t("コピー形式を選択")}</span>}
-          {!desktop && <span data-testid="readonly-note" title={t("ブラウザ表示は読み取り専用です")} className="shrink-0 rounded-sm border border-border px-1.5 py-0.5 text-[10px]">{t("読み取り専用")}</span>}
-          <span role="status" className="shrink-0">
-            {workspace.runtime ? (workspace.runtime.connection === "disconnected" ? t("Neovim 未接続") : workspace.runtime.connection === "connected" ? t("Neovim 接続済み") : workspace.runtime.detail) : t("接続状態を確認中…")}
-          </span>
-          <details className="relative shrink-0">
-            <summary aria-label={t("エディターの接続情報")} title={t("エディターの接続情報")} className="flex cursor-pointer list-none items-center rounded-sm p-0.5 hover:bg-muted"><Info size={13} aria-hidden="true" /></summary>
-            <div className="absolute bottom-7 right-0 z-20 min-w-44 rounded border border-border bg-card p-3 shadow-lg">
-          <span data-testid="revision" className="block">{t("リビジョン {{value0}}", { value0: active?.revision ?? "—" })}</span>
-              {desktop && session.vimKeys !== "" && <span data-testid="vim-keys" className="mt-1 block">{t("Vim入力 {{value0}}", { value0: session.vimKeys })}</span>}
-            </div>
-          </details>
-        </footer>
 
         <QuickOpen
           open={quickOpen}
@@ -1356,8 +1409,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               provider={aiProvider}
               disabled={staging.agentBusy}
               onBusyChange={staging.setInlineChatBusy}
-              onProposal={staging.handleProposal}
-              onReview={() => { setShowAi(true); void staging.fetchReviewDiff(); }}
+              onProposal={(proposal, sent, mode) => { void staging.handleProposal(proposal, sent, mode); staging.closeInlineChat(); }}
               onClose={staging.closeInlineChat}
               startPrompt={aiGateway?.startPrompt}
               aiGateway={aiGateway}
@@ -1430,13 +1482,11 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             onProposal={staging.handleProposal}
             startPrompt={aiGateway?.startPrompt}
             profileStore={aiProfileStore}
+            historyStore={chatHistoryStore}
             aiGateway={aiGateway}
             connectionControls={connectionControls}
             sessionScopeKey={sessionScopeKey}
-          />
-          </div>
-          <div className="max-h-72 min-h-0 overflow-y-auto">
-            <ReviewPanel
+            review={<ReviewPanel
               documentLabels={contextLabels}
               copyId={staging.staging?.copyId ?? null}
               diffs={staging.diffs}
@@ -1448,37 +1498,39 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               message={staging.reviewMessage}
               status={staging.reviewStatus}
               proposalText={staging.aiProposal?.proposal.text ?? null}
-              onFetchDiff={() => void staging.fetchReviewDiff()}
               onStageProposal={staging.aiProposal && staging.aiProposal.mode !== "ask" && staging.staging && staging.reviewMessage ? () => void staging.stageStoredProposal() : null}
               onApprove={() => void staging.approveStaging()}
               onReject={() => void staging.rejectStaging()}
-              onCancel={() => void staging.cancelStaging()}
               onRetryImports={staging.importOutcomes.some((item) => !item.ok) ? () => void staging.retryImports() : null}
-            />
+            />}
+          />
           </div>
           {staging.aiDismissed && active && (
             <button type="button" onClick={() => staging.setAiDismissed(false)} className="mt-2 w-full rounded-md border border-border px-3 py-1.5 text-xs">
               {t("現在の選択を送る")}</button>
           )}
-          {staging.aiProposal && staging.aiProposal.mode !== "ask" && (
-            <details data-testid="ai-proposal" className="mt-3 max-h-48 min-h-0 overflow-y-auto border-t border-border pt-2 text-xs">
-              <summary className="cursor-pointer text-muted-foreground">{t("提案の Markdown")}</summary>
-              <p className="font-medium">{t("AI の提案")}</p>
-              <p className="mt-1 whitespace-pre-wrap">{staging.aiProposal.proposal.text}</p>
-              <p
-                className="mt-1 text-muted-foreground"
-                title={staging.aiProposal.proposal.baseContexts.map((ref) => `rev ${ref.revision}`).join(", ")}
-              >
-                {t("対象:")}{staging.aiProposal.proposal.baseContexts.map((ref) => contextLabels[ref.documentId] ?? t("現在の文書")).join(", ")}
-              </p>
-              <button type="button" onClick={() => staging.setAiProposal(null)} className="mt-2 w-full rounded-md border border-border px-3 py-1.5">
-                {t("却下する")}</button>
-            </details>
-          )}
         </ResizableAiPane>
       )}
       {aiVisibilityOpen && <AiVisibilityDialog preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} connections={apiConnections.connections} saveFailed={aiView.saveFailed} onClose={closeAiVisibility} />}
       </div>
+      <footer className="marxen-status flex h-6 shrink-0 items-center gap-3 whitespace-nowrap border-t border-border bg-card px-3 text-[11px] text-muted-foreground">
+        {desktop && active && <span data-testid="vim-footer-mode" data-mode={vimMode} className="marxen-vim-mode -ml-3 flex h-6 shrink-0 items-center px-3 font-semibold">{MODE_JA[vimMode] ? t(MODE_JA[vimMode] as LabelKey) : vimMode}</span>}
+        <span className="min-w-0 flex-1 truncate">{workspace.wsRoot?.split(/[\\/]/).filter(Boolean).at(-1) ?? ""}</span>
+        {cursorPos && <span data-testid="cursor" title={t("カーソル位置")}><span className="sr-only">{t("カーソル")}{" "}</span>{cursorPos}</span>}
+        <span data-testid="dirty">{!active || active.dirty ? (active ? t("未保存") : "—") : t("保存済み")}</span>
+        {desktop && session.copyReady === activeId && <span data-testid="copy-ready" className="min-w-0 max-w-72 truncate" title={Object.entries(workspace.copyKeys).map(([format, key]) => `${key} ${t(COPY_LABELS[format as keyof typeof COPY_LABELS] as LabelKey)}`).join(" / ")}>{t("コピー形式を選択")}</span>}
+        {!desktop && <span data-testid="readonly-note" title={t("ブラウザ表示は読み取り専用です")} className="shrink-0 rounded-sm border border-border px-1.5 py-0.5 text-[10px]">{t("読み取り専用")}</span>}
+        <span role="status" className="shrink-0">
+          {workspace.runtime ? (workspace.runtime.connection === "disconnected" ? t("Neovim 未接続") : workspace.runtime.connection === "connected" ? t("Neovim 接続済み") : workspace.runtime.detail) : t("接続状態を確認中…")}
+        </span>
+        <details className="relative shrink-0">
+          <summary aria-label={t("エディターの接続情報")} title={t("エディターの接続情報")} className="flex cursor-pointer list-none items-center rounded-sm p-0.5 hover:bg-muted"><Info size={13} aria-hidden="true" /></summary>
+          <div className="absolute bottom-7 right-0 z-20 min-w-44 rounded border border-border bg-card p-3 shadow-lg">
+        <span data-testid="revision" className="block">{t("リビジョン {{value0}}", { value0: active?.revision ?? "—" })}</span>
+            {desktop && session.vimKeys !== "" && <span data-testid="vim-keys" className="mt-1 block">{t("Vim入力 {{value0}}", { value0: session.vimKeys })}</span>}
+          </div>
+        </details>
+      </footer>
     </div>
   );
 }

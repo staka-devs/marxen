@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
+import { EditorSelection } from "@codemirror/state";
 import { CodeMirrorEditor, singleEditFromDiff } from "./CodeMirrorEditor";
 import { applyTextEdits } from "../../domain/coordinates/utf16";
 
@@ -24,6 +25,14 @@ describe("native snapshot newline coordinates", () => {
     rendered.rerender(<CodeMirrorEditor value={source} ariaLabel="editor" externalCursor={{ anchor: source.length, head: source.length, seq: 1 }} />);
     expect(view.state.doc.toString()).toBe(source);
     expect(view.state.selection.main.head).toBe(source.length);
+  });
+
+  it("reports an Alt+drag rectangle as block corners for blockwise Visual", () => {
+    const selection = vi.fn();
+    const rendered = render(<CodeMirrorEditor value={"abcd\nefgh\nijkl"} ariaLabel="editor" onSelectionChange={selection} />);
+    const view = EditorView.findFromDOM(rendered.container.querySelector<HTMLElement>(".cm-content")!)!;
+    act(() => view.dispatch({ selection: EditorSelection.create([EditorSelection.range(1, 3), EditorSelection.range(6, 8), EditorSelection.range(11, 13)]) }));
+    expect(selection).toHaveBeenLastCalledWith({ anchor: 1, head: 13, block: true });
   });
 
   it("resynchronizes a rejected first character at a mixed-newline document end without unmounting", () => {
@@ -132,3 +141,23 @@ describe("composition commit", () => {
   });
 });
 
+
+it("highlights lines changed by the latest AI change against its baseline", () => {
+  const rendered = render(<CodeMirrorEditor value={"# T\nnew line\nend"} ariaLabel="editor" aiBaseline={"# T\nold line\nend"} />);
+  expect(rendered.container.querySelector(".marxen-ai-added")).toHaveTextContent("new line");
+  expect(rendered.container.querySelector(".marxen-ai-removed")).toHaveTextContent("old line");
+  rendered.rerender(<CodeMirrorEditor value={"# T\nnew line\nend"} ariaLabel="editor" aiBaseline={null} />);
+  expect(rendered.container.querySelector(".marxen-ai-added")).toBeNull();
+});
+
+it("marks added, modified and deleted lines against the Git HEAD text, ignoring CRLF", () => {
+  const head = "# T\r\nkeep\r\nold\r\ngone\r\nend\r\n";
+  const rendered = render(<CodeMirrorEditor value={"# T\r\nkeep\r\nnew\r\nend\r\nextra\r\n"} ariaLabel="editor" gitBaseline={head} />);
+  expect(rendered.container.querySelectorAll(".marxen-git-modified")).toHaveLength(1);
+  expect(rendered.container.querySelectorAll(".marxen-git-added")).toHaveLength(1);
+  rendered.rerender(<CodeMirrorEditor value={"# T\r\nkeep\r\nend\r\n"} ariaLabel="editor" gitBaseline={head} />);
+  expect(rendered.container.querySelectorAll(".marxen-git-deleted")).toHaveLength(1);
+  expect(rendered.container.querySelector(".marxen-git-added")).toBeNull();
+  rendered.rerender(<CodeMirrorEditor value={"# T\r\nkeep\r\nend\r\n"} ariaLabel="editor" gitBaseline={null} />);
+  expect(rendered.container.querySelector(".marxen-git-gutter")).toBeNull();
+});

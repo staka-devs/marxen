@@ -237,6 +237,24 @@ pub struct ExReport {
     pub text: String,
 }
 
+/// One working-tree change from `git status`, relative to its workspace root with `/` separators.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitChange {
+    pub path: String,
+    /// Porcelain code: `M` modified, `A` added, `D` deleted, `R` renamed, `U` conflicted, `?` untracked.
+    pub status: String,
+}
+
+/// Source-control state of one workspace root; `repository` is false outside a Git work tree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitStatus {
+    pub repository: bool,
+    pub branch: Option<String>,
+    pub changes: Vec<GitChange>,
+}
+
 /// Current `/` match position from `searchcount()`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -632,6 +650,8 @@ pub fn typescript() -> String {
         YankCopy::decl(&cfg),
         VimInputResult::decl(&cfg),
         GridUpdate::decl(&cfg),
+        GitChange::decl(&cfg),
+        GitStatus::decl(&cfg),
     ];
     let mut output = "// Generated from src-tauri/src/contracts/mod.rs. Run npm run contracts:generate.\n// Do not edit by hand. Global offsets count UTF-16 code units; ranges are [start, end).\n".to_owned();
     for declaration in declarations {

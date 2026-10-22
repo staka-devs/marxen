@@ -11,16 +11,22 @@
   --color-border: var(--border);
 }
 
+/* Neutral surfaces follow VS Code Light/Dark Modern; the dark accent is a tonal (M3-style) light blue with dark text. */
 :root {
   color-scheme: light;
   --background: #ffffff;
-  --foreground: #30343b;
-  --card: #f6f7f9;
-  --primary: #2868b2;
+  --foreground: #3b3b3b;
+  --card: #f8f8f8;
+  --primary: #005fb8;
   --primary-foreground: #ffffff;
-  --muted: #e9ecf1;
-  --muted-foreground: #6b7280;
-  --border: #e2e5ea;
+  --muted: #ebebeb;
+  --muted-foreground: #616161;
+  --border: #e5e5e5;
+  --vim-normal: #005fb8;
+  --vim-insert: #2e7d32;
+  --vim-visual: #8250df;
+  --vim-replace: #c62828;
+  --vim-command: #8a5a00;
   font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -28,14 +34,19 @@
 
 [data-theme="dark"] {
   color-scheme: dark;
-  --background: #1e1f23;
-  --foreground: #cdd0d8;
-  --card: #191a1e;
-  --primary: #8ab4f8;
-  --primary-foreground: #152238;
-  --muted: #2b2d34;
-  --muted-foreground: #8e939f;
-  --border: #2c2e35;
+  --background: #1f1f1f;
+  --foreground: #cccccc;
+  --card: #181818;
+  --primary: #4daafc;
+  --primary-foreground: #0b1d2e;
+  --muted: #2b2b2b;
+  --muted-foreground: #9d9d9d;
+  --border: #2b2b2b;
+  --vim-normal: #4daafc;
+  --vim-insert: #73c991;
+  --vim-visual: #c5a5ff;
+  --vim-replace: #f48771;
+  --vim-command: #e2c08d;
 }
 
 [data-theme="contrast"] {
@@ -88,9 +99,11 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 ::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--foreground) 38%, transparent); }
 
 .marxen-editor .cm-activeLine { background: color-mix(in srgb, var(--primary) 7%, transparent); box-shadow: inset 2px 0 color-mix(in srgb, var(--primary) 55%, transparent); }
+/* Live preview reads as a document: mark the current line without filling it. */
+.marxen-editor[data-live-preview="true"] .cm-activeLine { background: transparent; }
 .marxen-editor .cm-activeLineGutter { color: var(--foreground); background: color-mix(in srgb, var(--primary) 8%, transparent); }
 .marxen-editor .cm-scroller { font-family: "Cascadia Code", "Consolas", "Noto Sans Mono", monospace; }
-.marxen-editor[data-live-preview="true"] .cm-scroller { font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif; padding-inline: max(32px, calc((100% - 760px) / 2)); }
+.marxen-editor[data-live-preview="true"] .cm-scroller { font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif; padding-inline: max(24px, calc((100% - 960px) / 2)); }
 .marxen-editor .cm-content { padding: 32px 0 80px; }
 .marxen-editor .cm-line { padding-left: 12px; padding-right: 20px; }
 .marxen-editor .cm-gutterElement { min-width: 32px; padding-right: 8px; }
@@ -207,13 +220,20 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 
 /* Stable document typography while the active block exposes editable syntax. */
 .marxen-workspace { font-size: 13px; }
-.marxen-activity { background: color-mix(in srgb, var(--card) 88%, black); }
+.marxen-activity { background: var(--card); }
 .marxen-activity button { transition: color 120ms, background-color 120ms; }
 .marxen-activity button[aria-pressed="true"] { background: color-mix(in srgb, var(--primary) 6%, transparent); }
 .marxen-activity button:hover { background: var(--muted); }
 .marxen-context-bar { background: var(--background); }
 .marxen-context-bar select { font-size: 11px; }
-.marxen-status { font-size: 10px; }
+.marxen-status { font-size: 11px; }
+/* Vim mode chip: solid, color-coded per mode like VS Code's left status indicator. */
+.marxen-vim-mode { background: var(--vim-normal); color: var(--background); }
+.marxen-vim-mode[data-mode="insert"] { background: var(--vim-insert); }
+.marxen-vim-mode[data-mode^="visual"] { background: var(--vim-visual); }
+.marxen-vim-mode[data-mode="replace"] { background: var(--vim-replace); }
+.marxen-vim-mode[data-mode="command_line"] { background: var(--vim-command); }
+[data-theme="contrast"] .marxen-vim-mode { background: #000; color: #fff; }
 .marxen-editor[data-live-preview="true"] .cm-line,
 .marxen-editor[data-live-preview="true"] .marxen-live-widget { padding-inline: 0; }
 .marxen-editor .cm-line.marxen-live-gap { line-height: 12px; }
@@ -223,7 +243,7 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 .marxen-editor .cm-line.marxen-live-heading[data-heading-level="3"] { font-size: 1.15em; }
 .marxen-editor .marxen-live-heading-marker { color: var(--muted-foreground); font-weight: 400; }
 .marxen-editor .cm-line.marxen-live-code-line { font-family: "Cascadia Code", "Consolas", monospace; font-size: 0.87em; background: var(--muted); }
-article.marxen-md { padding: 32px max(32px, calc((100% - 760px) / 2)) 80px; }
+article.marxen-md { padding: 32px max(24px, calc((100% - 960px) / 2)) 80px; }
 .marxen-md > :first-child { margin-top: 0; }
 .marxen-live-body ul.contains-task-list { padding-left: 0; }
 .marxen-md .task-list-item input { margin-right: 0.4em; vertical-align: -0.05em; }
@@ -233,5 +253,29 @@ article.marxen-md { padding: 32px max(32px, calc((100% - 760px) / 2)) 80px; }
 }
 .marxen-picker-input:focus-visible { outline: none; }
 
+/* Source Control status letters and diff lines (VS Code gitDecoration colors). */
+:root { --scm-modified: #895503; --scm-added: #007100; --scm-deleted: #ad0707; --scm-conflict: #ad0707; --diff-add: color-mix(in srgb, #2ea043 18%, transparent); --diff-del: color-mix(in srgb, #f85149 18%, transparent); }
+[data-theme="dark"] { --scm-modified: #e2c08d; --scm-added: #73c991; --scm-deleted: #c74e39; --scm-conflict: #e4676b; }
+.marxen-scm-status[data-status="M"], .marxen-scm-status[data-status="R"] { color: var(--scm-modified); }
+.marxen-scm-status[data-status="A"], .marxen-scm-status[data-status="?"] { color: var(--scm-added); }
+.marxen-scm-status[data-status="D"] { color: var(--scm-deleted); }
+.marxen-scm-status[data-status="U"] { color: var(--scm-conflict); }
+.marxen-diff-add { background: var(--diff-add); }
+.marxen-diff-del { background: var(--diff-del); }
+.marxen-diff-hunk { color: var(--primary); }
+
 [data-theme="contrast"] [data-file-icon="folder"],
 [data-theme="contrast"] [data-file-icon="folder-open"] { color: var(--foreground); }
+
+/* Inline diff of the latest AI change (kept until Keep / Undo). */
+.marxen-editor .cm-line.marxen-ai-added { background: var(--diff-add); box-shadow: inset 3px 0 #2ea043; }
+.marxen-editor .marxen-ai-removed { background: var(--diff-del); box-shadow: inset 3px 0 #f85149; color: var(--muted-foreground); text-decoration: line-through; padding-left: 12px; white-space: pre-wrap; }
+.marxen-ai-bar { background: color-mix(in srgb, var(--primary) 8%, var(--background)); }
+
+/* Git change gutter against HEAD (VS Code quick diff). */
+.marxen-editor .marxen-git-gutter { width: 4px; }
+.marxen-editor .marxen-git-gutter .cm-gutterElement { padding: 0; }
+.marxen-git-added, .marxen-git-modified { width: 3px; height: 100%; }
+.marxen-git-added { background: #2ea043; }
+.marxen-git-modified { background: #0078d4; }
+.marxen-git-deleted { width: 0; height: 0; border-left: 4px solid #f85149; border-top: 4px solid transparent; border-bottom: 4px solid transparent; }

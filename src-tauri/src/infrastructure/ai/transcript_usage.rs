@@ -52,7 +52,7 @@ fn mtime_ms(path: &Path) -> Option<u64> {
 /// Collect transcript files below `root` up to the walk budgets.
 /// Symlinks are never followed; only regular files with a bounded depth
 /// and the caller's filename predicate qualify.
-fn collect_files(root: &Path, accept: &dyn Fn(&Path) -> bool) -> Vec<PathBuf> {
+pub(crate) fn collect_files(root: &Path, accept: &dyn Fn(&Path) -> bool) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![(root.to_path_buf(), 0usize)];
     let mut visited = 0usize;
@@ -60,19 +60,19 @@ fn collect_files(root: &Path, accept: &dyn Fn(&Path) -> bool) -> Vec<PathBuf> {
         if depth > MAX_WALK_DEPTH || visited >= MAX_WALK_ENTRIES {
             break;
         }
-        let entries = match fs::read_dir(&dir) {
-            Ok(entries) => entries,
+        let mut entries: Vec<_> = match fs::read_dir(&dir) {
+            Ok(entries) => entries.flatten().collect(),
             Err(_) => continue,
         };
+        // Date-named stores (e.g. sessions/YYYY/MM/DD) sort oldest first; walk them
+        // newest first so the caps drop old sessions, never the latest ones.
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.file_name()));
+        let mut dirs = Vec::new();
         for entry in entries {
             visited += 1;
             if visited > MAX_WALK_ENTRIES || out.len() >= MAX_TRANSCRIPT_FILES_PER_AGENT {
                 break;
             }
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(_) => continue,
-            };
             let kind = match entry.file_type() {
                 Ok(kind) => kind,
                 Err(_) => continue,
@@ -82,11 +82,13 @@ fn collect_files(root: &Path, accept: &dyn Fn(&Path) -> bool) -> Vec<PathBuf> {
             }
             let path = entry.path();
             if kind.is_dir() {
-                stack.push((path, depth + 1));
+                dirs.push((path, depth + 1));
             } else if kind.is_file() && accept(&path) {
                 out.push(path);
             }
         }
+        // The stack pops last-pushed first, so push the oldest directory first.
+        stack.extend(dirs.into_iter().rev());
     }
     out.sort();
     out
@@ -124,9 +126,10 @@ fn is_claude_transcript(path: &Path) -> bool {
 /// Scan one Codex rollout file for its cumulative token totals.
 /// `token_count` rows restate running totals, so the per-file fold keeps
 /// maxima; files without such rows contribute no session.
-fn scan_codex_file(path: &Path) -> Option<TranscriptSession> {
+fn scan_codex_file(path: &Path, roots: &[String]) -> Option<TranscriptSession> {
     let text = read_capped(path)?;
     let mut fold = TokenFold::default();
+    let mut in_app = false;
     for (index, line) in text.lines().enumerate() {
         if index >= MAX_TRANSCRIPT_FILE_LINES {
             break;
@@ -139,6 +142,9 @@ fn scan_codex_file(path: &Path) -> Option<TranscriptSession> {
             Ok(row) => row,
             Err(_) => continue,
         };
+        if let Some(cwd) = row.pointer("/payload/cwd").and_then(|cwd| cwd.as_str()) {
+            in_app |= in_app_directory(cwd, roots);
+        }
         // `token_count` rows restate cumulative totals; only the payload
         // marker matters, never the envelope type.
         if row.pointer("/payload/type").and_then(|kind| kind.as_str()) != Some("token_count") {
@@ -149,6 +155,9 @@ fn scan_codex_file(path: &Path) -> Option<TranscriptSession> {
         }
     }
     let tokens = fold_to_tokens(fold);
+    if !in_app {
+        return None;
+    }
     if tokens.input_tokens.is_none()
         && tokens.output_tokens.is_none()
         && tokens.cached_read_tokens.is_none()
@@ -173,9 +182,10 @@ fn scan_codex_file(path: &Path) -> Option<TranscriptSession> {
 /// Scan one Claude project file, summing per-message usage.
 /// Assistant rows without a `message.usage` object are skipped; files
 /// without any usage contribute no session.
-fn scan_claude_file(path: &Path) -> Option<TranscriptSession> {
+fn scan_claude_file(path: &Path, roots: &[String]) -> Option<TranscriptSession> {
     let text = read_capped(path)?;
     let mut fold = TokenFold::default();
+    let mut in_app = false;
     for (index, line) in text.lines().enumerate() {
         if index >= MAX_TRANSCRIPT_FILE_LINES {
             break;
@@ -188,6 +198,9 @@ fn scan_claude_file(path: &Path) -> Option<TranscriptSession> {
             Ok(row) => row,
             Err(_) => continue,
         };
+        if let Some(cwd) = row.get("cwd").and_then(|cwd| cwd.as_str()) {
+            in_app |= in_app_directory(cwd, roots);
+        }
         if row.get("type").and_then(|kind| kind.as_str()) != Some("assistant") {
             continue;
         }
@@ -196,6 +209,9 @@ fn scan_claude_file(path: &Path) -> Option<TranscriptSession> {
         }
     }
     let tokens = fold_to_tokens(fold);
+    if !in_app {
+        return None;
+    }
     if tokens.input_tokens.is_none()
         && tokens.output_tokens.is_none()
         && tokens.cached_read_tokens.is_none()
@@ -232,13 +248,17 @@ pub(crate) fn normalize_opencode_time(value: i64) -> Option<u64> {
 
 /// Read measured session rows from one opencode table.
 /// Unknown tables yield no rows; malformed rows are skipped individually.
-fn read_opencode_table(connection: &rusqlite::Connection, table: &str) -> Vec<TranscriptSession> {
+fn read_opencode_table(
+    connection: &rusqlite::Connection,
+    table: &str,
+    roots: &[String],
+) -> Vec<TranscriptSession> {
     if !matches!(table, "session" | "session_v2") {
         return Vec::new();
     }
     let sql = format!(
         "SELECT id, model, title, tokens_input, tokens_output, tokens_reasoning, \
-         tokens_cache_read, tokens_cache_write, time_updated \
+         tokens_cache_read, tokens_cache_write, time_updated, directory \
          FROM {table} ORDER BY time_updated DESC LIMIT {MAX_TRANSCRIPT_SQLITE_ROWS}"
     );
     let mut statement = match connection.prepare(&sql) {
@@ -256,6 +276,7 @@ fn read_opencode_table(connection: &rusqlite::Connection, table: &str) -> Vec<Tr
             row.get::<_, Option<i64>>(6)?,
             row.get::<_, Option<i64>>(7)?,
             row.get::<_, Option<i64>>(8)?,
+            row.get::<_, Option<String>>(9)?,
         ))
     }) {
         Ok(rows) => rows,
@@ -263,7 +284,21 @@ fn read_opencode_table(connection: &rusqlite::Connection, table: &str) -> Vec<Tr
     };
     let mut out = Vec::new();
     for row in rows.flatten() {
-        let (id, model, title, input, output, reasoning, cached_read, cached_write, updated) = row;
+        let (
+            id,
+            model,
+            title,
+            input,
+            output,
+            reasoning,
+            cached_read,
+            cached_write,
+            updated,
+            directory,
+        ) = row;
+        if !directory.is_some_and(|directory| in_app_directory(&directory, roots)) {
+            continue;
+        }
         let tokens = TranscriptTokens {
             input_tokens: input.and_then(sqlite_counter),
             output_tokens: output.and_then(sqlite_counter),
@@ -293,7 +328,7 @@ fn read_opencode_table(connection: &rusqlite::Connection, table: &str) -> Vec<Tr
 /// Scan one opencode database file in read-only mode.
 /// Both `session` and `session_v2` are read when present and merged by row
 /// ID, keeping the newest write; the merged list arrives newest first.
-pub(crate) fn scan_opencode_db(database: &Path) -> TranscriptAgentUsage {
+pub(crate) fn scan_opencode_db(database: &Path, roots: &[String]) -> TranscriptAgentUsage {
     if !database.is_file() {
         return TranscriptAgentUsage {
             agent: TranscriptAgent::Opencode,
@@ -322,7 +357,7 @@ pub(crate) fn scan_opencode_db(database: &Path) -> TranscriptAgentUsage {
         std::collections::BTreeMap::new();
     let mut scanned_rows: u32 = 0;
     for table in ["session_v2", "session"] {
-        let rows = read_opencode_table(&connection, table);
+        let rows = read_opencode_table(&connection, table, roots);
         scanned_rows = scanned_rows.saturating_add(rows.len() as u32);
         for session in rows {
             match merged.get(&session.session_id) {
@@ -351,8 +386,8 @@ pub(crate) fn scan_opencode_db(database: &Path) -> TranscriptAgentUsage {
 }
 
 /// Scan the default opencode database below `home`.
-fn scan_opencode(home: &Path) -> TranscriptAgentUsage {
-    scan_opencode_db(&data_dir(home).join("opencode").join("opencode.db"))
+fn scan_opencode(home: &Path, roots: &[String]) -> TranscriptAgentUsage {
+    scan_opencode_db(&data_dir(home).join("opencode").join("opencode.db"), roots)
 }
 
 /// Scan one JSONL transcript agent below its store root.
@@ -362,7 +397,8 @@ fn scan_jsonl_agent(
     agent: TranscriptAgent,
     root: &Path,
     accept: &dyn Fn(&Path) -> bool,
-    scan: &dyn Fn(&Path) -> Option<TranscriptSession>,
+    scan: &dyn Fn(&Path, &[String]) -> Option<TranscriptSession>,
+    roots: &[String],
 ) -> TranscriptAgentUsage {
     if !root.is_dir() {
         return TranscriptAgentUsage {
@@ -375,7 +411,8 @@ fn scan_jsonl_agent(
     }
     let files = collect_files(root, accept);
     let scanned_files = files.len().min(u32::MAX as usize) as u32;
-    let mut sessions: Vec<TranscriptSession> = files.iter().filter_map(|path| scan(path)).collect();
+    let mut sessions: Vec<TranscriptSession> =
+        files.iter().filter_map(|path| scan(path, roots)).collect();
     sort_sessions_newest_first(&mut sessions);
     let truncated = sessions.len() > MAX_TRANSCRIPT_SESSIONS_PER_AGENT;
     sessions.truncate(MAX_TRANSCRIPT_SESSIONS_PER_AGENT);
@@ -391,23 +428,25 @@ fn scan_jsonl_agent(
     }
 }
 
-/// Inspect every known local transcript store below `home`.
+/// Inspect every known local transcript store below `home`, keeping only sessions run in `roots`.
 /// Copilot session events carry no token data, so a present store still
 /// reports `NoTokenData` instead of invented totals.
-pub fn scan_transcript_stores(home: &Path) -> Vec<TranscriptAgentUsage> {
+pub fn scan_transcript_stores(home: &Path, roots: &[String]) -> Vec<TranscriptAgentUsage> {
     let codex = scan_jsonl_agent(
         TranscriptAgent::Codex,
         &home.join(".codex").join("sessions"),
         &is_codex_rollout,
         &scan_codex_file,
+        roots,
     );
     let claude = scan_jsonl_agent(
         TranscriptAgent::Claude,
         &home.join(".claude").join("projects"),
         &is_claude_transcript,
         &scan_claude_file,
+        roots,
     );
-    let opencode = scan_opencode(home);
+    let opencode = scan_opencode(home, roots);
     let copilot_root = {
         let base = std::env::var_os("COPILOT_HOME")
             .map(PathBuf::from)
@@ -435,20 +474,24 @@ pub fn scan_transcript_stores(home: &Path) -> Vec<TranscriptAgentUsage> {
     vec![codex, claude, opencode, copilot]
 }
 
-/// Scan the current user's local transcript stores.
-/// An unresolvable home reports every agent as store-missing.
-pub fn read_transcript_usage() -> Vec<TranscriptAgentUsage> {
-    NativeTranscriptUsageReader.read_agents()
-}
-
 /// Read default local transcript stores through the application port.
-pub struct NativeTranscriptUsageReader;
+///
+/// Only sessions whose working directory lies in the app's staging folder count (Issue #120).
+pub struct NativeTranscriptUsageReader {
+    /// Folder the app runs every agent prompt in.
+    pub staging_root: PathBuf,
+}
 
 impl TranscriptUsageReader for NativeTranscriptUsageReader {
     /// Scan the current user's local transcript stores without network or inference.
     fn read_agents(&self) -> Vec<TranscriptAgentUsage> {
+        // Agents may record the resolved path (e.g. macOS /private/var), so accept both spellings.
+        let mut roots = vec![self.staging_root.to_string_lossy().into_owned()];
+        if let Ok(resolved) = fs::canonicalize(&self.staging_root) {
+            roots.push(resolved.to_string_lossy().into_owned());
+        }
         match home_dir() {
-            Some(home) => scan_transcript_stores(&home),
+            Some(home) => scan_transcript_stores(&home, &roots),
             None => missing_home_report(),
         }
     }

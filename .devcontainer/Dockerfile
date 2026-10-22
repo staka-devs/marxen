@@ -7,7 +7,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 USER node
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.99.0 --profile minimal --component rustfmt --component clippy
+# Download first: with `curl | sh` a failed download still exits 0 and leaves an image without Rust.
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh \
+    && sh /tmp/rustup.sh -y --default-toolchain 1.99.0 --profile minimal --component rustfmt --component clippy \
+    && rm /tmp/rustup.sh && "$HOME/.cargo/bin/cargo" --version
 ENV PATH="/home/node/.cargo/bin:${PATH}"
 
 USER root

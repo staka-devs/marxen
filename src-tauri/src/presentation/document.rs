@@ -443,12 +443,24 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Close an unedited document and move its file to the OS trash.
+    pub fn trash_document(
+        state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
+        document_id: String,
+        base_revision: u32,
+    ) -> Result<(), WorkspaceError> {
+        with_document(&state, document_id.clone(), &location, |w| {
+            w.trash_document(request(document_id, base_revision))
+        })
+    }
+    #[tauri::command(async)]
     /// Return available workspace recovery descriptors.
     pub fn list_recovery(
         state: tauri::State<'_, ActorState>,
         scope: RootScope,
     ) -> Result<Vec<RecoveryEntry>, WorkspaceError> {
-        with_workspace(&state, &scope, |w| w.recovery_entries())
+        with_workspace(&state, &scope, |w| w.pending_recovery_entries())
     }
     #[tauri::command(async)]
     /// Restore the selected recovery entry through the registry's containment and conflict checks.
@@ -637,14 +649,21 @@ mod desktop {
         revision: u32,
         anchor: u32,
         head: u32,
+        block: Option<bool>,
     ) -> Result<CursorUpdate, WorkspaceError> {
         with_document(&state, document_id.clone(), &location, |w| {
-            Ok(w.actor(&document_id)?.set_cursor(CursorUpdate {
+            let actor = w.actor(&document_id)?;
+            let update = CursorUpdate {
                 document_id: DocumentId(document_id),
                 revision: Revision(revision),
                 anchor: Utf16Offset(anchor),
                 head: Utf16Offset(head),
-            })?)
+            };
+            Ok(if block == Some(true) {
+                actor.set_block_cursor(update)?
+            } else {
+                actor.set_cursor(update)?
+            })
         })
     }
     #[tauri::command(async)]
