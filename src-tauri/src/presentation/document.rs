@@ -443,6 +443,18 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Close an unedited document and move its file to the OS trash.
+    pub fn trash_document(
+        state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
+        document_id: String,
+        base_revision: u32,
+    ) -> Result<(), WorkspaceError> {
+        with_document(&state, document_id.clone(), &location, |w| {
+            w.trash_document(request(document_id, base_revision))
+        })
+    }
+    #[tauri::command(async)]
     /// Return available workspace recovery descriptors.
     pub fn list_recovery(
         state: tauri::State<'_, ActorState>,

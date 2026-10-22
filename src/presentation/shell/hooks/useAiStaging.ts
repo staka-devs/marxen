@@ -48,6 +48,8 @@ export interface AiChange {
   before: string;
   /** Revision right after the change was saved; undo only applies while unchanged. */
   revision: number;
+  /** The AI created this file; undo moves it to the trash instead of restoring text. */
+  created?: boolean;
 }
 
 /** Injected ports for AI review and inline flow. */
@@ -531,11 +533,12 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
         ? await importStagedFiles(isolationGateway, copyId, stagedFiles)
         : [];
       const savedIds = new Set(applied.saved.filter((entry) => entry.saved).map((entry) => entry.documentId));
-      setAiChanges(await Promise.all(before.filter((item) => savedIds.has(item.documentId)).map(async (item) => ({
+      const created = imports.flatMap((item) => (item.ok && item.snapshot ? [{ documentId: item.snapshot.documentId, before: "", revision: item.snapshot.revision, created: true }] : []));
+      setAiChanges([...await Promise.all(before.filter((item) => savedIds.has(item.documentId)).map(async (item) => ({
         documentId: item.documentId,
         before: item.text,
         revision: (await registry.fetchSnapshot(item.documentId)).revision,
-      }))));
+      }))), ...created]);
       registerImports(imports);
       const summary = summarizeApproveResult(applied.approve, t);
       const saved = summarizeSavedResult(applied.saved);
@@ -598,10 +601,12 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
   const undoAiChanges = useCallback(async () => {
     if (!registry) return;
     let skipped = 0;
+    let trashed = 0;
     for (const change of aiChanges) {
       try {
         const current = await registry.fetchSnapshot(change.documentId);
         if (current.revision !== change.revision) { skipped += 1; continue; }
+        if (change.created) { await session.trashDocument(change.documentId, change.revision); trashed += 1; continue; }
         const edits = singleEditFromDiff(current.text, change.before);
         const restored = edits ? await registry.applyEdits({ documentId: change.documentId, baseRevision: current.revision }, edits) : current;
         mergeSnapshot(restored);
@@ -614,8 +619,9 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
     }
     setAiChanges([]);
     if (skipped > 0) setNotice(message("{{value0}} 件は編集後のため戻していません。Vim の u で取り消せます。", { value0: skipped }));
+    else if (trashed > 0) setNotice(message("AI の変更を元に戻しました。作成されたファイル {{value0}} 件はごみ箱へ移動しました。", { value0: trashed }));
     else setNotice(message("AI の変更を元に戻しました。"));
-  }, [aiChanges, registry, mergeSnapshot, notify]);
+  }, [aiChanges, registry, mergeSnapshot, session, notify]);
 
   /**
    * Retry failed new-file imports without reapplying document edits.

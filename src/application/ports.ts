@@ -228,6 +228,8 @@ export interface WorkspaceGateway {
   renameFolder(source: string, dest: string, scope?: import("../contracts/contracts").RootScope): Promise<WorkspaceEntry>;
   /** Close a document with an explicit decision. */
   closeDocument(request: SaveRequest, action: CloseAction): Promise<boolean>;
+  /** Close an unedited document and move its file to the OS trash; refused if edited since the revision. */
+  trashDocument?(request: SaveRequest): Promise<void>;
   /** Native full-text search. */
   searchWorkspace(query: string, options: SearchOptions, root: string): Promise<SearchResults>;
   /** Prepare authoritative match edits only for unchanged searched content and root. */

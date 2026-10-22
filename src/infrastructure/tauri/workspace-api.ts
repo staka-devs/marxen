@@ -184,6 +184,8 @@ export const workspaceApi = {
   reloadDocument: (request: SaveRequest) => documentInvoke<DocumentSnapshot>("reload_document", { ...request }),
   /** Close a document with an explicit save/discard/cancel decision. */
   closeDocument: (request: SaveRequest, action: CloseAction) => documentInvoke<boolean>("close_document", { ...request, action }),
+  /** Move an unedited document's file to the OS trash. */
+  trashDocument: (request: SaveRequest) => documentInvoke<void>("trash_document", { ...request }),
   /** Full-text workspace search through the native index. */
   searchWorkspace: (query: string, options: SearchOptions, root: string) => rootInvoke<SearchResults>("search_workspace", { query, options, root }, rootScopes.get(root)),
   /** Request native revision-bound literal edits over authoritative search ranges. */

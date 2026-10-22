@@ -218,6 +218,8 @@ pub trait DocumentStorage: FileReader {
     fn hard_link(&self, source: &Path, target: &Path) -> Result<(), WorkspaceError>;
     /// Remove one guarded file after its replacement or rename succeeds.
     fn remove_file(&self, path: &Path) -> Result<(), WorkspaceError>;
+    /// Move one file to the OS trash so the user can still restore it.
+    fn move_to_trash(&self, path: &Path) -> Result<(), WorkspaceError>;
     /// Reject unsafe save destinations and paths outside an optional workspace root.
     fn check_target(&self, root: Option<&Path>, path: &Path) -> Result<(), WorkspaceError>;
     /// Replace a file atomically only if its fingerprint matches the expected baseline.

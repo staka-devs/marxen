@@ -457,6 +457,25 @@ impl Workspace {
         Ok(true)
     }
 
+    /// Close a saved document and move its file to the OS trash (undo of an AI-created file, #127).
+    ///
+    /// Refuses when the document changed since `request.base_revision` or has unsaved text,
+    /// so a file the user edited after creation is never removed.
+    pub fn trash_document(&mut self, request: SaveRequest) -> Result<(), WorkspaceError> {
+        let actor = self.actor(&request.document_id.0)?;
+        let snapshot = actor.sync_from_nvim().unwrap_or_else(|_| actor.snapshot());
+        crate::domain::validation::validate_save(&snapshot, &request)
+            .map_err(|error| WorkspaceError::Contract { error })?;
+        if snapshot.dirty {
+            return Err(WorkspaceError::UnsavedChanges {
+                snapshot: Box::new(snapshot),
+            });
+        }
+        let path = actor.path().ok_or(WorkspaceError::InvalidPath)?;
+        self.close(request, CloseAction::Discard)?;
+        self.storage.move_to_trash(&path)
+    }
+
     /// Explicitly refuses workspace switches while any document has unsaved text.
     pub fn ensure_clean(&self) -> Result<(), WorkspaceError> {
         for actor in self.actors.values() {

@@ -191,6 +191,7 @@ pub fn run() {
             presentation::document::rename_folder,
             presentation::document::reload_document,
             presentation::document::close_document,
+            presentation::document::trash_document,
             presentation::document::search_workspace,
             presentation::document::plan_search_replacement,
             presentation::document::poll_workspace_events,
