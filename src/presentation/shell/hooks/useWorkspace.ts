@@ -1,6 +1,7 @@
-import { localizedFailure, renderLocalizedText } from "../../../domain/localization";
+import { localizedFailure } from "../../../domain/localization";
 import type { LocalizedText } from "../../../contracts/localization";
 import { useI18n } from "../../i18n/I18nProvider";
+import { useNvimConfig } from "./useNvimConfig";
 // Workspace lifecycle, search, events, and native views (presentation).
 //
 // Owns workspace entries and roots, file create/rename/restore flows,
@@ -18,10 +19,7 @@ import type { PersistedTab, WorkspaceMetadata } from "../../../contracts/workspa
 import type { ExplorerTarget } from "../../../contracts/workbench";
 import type { SearchHitItem } from "../../../domain/search-hit";
 import { docFromOpen, type OpenDoc } from "../../../application/document/document-helpers";
-import {
-  isSupportedConfigName,
-} from "../../../domain/workspace-content";
-import { StaleResync, workspaceErrorText } from "../../../domain/document-errors";
+import { workspaceErrorText } from "../../../domain/document-errors";
 import { applyGridUpdates, createGridState, type NvimGridState } from "../../../domain/coordinates/grid";
 import type {
   DialogGateway,
@@ -219,8 +217,6 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     activeId,
     active,
     mergeSnapshot,
-    sayStale,
-    refreshModeCursor,
     setExternalByDoc,
   } = session;
 
@@ -255,13 +251,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [nvimGrid, setNvimGrid] = useState<NvimGridState | null>(null);
   const [gridRev, setGridRev] = useState<number | null>(null);
-  const [configPath, setConfigPath] = useState("");
-  const [configError, setConfigError] = useState<LocalizedText | null>(null);
-  const [applyingConfig, setApplyingConfig] = useState(false);
-  const [currentConfig, setCurrentConfig] = useState<string | null>(null);
-  const [copyKeys, setCopyKeys] = useState<Record<string, string>>({
-    markdown: "<F6>", text: "<F7>", rich: "<F8>", html: "<F9>",
-  });
+  const config = useNvimConfig({ session, settingsOpen, notify });
   const [newFileOpen, setNewFileOpen] = useState(false);
   const [newFilePath, setNewFilePath] = useState("");
   const [renameDoc, setRenameDoc] = useState<string | null>(null);
@@ -909,53 +899,6 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
       .catch((cause: unknown) => setNotice(localizedFailure(cause, workspaceErrorText)));
   }, [desktop, workspaceGateway, activeRef, notify]);
 
-  // -- config -----------------------------------------------------------------
-
-  /** Apply a Neovim config restarting the actor with Undo reset. */
-  const applyConfig = useCallback(async (path?: string) => {
-    if (!registry) return;
-    const trimmed = (path ?? configPath).trim();
-    setConfigPath(trimmed);
-    if (trimmed !== "" && !isSupportedConfigName(trimmed)) {
-      setConfigError(message("対応する名前は vimrc / _vimrc / .vimrc / init.vim / init.lua です。"));
-      return;
-    }
-    const documents = Object.values(docsRef.current);
-    if (!documents.length) return;
-    setApplyingConfig(true);
-    try {
-      for (const current of documents) {
-      const id = current.documentId;
-      const result = await registry.configure({ ...(current.location ? { location: current.location } : {}), documentId: id, baseRevision: current.revision }, trimmed === "" ? null : trimmed);
-      setConfigError(result.errors.length > 0 ? result.errors.join("\n") : null);
-      setCurrentConfig(result.path);
-      setCopyKeys(result.copyKeys ?? { markdown: "<F6>", text: "<F7>", rich: "<F8>", html: "<F9>" });
-      const snapshot = await registry.fetchSnapshot(id);
-      mergeSnapshot(snapshot);
-      if (activeRef.current === id) await refreshModeCursor(id);
-      }
-      setNotice(message("設定を適用して再起動しました（Undo・モードは初期化）。"));
-    } catch (cause) {
-      if (cause instanceof StaleResync) sayStale(cause.snapshot);
-      else setNotice(localizedFailure(cause, workspaceErrorText));
-    } finally {
-      setApplyingConfig(false);
-    }
-  }, [registry, workspaceGateway, configPath, mergeSnapshot, refreshModeCursor, sayStale, docsRef, activeRef, notify]);
-
-  useEffect(() => {
-    if (!registry || !activeId || !docsRef.current[activeId]) return;
-    registry
-      .fetchConfig(activeId)
-      .then((config) => {
-        setCurrentConfig(config.path);
-        if (config.path?.startsWith("user:")) setConfigPath(config.path.slice(5));
-        setConfigError(config.errors.length > 0 ? config.errors.join("\n") : null);
-        setCopyKeys(config.copyKeys ?? { markdown: "<F6>", text: "<F7>", rich: "<F8>", html: "<F9>" });
-      })
-      .catch(() => undefined);
-  }, [settingsOpen, registry, activeId, docsRef]);
-
   return {
     roots, entriesByRoot, missingRoots, removingRoot, addWorkspaceFolder, pickFolderAndAdd, beginRemoveRoot, resolveRemoveRoot,
     busy: busy || layoutLoading.current, generation: generation.current, refreshing, entryKind, createdTarget, targetFor, isTargetCurrent, canOperate, beginCreate, beginRename, refreshEntries,
@@ -980,12 +923,12 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     runtime,
     nvimGrid,
     gridRev,
-    configPath,
-    setConfigPath,
-    configError: configError === null ? null : renderLocalizedText(configError, t),
-    applyingConfig,
-    currentConfig,
-    copyKeys,
+    configPath: config.configPath,
+    setConfigPath: config.setConfigPath,
+    configError: config.configError,
+    applyingConfig: config.applyingConfig,
+    currentConfig: config.currentConfig,
+    copyKeys: config.copyKeys,
     newFileOpen,
     setNewFileOpen,
     newFilePath,
@@ -1007,7 +950,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     refreshRuntime,
     handleRawGridKeys,
     handleRawGridRefresh,
-    applyConfig,
+    applyConfig: config.applyConfig,
   };
 }
 
