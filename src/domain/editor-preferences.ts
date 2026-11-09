@@ -26,6 +26,10 @@ export interface EditorPreferences {
   /** Add Markdown hard-break spaces on Insert-mode prose-line Enter. */
   hardBreakOnEnter: boolean;
   notificationPosition: NotificationPosition;
+  /** Folder for pasted or dropped images: relative to the document, or to the workspace root with a leading `/`. */
+  imageFolder: string;
+  /** File name pattern for pasted or dropped images; see `imageFileName`. */
+  imageName: string;
 }
 
 /** First-run defaults: dark theme with readable Japanese typography. */
@@ -34,6 +38,7 @@ export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
   wordWrap: true, lineNumbers: true, highlightActiveLine: true,
   hardBreakOnEnter: false,
   notificationPosition: "bottom-right",
+  imageFolder: "images", imageName: "{name}",
 };
 
 /**
@@ -50,6 +55,8 @@ export function normalizeEditorPreferences(value: unknown): EditorPreferences {
     typeof raw[key] === "number" && Number.isFinite(raw[key]) ? Math.min(max, Math.max(min, raw[key])) : defaultValue;
   /** Read a boolean field or return its default. */
   const bool = (key: string, defaultValue: boolean) => typeof raw[key] === "boolean" ? raw[key] as boolean : defaultValue;
+  /** Read a bounded text field or return its default. */
+  const text = (key: string, defaultValue: string) => typeof raw[key] === "string" && raw[key].length <= 200 ? raw[key] as string : defaultValue;
   return {
     theme: ["dark", "light", "contrast"].includes(raw.theme as string) ? raw.theme as ThemeId : fallback.theme,
     seedColor: isSeedColor(raw.seedColor) ? raw.seedColor.toLowerCase() : fallback.seedColor,
@@ -61,5 +68,7 @@ export function normalizeEditorPreferences(value: unknown): EditorPreferences {
     hardBreakOnEnter: bool("hardBreakOnEnter", fallback.hardBreakOnEnter),
     notificationPosition: NOTIFICATION_POSITIONS.includes(raw.notificationPosition as NotificationPosition)
       ? raw.notificationPosition as NotificationPosition : fallback.notificationPosition,
+    imageFolder: text("imageFolder", fallback.imageFolder),
+    imageName: text("imageName", fallback.imageName).trim() || fallback.imageName,
   };
 }

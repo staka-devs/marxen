@@ -232,12 +232,16 @@ mod desktop {
         document_id: String,
         base_revision: u32,
         path: String,
+        folder: String,
+        name: String,
         range: Utf16Range,
     ) -> Result<PasteResult, WorkspaceError> {
         with_document(&state, document_id.clone(), &location, |w| {
             w.import_external_image(
                 request(document_id, base_revision),
                 std::path::Path::new(&path),
+                &folder,
+                &name,
                 range,
             )
         })
@@ -503,12 +507,19 @@ mod desktop {
         location: DocumentLocation,
         document_id: String,
         base_revision: u32,
+        folder: String,
         name: String,
         bytes: Vec<u8>,
         range: Utf16Range,
     ) -> Result<PasteResult, WorkspaceError> {
         with_document(&state, document_id.clone(), &location, |w| {
-            w.paste_image(request(document_id, base_revision), &name, &bytes, range)
+            w.paste_image(
+                request(document_id, base_revision),
+                &folder,
+                &name,
+                &bytes,
+                range,
+            )
         })
     }
     #[tauri::command(async)]

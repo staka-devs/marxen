@@ -42,7 +42,7 @@ it("loads foreign same-name image bytes by native scope and pastes them into the
   act(() => f.result.current.handleImageDrop({ kind: "workspace", scope: b.scope, path: "same.png" }, { start: 0, end: 0 }));
   await waitFor(() => expect(f.registry.pasteImage).toHaveBeenCalledOnce());
   expect(f.gateway.loadWorkspaceImage).toHaveBeenCalledExactlyOnceWith("same.png", b.scope);
-  expect(f.registry.pasteImage).toHaveBeenCalledWith({ request: { location: snapshot.location, documentId: "doc-a", baseRevision: 3 }, name: "same.png", bytes: new Uint8Array([2, 3, 4]), range: { start: 0, end: 0 } });
+  expect(f.registry.pasteImage).toHaveBeenCalledWith({ request: { location: snapshot.location, documentId: "doc-a", baseRevision: 3 }, folder: "images", name: "same.png", bytes: new Uint8Array([2, 3, 4]), range: { start: 0, end: 0 } });
   expect(f.registry.insertWorkspaceImage).not.toHaveBeenCalled();
   expect(f.registry.importExternalImage).not.toHaveBeenCalled();
 });

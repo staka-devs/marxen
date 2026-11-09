@@ -599,6 +599,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     workspaceGateway,
     imageLoader,
     loadEntries: workspace.loadEntries,
+    imageFolder: preferences.imageFolder,
+    imageName: preferences.imageName,
   });
   /** Refresh Explorer listings after AI imports register new documents. */
   const refreshAfterImport = useCallback(() => { void workspace.loadEntries(); }, [workspace]);

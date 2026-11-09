@@ -840,7 +840,13 @@ fn image_paste_is_contained_revision_checked_and_loadable() {
     let doc = w.create("notes/a.md", "😀").unwrap();
     let png = b"\x89PNG\r\n\x1a\npayload";
     let pasted = w
-        .paste_image(request(&doc.snapshot), "test.png", png, range(2, 2))
+        .paste_image(
+            request(&doc.snapshot),
+            "images",
+            "test.png",
+            png,
+            range(2, 2),
+        )
         .unwrap();
     assert_eq!(pasted.snapshot.text, "😀![](images/test.png)");
     assert_eq!(
@@ -850,23 +856,87 @@ fn image_paste_is_contained_revision_checked_and_loadable() {
         png
     );
     assert!(w
-        .paste_image(request(&doc.snapshot), "stale.png", png, range(2, 2))
+        .paste_image(
+            request(&doc.snapshot),
+            "images",
+            "stale.png",
+            png,
+            range(2, 2)
+        )
         .is_err());
     assert!(!root.path().join("notes/images/stale.png").exists());
     assert!(w
         .load_image(&doc.snapshot.document_id.0, "../../outside.png")
         .is_err());
     assert!(w
-        .paste_image(request(&pasted.snapshot), "../unsafe.png", png, range(2, 2))
+        .paste_image(
+            request(&pasted.snapshot),
+            "images",
+            "../unsafe.png",
+            png,
+            range(2, 2)
+        )
         .is_err());
     assert!(w
         .paste_image(
             request(&pasted.snapshot),
+            "images",
             "unsafe.svg",
             b"<svg/>",
             range(2, 2)
         )
         .is_err());
+}
+#[test]
+/// Paste into a configured nested folder, number repeated names and refuse folders that leave the workspace.
+fn image_paste_uses_configured_folder_and_numbers_duplicates() {
+    let (root, _recovery, mut w) = setup();
+    fs::create_dir(root.path().join("notes")).unwrap();
+    let doc = w.create("notes/a.md", "").unwrap();
+    let png = b"\x89PNG\r\n\x1a\npayload";
+    let first = w
+        .paste_image(
+            request(&doc.snapshot),
+            "img/shots",
+            "image.png",
+            png,
+            range(0, 0),
+        )
+        .unwrap();
+    assert_eq!(first.path, "notes/img/shots/image.png");
+    let second = w
+        .paste_image(
+            request(&first.snapshot),
+            "img/shots",
+            "image.png",
+            png,
+            range(0, 0),
+        )
+        .unwrap();
+    assert_eq!(second.path, "notes/img/shots/image-1.png");
+    assert_eq!(
+        second.snapshot.text,
+        "![](img/shots/image-1.png)![](img/shots/image.png)"
+    );
+    let here = w
+        .paste_image(request(&second.snapshot), ".", "here.png", png, range(0, 0))
+        .unwrap();
+    assert_eq!(here.path, "notes/here.png");
+    assert!(w
+        .paste_image(request(&here.snapshot), "../..", "up.png", png, range(0, 0))
+        .is_err());
+    let shared = w
+        .paste_image(
+            request(&here.snapshot),
+            "/assets",
+            "up.png",
+            png,
+            range(0, 0),
+        )
+        .unwrap();
+    assert_eq!(shared.path, "assets/up.png");
+    assert!(shared.snapshot.text.starts_with("![](../assets/up.png)"));
+    assert!(!root.path().parent().unwrap().join("up.png").exists());
 }
 #[test]
 /// Create files atomically without replacing existing entries and retain their intended permissions.
@@ -938,7 +1008,7 @@ fn undo_to_saved_bytes_clears_recovery_and_unicode_image_links_load() {
     let s = actor.snapshot();
     let png = b"\x89PNG\r\n\x1a\npayload";
     let pasted = w
-        .paste_image(request(&s), "日本 #.png", png, range(3, 3))
+        .paste_image(request(&s), "images", "日本 #.png", png, range(3, 3))
         .unwrap();
     assert!(pasted.snapshot.text.contains("%E6%97%A5"));
     let loaded = w
