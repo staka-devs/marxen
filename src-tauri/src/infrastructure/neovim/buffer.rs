@@ -178,6 +178,17 @@ impl Buffer for NativeBuffer {
     fn search_count(&self) -> Result<Option<crate::contracts::SearchCount>, BufferError> {
         Ok(self.0.search_count()?)
     }
+    /// Set `@/` and the search history; direction and highlighting stay Vim's.
+    fn set_search_pattern(&self, pattern: &str) -> Result<(), BufferError> {
+        self.0.client().call(
+            "nvim_exec_lua",
+            vec![
+                rmpv::Value::from("local pattern = ...; vim.fn.setreg('/', pattern); vim.fn.histadd('search', pattern)"),
+                rmpv::Value::Array(vec![rmpv::Value::from(pattern)]),
+            ],
+        )?;
+        Ok(())
+    }
     /// Return accepted copy selectors and diagnostics for invalid, reserved, or duplicate keys.
     fn copy_config(&self) -> Result<(BTreeMap<String, String>, Vec<String>), BufferError> {
         Ok(self.0.copy_config()?)

@@ -680,6 +680,11 @@ export class RegistryClient {
     return this.transport.fetchCursor(documentId, this.location(documentId));
   }
 
+  /** Install a Vim pattern as the document's native last search (`@/`). */
+  async setSearchPattern(documentId: DocumentId, pattern: string): Promise<void> {
+    await this.transport.setSearchPattern?.(documentId, pattern, this.location(documentId));
+  }
+
   /**
    * Stage a GUI selection for serial reporting, coalescing rapid gestures.
    *

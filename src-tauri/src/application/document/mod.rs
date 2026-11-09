@@ -1058,6 +1058,21 @@ impl DocumentActor {
         Ok(update)
     }
 
+    /// Install a GUI find query as Vim's last search; skipped while Vim awaits more input.
+    pub fn set_search_pattern(&self, pattern: &str) -> Result<(), ActorError> {
+        if pattern.is_empty() || pattern.len() > 4096 {
+            return Err(WorkspaceError::InvalidPath.into());
+        }
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ActorError::Nvim("document lock poisoned".into()))?;
+        if !state.nvim.mode_state()?.1 {
+            state.nvim.set_search_pattern(pattern)?;
+        }
+        Ok(())
+    }
+
     /// Drain raw Neovim redraw deltas without losing pending Rust save requests.
     pub fn grid(&self, width: u32, height: u32) -> Result<GridUpdate, ActorError> {
         if !(1..=500).contains(&width) || !(1..=300).contains(&height) {

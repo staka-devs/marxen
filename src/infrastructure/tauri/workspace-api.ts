@@ -220,6 +220,8 @@ export const workspaceApi = {
     documentInvoke<boolean>("has_nvim_mapping", { documentId, mode, lhs, location }),
   /** Fetch the last known native cursor for a document. */
   fetchCursor: (documentId: DocumentId, location?: DocumentLocation) => documentInvoke<CursorUpdate>("fetch_cursor", { documentId, location }),
+  /** Set a document's native last search pattern (`@/`). */
+  setSearchPattern: (documentId: DocumentId, pattern: string, location?: DocumentLocation) => documentInvoke<void>("set_search_pattern", { documentId, pattern, location }),
   /** Report a GUI selection to the native cursor tracker. */
   reportCursor: (update: CursorUpdate, location?: DocumentLocation, block?: boolean) => documentInvoke<CursorUpdate>("report_cursor", { ...update, location, block }),
   /** Fetch a Neovim grid screen batch. */

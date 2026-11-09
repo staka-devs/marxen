@@ -6,7 +6,7 @@ import type { LabelKey } from "../../contracts/localization";
 import { useI18n } from "../i18n/I18nProvider";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { schemeStylesheet } from "../../domain/color-scheme";
-import { parseSubstituteCommand, SUBSTITUTE_SEARCH_OPTIONS } from "../../domain/search";
+import { parseSearchCommand, parseSubstituteCommand, SUBSTITUTE_SEARCH_OPTIONS, vimSearchPattern } from "../../domain/search";
 import { MessageSquare, Files, GitBranch, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronRight, FileText, FilePlus2, FolderPlus, RefreshCw } from "lucide-react";
 import { SourceControlPanel } from "../workspace/SourceControlPanel";
 import { AiChangesBar } from "../ai/AiChangesBar";
@@ -53,7 +53,7 @@ import { useEditorMenu } from "./hooks/useEditorMenu";
 import { useWorkbenchCommands } from "./hooks/useWorkbenchCommands";
 import { WorkbenchMenuBar } from "../workspace/WorkbenchMenuBar";
 import { StyledSelect } from "../ui/select";
-import type { RootScope } from "../../contracts/contracts";
+import type { RootScope, SearchOptions } from "../../contracts/contracts";
 import { sameRoot } from "../../domain/document-location";
 import { rootFileLabel, type RootFile } from "../../domain/workspace-roots";
 import type { ExplorerTarget } from "../../contracts/workbench";
@@ -637,14 +637,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   const vimMode = session.vimMode;
   const commandCursor = session.commandLine ? [...session.commandLine.text.slice(session.commandLine.cursor)][0] ?? " " : " ";
   const typedSubstitute = session.commandLine ? parseSubstituteCommand(session.commandLine.text) : null;
-  // Issue #119: mirror a typed `:s/pat/rep` into the search panel so matches and counts show before Enter.
-  useEffect(() => {
-    if (!typedSubstitute) return;
-    workspace.setSearchOptions(SUBSTITUTE_SEARCH_OPTIONS);
-    workspace.setSearchQuery(typedSubstitute.pattern);
-    workspace.setReplaceText(typedSubstitute.replacement);
-    setSideView("search");
-  }, [typedSubstitute?.pattern, typedSubstitute?.replacement]);
+  const typedPattern = typedSubstitute?.pattern ?? (session.commandLine ? parseSearchCommand(session.commandLine.text) : null);
 
   // Issue #124: HEAD text of the active file for the change gutter; refreshed on open and save.
   const [gitHead, setGitHead] = useState<{ documentId: string; text: string | null } | null>(null);
@@ -662,10 +655,32 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
 
   // Issue #125: in-file find bar over the same native search, limited to the active file; idle while closed.
   const [findOpen, setFindOpen] = useState(false);
+  const [findFocus, setFindFocus] = useState(0);
+  const [findReplace, setFindReplace] = useState(false);
   const fileSearch = useWorkspaceSearch({ desktop, root: workspace.wsRoot, roots: workspace.roots, gateway: workspaceGateway, session, notify: setNotice,
     only: { path: findOpen ? active?.path ?? "" : "", scope: active?.location?.scope } });
+  /** Open the find bar from Ctrl+F with the keyboard in its query. */
+  const openFind = () => { setFindOpen(true); setFindFocus((count) => count + 1); };
   /** Close the find bar and hand the keyboard back to the editor. */
-  const closeFind = () => { setFindOpen(false); document.querySelector<HTMLElement>('[data-testid="editor-primary"] .cm-content')?.focus(); };
+  const closeFind = () => { setFindOpen(false); setFindReplace(false); document.querySelector<HTMLElement>('[data-testid="editor-primary"] .cm-content')?.focus(); };
+  // Issue #119: mirror a typed `/pat`, `?pat` or `:s/pat/rep` into the find bar so matches and counts show before Enter.
+  // The keyboard stays on Vim's command line; the bar stays open after Enter like hlsearch.
+  useEffect(() => {
+    if (!typedPattern) return;
+    fileSearch.setSearchOptions(SUBSTITUTE_SEARCH_OPTIONS);
+    fileSearch.setSearchQuery(typedPattern);
+    if (typedSubstitute) { fileSearch.setReplaceText(typedSubstitute.replacement); setFindReplace(true); }
+    setFindOpen(true);
+  }, [typedPattern, typedSubstitute?.replacement]);
+  /** Make the find bar's query Vim's last search, so `n`/`N` and `:s//` use the same matches. */
+  const syncVimSearch = (query: string, options: SearchOptions) => {
+    if (active && query !== "") documentGateway?.setSearchPattern?.(active.documentId, vimSearchPattern(query, options)).catch(() => undefined);
+  };
+  const searchRanges = useMemo(() => findOpen
+    ? fileSearch.registryHits.flatMap((hit) => hit.offset !== undefined && hit.end !== undefined ? [{ from: hit.offset, to: hit.end }] : [])
+    : [], [findOpen, fileSearch.registryHits]);
+  const activeSelection = active ? selections[active.documentId] : undefined;
+  const findCursor = activeSelection ? Math.min(activeSelection.anchor, activeSelection.head) : null;
 
   /** Text before the latest AI change to the active document, for the inline diff. */
   const aiBaseline = active ? staging.aiChanges.find((change) => change.documentId === active.documentId)?.before ?? null : null;
@@ -732,7 +747,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       /** Open the existing search and replacement controls. */
       "edit-find": () => setSideView("search"),
       /** Open the in-file find bar. */
-      "find-file": () => setFindOpen(true),
+      "find-file": openFind,
       /** Open the supported-file picker. */
       "palette-quickopen": () => setQuickOpen(true),
       /** Open the shared command picker. */
@@ -1231,7 +1246,9 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           style={{ gridTemplateColumns: effectiveViewMode === "split" && activeIsMarkdown && active ? `minmax(0, ${splitRatio}fr) 5px minmax(0, ${100 - splitRatio}fr)` : "minmax(0, 1fr)" }}
           aria-label={t("編集領域")}
         >
-          {findOpen && active && <FindBar query={fileSearch.searchQuery} onQuery={fileSearch.setSearchQuery} options={fileSearch.searchOptions} onOptions={fileSearch.setSearchOptions}
+          {findOpen && active && <FindBar query={fileSearch.searchQuery} onQuery={(query) => { fileSearch.setSearchQuery(query); syncVimSearch(query, fileSearch.searchOptions); }}
+            options={fileSearch.searchOptions} onOptions={(options) => { fileSearch.setSearchOptions(options); syncVimSearch(fileSearch.searchQuery, options); }}
+            focusRequest={findFocus} replaceOpen={findReplace} cursor={findCursor}
             hits={fileSearch.registryHits} searching={fileSearch.searching} ready={fileSearch.resultsReady} error={fileSearch.searchError}
             replaceText={fileSearch.replaceText} onReplaceText={fileSearch.setReplaceText}
             onJump={(hit) => void fileSearch.jumpToHit(hit)} onReplaceOne={(hit) => void fileSearch.replaceOne(hit)} onReplaceAll={() => void fileSearch.replaceAllMatches()} onClose={closeFind} />}
@@ -1250,6 +1267,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   testId="editor-primary"
                   aiBaseline={aiBaseline}
                   gitBaseline={gitBaseline}
+                  searchRanges={searchRanges}
                   onEditorMenu={(point) => void editorMenu.open(point)}
                   focusRequest={editorFocus?.path === active.path ? editorFocus.sequence : 0}
                   initialSelection={selections[active.documentId] ?? null}
@@ -1283,6 +1301,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   testId="editor-primary"
                   aiBaseline={aiBaseline}
                   gitBaseline={gitBaseline}
+                  searchRanges={searchRanges}
                   onEditorMenu={(point) => void editorMenu.open(point)}
                   focusRequest={editorFocus?.path === active.path ? editorFocus.sequence : 0}
                   preferences={preferences}

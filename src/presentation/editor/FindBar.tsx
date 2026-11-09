@@ -26,17 +26,25 @@ interface Props {
   onReplaceAll: () => void;
   /** Close and return focus to the editor. */
   onClose: () => void;
+  /** Bumped by Ctrl+F to focus the query; 0 keeps focus where it is (bars opened from Vim's command line). */
+  focusRequest?: number;
+  /** Expand the replace row (a typed `:s`). */
+  replaceOpen?: boolean;
+  /** Editor cursor offset, so Vim's `n`/`N` move the current-match counter too. */
+  cursor?: number | null;
 }
 
 /** In-file find and replace bar over the editor (VS Code's find widget). */
-export function FindBar({ query, onQuery, options, onOptions, hits, searching, ready, error, replaceText, onReplaceText, onJump, onReplaceOne, onReplaceAll, onClose }: Props) {
+export function FindBar({ query, onQuery, options, onOptions, hits, searching, ready, error, replaceText, onReplaceText, onJump, onReplaceOne, onReplaceAll, onClose, focusRequest = 1, replaceOpen = false, cursor = null }: Props) {
   const { t } = useI18n();
   const input = useRef<HTMLInputElement>(null);
   const [index, setIndex] = useState(0);
   const [replacing, setReplacing] = useState(false);
-  useEffect(() => { input.current?.focus(); input.current?.select(); }, []);
+  useEffect(() => { if (focusRequest > 0) { input.current?.focus(); input.current?.select(); } }, [focusRequest]);
+  useEffect(() => { if (replaceOpen) setReplacing(true); }, [replaceOpen]);
   useEffect(() => { setIndex(0); }, [query, options.caseSensitive, options.wholeWord, options.regex]);
-  const current = hits.length > 0 ? Math.min(index, hits.length - 1) : -1;
+  const atCursor = cursor === null ? -1 : hits.findIndex((hit) => hit.offset === cursor);
+  const current = atCursor >= 0 ? atCursor : hits.length > 0 ? Math.min(index, hits.length - 1) : -1;
   /** Step to the next or previous match, wrapping around, and show it. */
   const step = (delta: number) => {
     if (hits.length === 0 || !ready) return;

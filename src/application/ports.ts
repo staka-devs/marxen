@@ -136,6 +136,8 @@ export interface DocumentGateway {
   reportCursor(update: CursorUpdate): Promise<CursorUpdate>;
   /** Fetch a grid screen batch. */
   fetchGrid(documentId: DocumentId, width?: number, height?: number): Promise<GridUpdate>;
+  /** Make a Vim pattern the native last search so `n`/`N` follow the GUI find bar; desktop only. */
+  setSearchPattern?(documentId: DocumentId, pattern: string): Promise<void>;
   /** Fetch the Neovim config state. */
   fetchConfig(documentId: DocumentId): Promise<NvimConfig>;
 }
@@ -192,6 +194,8 @@ export interface DocumentTransport {
   pasteImage(request: SaveRequest, name: string, bytes: Uint8Array, range: Utf16Range): Promise<PasteResult>;
   /** Fetch a Neovim grid screen batch. */
   fetchGrid(documentId: DocumentId, width?: number, height?: number): Promise<GridUpdate>;
+  /** Set the native last search pattern of one document. */
+  setSearchPattern?(documentId: DocumentId, pattern: string, location?: DocumentLocation): Promise<void>;
   /** Fetch the current Neovim config state for a document. */
   fetchConfig(documentId: DocumentId, location?: DocumentLocation): Promise<NvimConfig>;
 }

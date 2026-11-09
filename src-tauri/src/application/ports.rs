@@ -81,6 +81,8 @@ pub trait Buffer: Send {
     fn read_quickfix(&self) -> Result<crate::contracts::QuickfixList, BufferError>;
     /// Read the current `/` position; `None` without an active search.
     fn search_count(&self) -> Result<Option<crate::contracts::SearchCount>, BufferError>;
+    /// Make a Vim pattern the last search (`@/`) so `n`/`N` follow the GUI find bar.
+    fn set_search_pattern(&self, pattern: &str) -> Result<(), BufferError>;
     /// Read copy-format bindings together with configuration errors.
     fn copy_config(&self) -> Result<(BTreeMap<String, String>, Vec<String>), BufferError>;
     /// Compare key notation after native termcode normalization.

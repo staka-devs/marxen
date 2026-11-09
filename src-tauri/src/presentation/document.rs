@@ -597,6 +597,18 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Make the GUI find bar's query the document's native last search pattern.
+    pub fn set_search_pattern(
+        state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
+        document_id: String,
+        pattern: String,
+    ) -> Result<(), WorkspaceError> {
+        with_document(&state, document_id.clone(), &location, |w| {
+            Ok(w.actor(&document_id)?.set_search_pattern(&pattern)?)
+        })
+    }
+    #[tauri::command(async)]
     /// Capture revision-bound native selection and effective editor configuration.
     pub fn fetch_editor_context(
         state: tauri::State<'_, ActorState>,
