@@ -26,7 +26,21 @@ static RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
 /// Configure the installed Tauri resource directory before opening documents.
 /// Only the first call takes effect because the directory is stored in a `OnceLock`.
 pub fn configure_resource_dir(directory: PathBuf) {
-    let _ = RESOURCE_DIR.set(directory);
+    let _ = RESOURCE_DIR.set(plain_path(directory));
+}
+
+/// Drop the Windows `\\?\` verbatim prefix Tauri's resource directory carries.
+/// Neovim cannot search a verbatim `VIMRUNTIME`, so every lazily loaded
+/// `vim.*` Lua module (e.g. `vim.snippet`) failed in packaged builds.
+fn plain_path(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) => PathBuf::from(rest),
+        None => path,
+    }
 }
 
 pub use crate::domain::coordinates::{
@@ -815,4 +829,21 @@ fn trim_remote(detail: String) -> String {
         .chars()
         .take(500)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plain_path;
+    use std::path::PathBuf;
+
+    /// Local and UNC verbatim paths become plain paths; others pass through.
+    #[test]
+    fn strips_windows_verbatim_prefixes() {
+        let local = PathBuf::from(r"\\?\C:\Apps\Marxen");
+        assert_eq!(plain_path(local), PathBuf::from(r"C:\Apps\Marxen"));
+        let unc = PathBuf::from(r"\\?\UNC\server\share\Marxen");
+        assert_eq!(plain_path(unc), PathBuf::from(r"\\server\share\Marxen"));
+        let plain = PathBuf::from("/opt/marxen");
+        assert_eq!(plain_path(plain), PathBuf::from("/opt/marxen"));
+    }
 }
