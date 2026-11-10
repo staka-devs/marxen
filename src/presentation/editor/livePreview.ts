@@ -24,6 +24,7 @@ import { toggleCheckbox } from "../../domain/markdown-gui";
 import { disposeMarkdownView, hydrateMarkdownView } from "../preview/hydrate";
 import { hydrateLocalImages } from "../images/hydrate-images";
 import { inlineMarks } from "../../domain/render/inline-marks";
+import { lineMarkers, type LineMarker } from "../../domain/render/line-markers";
 import { setPropertyEdit } from "../../domain/frontmatter";
 import { hydrateDatabases, type DatabaseViewer } from "../database/hydrate-databases";
 import type { ImageResolver } from "../../domain/image-sources";
@@ -381,6 +382,67 @@ class LiveBlockWidget extends WidgetType {
   }
 }
 
+/** Bullet, number or task box drawn over a list marker on a line without the cursor. */
+class MarkerWidget extends WidgetType {
+  /** Pin the marker kind, text, state and its line offset. */ constructor(
+    readonly kind: LineMarker["kind"],
+    readonly label: string,
+    readonly checked: boolean,
+    readonly at: number,
+    readonly getCallbacks: () => LivePreviewCallbacks,
+  ) {
+    super();
+  }
+
+  /** Same marker at the same line keeps its DOM. */ eq(other: MarkerWidget): boolean {
+    return other.kind === this.kind && other.label === this.label && other.checked === this.checked && other.at === this.at;
+  }
+
+  /** Draw a bullet glyph, the item number, or a clickable task box. */ toDOM(view: EditorView): HTMLElement {
+    if (this.kind !== "task") {
+      const span = document.createElement("span");
+      span.className = this.kind === "ordered" ? "marxen-live-number" : "marxen-live-bullet";
+      span.textContent = this.kind === "ordered" ? `${this.label} ` : "•";
+      return span;
+    }
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.className = "marxen-live-task";
+    box.checked = this.checked;
+    box.addEventListener("mousedown", (event) => event.preventDefault());
+    box.addEventListener("click", (event) => {
+      event.preventDefault();
+      this.getCallbacks().onGuiEdits?.(toggleCheckbox(view.state.doc.toString(), this.at));
+    });
+    return box;
+  }
+
+  /** The box handles its own clicks; CodeMirror never moves the cursor for them. */ ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+const QUOTE_LINE = Decoration.line({ class: "marxen-live-quote-line" });
+
+/**
+ * Draw list bullets, numbers, task boxes and quote bars on active-block lines
+ * the selection does not touch; the cursor line stays raw Markdown.
+ */
+function lineMarkerDecorations(decorations: Range<Decoration>[], text: string, base: number, selFrom: number, selTo: number, getCallbacks: () => LivePreviewCallbacks): void {
+  for (const marker of lineMarkers(text)) {
+    const lineStart = base + marker.lineFrom;
+    const lineEnd = base + (text.indexOf("\n", marker.lineFrom) < 0 ? text.length : text.indexOf("\n", marker.lineFrom));
+    if (selFrom <= lineEnd && selTo >= lineStart) continue;
+    const from = base + marker.markerFrom;
+    const to = base + marker.markerTo;
+    if (marker.kind === "quote") {
+      decorations.push(QUOTE_LINE.range(lineStart), HIDDEN.range(from, to));
+    } else {
+      decorations.push(Decoration.replace({ widget: new MarkerWidget(marker.kind, marker.label ?? "", marker.checked ?? false, lineStart, getCallbacks) }).range(from, to));
+    }
+  }
+}
+
 const HIDDEN = Decoration.replace({});
 const MARKER = Decoration.mark({ class: "marxen-live-marker" });
 
@@ -425,6 +487,7 @@ function inlineDecorations(decorations: Range<Decoration>[], text: string, base:
         }
       }
       if (block.kind !== "code" && block.kind !== "math" && block.kind !== "html") inlineDecorations(decorations, text, block.from, selFrom, selTo);
+      if (block.kind === "list" || block.kind === "blockquote" || block.kind.startsWith("alert:")) lineMarkerDecorations(decorations, text, block.from, selFrom, selTo, getCallbacks);
       continue;
     }
     const text = docText.slice(block.from, block.to);

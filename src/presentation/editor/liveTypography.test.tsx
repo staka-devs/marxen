@@ -144,3 +144,16 @@ it("shows frontmatter as editable properties and sends a value edit", async () =
   fireEvent.change(input, { target: { value: "done" } });
   expect(onGuiEdits).toHaveBeenCalledWith([{ range: { start: 12, end: 16 }, text: "done" }], text);
 });
+
+it("draws bullets and clickable task boxes on active list lines without the cursor", () => {
+  const text = "- 一つ目\n- [ ] 二つ目\n- 三つ目\n";
+  const onGuiEdits = vi.fn();
+  render(<CodeMirrorEditor value={text} ariaLabel="検証" livePreview onGuiEdits={onGuiEdits} initialSelection={{ anchor: 2, head: 2 }} />);
+  const view = editorView();
+  expect(view.contentDOM.querySelectorAll(".marxen-live-bullet").length).toBe(1);
+  const box = view.contentDOM.querySelector<HTMLInputElement>("input.marxen-live-task");
+  expect(box?.checked).toBe(false);
+  fireEvent.click(box!);
+  expect(onGuiEdits).toHaveBeenCalledWith([{ range: { start: 6, end: 15 }, text: "- [x] 二つ目" }], text);
+  expect(view.state.doc.toString()).toBe(text);
+});

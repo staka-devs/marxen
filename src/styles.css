@@ -313,3 +313,9 @@ article.marxen-md { padding: 32px max(24px, calc((100% - 960px) / 2)) 80px; }
 .marxen-md .marxen-property-input { width: 100%; min-width: 12rem; border: 1px solid transparent; border-radius: 4px; padding: 0.15rem 0.4rem; background: transparent; color: inherit; font: inherit; outline: none; }
 .marxen-md .marxen-property-input:hover { border-color: var(--border); }
 .marxen-md .marxen-property-input:focus { border-color: var(--primary); }
+
+/* List and quote markers on active-block lines without the cursor. */
+.marxen-editor .marxen-live-bullet { display: inline-block; width: 1.2em; color: var(--muted-foreground); }
+.marxen-editor .marxen-live-number { color: var(--muted-foreground); }
+.marxen-editor .marxen-live-task { margin: 0 0.4em 0 0.1em; vertical-align: -0.1em; cursor: pointer; }
+.marxen-editor .cm-line.marxen-live-quote-line { border-left: 3px solid var(--border); padding-left: 0.8em; color: var(--muted-foreground); }
