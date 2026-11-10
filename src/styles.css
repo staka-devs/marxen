@@ -236,7 +236,6 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 [data-theme="contrast"] .marxen-vim-mode { background: #000; color: #fff; }
 .marxen-editor[data-live-preview="true"] .cm-line,
 .marxen-editor[data-live-preview="true"] .marxen-live-widget { padding-inline: 0; }
-.marxen-editor .cm-line.marxen-live-gap { line-height: 12px; }
 .marxen-editor .cm-line.marxen-live-heading { font-weight: 600; line-height: 1.45; letter-spacing: -0.015em; }
 .marxen-editor .cm-line.marxen-live-heading[data-heading-level="1"] { font-size: 1.8em; letter-spacing: -0.025em; }
 .marxen-editor .cm-line.marxen-live-heading[data-heading-level="2"] { font-size: 1.35em; }
@@ -321,6 +320,5 @@ article.marxen-md { padding: 32px max(24px, calc((100% - 960px) / 2)) 80px; }
 .marxen-editor .cm-line.marxen-live-quote-line { border-left: 3px solid var(--border); padding-left: 0.8em; color: var(--muted-foreground); }
 /* Plain items in a list that also has tasks keep their bullet. */
 .marxen-md ul.contains-task-list > li:not(.task-list-item) { list-style: disc; margin-left: 1.1em; }
-.marxen-editor .cm-lineNumbers .cm-gutterElement.marxen-live-gap-gutter { font-size: 9px; line-height: 12px; opacity: 0.6; }
 /* Diagrams, maps and models speak for themselves; their kind label is not shown. */
 .marxen-md .marxen-special-title { display: none; }
