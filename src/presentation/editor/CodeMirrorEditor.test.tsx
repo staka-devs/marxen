@@ -161,3 +161,14 @@ it("marks added, modified and deleted lines against the Git HEAD text, ignoring 
   rendered.rerender(<CodeMirrorEditor value={"# T\r\nkeep\r\nend\r\n"} ariaLabel="editor" gitBaseline={null} />);
   expect(rendered.container.querySelector(".marxen-git-gutter")).toBeNull();
 });
+
+it("returns typed text outside Insert mode to Vim instead of editing the buffer", () => {
+  const onGuiEdits = vi.fn();
+  const onRejectedText = vi.fn();
+  const { container } = render(<CodeMirrorEditor value="本文" ariaLabel="検証" vimMode="command_line" allowTextInput={false} onGuiEdits={onGuiEdits} onRejectedText={onRejectedText} initialSelection={{ anchor: 0, head: 0 }} />);
+  const view = EditorView.findFromDOM(container.querySelector(".cm-editor") as HTMLElement)!;
+  act(() => view.dispatch({ changes: { from: 0, insert: "検索" }, userEvent: "input.type" }));
+  expect(onRejectedText).toHaveBeenCalledWith("検索");
+  expect(onGuiEdits).not.toHaveBeenCalled();
+  expect(view.state.doc.toString()).toBe("本文");
+});

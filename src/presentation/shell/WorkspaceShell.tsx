@@ -7,7 +7,7 @@ import { useI18n } from "../i18n/I18nProvider";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { schemeStylesheet } from "../../domain/color-scheme";
 import { parseSearchCommand, parseSubstituteCommand, SUBSTITUTE_SEARCH_OPTIONS, vimSearchPattern } from "../../domain/search";
-import { MessageSquare, Files, GitBranch, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronRight, FileText, FilePlus2, FolderPlus, RefreshCw } from "lucide-react";
+import { MessageSquare, Files, GitBranch, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, ChevronRight, FileText, FilePlus2, FolderPlus, RefreshCw } from "lucide-react";
 import { SourceControlPanel } from "../workspace/SourceControlPanel";
 import { AiChangesBar } from "../ai/AiChangesBar";
 import { FindBar } from "../editor/FindBar";
@@ -1305,6 +1305,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   snapshot={active}
                   shouldUseNativeCursor={() => vim.isNativeInputPending(active.documentId)}
                   onGuiEdits={(edits, beforeText, selection, key, nativeCursor) => vim.routeGuiEdits(active.documentId, edits, beforeText, selection, key, nativeCursor)}
+                  onRejectedText={(text) => { if (vimMode === "command_line") void vim.routeVimKeys(active.documentId, text.replaceAll("<", "<lt>")); }}
                   onSelectionChange={(selection) => session.handleSelection(active.documentId, selection)}
                 />
               </div>
@@ -1337,6 +1338,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   snapshot={active}
                   shouldUseNativeCursor={() => vim.isNativeInputPending(active.documentId)}
                   onGuiEdits={(edits, beforeText, selection, key, nativeCursor) => vim.routeGuiEdits(active.documentId, edits, beforeText, selection, key, nativeCursor)}
+                  onRejectedText={(text) => { if (vimMode === "command_line") void vim.routeVimKeys(active.documentId, text.replaceAll("<", "<lt>")); }}
                   onSelectionChange={(selection) => session.handleSelection(active.documentId, selection)}
                 />
               </div>
@@ -1559,21 +1561,20 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       </div>
       <footer className="marxen-status flex h-6 shrink-0 items-center gap-3 whitespace-nowrap border-t border-border bg-card px-3 text-[11px] text-muted-foreground">
         {desktop && active && <span data-testid="vim-footer-mode" data-mode={vimMode} className="marxen-vim-mode -ml-3 flex h-6 shrink-0 items-center px-3 font-semibold">{MODE_JA[vimMode] ? t(MODE_JA[vimMode] as LabelKey) : vimMode}</span>}
-        <span className="min-w-0 flex-1 truncate">{workspace.wsRoot?.split(/[\\/]/).filter(Boolean).at(-1) ?? ""}</span>
+        <span className="min-w-0 flex-1" />
         {cursorPos && <span data-testid="cursor" title={t("カーソル位置")}><span className="sr-only">{t("カーソル")}{" "}</span>{cursorPos}</span>}
-        <span data-testid="dirty">{!active || active.dirty ? (active ? t("未保存") : "—") : t("保存済み")}</span>
+        {/* Only states that need attention are visible; the normal ones stay for screen readers. */}
+        <span data-testid="dirty" className={active?.dirty ? undefined : "sr-only"}>{!active ? "" : active.dirty ? t("未保存") : t("保存済み")}</span>
         {desktop && session.copyReady === activeId && <span data-testid="copy-ready" className="min-w-0 max-w-72 truncate" title={Object.entries(workspace.copyKeys).map(([format, key]) => `${key} ${t(COPY_LABELS[format as keyof typeof COPY_LABELS] as LabelKey)}`).join(" / ")}>{t("コピー形式を選択")}</span>}
         {!desktop && <span data-testid="readonly-note" title={t("ブラウザ表示は読み取り専用です")} className="shrink-0 rounded-sm border border-border px-1.5 py-0.5 text-[10px]">{t("読み取り専用")}</span>}
-        <span role="status" className="shrink-0">
+        <span role="status" className={workspace.runtime?.connection === "connected" ? "sr-only" : "shrink-0"}>
           {workspace.runtime ? (workspace.runtime.connection === "disconnected" ? t("Neovim 未接続") : workspace.runtime.connection === "connected" ? t("Neovim 接続済み") : workspace.runtime.detail) : t("接続状態を確認中…")}
         </span>
-        <details className="relative shrink-0">
-          <summary aria-label={t("エディターの接続情報")} title={t("エディターの接続情報")} className="flex cursor-pointer list-none items-center rounded-sm p-0.5 hover:bg-muted"><Info size={13} aria-hidden="true" /></summary>
-          <div className="absolute bottom-7 right-0 z-20 min-w-44 rounded border border-border bg-card p-3 shadow-lg">
-        <span data-testid="revision" className="block">{t("リビジョン {{value0}}", { value0: active?.revision ?? "—" })}</span>
-            {desktop && session.vimKeys !== "" && <span data-testid="vim-keys" className="mt-1 block">{t("Vim入力 {{value0}}", { value0: session.vimKeys })}</span>}
-          </div>
-        </details>
+        {/* Diagnostics stay readable to assistive tech and tests without taking screen space. */}
+        <span className="sr-only">
+          <span data-testid="revision">{t("リビジョン {{value0}}", { value0: active?.revision ?? "—" })}</span>
+          {desktop && session.vimKeys !== "" && <span data-testid="vim-keys">{t("Vim入力 {{value0}}", { value0: session.vimKeys })}</span>}
+        </span>
       </footer>
     </div>
   );

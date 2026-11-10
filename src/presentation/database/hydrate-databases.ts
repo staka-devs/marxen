@@ -171,8 +171,7 @@ function draw(view: View, table: DatabaseTable): void {
 /**
  * Hydrate every database block under `root`.
  *
- * Without a viewer (feature off or browser demo) each block explains how to
- * enable it. No DOM is written after `signal` aborts.
+ * Without a viewer (feature off or browser demo) each block shows its source. No DOM is written after `signal` aborts.
  */
 export async function hydrateDatabases(root: HTMLElement, viewer: DatabaseViewer | undefined, signal?: AbortSignal, t: Translator = japaneseTranslator): Promise<void> {
   const blocks = [...root.querySelectorAll<HTMLElement>('[data-marxen-kind="database"]:not([data-invalid]):not([data-hydrated])')];
@@ -186,7 +185,9 @@ export async function hydrateDatabases(root: HTMLElement, viewer: DatabaseViewer
       container.addEventListener(type, (event) => event.stopPropagation());
     }
     if (!viewer) {
-      container.replaceChildren(node("p", "marxen-database-note-text", t("設定 → エディターで「データベース表示を有効にする」をオンにし、このノートの frontmatter に database: true を書くと表で表示します。")));
+      // Not enabled for this note: show the block as plain source, without explanations.
+      block.querySelector("details")?.setAttribute("open", "");
+      container.remove();
       return;
     }
     const view: View = { container, source: parsed.source, viewer, t, signal };
