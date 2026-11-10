@@ -27,9 +27,11 @@ describe("Vim search bridge", () => {
   });
 
   it("turns find bar queries into Vim patterns", () => {
+    expect(vimSearchPattern("テスト", { caseSensitive: true, wholeWord: false, regex: true })).toBe("テスト");
     const literal = { caseSensitive: false, wholeWord: false, regex: false };
-    expect(vimSearchPattern("a.b\\c", literal)).toBe(String.raw`\c\Va.b\\c`);
-    expect(vimSearchPattern("foo", { ...literal, caseSensitive: true, wholeWord: true })).toBe(String.raw`\C\V\<foo\>`);
+    expect(vimSearchPattern("a.b\\c", literal)).toBe(String.raw`\ca\.b\\c`);
+    expect(vimSearchPattern("テスト/1", literal)).toBe(String.raw`テスト\/1`);
+    expect(vimSearchPattern("foo", { ...literal, caseSensitive: true, wholeWord: true })).toBe(String.raw`\C\<foo\>`);
     expect(vimSearchPattern("a|b", { ...literal, regex: true, wholeWord: true })).toBe(String.raw`\c\v<(a|b)>`);
   });
 });

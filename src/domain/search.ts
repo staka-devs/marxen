@@ -37,13 +37,17 @@ export function searchIdentity(root: string | null, query: string, options: Sear
 /**
  * Translate a GUI find query into a Vim search pattern for `@/`, so `n`/`N` follow the find bar.
  *
- * Literal text uses very-nomagic `\V` (only backslash is special); regex mode uses very-magic `\v`.
+ * The pattern is shown on Vim's command line, so it stays as plain as the query
+ * allows: literal text escapes only Vim's magic characters, a case flag is added
+ * only when the query has cased letters, and regex mode uses very-magic `\v`.
  */
 export function vimSearchPattern(query: string, options: SearchOptions): string {
+  const flag = !/[\p{Lu}\p{Ll}]/u.test(query) ? "" : options.caseSensitive ? "\\C" : "\\c";
   // shortcut: `\v` approximates the native regex dialect; translate classes like `\d`/`(?:` if users hit gaps.
-  const body = options.regex ? query : query.replaceAll("\\", "\\\\");
-  const word = options.wholeWord ? (options.regex ? `<(${body})>` : `\\<${body}\\>`) : body;
-  return `${options.caseSensitive ? "\\C" : "\\c"}${options.regex ? "\\v" : "\\V"}${word}`;
+  // A regex without special characters means the same as literal text, which reads better.
+  if (options.regex && /[\\^$.*+?()[\]{}|<>=@%~&]/.test(query)) return `${flag}\\v${options.wholeWord ? `<(${query})>` : query}`;
+  const body = query.replace(/[\\.*[\]~^$/]/g, "\\$&");
+  return `${flag}${options.wholeWord ? `\\<${body}\\>` : body}`;
 }
 
 /**

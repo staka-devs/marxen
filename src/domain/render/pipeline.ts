@@ -28,6 +28,8 @@ import { escapeHtml } from "./html";
 import { alertKind, mdastText } from "./mdast";
 import { highlightCode } from "./shiki";
 import { CLOBBER_PREFIX, marxenSanitizeSchema } from "./sanitize-schema";
+import { parseDatabaseBlock } from "../database-block";
+import { maskFrontmatter, parseFrontmatter, type Frontmatter } from "../frontmatter";
 import { isSpecialLanguage, type RenderDiagnostic, type RenderResult, type SourceBlock } from "./types";
 import {
   validateGeoJson,
@@ -154,6 +156,7 @@ const KIND_LABEL: Record<string, string> = {
   topojson: "地図 (TopoJSON)",
   stl: "3D (STL)",
   math: "数式",
+  database: "データベース",
 };
 
 /**
@@ -238,6 +241,7 @@ const SPECIAL_CONTAINER_CLASS: Record<string, string> = {
   geojson: "marxen-map",
   topojson: "marxen-map",
   stl: "marxen-stl",
+  database: "marxen-database",
 };
 
 /**
@@ -317,6 +321,11 @@ function rehypeMarxenBlocks(t: Translator = japaneseTranslator) {
             const topo = validateTopoJson(normalized, t);
             validation = topo;
             topoObject = topo.ok ? topo.objectNames?.[0] : undefined;
+            break;
+          }
+          case "database": {
+            const parsed = parseDatabaseBlock(normalized, t);
+            validation = parsed.ok ? { ok: true } : { ok: false, message: parsed.message };
             break;
           }
           default:
@@ -451,12 +460,20 @@ function getProcessor(t: Translator): ReturnType<typeof buildProcessor> {
   return processor;
 }
 
+/** Properties table for leading frontmatter; values stay text here and become inputs in live widgets. */
+function propertiesHtml(front: Frontmatter, endLine: number): string {
+  const rows = front.properties.map((property) => `<tr><th scope="row">${escapeHtml(property.key)}</th><td data-property="${escapeHtml(property.key)}"${property.editable ? " data-editable=\"true\"" : ""}>${escapeHtml(property.value)}</td></tr>`).join("");
+  return `<table class="marxen-properties" data-source-start-line="1" data-source-end-line="${endLine}"><tbody>${rows}</tbody></table>`;
+}
+
 /** Render Markdown to sanitized local-only HTML with diagnostics and blocks. Never throws. */
 export async function renderMarkdownDocument(source: string, t: Translator = japaneseTranslator): Promise<RenderResult> {
   const blocks = parseMarkdownBlocks(source);
   try {
-    const file = await getProcessor(t).process(source);
-    return { html: String(file), diagnostics: readDiagnostics(file), blocks };
+    const front = parseFrontmatter(source);
+    const file = await getProcessor(t).process(maskFrontmatter(source));
+    const properties = front ? propertiesHtml(front, source.slice(0, front.end).split("\n").length - 1) : "";
+    return { html: properties + String(file), diagnostics: readDiagnostics(file), blocks };
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
     return {
@@ -470,8 +487,10 @@ export async function renderMarkdownDocument(source: string, t: Translator = jap
 /** Top-level source blocks with 1-based lines for live/read mapping. */
 export function parseMarkdownBlocks(source: string): SourceBlock[] {
   try {
-    const tree = unified().use(remarkParse).use(remarkGfm).use(remarkMath).parse(source) as MdastRoot;
+    const tree = unified().use(remarkParse).use(remarkGfm).use(remarkMath).parse(maskFrontmatter(source)) as MdastRoot;
     const blocks: SourceBlock[] = [];
+    const front = parseFrontmatter(source);
+    if (front) blocks.push({ kind: "frontmatter", startLine: 1, endLine: source.slice(0, front.end).split("\n").length - 1 });
     for (const node of tree.children) {
       const position = node.position;
       if (!position) continue;

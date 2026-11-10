@@ -17,6 +17,7 @@ import { sameRoot } from "../../../domain/document-location";
 import type { WorkspaceInfo, DocumentSnapshot } from "../../../contracts/contracts";
 import { isMarkdownPath } from "../../../domain/workspace-files";
 import { imageFileName } from "../../../domain/image-name";
+import { BUNDLE_ASSETS, bundleOf } from "../../../domain/bundle";
 import { READONLY_MESSAGE, StaleResync, workspaceErrorText } from "../../../domain/document-errors";
 import type { NoticeKind } from "../../workspace/Notifications";
 import type { ImageDrop } from "../../workspace/ImageDropZone";
@@ -190,6 +191,7 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
       let cursor = { ...range };
       let revision = docsRef.current[id]?.revision ?? 0;
       let previousLength = docsRef.current[id]?.text.length ?? 0;
+      const target = bundleOf(docsRef.current[id]?.path ?? "") ? BUNDLE_ASSETS : folder;
       for (const file of files) {
         if (file.size > 20 * 1024 * 1024) {
           setNotice(message("対応画像（PNG/JPEG/GIF/WebP、20 MiB 以下）のみ扱えます。"));
@@ -198,7 +200,7 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
         try {
           const bytes = new Uint8Array(await file.arrayBuffer());
           const result = await registry.pasteImage(
-            { request: { documentId: id, baseRevision: revision }, folder, name: imageFileName(pattern, file.name, new Date()), bytes, range: cursor },
+            { request: { documentId: id, baseRevision: revision }, folder: target, name: imageFileName(pattern, file.name, new Date()), bytes, range: cursor },
           );
           revision = result.snapshot.revision;
           const inserted = result.snapshot.text.length - previousLength;
@@ -230,6 +232,8 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
   const onPasteCapture = useCallback(
     (event: React.ClipboardEvent) => {
       if (!desktop || !registry || !activeRef.current) return;
+      // Fields inside the editor (database cells) take their own pastes.
+      if ((event.target as HTMLElement | null)?.closest?.("input,textarea")) return;
       const id = activeRef.current;
       if (!docsRef.current[id]) return;
       const data = event.clipboardData;
@@ -289,6 +293,7 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
     const source = drop.kind === "workspace" && drop.scope ? roots?.find((root) => sameRoot(root.scope, drop.scope)) : undefined;
     if (drop.kind === "workspace" && drop.scope && !source) return;
     const crossRoot = source && !sameRoot(source.scope, doc.location?.scope);
+    const imageFolder = bundleOf(doc.path ?? "") ? BUNDLE_ASSETS : folder;
     const gen = bumpSelectionGen(id);
     const request = { documentId: id, baseRevision: doc.revision };
     void (async () => {
@@ -303,11 +308,11 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
           if (crossRoot) {
             const image = await workspaceGateway!.loadWorkspaceImage(path, source.scope);
             if (!currentRoots.current?.some((root) => sameRoot(root.scope, source.scope)) || !docsRef.current[id]) return;
-            result = (await registry.pasteImage({ request: ownedRequest, folder, name: imageFileName(pattern, path.split("/").at(-1)!, new Date()), bytes: new Uint8Array(image.bytes), range: cursor })).snapshot;
+            result = (await registry.pasteImage({ request: ownedRequest, folder: imageFolder, name: imageFileName(pattern, path.split("/").at(-1)!, new Date()), bytes: new Uint8Array(image.bytes), range: cursor })).snapshot;
           } else if (drop.kind === "workspace") {
             result = await registry.insertWorkspaceImage(ownedRequest, path, cursor);
           } else {
-            result = (await registry.importExternalImage(ownedRequest, path, cursor, folder, imageFileName(pattern, path.split(/[\\/]/).at(-1)!, new Date()))).snapshot;
+            result = (await registry.importExternalImage(ownedRequest, path, cursor, imageFolder, imageFileName(pattern, path.split(/[\\/]/).at(-1)!, new Date()))).snapshot;
           }
           revision = result.revision;
           const next = cursor.end + result.text.length - length;

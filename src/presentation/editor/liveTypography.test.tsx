@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { expect, it, vi } from "vitest";
 import { CodeMirrorEditor } from "./CodeMirrorEditor";
@@ -113,4 +113,53 @@ it("rejects composition if native mode stops permitting input before commit", ()
   fireEvent.compositionEnd(view.contentDOM);
   expect(onGuiEdits).not.toHaveBeenCalled();
   expect(view.state.doc.toString()).toBe("前後");
+});
+
+it("styles inline spans in the active block and hides their markers until the cursor touches them", () => {
+  const text = "前 **太字** と [リンク](https://e.com) 後\n";
+  render(<CodeMirrorEditor value={text} ariaLabel="検証" livePreview initialSelection={{ anchor: 0, head: 0 }} />);
+  const view = editorView();
+  expect(view.contentDOM.querySelector(".marxen-live-strong")).toHaveTextContent("太字");
+  expect(view.contentDOM.querySelector(".marxen-live-link")).toHaveTextContent("リンク");
+  expect(view.contentDOM.textContent).not.toContain("**");
+  expect(view.contentDOM.textContent).not.toContain("https://e.com");
+  act(() => view.dispatch({ selection: { anchor: text.indexOf("太字") } }));
+  expect(view.contentDOM.textContent).toContain("**太字**");
+  expect(view.contentDOM.textContent).not.toContain("https://e.com");
+  expect(view.state.doc.toString()).toBe(text);
+});
+
+it("shows frontmatter as editable properties and sends a value edit", async () => {
+  const text = "---\nstatus: todo\n---\n# 見出し\n\n本文\n";
+  const onGuiEdits = vi.fn();
+  render(<CodeMirrorEditor value={text} ariaLabel="検証" livePreview onGuiEdits={onGuiEdits} initialSelection={{ anchor: text.length, head: text.length }} />);
+  const view = editorView();
+  const input = await waitFor(() => {
+    const found = view.contentDOM.querySelector<HTMLInputElement>("input.marxen-property-input");
+    if (!found) throw new Error("properties not rendered");
+    return found;
+  });
+  expect(input.value).toBe("todo");
+  expect(view.contentDOM.querySelector(".marxen-live-heading, h1")).toBeTruthy();
+  fireEvent.change(input, { target: { value: "done" } });
+  expect(onGuiEdits).toHaveBeenCalledWith([{ range: { start: 12, end: 16 }, text: "done" }], text);
+});
+
+it("draws bullets and clickable task boxes on active list lines without the cursor", () => {
+  const text = "- 一つ目\n- [ ] 二つ目\n- 三つ目\n";
+  const onGuiEdits = vi.fn();
+  render(<CodeMirrorEditor value={text} ariaLabel="検証" livePreview onGuiEdits={onGuiEdits} initialSelection={{ anchor: 2, head: 2 }} />);
+  const view = editorView();
+  expect(view.contentDOM.querySelectorAll(".marxen-live-bullet").length).toBe(1);
+  const box = view.contentDOM.querySelector<HTMLInputElement>("input.marxen-live-task");
+  expect(box?.checked).toBe(false);
+  fireEvent.click(box!);
+  expect(onGuiEdits).toHaveBeenCalledWith([{ range: { start: 6, end: 15 }, text: "- [x] 二つ目" }], text);
+  expect(view.state.doc.toString()).toBe(text);
+});
+
+it("marks compact blank lines in the line-number gutter so numbers do not overlap", () => {
+  render(<CodeMirrorEditor value={"一\n\n二\n"} ariaLabel="検証" livePreview initialSelection={{ anchor: 0, head: 0 }} />);
+  const view = editorView();
+  expect(view.dom.querySelectorAll(".cm-lineNumbers .marxen-live-gap-gutter").length).toBeGreaterThan(0);
 });

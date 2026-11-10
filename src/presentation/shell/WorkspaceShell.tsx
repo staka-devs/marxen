@@ -7,7 +7,7 @@ import { useI18n } from "../i18n/I18nProvider";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { schemeStylesheet } from "../../domain/color-scheme";
 import { parseSearchCommand, parseSubstituteCommand, SUBSTITUTE_SEARCH_OPTIONS, vimSearchPattern } from "../../domain/search";
-import { MessageSquare, Files, GitBranch, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, Info, ChevronRight, FileText, FilePlus2, FolderPlus, RefreshCw } from "lucide-react";
+import { MessageSquare, Files, GitBranch, ListTree, Save, Search, Settings as SettingsIcon, Ellipsis, PanelsLeftRight, ChevronRight, FileText, FilePlus2, FolderPlus, RefreshCw } from "lucide-react";
 import { SourceControlPanel } from "../workspace/SourceControlPanel";
 import { AiChangesBar } from "../ai/AiChangesBar";
 import { FindBar } from "../editor/FindBar";
@@ -75,6 +75,8 @@ import {
 } from "../../domain/document-errors";
 import { COPY_LABELS } from "../../domain/clipboard-text";
 import { offsetToLineCol, lineColToOffset } from "../../domain/coordinates/utf16";
+import type { DatabaseViewer } from "../database/hydrate-databases";
+import { databasesEnabled } from "../../domain/frontmatter";
 import { DEFAULT_EDITOR_PREFERENCES, normalizeEditorPreferences, type EditorPreferences } from "../../domain/editor-preferences";
 import { entryKind } from "../../domain/workspace-files";
 import { docFromOpen, fileLabel } from "../../application/document/document-helpers";
@@ -682,6 +684,26 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     ? fileSearch.registryHits.flatMap((hit) => hit.offset !== undefined && hit.end !== undefined ? [{ from: hit.offset, to: hit.end }] : [])
     : [], [findOpen, fileSearch.registryHits]);
   const activeSelection = active ? selections[active.documentId] : undefined;
+  // Read at click time: the opener closes over render state that changes every render.
+  const openNoteRef = useRef(openFileForEditing);
+  openNoteRef.current = openFileForEditing;
+  const activeDocumentId = active?.documentId;
+  // Databases are allowed by the setting and enabled per note with `database: true` in its frontmatter.
+  const noteDatabases = useMemo(() => databasesEnabled(active?.text ?? ""), [active?.text]);
+  const documentScope = active?.location?.scope;
+  /** Database views for the active document, only when the opt-in setting is on. */
+  const databaseViewer = useMemo<DatabaseViewer | undefined>(() => {
+    if (!preferences.databases || !noteDatabases || !activeDocumentId || !documentGateway?.queryDatabase || !documentGateway.editDatabase) return undefined;
+    const gateway = documentGateway;
+    return {
+      /** Read a view through the active document. */
+      query: (source) => gateway.queryDatabase!(activeDocumentId, source),
+      /** Edit a view through the active document. */
+      edit: (source, edit) => gateway.editDatabase!(activeDocumentId, source, edit),
+      /** Open a folder-view note in the editor. */
+      openNote: (path) => { void openNoteRef.current(path, documentScope); },
+    };
+  }, [preferences.databases, noteDatabases, activeDocumentId, documentScope, documentGateway]);
   const findCursor = activeSelection ? Math.min(activeSelection.anchor, activeSelection.head) : null;
 
   /** Text before the latest AI change to the active document, for the inline diff. */
@@ -917,7 +939,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                 <FileTree key={owner.scope.generation} theme={theme} desktop nodes={buildTree(workspace.entriesByRoot[owner.scope.rootId] ?? [])} rootPath={owner.root} rootScope={owner.scope} rootName={owner.root.split(/[\\/]/).filter(Boolean).at(-1)} activePath={sameRoot(activeScope, owner.scope) ? activeImage ?? active?.path ?? null : null} selectedPath={explorerTarget?.rootId === owner.scope.rootId ? explorerTarget.path : null}
                   onRemoveRoot={() => workspace.beginRemoveRoot(owner.scope)} rootRemovalDisabled={workspace.busy}
                   onSelect={(node) => setExplorerTarget(treeTarget(node, owner.scope))} onCommand={(id, node) => runTreeCommand(id, node, owner.scope)}
-                  contextCommands={(node) => ["tree-open", "file-new", "folder-new", "file-rename", "tree-refresh"].map((id) => workbench.command(id, treeTarget(node, owner.scope))!)}
+                  contextCommands={(node) => ["tree-open", "file-new", "folder-new", "bundle-new", "file-rename", "bundle-export", "bundle-import", "tree-refresh"].map((id) => workbench.command(id, treeTarget(node, owner.scope))!)}
                   onOpenFile={(path) => { void openFileForEditing(path, owner.scope); if (window.innerWidth < 768) setSideView(null); }} />
               </div>) : <FileTree theme={theme} nodes={treeNodes} activePath={active?.path ?? null} onOpenFile={(path) => { void openFileForEditing(path); if (window.innerWidth < 768) setSideView(null); }} />}
               {workspace.missingRoots.map((root) => <p key={root} className="px-4 py-2 text-xs text-muted-foreground">{t("フォルダーが見つかりません。復元情報を保持しています: {{root}}", { root })}</p>)}
@@ -1209,12 +1231,12 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             </WorkspaceDialog>
           )}
           {workspace.newFileOpen && (
-            <WorkspaceDialog theme={theme} label={t(workspace.entryKind === "folder" ? "新規フォルダー" : "新規Markdownファイル")} onDismiss={() => workspace.setNewFileOpen(false)}>
+            <WorkspaceDialog theme={theme} label={t(workspace.entryKind === "folder" ? "新規フォルダー" : workspace.entryKind === "bundle" ? "新規バンドルノート" : "新規Markdownファイル")} onDismiss={() => workspace.setNewFileOpen(false)}>
               <form onSubmit={(event) => { event.preventDefault(); void workspace.createFile(); }} className="flex flex-wrap items-center gap-2">
               <input
                 value={workspace.newFilePath}
                 onChange={(event) => workspace.setNewFilePath(event.target.value)}
-                placeholder={workspace.entryKind === "folder" ? t("メモ/新しいフォルダー") : "notes/new.md"}
+                placeholder={workspace.entryKind === "folder" ? t("メモ/新しいフォルダー") : workspace.entryKind === "bundle" ? "notes/new.marxen" : "notes/new.md"}
                 aria-label={t(workspace.entryKind === "folder" ? "新規フォルダーのパス" : "新規ファイルのパス")}
                 className="min-w-40 flex-1 rounded-md border border-border bg-background px-3 py-1.5"
               />
@@ -1279,9 +1301,11 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   vimMode={vimMode}
                   allowTextInput={vimMode === "insert" || vimMode === "replace"}
                   resolveImage={image.liveResolver}
+                  database={databaseViewer}
                   snapshot={active}
                   shouldUseNativeCursor={() => vim.isNativeInputPending(active.documentId)}
                   onGuiEdits={(edits, beforeText, selection, key, nativeCursor) => vim.routeGuiEdits(active.documentId, edits, beforeText, selection, key, nativeCursor)}
+                  onRejectedText={(text) => { if (vimMode === "command_line") void vim.routeVimKeys(active.documentId, text.replaceAll("<", "<lt>")); }}
                   onSelectionChange={(selection) => session.handleSelection(active.documentId, selection)}
                 />
               </div>
@@ -1314,6 +1338,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   snapshot={active}
                   shouldUseNativeCursor={() => vim.isNativeInputPending(active.documentId)}
                   onGuiEdits={(edits, beforeText, selection, key, nativeCursor) => vim.routeGuiEdits(active.documentId, edits, beforeText, selection, key, nativeCursor)}
+                  onRejectedText={(text) => { if (vimMode === "command_line") void vim.routeVimKeys(active.documentId, text.replaceAll("<", "<lt>")); }}
                   onSelectionChange={(selection) => session.handleSelection(active.documentId, selection)}
                 />
               </div>
@@ -1335,7 +1360,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           )}
           {effectiveViewMode === "read" && activeIsMarkdown && active && (
             <div className="min-h-0 min-w-0">
-              <MarkdownPreview key={`read-${active.documentId}`} text={active.text} resolveImage={image.readResolver} />
+              <MarkdownPreview key={`read-${active.documentId}`} text={active.text} resolveImage={image.readResolver} database={databaseViewer} />
             </div>
           )}
           {effectiveViewMode === "split" && active && (
@@ -1366,7 +1391,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               <div className="flex min-h-0 min-w-0 flex-col" data-testid="split-preview-pane">
                 <div className="flex h-7 shrink-0 items-center border-b border-border px-3 text-xs text-muted-foreground">{t("プレビュー")}</div>
                 <div className="min-h-0 flex-1">
-                  <MarkdownPreview key={`split-${active.documentId}`} text={active.text} resolveImage={image.readResolver} />
+                  <MarkdownPreview key={`split-${active.documentId}`} text={active.text} resolveImage={image.readResolver} database={databaseViewer} />
                 </div>
               </div>
             </>
@@ -1536,21 +1561,20 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       </div>
       <footer className="marxen-status flex h-6 shrink-0 items-center gap-3 whitespace-nowrap border-t border-border bg-card px-3 text-[11px] text-muted-foreground">
         {desktop && active && <span data-testid="vim-footer-mode" data-mode={vimMode} className="marxen-vim-mode -ml-3 flex h-6 shrink-0 items-center px-3 font-semibold">{MODE_JA[vimMode] ? t(MODE_JA[vimMode] as LabelKey) : vimMode}</span>}
-        <span className="min-w-0 flex-1 truncate">{workspace.wsRoot?.split(/[\\/]/).filter(Boolean).at(-1) ?? ""}</span>
+        <span className="min-w-0 flex-1" />
         {cursorPos && <span data-testid="cursor" title={t("カーソル位置")}><span className="sr-only">{t("カーソル")}{" "}</span>{cursorPos}</span>}
-        <span data-testid="dirty">{!active || active.dirty ? (active ? t("未保存") : "—") : t("保存済み")}</span>
+        {/* Only states that need attention are visible; the normal ones stay for screen readers. */}
+        <span data-testid="dirty" className={active?.dirty ? undefined : "sr-only"}>{!active ? "" : active.dirty ? t("未保存") : t("保存済み")}</span>
         {desktop && session.copyReady === activeId && <span data-testid="copy-ready" className="min-w-0 max-w-72 truncate" title={Object.entries(workspace.copyKeys).map(([format, key]) => `${key} ${t(COPY_LABELS[format as keyof typeof COPY_LABELS] as LabelKey)}`).join(" / ")}>{t("コピー形式を選択")}</span>}
         {!desktop && <span data-testid="readonly-note" title={t("ブラウザ表示は読み取り専用です")} className="shrink-0 rounded-sm border border-border px-1.5 py-0.5 text-[10px]">{t("読み取り専用")}</span>}
-        <span role="status" className="shrink-0">
+        <span role="status" className={workspace.runtime?.connection === "connected" ? "sr-only" : "shrink-0"}>
           {workspace.runtime ? (workspace.runtime.connection === "disconnected" ? t("Neovim 未接続") : workspace.runtime.connection === "connected" ? t("Neovim 接続済み") : workspace.runtime.detail) : t("接続状態を確認中…")}
         </span>
-        <details className="relative shrink-0">
-          <summary aria-label={t("エディターの接続情報")} title={t("エディターの接続情報")} className="flex cursor-pointer list-none items-center rounded-sm p-0.5 hover:bg-muted"><Info size={13} aria-hidden="true" /></summary>
-          <div className="absolute bottom-7 right-0 z-20 min-w-44 rounded border border-border bg-card p-3 shadow-lg">
-        <span data-testid="revision" className="block">{t("リビジョン {{value0}}", { value0: active?.revision ?? "—" })}</span>
-            {desktop && session.vimKeys !== "" && <span data-testid="vim-keys" className="mt-1 block">{t("Vim入力 {{value0}}", { value0: session.vimKeys })}</span>}
-          </div>
-        </details>
+        {/* Diagnostics stay readable to assistive tech and tests without taking screen space. */}
+        <span className="sr-only">
+          <span data-testid="revision">{t("リビジョン {{value0}}", { value0: active?.revision ?? "—" })}</span>
+          {desktop && session.vimKeys !== "" && <span data-testid="vim-keys">{t("Vim入力 {{value0}}", { value0: session.vimKeys })}</span>}
+        </span>
       </footer>
     </div>
   );

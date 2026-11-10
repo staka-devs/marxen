@@ -255,6 +255,60 @@ pub struct GitStatus {
     pub changes: Vec<GitChange>,
 }
 
+/// Where an embedded database view reads its rows; paths are relative to the document, or to the root with a leading `/`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum DatabaseSource {
+    /// Markdown notes in one folder; each note is a row and its frontmatter keys are columns.
+    Folder { path: String },
+    /// One table of a SQLite file inside the workspace.
+    Sqlite { path: String, table: String },
+}
+
+/// One change requested from a database view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum DatabaseEdit {
+    AddRow,
+    DeleteRow {
+        id: String,
+    },
+    SetCell {
+        id: String,
+        column: String,
+        value: String,
+    },
+    AddColumn {
+        name: String,
+    },
+}
+
+/// Column header; read-only columns (note names, primary keys) are not edited in place.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseColumn {
+    pub name: String,
+    pub editable: bool,
+}
+
+/// One row; `path` is the root-relative note for folder sources.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseRow {
+    pub id: String,
+    pub cells: BTreeMap<String, String>,
+    pub path: Option<String>,
+}
+
+/// Rows and columns of one database view; `truncated` marks a capped result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseTable {
+    pub columns: Vec<DatabaseColumn>,
+    pub rows: Vec<DatabaseRow>,
+    pub truncated: bool,
+}
+
 /// Current `/` match position from `searchcount()`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -652,6 +706,11 @@ pub fn typescript() -> String {
         GridUpdate::decl(&cfg),
         GitChange::decl(&cfg),
         GitStatus::decl(&cfg),
+        DatabaseSource::decl(&cfg),
+        DatabaseEdit::decl(&cfg),
+        DatabaseColumn::decl(&cfg),
+        DatabaseRow::decl(&cfg),
+        DatabaseTable::decl(&cfg),
     ];
     let mut output = "// Generated from src-tauri/src/contracts/mod.rs. Run npm run contracts:generate.\n// Do not edit by hand. Global offsets count UTF-16 code units; ranges are [start, end).\n".to_owned();
     for declaration in declarations {

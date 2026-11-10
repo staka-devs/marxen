@@ -54,7 +54,7 @@ const CATEGORIES = [
 type Category = typeof CATEGORIES[number]["id"];
 const CATEGORY_FIELDS = {
   appearance: ["言語", "カラーテーマ", "ライト", "ダーク", "ハイコントラスト"],
-  editor: ["文字サイズ", "行の高さ", "長い行を折り返す", "Markdown の行番号を表示する", "編集中の行を強調する", "画像の保存先フォルダー", "画像のファイル名"],
+  editor: ["文字サイズ", "行の高さ", "長い行を折り返す", "Markdown の行番号を表示する", "編集中の行を強調する", "画像の保存先フォルダー", "画像のファイル名", "データベース表示を有効にする"],
   notifications: ["通知の表示位置", "左上", "上中央", "右上", "左下", "下中央", "右下"],
   vim: ["Neovim 設定ファイル", "タブ幅", "インデント幅", "リーダーキー", "コピー形式キー", "モード別マッピング", "よく使うリーダーキー", "Space（スペース）"],
   copy: ["装飾なしテキスト", "リッチテキスト", "HTML ソース"],
@@ -120,7 +120,7 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
                 </StyledSelect></SettingRow>
                 <SettingRow label={t("カラーテーマ")}><StyledSelect label={t("カラーテーマ")} className="w-40" value={theme} onChange={(value) => onTheme(value as ThemeId)}>{THEMES.map((item) => <option key={item.id} value={item.id}>{t(item.label as LabelKey)}</option>)}</StyledSelect></SettingRow>
                 <div role="group" aria-label={t("配色の基調色")} className="marxen-setting-row">
-                  <span className="marxen-setting-label">{t("配色の基調色")}<span className="mt-1 block text-[11px] font-normal text-muted-foreground">{theme === "contrast" ? t("ハイコントラストでは使いません。") : t("Material 3 の配色をこの色から作ります。")}</span></span>
+                  <span className="marxen-setting-label">{t("配色の基調色")}{theme === "contrast" && <span className="mt-1 block text-[11px] font-normal text-muted-foreground">{t("ハイコントラストでは使いません。")}</span>}</span>
                   <span className="marxen-setting-control"><SeedColorPicker value={preferences.seedColor} onChange={(color) => change("seedColor", color)} /></span>
                 </div>
               </>}
@@ -128,8 +128,9 @@ export function SettingsPanel({ theme, onTheme, preferences = DEFAULT_EDITOR_PRE
                 <SettingRow label={t("文字サイズ")}><input aria-label={t("文字サイズ")} type="number" min={11} max={28} value={preferences.fontSize} onChange={(event) => { const n = event.currentTarget.valueAsNumber; if (Number.isFinite(n)) change("fontSize", Math.min(28, Math.max(11, n))); }} className={`${inputClass} w-20`} /><span className="text-xs text-muted-foreground">px</span></SettingRow>
                 <SettingRow label={t("行の高さ")}><StyledSelect label={t("行の高さ")} value={preferences.lineHeight} onChange={(value) => change("lineHeight", Number(value))} className="w-24">{[1.2, 1.4, 1.5, 1.6, 1.7, 1.8, 2, 2.2, 2.4].map((height) => <option key={height} value={height}>{height}</option>)}</StyledSelect></SettingRow>
                 {([["wordWrap", t("長い行を折り返す")], ["lineNumbers", t("Markdown の行番号を表示する")], ["highlightActiveLine", t("編集中の行を強調する")]] as const).map(([key, text]) => <SettingRow key={key} label={text}><input aria-label={text} type="checkbox" checked={preferences[key]} onChange={(event) => change(key, event.target.checked)} className="h-4 w-4" /></SettingRow>)}
-                <div className="marxen-setting-row"><label htmlFor="marxen-imageFolder" className="marxen-setting-label">{t("画像の保存先フォルダー")}<span className="mt-1 block text-[11px] font-normal text-muted-foreground">{t("文書からの相対パス。/ で始めるとワークスペース直下から。")}</span></label><span className="marxen-setting-control"><input id="marxen-imageFolder" value={preferences.imageFolder} maxLength={200} spellCheck={false} onChange={(event) => change("imageFolder", event.target.value)} className={`${inputClass} w-52 font-mono`} /></span></div>
-                <div className="marxen-setting-row"><label htmlFor="marxen-imageName" className="marxen-setting-label">{t("画像のファイル名")}<span className="mt-1 block text-[11px] font-normal text-muted-foreground">{t("{name} 元の名前、{date} 日付、{time} 時刻。同名は -1, -2 と番号が付きます。")}</span></label><span className="marxen-setting-control"><input id="marxen-imageName" value={preferences.imageName} maxLength={200} spellCheck={false} onChange={(event) => change("imageName", event.target.value)} className={`${inputClass} w-52 font-mono`} /></span></div>
+                <div className="marxen-setting-row" title={t("文書からの相対パス。/ で始めるとワークスペース直下から。")}><label htmlFor="marxen-imageFolder" className="marxen-setting-label">{t("画像の保存先フォルダー")}</label><span className="marxen-setting-control"><input id="marxen-imageFolder" value={preferences.imageFolder} maxLength={200} spellCheck={false} onChange={(event) => change("imageFolder", event.target.value)} className={`${inputClass} w-52 font-mono`} /></span></div>
+                <div className="marxen-setting-row" title={t("{name} 元の名前、{date} 日付、{time} 時刻。同名は -1, -2 と番号が付きます。")}><label htmlFor="marxen-imageName" className="marxen-setting-label">{t("画像のファイル名")}</label><span className="marxen-setting-control"><input id="marxen-imageName" value={preferences.imageName} maxLength={200} spellCheck={false} onChange={(event) => change("imageName", event.target.value)} className={`${inputClass} w-52 font-mono`} /></span></div>
+                <div className="marxen-setting-row" title={t("frontmatter に database: true と書いたノートで、database ブロックを表として表示します。")}><label htmlFor="marxen-databases" className="marxen-setting-label">{t("データベース表示を有効にする")}</label><span className="marxen-setting-control"><input id="marxen-databases" type="checkbox" checked={preferences.databases} onChange={(event) => change("databases", event.target.checked)} className="h-4 w-4" /></span></div>
                 <button type="button" onClick={() => onPreferences?.({ ...DEFAULT_EDITOR_PREFERENCES, theme, seedColor: preferences.seedColor, notificationPosition: preferences.notificationPosition })} className="mt-3 flex items-center gap-2 rounded-sm border border-border px-3 py-1.5 text-xs hover:bg-muted"><RotateCcw size={13} />{t("エディター設定をリセット")}</button>
               </>}
               {id === "notifications" && <>

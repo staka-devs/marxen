@@ -15,6 +15,9 @@ import { LocalizedError } from "../../domain/localized-error";
 
 import type {
   CursorUpdate,
+  DatabaseEdit,
+  DatabaseSource,
+  DatabaseTable,
   EditorContext,
   DocumentId,
   DocumentSnapshot,
@@ -680,6 +683,18 @@ export class RegistryClient {
    */
   fetchCursor(documentId: DocumentId): Promise<CursorUpdate> {
     return this.transport.fetchCursor(documentId, this.location(documentId));
+  }
+
+  /** Read a database view's rows through the document's owner root. */
+  async queryDatabase(documentId: DocumentId, source: DatabaseSource): Promise<DatabaseTable> {
+    if (!this.transport.queryDatabase) throw new Error("database views need the desktop app");
+    return this.transport.queryDatabase(documentId, source, this.location(documentId));
+  }
+
+  /** Apply one database view edit through the document's owner root. */
+  async editDatabase(documentId: DocumentId, source: DatabaseSource, edit: DatabaseEdit): Promise<DatabaseTable> {
+    if (!this.transport.editDatabase) throw new Error("database views need the desktop app");
+    return this.transport.editDatabase(documentId, source, edit, this.location(documentId));
   }
 
   /** Install a Vim pattern as the document's native last search (`@/`). */

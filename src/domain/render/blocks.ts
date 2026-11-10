@@ -12,6 +12,7 @@ import remarkMath from "remark-math";
 import type { Root as MdastRoot } from "mdast";
 import { alertKind, mdastText } from "./mdast";
 import { splitTableRowCells } from "../markdown-gui";
+import { maskFrontmatter, parseFrontmatter } from "../frontmatter";
 
 export interface LiveBlock {
   /** `heading`, `paragraph`, `code`, `math`, `table`, `list`, `blockquote`, `alert:note`, `html`, `thematicBreak`. */
@@ -34,8 +35,13 @@ export interface LiveBlock {
  */
 export function computeLiveBlocks(source: string): LiveBlock[] {
   try {
-    const tree = unified().use(remarkParse).use(remarkGfm).use(remarkMath).parse(source) as MdastRoot;
+    const tree = unified().use(remarkParse).use(remarkGfm).use(remarkMath).parse(maskFrontmatter(source)) as MdastRoot;
     const blocks: LiveBlock[] = [];
+    const front = parseFrontmatter(source);
+    if (front) {
+      const to = source.slice(0, front.end).replace(/\r?\n$/, "").length;
+      blocks.push({ kind: "frontmatter", from: 0, to, startLine: 1, endLine: source.slice(0, to).split("\n").length });
+    }
     for (const node of tree.children) {
       const position = node.position;
       if (!position || position.start.offset === undefined || position.end.offset === undefined) continue;

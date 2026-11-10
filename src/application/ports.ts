@@ -7,6 +7,9 @@
 
 import type {
   CloseAction,
+  DatabaseEdit,
+  DatabaseSource,
+  DatabaseTable,
   CursorUpdate,
   EditorContext,
   DocumentId,
@@ -138,6 +141,10 @@ export interface DocumentGateway {
   fetchGrid(documentId: DocumentId, width?: number, height?: number): Promise<GridUpdate>;
   /** Make a Vim pattern the native last search so `n`/`N` follow the GUI find bar; desktop only. */
   setSearchPattern?(documentId: DocumentId, pattern: string): Promise<void>;
+  /** Read the rows of a database view embedded in a document; desktop only. */
+  queryDatabase?(documentId: DocumentId, source: DatabaseSource): Promise<DatabaseTable>;
+  /** Apply one database view edit and return the refreshed rows; desktop only. */
+  editDatabase?(documentId: DocumentId, source: DatabaseSource, edit: DatabaseEdit): Promise<DatabaseTable>;
   /** Fetch the Neovim config state. */
   fetchConfig(documentId: DocumentId): Promise<NvimConfig>;
 }
@@ -196,6 +203,10 @@ export interface DocumentTransport {
   fetchGrid(documentId: DocumentId, width?: number, height?: number): Promise<GridUpdate>;
   /** Set the native last search pattern of one document. */
   setSearchPattern?(documentId: DocumentId, pattern: string, location?: DocumentLocation): Promise<void>;
+  /** Read the rows of a document's database view. */
+  queryDatabase?(documentId: DocumentId, source: DatabaseSource, location?: DocumentLocation): Promise<DatabaseTable>;
+  /** Apply one database view edit for a document. */
+  editDatabase?(documentId: DocumentId, source: DatabaseSource, edit: DatabaseEdit, location?: DocumentLocation): Promise<DatabaseTable>;
   /** Fetch the current Neovim config state for a document. */
   fetchConfig(documentId: DocumentId, location?: DocumentLocation): Promise<NvimConfig>;
 }
@@ -224,6 +235,10 @@ export interface WorkspaceGateway {
   createMarkdown(path: string, text?: string, scope?: import("../contracts/contracts").RootScope): Promise<OpenDocument>;
   /** Create one contained folder under an existing parent without opening a document. */
   createFolder(path: string, scope?: import("../contracts/contracts").RootScope): Promise<WorkspaceEntry>;
+  /** Pack a `name.marxen` bundle folder into a chosen `.marxenpack` file; desktop only. */
+  exportBundle?(path: string, destination: string, scope?: import("../contracts/contracts").RootScope): Promise<void>;
+  /** Unpack a `.marxenpack` into a folder and return the new note's path; desktop only. */
+  importBundle?(source: string, folder: string, scope?: import("../contracts/contracts").RootScope): Promise<string>;
   /** Rename a Markdown or supported UTF-8 text document, keeping its document ID. */
   renameMarkdown(request: SaveRequest, path: string): Promise<OpenDocument>;
   /** Rename a workspace image without a document actor, verifying its captured fingerprint. */
@@ -325,6 +340,10 @@ export interface DialogGateway {
   pickFolder(title?: string): Promise<string | null>;
   /** Native config-file picker; name validated by the caller. */
   pickConfigFile(title?: string): Promise<string | null>;
+  /** Native picker for a `.marxenpack` to import; null when cancelled. */
+  pickPack?(title: string): Promise<string | null>;
+  /** Native save dialog for an exported `.marxenpack`; null when cancelled. */
+  pickPackDestination?(title: string, defaultName: string): Promise<string | null>;
 }
 
 /** Native file-drop subscription. */

@@ -8,6 +8,9 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { WorkspaceEventSource } from "../../application/ports";
 import type {
+  DatabaseEdit,
+  DatabaseSource,
+  DatabaseTable,
   RootScope,
   RootEvent,
   DocumentLocation,
@@ -168,6 +171,10 @@ export const workspaceApi = {
   createMarkdown: (path: string, text = "", scope?: RootScope) => rootInvoke<OpenDocument>("create_markdown", { path, text }, scope ?? currentScope),
   /** Create a contained directory using the existing Rust workspace owner. */
   createFolder: (path: string, scope?: RootScope) => rootInvoke<WorkspaceEntry>("create_folder", { path }, scope ?? currentScope),
+  /** Pack a bundle folder into a chosen `.marxenpack` file. */
+  exportBundle: (path: string, destination: string, scope?: RootScope) => rootInvoke<void>("export_bundle", { path, destination }, scope ?? currentScope),
+  /** Unpack a `.marxenpack` into a folder and return the new note path. */
+  importBundle: (source: string, folder: string, scope?: RootScope) => rootInvoke<string>("import_bundle", { source, folder }, scope ?? currentScope),
   /** Rename a Markdown or supported UTF-8 text document, keeping its document ID. */
   renameMarkdown: (request: SaveRequest, path: string) => documentInvoke<OpenDocument>("rename_markdown", { ...request, path }),
   /** Rename a workspace image without a document actor, verifying its captured fingerprint. */
@@ -222,6 +229,10 @@ export const workspaceApi = {
   fetchCursor: (documentId: DocumentId, location?: DocumentLocation) => documentInvoke<CursorUpdate>("fetch_cursor", { documentId, location }),
   /** Set a document's native last search pattern (`@/`). */
   setSearchPattern: (documentId: DocumentId, pattern: string, location?: DocumentLocation) => documentInvoke<void>("set_search_pattern", { documentId, pattern, location }),
+  /** Read the rows of a document's database view. */
+  queryDatabase: (documentId: DocumentId, source: DatabaseSource, location?: DocumentLocation) => documentInvoke<DatabaseTable>("database_query", { documentId, source, location }),
+  /** Apply one database view edit for a document. */
+  editDatabase: (documentId: DocumentId, source: DatabaseSource, edit: DatabaseEdit, location?: DocumentLocation) => documentInvoke<DatabaseTable>("database_edit", { documentId, source, edit, location }),
   /** Report a GUI selection to the native cursor tracker. */
   reportCursor: (update: CursorUpdate, location?: DocumentLocation, block?: boolean) => documentInvoke<CursorUpdate>("report_cursor", { ...update, location, block }),
   /** Fetch a Neovim grid screen batch. */

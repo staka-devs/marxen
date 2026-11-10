@@ -30,6 +30,8 @@ export interface EditorPreferences {
   imageFolder: string;
   /** File name pattern for pasted or dropped images; see `imageFileName`. */
   imageName: string;
+  /** Opt-in: show fenced `database` blocks as editable tables. */
+  databases: boolean;
 }
 
 /** First-run defaults: dark theme with readable Japanese typography. */
@@ -38,7 +40,7 @@ export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
   wordWrap: true, lineNumbers: true, highlightActiveLine: true,
   hardBreakOnEnter: false,
   notificationPosition: "bottom-right",
-  imageFolder: "images", imageName: "{name}",
+  imageFolder: "images", imageName: "{name}", databases: false,
 };
 
 /**
@@ -70,5 +72,6 @@ export function normalizeEditorPreferences(value: unknown): EditorPreferences {
       ? raw.notificationPosition as NotificationPosition : fallback.notificationPosition,
     imageFolder: text("imageFolder", fallback.imageFolder),
     imageName: text("imageName", fallback.imageName).trim() || fallback.imageName,
+    databases: bool("databases", fallback.databases),
   };
 }

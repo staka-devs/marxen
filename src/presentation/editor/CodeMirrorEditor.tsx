@@ -11,6 +11,7 @@ import { gitGutter } from "./gitGutter";
 import { searchMatches } from "./searchMatches";
 import { blockCursorWidth } from "./cursorWidth";
 import type { ImageResolver } from "../../domain/image-sources";
+import type { DatabaseViewer } from "../database/hydrate-databases";
 import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../domain/editor-preferences";
 import { useI18n } from "../i18n/I18nProvider";
 import type { EditorMenuPoint } from "./EditorMenu";
@@ -58,6 +59,8 @@ interface Props {
   testId?: string;
   /** Emit committed document changes as wire range edits. */
   onGuiEdits?: (edits: TextEdit[], beforeText: string, selection?: EditorSelection, key?: string, nativeCursor?: boolean) => void;
+  /** Receive IME text the buffer refused outside Insert/Replace mode. */
+  onRejectedText?: (text: string) => void;
   /** Report selection changes for cursor tracking. */
   onSelectionChange?: (selection: EditorSelection) => void;
   initialSelection?: EditorSelection | null;
@@ -74,6 +77,8 @@ interface Props {
    * it after their HTML mounts, on the widget abort lifecycle.
    */
   resolveImage?: ImageResolver;
+  /** Database view access for live widgets; absent when the feature is off. */
+  database?: DatabaseViewer;
   preferences?: EditorPreferences;
   vimMode?: string;
   allowTextInput?: boolean;
@@ -135,7 +140,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
 
 const NO_RANGES: ReadonlyArray<{ from: number; to: number }> = [];
 
-/** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, snapshot, shouldUseNativeCursor, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true, focusRequest = 0, onEditorMenu, aiBaseline = null, gitBaseline = null, searchRanges = NO_RANGES }: Props) {
+/** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, snapshot, shouldUseNativeCursor, editable = true, ariaLabel, testId, onGuiEdits, onRejectedText, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, database, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true, focusRequest = 0, onEditorMenu, aiBaseline = null, gitBaseline = null, searchRanges = NO_RANGES }: Props) {
   const { t, language } = useI18n();
   const languageRef = useRef(language);
   languageRef.current = language;
@@ -158,8 +163,8 @@ const NO_RANGES: ReadonlyArray<{ from: number; to: number }> = [];
   const compositionNativeCursor = useRef(false);
   const allowTextInputRef = useRef(allowTextInput);
   allowTextInputRef.current = allowTextInput;
-  const callbacks = useRef({ onGuiEdits, onSelectionChange, shouldUseNativeCursor, onEditorMenu });
-  callbacks.current = { onGuiEdits, onSelectionChange, shouldUseNativeCursor, onEditorMenu };
+  const callbacks = useRef({ onGuiEdits, onRejectedText, onSelectionChange, shouldUseNativeCursor, onEditorMenu });
+  callbacks.current = { onGuiEdits, onRejectedText, onSelectionChange, shouldUseNativeCursor, onEditorMenu };
   const valueRef = useRef(value);
   valueRef.current = value;
   const editableRefValue = useRef(editable);
@@ -169,12 +174,15 @@ const NO_RANGES: ReadonlyArray<{ from: number; to: number }> = [];
   // cell commits always read the latest props through this getter.
   const resolveImageRef = useRef(resolveImage);
   resolveImageRef.current = resolveImage;
+  const databaseRef = useRef(database);
+  databaseRef.current = database;
   /** Build fresh live-preview callbacks reading latest props through refs. */
   const getLiveCallbacks = useCallback((): LivePreviewCallbacks => {
     return {
       /** Forward widget edits to the current GUI handler. */
       onGuiEdits: (edits) => callbacks.current.onGuiEdits?.(edits, viewRef.current?.state.doc.toString() ?? valueRef.current),
       resolveImage: resolveImageRef.current,
+      database: databaseRef.current,
       translator: translatorRef.current,
       language: languageRef.current,
       /** Move the editor cursor into a source span and focus it. */
@@ -236,6 +244,15 @@ const NO_RANGES: ReadonlyArray<{ from: number; to: number }> = [];
             // Preedit positions belong to uncommitted text, so neither edits
             // nor cursor reports may reach Neovim until composition ends.
             if (composing.current) return;
+            // Typed text outside Insert/Replace never edits the buffer; Vim may be waiting for it instead.
+            if (update.docChanged && !allowTextInputRef.current && update.transactions.some((tr) => tr.isUserEvent("input.type"))) {
+              const committed = singleEditFromDiff(update.startState.doc.toString(), update.state.doc.toString())?.[0]?.text;
+              syncing.current = true;
+              try { update.view.dispatch({ changes: { from: 0, to: update.state.doc.length, insert: update.startState.doc.toString() }, selection: update.startState.selection }); }
+              finally { syncing.current = false; }
+              if (committed) callbacks.current.onRejectedText?.(committed);
+              return;
+            }
             if (update.docChanged) {
               const edits: TextEdit[] = [];
               update.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
@@ -316,6 +333,9 @@ const NO_RANGES: ReadonlyArray<{ from: number; to: number }> = [];
       const afterText = view.state.doc.toString();
       preComposition.current = null;
       if (!allowTextInputRef.current) {
+        // The buffer refuses the text, but Vim may be waiting for it (`/` search, `:` commands).
+        const committed = singleEditFromDiff(before, afterText)?.[0]?.text;
+        if (committed) callbacks.current.onRejectedText?.(committed);
         syncing.current = true;
         const prior = preCompositionSelection.current;
         const selection = prior ? { anchor: Math.min(prior.anchor, valueRef.current.length), head: Math.min(prior.head, valueRef.current.length) } : undefined;

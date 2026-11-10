@@ -68,3 +68,14 @@ it("captures pointer and keyboard contexts, preserves focus on Escape, and route
   fireEvent.keyDown(screen.getByRole("menuitem", { name: "名前を変更" }), { key: "Escape" });
   fireEvent.keyDown(row, { key: "ContextMenu" }); expect(screen.getByRole("menuitem", { name: "名前を変更" })).toHaveFocus();
 });
+
+it("shows a bundle folder as one note that opens its index and hides its assets", () => {
+  const tree = buildTree([
+    { path: "notes", name: "notes", directory: true, markdown: false },
+    { path: "notes/メモ.marxen", name: "メモ.marxen", directory: true, markdown: false },
+    { path: "notes/メモ.marxen/index.md", name: "index.md", directory: false, markdown: true },
+    { path: "notes/メモ.marxen/assets", name: "assets", directory: true, markdown: false },
+    { path: "notes/メモ.marxen/assets/a.png", name: "a.png", directory: false, markdown: false, kind: "image" },
+  ]);
+  expect(tree[0].children).toEqual([{ path: "notes/メモ.marxen/index.md", name: "メモ", directory: false, markdown: true, kind: "markdown" }]);
+});

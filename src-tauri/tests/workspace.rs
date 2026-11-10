@@ -1184,3 +1184,140 @@ fn native_search_uses_vim_semantics() {
     assert_eq!(plan.edits.len(), 1);
     assert_eq!(plan.edits[0].text, "cX");
 }
+
+#[test]
+/// Show folder notes as rows and write cells through open buffers or atomically on disk.
+fn folder_database_reads_and_edits_note_properties() {
+    let (root, _recovery, mut w) = setup();
+    let tables = marxen_lib::infrastructure::sqlite_tables::SqliteTables;
+    fs::create_dir(root.path().join("tasks")).unwrap();
+    fs::write(
+        root.path().join("tasks/a.md"),
+        "---\nstatus: todo\n---\n# A\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("tasks/b.md"), "# B\n").unwrap();
+    let index = w.create("index.md", "").unwrap();
+    let id = index.snapshot.document_id.0.clone();
+    let open = w.open_markdown("tasks/b.md").unwrap();
+    let source = DatabaseSource::Folder {
+        path: "tasks".into(),
+    };
+    let table = w.database_query(&id, &source, &tables).unwrap();
+    assert_eq!(table.rows.len(), 2);
+    assert_eq!(table.columns[0].name, "status");
+    assert_eq!(table.rows[0].cells["status"], "todo");
+
+    let set = |id: &str, value: &str| DatabaseEdit::SetCell {
+        id: id.into(),
+        column: "status".into(),
+        value: value.into(),
+    };
+    w.database_edit(&id, &source, &set("tasks/a.md", "done"), &tables)
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(root.path().join("tasks/a.md")).unwrap(),
+        "---\nstatus: done\n---\n# A\n"
+    );
+    let table = w
+        .database_edit(&id, &source, &set("tasks/b.md", "doing"), &tables)
+        .unwrap();
+    assert_eq!(table.rows[1].cells["status"], "doing");
+    assert_eq!(
+        w.actor(&open.snapshot.document_id.0)
+            .unwrap()
+            .snapshot()
+            .text,
+        "---\nstatus: doing\n---\n# B\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("tasks/b.md")).unwrap(),
+        "# B\n"
+    );
+
+    let table = w
+        .database_edit(&id, &source, &DatabaseEdit::AddRow, &tables)
+        .unwrap();
+    assert_eq!(table.rows.len(), 3);
+    assert!(root.path().join("tasks/Untitled.md").exists());
+    let table = w
+        .database_edit(
+            &id,
+            &source,
+            &DatabaseEdit::AddColumn { name: "due".into() },
+            &tables,
+        )
+        .unwrap();
+    assert!(table.rows.iter().all(|row| row.cells.contains_key("due")));
+    assert!(w
+        .database_edit(
+            &id,
+            &source,
+            &DatabaseEdit::DeleteRow {
+                id: "tasks/b.md".into()
+            },
+            &tables
+        )
+        .is_err());
+    assert!(w
+        .database_edit(&id, &source, &set("index.md", "x"), &tables)
+        .is_err());
+    assert!(w
+        .database_query(
+            &id,
+            &DatabaseSource::Folder {
+                path: "../..".into()
+            },
+            &tables
+        )
+        .is_err());
+    assert!(w
+        .database_query(
+            &id,
+            &DatabaseSource::Sqlite {
+                path: "tasks/a.md".into(),
+                table: "t".into()
+            },
+            &tables
+        )
+        .is_err());
+}
+
+#[test]
+/// Pack a bundle with its assets, refuse unsaved notes, and unpack copies without overwriting.
+fn bundle_exports_and_imports_as_a_pack() {
+    let (root, _recovery, mut w) = setup();
+    let out = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("メモ.marxen/assets")).unwrap();
+    fs::write(root.path().join("メモ.marxen/index.md"), "# メモ\n").unwrap();
+    fs::write(root.path().join("メモ.marxen/assets/a.png"), b"\x89PNG").unwrap();
+    let pack = out.path().join("メモ.marxenpack");
+    w.export_bundle("メモ.marxen", &pack).unwrap();
+    assert!(w
+        .export_bundle("メモ.marxen", &out.path().join("x.zip"))
+        .is_err());
+    assert!(w.export_bundle("assets", &pack).is_err());
+
+    let first = w.import_bundle(&pack, "受信").unwrap();
+    assert_eq!(first, "受信/メモ.marxen/index.md");
+    assert_eq!(
+        fs::read(root.path().join("受信/メモ.marxen/assets/a.png")).unwrap(),
+        b"\x89PNG"
+    );
+    assert_eq!(
+        w.import_bundle(&pack, "受信").unwrap(),
+        "受信/メモ-1.marxen/index.md"
+    );
+
+    let open = w.open_markdown("メモ.marxen/index.md").unwrap();
+    let actor = w.actor(&open.snapshot.document_id.0).unwrap();
+    edit(actor, 0, 0, "x");
+    assert!(matches!(
+        w.export_bundle("メモ.marxen", &pack),
+        Err(WorkspaceError::UnsavedChanges { .. })
+    ));
+    fs::write(out.path().join("bad.marxenpack"), b"not a pack").unwrap();
+    assert!(w
+        .import_bundle(&out.path().join("bad.marxenpack"), "")
+        .is_err());
+}

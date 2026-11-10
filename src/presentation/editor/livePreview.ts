@@ -16,13 +16,17 @@ import { japaneseTranslator } from "../../domain/localization";
 // lifecycles as the read preview; destroying a widget aborts its pass and
 // disposes its maps and GL resources.
 
-import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
-import { StateField, type Extension, type Range } from "@codemirror/state";
+import { Decoration, EditorView, GutterMarker, WidgetType, gutterLineClass, type DecorationSet } from "@codemirror/view";
+import { RangeSet, StateField, type Extension, type Range } from "@codemirror/state";
 import { computeLiveBlocks, extractLinkDefinitions, findTableCellRange, type LiveBlock } from "../../domain/render/blocks";
 import { renderMarkdownDocument } from "../../domain/render/pipeline";
 import { toggleCheckbox } from "../../domain/markdown-gui";
 import { disposeMarkdownView, hydrateMarkdownView } from "../preview/hydrate";
 import { hydrateLocalImages } from "../images/hydrate-images";
+import { inlineMarks } from "../../domain/render/inline-marks";
+import { lineMarkers, type LineMarker } from "../../domain/render/line-markers";
+import { setPropertyEdit } from "../../domain/frontmatter";
+import { hydrateDatabases, type DatabaseViewer } from "../database/hydrate-databases";
 import type { ImageResolver } from "../../domain/image-sources";
 import type { TextEdit } from "../../contracts/contracts";
 
@@ -35,6 +39,8 @@ export interface LivePreviewCallbacks {
   focusSource?: (from: number, to: number) => void;
   /** Local-image resolver shared with read previews (ADR-0063). */
   resolveImage?: ImageResolver;
+  /** Database view access for the edited document; absent when the feature is off. */
+  database?: DatabaseViewer;
 }
 
 /** Rendered HTML by block key (`kind + text + definitions`). */
@@ -227,6 +233,26 @@ class LiveBlockWidget extends WidgetType {
     body.querySelectorAll("td,th").forEach((cell) => {
       if (!cell.hasAttribute("tabindex")) cell.setAttribute("tabindex", "0");
     });
+    // Frontmatter values edit in place; nested YAML stays read-only text.
+    body.querySelectorAll<HTMLElement>("table.marxen-properties td[data-editable]").forEach((cell) => {
+      const input = document.createElement("input");
+      input.className = "marxen-property-input";
+      input.value = cell.textContent ?? "";
+      input.dataset.property = cell.dataset.property ?? "";
+      input.setAttribute("aria-label", cell.dataset.property ?? "");
+      for (const type of ["compositionstart", "compositionend", "paste"]) input.addEventListener(type, (event) => event.stopPropagation());
+      input.addEventListener("keydown", (event) => {
+        event.stopPropagation();
+        if (event.isComposing) return;
+        if (event.key === "Enter") input.blur();
+        if (event.key === "Escape") {
+          input.value = cell.dataset.stored ?? "";
+          input.blur();
+        }
+      });
+      cell.dataset.stored = input.value;
+      cell.replaceChildren(input);
+    });
     abortHost(host);
     const controller = new AbortController();
     (host as unknown as { __liveController?: AbortController }).__liveController = controller;
@@ -236,6 +262,8 @@ class LiveBlockWidget extends WidgetType {
     // carries the current resolver so rebinds never use a stale loader.
     const resolveImage = readBinding(host)?.getCallbacks().resolveImage;
     if (resolveImage) void hydrateLocalImages(body, resolveImage, controller.signal);
+    const callbacks = readBinding(host)?.getCallbacks();
+    void hydrateDatabases(body, callbacks?.database, controller.signal, callbacks?.translator ?? japaneseTranslator);
   }
 
   /** Source offsets of task markers in document order. */ private taskOffsets(binding: HostBinding): number[] {
@@ -252,6 +280,10 @@ class LiveBlockWidget extends WidgetType {
 
   /** Toggle checkboxes via range edits, reverting optimistic flips. */ private onHostChange(host: HTMLElement, view: EditorView, event: Event): void {
     const target = event.target as HTMLElement | null;
+    if (target instanceof HTMLInputElement && target.classList.contains("marxen-property-input") && host.contains(target)) {
+      this.commitProperty(host, view, target);
+      return;
+    }
     const box = target?.closest?.('li.task-list-item > input[type="checkbox"]') as HTMLInputElement | null;
     if (!box || !host.contains(box)) return;
     const binding = readBinding(host);
@@ -276,10 +308,22 @@ class LiveBlockWidget extends WidgetType {
     }
   }
 
+  /** Send one frontmatter value as a range edit; the snapshot redraws the widget. */ private commitProperty(host: HTMLElement, view: EditorView, input: HTMLInputElement): void {
+    const binding = readBinding(host);
+    if (!binding) return;
+    const docText = view.state.doc.toString();
+    const at = relocateBlock(docText, binding.text, binding.from);
+    if (at < 0) return;
+    const edit = setPropertyEdit(binding.text, input.dataset.property ?? "", input.value, at);
+    if (edit) binding.getCallbacks().onGuiEdits?.([edit]);
+  }
+
   /** Select table cells or reveal link sources without navigation. */ private onHostClick(host: HTMLElement, view: EditorView, event: MouseEvent): void {
     const target = event.target as HTMLElement | null;
     const binding = readBinding(host);
     if (!binding) return;
+    // Database views own their cells and buttons; they never map to Markdown source.
+    if (target?.closest?.(".marxen-database")) return;
     const cell = target?.closest?.("td,th") as HTMLTableCellElement | null;
     if (cell && host.contains(cell)) {
       event.stopPropagation();
@@ -325,6 +369,7 @@ class LiveBlockWidget extends WidgetType {
 
   /** Activate keyboard-reachable cells and suppress editor keys. */ private onHostKey(host: HTMLElement, event: KeyboardEvent): void {
     const target = event.target as HTMLElement | null;
+    if (target?.closest?.(".marxen-database")) return;
     const cell = target?.closest?.("td,th");
     if (!cell || !host.contains(cell)) return;
     if (event.key === "Enter" || event.key === " ") {
@@ -334,6 +379,95 @@ class LiveBlockWidget extends WidgetType {
     } else {
       event.stopPropagation();
     }
+  }
+}
+
+/** Bullet, number or task box drawn over a list marker on a line without the cursor. */
+class MarkerWidget extends WidgetType {
+  /** Pin the marker kind, text, state and its line offset. */ constructor(
+    readonly kind: LineMarker["kind"],
+    readonly label: string,
+    readonly checked: boolean,
+    readonly at: number,
+    readonly getCallbacks: () => LivePreviewCallbacks,
+  ) {
+    super();
+  }
+
+  /** Same marker at the same line keeps its DOM. */ eq(other: MarkerWidget): boolean {
+    return other.kind === this.kind && other.label === this.label && other.checked === this.checked && other.at === this.at;
+  }
+
+  /** Draw a bullet glyph, the item number, or a clickable task box. */ toDOM(view: EditorView): HTMLElement {
+    if (this.kind !== "task") {
+      const span = document.createElement("span");
+      span.className = this.kind === "ordered" ? "marxen-live-number" : "marxen-live-bullet";
+      span.textContent = this.kind === "ordered" ? `${this.label} ` : "•";
+      return span;
+    }
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.className = "marxen-live-task";
+    box.checked = this.checked;
+    box.addEventListener("mousedown", (event) => event.preventDefault());
+    box.addEventListener("click", (event) => {
+      event.preventDefault();
+      this.getCallbacks().onGuiEdits?.(toggleCheckbox(view.state.doc.toString(), this.at));
+    });
+    return box;
+  }
+
+  /** The box handles its own clicks; CodeMirror never moves the cursor for them. */ ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+/** Gutter class for compact blank lines. */
+class GapGutterMarker extends GutterMarker {
+  elementClass = "marxen-live-gap-gutter";
+}
+const GAP_GUTTER = new GapGutterMarker();
+
+const QUOTE_LINE = Decoration.line({ class: "marxen-live-quote-line" });
+
+/**
+ * Draw list bullets, numbers, task boxes and quote bars on active-block lines
+ * the selection does not touch; the cursor line stays raw Markdown.
+ */
+function lineMarkerDecorations(decorations: Range<Decoration>[], text: string, base: number, selFrom: number, selTo: number, getCallbacks: () => LivePreviewCallbacks): void {
+  for (const marker of lineMarkers(text)) {
+    const lineStart = base + marker.lineFrom;
+    const lineEnd = base + (text.indexOf("\n", marker.lineFrom) < 0 ? text.length : text.indexOf("\n", marker.lineFrom));
+    if (selFrom <= lineEnd && selTo >= lineStart) continue;
+    const from = base + marker.markerFrom;
+    const to = base + marker.markerTo;
+    if (marker.kind === "quote") {
+      decorations.push(QUOTE_LINE.range(lineStart), HIDDEN.range(from, to));
+    } else {
+      decorations.push(Decoration.replace({ widget: new MarkerWidget(marker.kind, marker.label ?? "", marker.checked ?? false, lineStart, getCallbacks) }).range(from, to));
+    }
+  }
+}
+
+const HIDDEN = Decoration.replace({});
+const MARKER = Decoration.mark({ class: "marxen-live-marker" });
+
+/**
+ * Style inline spans of the raw active block and hide their markers.
+ *
+ * Markers stay visible (muted) while the selection touches their span, so
+ * Vim motions always land on real characters. Offsets are never changed.
+ */
+function inlineDecorations(decorations: Range<Decoration>[], text: string, base: number, selFrom: number, selTo: number): void {
+  for (const mark of inlineMarks(text)) {
+    const from = base + mark.from;
+    const to = base + mark.to;
+    const contentFrom = base + mark.contentFrom;
+    const contentTo = base + mark.contentTo;
+    if (contentTo > contentFrom) decorations.push(Decoration.mark({ class: `marxen-live-${mark.kind}` }).range(contentFrom, contentTo));
+    const markers = selFrom <= to && selTo >= from ? MARKER : HIDDEN;
+    if (contentFrom > from) decorations.push(markers.range(from, contentFrom));
+    if (to > contentTo) decorations.push(markers.range(contentTo, to));
   }
 }
 
@@ -358,6 +492,8 @@ class LiveBlockWidget extends WidgetType {
           offset += line.length + 1;
         }
       }
+      if (block.kind !== "code" && block.kind !== "math" && block.kind !== "html") inlineDecorations(decorations, text, block.from, selFrom, selTo);
+      if (block.kind === "list" || block.kind === "blockquote" || block.kind.startsWith("alert:")) lineMarkerDecorations(decorations, text, block.from, selFrom, selTo, getCallbacks);
       continue;
     }
     const text = docText.slice(block.from, block.to);
@@ -436,7 +572,15 @@ class LiveBlockWidget extends WidgetType {
       return true;
     },
   });
-  return [field, activation];
+  // Compact blank lines get a matching gutter class so their numbers shrink instead of overlapping.
+  const gapGutter = gutterLineClass.compute([field], (state) => {
+    const markers: Range<GutterMarker>[] = [];
+    state.field(field).between(0, state.doc.length, (from, _to, value) => {
+      if (value.spec.class === "marxen-live-gap") markers.push(GAP_GUTTER.range(from));
+    });
+    return RangeSet.of(markers, true);
+  });
+  return [field, activation, gapGutter];
 }
 
 export type { LiveBlock };

@@ -4,6 +4,7 @@ import type { ExplorerTarget, WorkbenchCommand, WorkbenchMenu } from "../../../c
 import type { LabelKey, LocalizedText } from "../../../contracts/localization";
 import type { EditorAction } from "../../../application/ports";
 import { supportsEditorSelection } from "../../../domain/editor-menu";
+import { bundleOf } from "../../../domain/bundle";
 import { localizedFailure } from "../../../domain/localization";
 import { StaleResync, workspaceErrorText } from "../../../domain/document-errors";
 import { useI18n } from "../../i18n/I18nProvider";
@@ -26,7 +27,8 @@ interface Args {
 }
 
 const DEFINITIONS: Array<[string, WorkbenchMenu, LabelKey, string?]> = [
-  ["file-new", "file", "新規Markdownファイル"], ["folder-new", "file", "新規フォルダー"],
+  ["file-new", "file", "新規Markdownファイル"], ["folder-new", "file", "新規フォルダー"], ["bundle-new", "file", "新規バンドルノート"],
+  ["bundle-export", "file", "バンドルを書き出す"], ["bundle-import", "file", "バンドルを読み込む"],
   ["folder-open", "file", "フォルダーを開く"], ["folder-path", "file", "パスを入力する"],
   ["folder-add", "file", "ワークスペースにフォルダーを追加"], ["file-save", "file", "保存", "Ctrl/Cmd+S"],
   ["file-rename", "file", "名前を変更"], ["file-reload", "file", "再読込"], ["file-close", "file", "閉じる"],
@@ -101,9 +103,17 @@ export function useWorkbenchCommands(args: Args) {
     let enabled = true;
     let reason: LabelKey = "操作できる文書がありません。";
     if (["folder-open", "folder-path"].includes(id)) enabled = native;
-    if (["file-new", "folder-new", "tree-refresh", "tree-open", "file-rename"].includes(id)) {
+    if (["file-new", "folder-new", "bundle-new", "bundle-import", "bundle-export", "tree-refresh", "tree-open", "file-rename"].includes(id)) {
       enabled = native && workspace.isTargetCurrent(location);
       reason = "フォルダーを開いてください。";
+      if (id === "bundle-export") {
+        enabled = enabled && bundleOf(location.path) !== null;
+        reason = "バンドルノートを選んでください。";
+      }
+      if (id === "file-rename" && bundleOf(location.path) !== null && !location.directory) {
+        enabled = false;
+        reason = "バンドルノートの名前はフォルダーごと変更してください。";
+      }
       if (id === "tree-open") enabled = enabled && !location.directory;
       if (id === "file-rename") {
         if (location.directory) {
@@ -136,7 +146,9 @@ export function useWorkbenchCommands(args: Args) {
     if (!command(id, override)?.enabled) return;
     const { session, workspace, target, uiActions, openFile, notify } = latest.current;
     const location = override ?? target ?? workspace.targetFor();
-    if (id === "file-new" || id === "folder-new") workspace.beginCreate(location, id === "folder-new");
+    if (id === "file-new" || id === "folder-new" || id === "bundle-new") workspace.beginCreate(location, id === "bundle-new" ? "bundle" : id === "folder-new");
+    else if (id === "bundle-export") await workspace.exportBundle(location);
+    else if (id === "bundle-import") await workspace.importBundle(location);
     else if (id === "file-rename") await workspace.beginRename(location);
     else if (id === "tree-refresh") await workspace.refreshEntries();
     else if (id === "tree-open") await openFile(location.path, workspace.roots.find((root) => root.scope.rootId === location.rootId)?.scope);

@@ -34,10 +34,31 @@ export async function pickConfigFile(title: string = japaneseMessages["Neovim ши
   return typeof selected === "string" ? selected : null;
 }
 
+const PACK_FILTER = [{ name: "Marxen", extensions: ["marxenpack"] }];
+
+/** Pick a `.marxenpack` to import; null when cancelled or outside Tauri. */
+export async function pickPack(title: string): Promise<string | null> {
+  if (!isDesktop()) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const selected = await open({ directory: false, multiple: false, title, filters: PACK_FILTER });
+  return typeof selected === "string" ? selected : null;
+}
+
+/** Choose where to save an exported `.marxenpack`; null when cancelled or outside Tauri. */
+export async function pickPackDestination(title: string, defaultName: string): Promise<string | null> {
+  if (!isDesktop()) return null;
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  return (await save({ title, defaultPath: defaultName, filters: PACK_FILTER })) ?? null;
+}
+
 /** Dialog gateway adapter satisfying the application port with native pickers. */
 export const dialogGateway: DialogGateway = {
   /** Native folder picker; null when cancelled or unavailable. */
   pickFolder,
   /** Native config-file picker; name validated by the caller. */
   pickConfigFile,
+  /** Native `.marxenpack` picker. */
+  pickPack,
+  /** Native `.marxenpack` save dialog. */
+  pickPackDestination,
 };

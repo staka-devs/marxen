@@ -113,9 +113,10 @@ test("widgets render inside one editor, active block stays raw", async ({ page }
   expect(await content.locator(".marxen-live-widget h1").count()).toBe(0);
 
   // Clicking a paragraph widget moves the cursor there: it turns raw while
-  // the heading becomes a widget. Raw markers exist only in the active block.
+  // the heading becomes a widget. The raw paragraph styles its bold span in
+  // place (ADR-0164); its markers show only while the cursor touches it.
   await content.locator(".marxen-live-widget").getByText("太字").first().click();
-  await expect(content.getByText("**太字**")).toBeVisible();
+  await expect(content.locator(".cm-line .marxen-live-strong").getByText("太字")).toBeVisible();
   await expect(content.locator(".marxen-live-widget h1")).toBeVisible();
   expect(await content.getByText("# ライブ見出し").count()).toBe(0);
 });
