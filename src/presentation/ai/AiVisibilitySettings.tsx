@@ -19,6 +19,8 @@ export interface AiVisibilitySettingsProps {
   connections?: readonly ApiConnection[];
   saveFailed?: boolean;
   showHeading?: boolean;
+  /** Installed ACP presets; null while unknown shows every preset. */
+  installed?: ReadonlySet<string> | null;
 }
 
 interface DialogProps extends AiVisibilitySettingsProps {
@@ -27,11 +29,12 @@ interface DialogProps extends AiVisibilitySettingsProps {
 }
 
 /** Searchable provider groups expose only actual advertised model IDs and independent visibility switches. */
-export function AiVisibilitySettings({ preferences, onPreferences, advertisedProviders, connections = [], saveFailed, showHeading = true }: AiVisibilitySettingsProps) {
+export function AiVisibilitySettings({ preferences, onPreferences, advertisedProviders, connections = [], saveFailed, showHeading = true, installed = null }: AiVisibilitySettingsProps) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
   const search = query.trim().toLocaleLowerCase();
-  const providers = AI_PROVIDER_IDS.filter((id) => id !== "openai_chat_completions" && id !== "openai_responses" && id !== "anthropic").map((id) => {
+  // Only installed agents are worth configuring; the rest stay out of the list.
+  const providers = AI_PROVIDER_IDS.filter((id) => id !== "openai_chat_completions" && id !== "openai_responses" && id !== "anthropic").filter((id) => !installed || installed.has(id)).map((id) => {
     const label = t(PRESET_LABELS[id] as LabelKey);
     return { id, label, connectionId: undefined, detail: "" };
   });
@@ -57,7 +60,7 @@ export function AiVisibilitySettings({ preferences, onPreferences, advertisedPro
             <input type="checkbox" className="mt-0.5 shrink-0" aria-label={t("{{model}} を表示", { model: model.name })} checked={isAiModelVisible(preferences, id, model.optionId, model.value)} onChange={(event) => onPreferences(setAiModelVisible(preferences, { provider: id, optionId: model.optionId, value: model.value }, event.target.checked))} />
             <span className="min-w-0"><span className="block break-words">{model.name}</span><span className="block break-all text-[11px] text-muted-foreground">{model.value}</span></span>
           </label>)}
-          {models.length === 0 && <p className="px-1 py-1 text-[11px] text-muted-foreground">{id === "openai_chat_completions" || id === "openai_responses" || id === "anthropic" ? t("モデル名は接続設定で指定してください。") : discovery?.discovered ? t("モデル候補なし（接続先の設定を使用）") : t("モデル候補を取得するには接続を確認してください。")}</p>}
+          {models.length === 0 && <p className="px-1 py-1 text-[11px] text-muted-foreground">{id === "openai_chat_completions" || id === "openai_responses" || id === "anthropic" ? t("モデル名は接続設定で指定してください。") : discovery?.discovered ? t("モデル候補なし（接続先の設定を使用）") : null}</p>}
         </fieldset>;
       })}
       {groups.length === 0 && <p role="status" className="text-muted-foreground">{t("一致する接続先やモデルがありません。")}</p>}

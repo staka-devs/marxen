@@ -224,6 +224,7 @@ pub fn run() {
             presentation::ai::ai_prompt_cancel,
             presentation::ai::ai_permission_reply,
             presentation::ai::ai_usage_snapshot,
+            presentation::ai::ai_installed_presets,
             presentation::ai::ai_codex_account_usage,
             presentation::ai::ai_transcript_usage,
             presentation::provider_accounts::provider_accounts_snapshot,

@@ -158,8 +158,8 @@ it("draws bullets and clickable task boxes on active list lines without the curs
   expect(view.state.doc.toString()).toBe(text);
 });
 
-it("marks compact blank lines in the line-number gutter so numbers do not overlap", () => {
+it("keeps blank lines at the normal line height so line numbers line up", () => {
   render(<CodeMirrorEditor value={"一\n\n二\n"} ariaLabel="検証" livePreview initialSelection={{ anchor: 0, head: 0 }} />);
   const view = editorView();
-  expect(view.dom.querySelectorAll(".cm-lineNumbers .marxen-live-gap-gutter").length).toBeGreaterThan(0);
+  expect(view.contentDOM.querySelector(".marxen-live-gap")).toBeNull();
 });
