@@ -4,6 +4,7 @@ pub mod ai;
 pub mod clipboard;
 pub mod git;
 pub mod neovim;
+pub mod sqlite_tables;
 pub mod staging;
 pub mod storage;
 pub mod vim_settings;

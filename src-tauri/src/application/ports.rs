@@ -285,3 +285,12 @@ pub trait StagingStorage: FileReader + DirectoryStorage {
     /// adapter so use cases never follow escapes.
     fn list_staging_files(&self, dir: &Path) -> Result<Vec<PathBuf>, WorkspaceError>;
 }
+
+/// Tabular storage behind SQLite database views; paths are already contained by the caller.
+pub trait TableStore: Send + Sync {
+    /// Read up to `limit` rows of one table, creating the file and a starter table when missing.
+    fn read(&self, file: &Path, table: &str, limit: usize)
+        -> Result<DatabaseTable, WorkspaceError>;
+    /// Apply one row, cell or column change to the table.
+    fn edit(&self, file: &Path, table: &str, edit: &DatabaseEdit) -> Result<(), WorkspaceError>;
+}

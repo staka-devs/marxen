@@ -282,3 +282,18 @@ article.marxen-md { padding: 32px max(24px, calc((100% - 960px) / 2)) 80px; }
 .marxen-git-added { background: #2ea043; }
 .marxen-git-modified { background: #0078d4; }
 .marxen-git-deleted { width: 0; height: 0; border-left: 4px solid #f85149; border-top: 4px solid transparent; border-bottom: 4px solid transparent; }
+
+/* Database views (fenced `database` blocks). */
+.marxen-md .marxen-database { overflow-x: auto; }
+.marxen-md .marxen-database-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.25rem 0 0.5rem; }
+.marxen-md .marxen-database-button { border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.6rem; font-size: 0.8rem; background: transparent; color: inherit; cursor: pointer; }
+.marxen-md .marxen-database-button:hover { background: color-mix(in srgb, var(--primary) 10%, transparent); }
+.marxen-md table.marxen-database-table { border-collapse: collapse; width: 100%; margin: 0; }
+.marxen-md table.marxen-database-table th, .marxen-md table.marxen-database-table td { border: 1px solid var(--border); padding: 0; text-align: left; }
+.marxen-md table.marxen-database-table th { padding: 0.3rem 0.5rem; font-weight: 600; font-size: 0.85rem; }
+.marxen-md .marxen-database-input { width: 100%; min-width: 6rem; border: 0; padding: 0.3rem 0.5rem; background: transparent; color: inherit; font: inherit; outline: none; }
+.marxen-md .marxen-database-input:focus { box-shadow: inset 0 0 0 2px var(--primary); }
+.marxen-md .marxen-database-link { border: 0; background: transparent; color: var(--primary); padding: 0.3rem 0.5rem; cursor: pointer; text-align: left; font: inherit; }
+.marxen-md .marxen-database-link:hover { text-decoration: underline; }
+.marxen-md .marxen-database-actions { width: 2.5rem; text-align: center; }
+.marxen-md .marxen-database-note-text { color: var(--muted-foreground, #6b7280); font-size: 0.85rem; }

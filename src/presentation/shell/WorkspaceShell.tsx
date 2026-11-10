@@ -75,6 +75,7 @@ import {
 } from "../../domain/document-errors";
 import { COPY_LABELS } from "../../domain/clipboard-text";
 import { offsetToLineCol, lineColToOffset } from "../../domain/coordinates/utf16";
+import type { DatabaseViewer } from "../database/hydrate-databases";
 import { DEFAULT_EDITOR_PREFERENCES, normalizeEditorPreferences, type EditorPreferences } from "../../domain/editor-preferences";
 import { entryKind } from "../../domain/workspace-files";
 import { docFromOpen, fileLabel } from "../../application/document/document-helpers";
@@ -682,6 +683,24 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     ? fileSearch.registryHits.flatMap((hit) => hit.offset !== undefined && hit.end !== undefined ? [{ from: hit.offset, to: hit.end }] : [])
     : [], [findOpen, fileSearch.registryHits]);
   const activeSelection = active ? selections[active.documentId] : undefined;
+  // Read at click time: the opener closes over render state that changes every render.
+  const openNoteRef = useRef(openFileForEditing);
+  openNoteRef.current = openFileForEditing;
+  const activeDocumentId = active?.documentId;
+  const documentScope = active?.location?.scope;
+  /** Database views for the active document, only when the opt-in setting is on. */
+  const databaseViewer = useMemo<DatabaseViewer | undefined>(() => {
+    if (!preferences.databases || !activeDocumentId || !documentGateway?.queryDatabase || !documentGateway.editDatabase) return undefined;
+    const gateway = documentGateway;
+    return {
+      /** Read a view through the active document. */
+      query: (source) => gateway.queryDatabase!(activeDocumentId, source),
+      /** Edit a view through the active document. */
+      edit: (source, edit) => gateway.editDatabase!(activeDocumentId, source, edit),
+      /** Open a folder-view note in the editor. */
+      openNote: (path) => { void openNoteRef.current(path, documentScope); },
+    };
+  }, [preferences.databases, activeDocumentId, documentScope, documentGateway]);
   const findCursor = activeSelection ? Math.min(activeSelection.anchor, activeSelection.head) : null;
 
   /** Text before the latest AI change to the active document, for the inline diff. */
@@ -1279,6 +1298,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                   vimMode={vimMode}
                   allowTextInput={vimMode === "insert" || vimMode === "replace"}
                   resolveImage={image.liveResolver}
+                  database={databaseViewer}
                   snapshot={active}
                   shouldUseNativeCursor={() => vim.isNativeInputPending(active.documentId)}
                   onGuiEdits={(edits, beforeText, selection, key, nativeCursor) => vim.routeGuiEdits(active.documentId, edits, beforeText, selection, key, nativeCursor)}
@@ -1335,7 +1355,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           )}
           {effectiveViewMode === "read" && activeIsMarkdown && active && (
             <div className="min-h-0 min-w-0">
-              <MarkdownPreview key={`read-${active.documentId}`} text={active.text} resolveImage={image.readResolver} />
+              <MarkdownPreview key={`read-${active.documentId}`} text={active.text} resolveImage={image.readResolver} database={databaseViewer} />
             </div>
           )}
           {effectiveViewMode === "split" && active && (
@@ -1366,7 +1386,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               <div className="flex min-h-0 min-w-0 flex-col" data-testid="split-preview-pane">
                 <div className="flex h-7 shrink-0 items-center border-b border-border px-3 text-xs text-muted-foreground">{t("プレビュー")}</div>
                 <div className="min-h-0 flex-1">
-                  <MarkdownPreview key={`split-${active.documentId}`} text={active.text} resolveImage={image.readResolver} />
+                  <MarkdownPreview key={`split-${active.documentId}`} text={active.text} resolveImage={image.readResolver} database={databaseViewer} />
                 </div>
               </div>
             </>

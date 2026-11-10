@@ -28,6 +28,10 @@ impl ActorState {
         }
     }
 }
+/// Injected SQLite adapter for database views, owned by the composition root.
+pub struct DatabaseState {
+    pub tables: Arc<dyn crate::application::ports::TableStore>,
+}
 #[cfg(feature = "desktop")]
 pub use desktop::*;
 #[cfg(feature = "desktop")]
@@ -619,6 +623,33 @@ mod desktop {
     ) -> Result<(), WorkspaceError> {
         with_document(&state, document_id.clone(), &location, |w| {
             Ok(w.actor(&document_id)?.set_search_pattern(&pattern)?)
+        })
+    }
+    #[tauri::command(async)]
+    /// Read the rows of a database view embedded in a document.
+    pub fn database_query(
+        state: tauri::State<'_, ActorState>,
+        databases: tauri::State<'_, DatabaseState>,
+        location: DocumentLocation,
+        document_id: String,
+        source: DatabaseSource,
+    ) -> Result<DatabaseTable, WorkspaceError> {
+        with_document(&state, document_id.clone(), &location, |w| {
+            w.database_query(&document_id, &source, databases.tables.as_ref())
+        })
+    }
+    #[tauri::command(async)]
+    /// Apply one database view edit and return the refreshed rows.
+    pub fn database_edit(
+        state: tauri::State<'_, ActorState>,
+        databases: tauri::State<'_, DatabaseState>,
+        location: DocumentLocation,
+        document_id: String,
+        source: DatabaseSource,
+        edit: DatabaseEdit,
+    ) -> Result<DatabaseTable, WorkspaceError> {
+        with_document(&state, document_id.clone(), &location, |w| {
+            w.database_edit(&document_id, &source, &edit, databases.tables.as_ref())
         })
     }
     #[tauri::command(async)]

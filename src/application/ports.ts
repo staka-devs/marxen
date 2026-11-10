@@ -7,6 +7,9 @@
 
 import type {
   CloseAction,
+  DatabaseEdit,
+  DatabaseSource,
+  DatabaseTable,
   CursorUpdate,
   EditorContext,
   DocumentId,
@@ -138,6 +141,10 @@ export interface DocumentGateway {
   fetchGrid(documentId: DocumentId, width?: number, height?: number): Promise<GridUpdate>;
   /** Make a Vim pattern the native last search so `n`/`N` follow the GUI find bar; desktop only. */
   setSearchPattern?(documentId: DocumentId, pattern: string): Promise<void>;
+  /** Read the rows of a database view embedded in a document; desktop only. */
+  queryDatabase?(documentId: DocumentId, source: DatabaseSource): Promise<DatabaseTable>;
+  /** Apply one database view edit and return the refreshed rows; desktop only. */
+  editDatabase?(documentId: DocumentId, source: DatabaseSource, edit: DatabaseEdit): Promise<DatabaseTable>;
   /** Fetch the Neovim config state. */
   fetchConfig(documentId: DocumentId): Promise<NvimConfig>;
 }
@@ -196,6 +203,10 @@ export interface DocumentTransport {
   fetchGrid(documentId: DocumentId, width?: number, height?: number): Promise<GridUpdate>;
   /** Set the native last search pattern of one document. */
   setSearchPattern?(documentId: DocumentId, pattern: string, location?: DocumentLocation): Promise<void>;
+  /** Read the rows of a document's database view. */
+  queryDatabase?(documentId: DocumentId, source: DatabaseSource, location?: DocumentLocation): Promise<DatabaseTable>;
+  /** Apply one database view edit for a document. */
+  editDatabase?(documentId: DocumentId, source: DatabaseSource, edit: DatabaseEdit, location?: DocumentLocation): Promise<DatabaseTable>;
   /** Fetch the current Neovim config state for a document. */
   fetchConfig(documentId: DocumentId, location?: DocumentLocation): Promise<NvimConfig>;
 }

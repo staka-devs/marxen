@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { renderMarkdownDocument, type RenderResult } from "../../domain/render/pipeline";
 import { disposeMarkdownView, hydrateMarkdownView } from "./hydrate";
 import { hydrateLocalImages } from "../images/hydrate-images";
+import { hydrateDatabases, type DatabaseViewer } from "../database/hydrate-databases";
 import type { ImageResolver } from "../../domain/image-sources";
 import "leaflet/dist/leaflet.css";
 
@@ -17,6 +18,8 @@ interface Props {
    * as authored (browser demo behavior).
    */
   resolveImage?: ImageResolver;
+  /** Database view access; absent when the feature is off. */
+  database?: DatabaseViewer;
 }
 
 /**
@@ -27,7 +30,7 @@ interface Props {
  * GeoJSON / TopoJSON / STL) hydrate locally with bundled libraries; raw
  * source and Japanese errors stay visible for malformed input.
  */
-export function MarkdownPreview({ text, label, testId = "preview", resolveImage }: Props) {
+export function MarkdownPreview({ text, label, testId = "preview", resolveImage, database }: Props) {
   const { t, language } = useI18n();
   const [result, setResult] = useState<RenderResult | null>(null);
   const hostRef = useRef<HTMLElement | null>(null);
@@ -67,12 +70,13 @@ export function MarkdownPreview({ text, label, testId = "preview", resolveImage 
     const controller = new AbortController();
     const pending: Array<Promise<unknown>> = [hydrateMarkdownView(host, controller.signal, t)];
     if (resolveImage) pending.push(hydrateLocalImages(host, resolveImage, controller.signal));
+    pending.push(hydrateDatabases(host, database, controller.signal, t));
     void Promise.allSettled(pending);
     return () => {
       controller.abort();
       disposeMarkdownView(host);
     };
-  }, [result, resolveImage, t]);
+  }, [result, resolveImage, database, t]);
 
   if (!result) {
     return (

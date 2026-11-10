@@ -9,7 +9,8 @@ export type RenderDiagnosticCode =
   | "math-invalid"
   | "geojson-invalid"
   | "topojson-invalid"
-  | "stl-invalid";
+  | "stl-invalid"
+  | "database-invalid";
 
 export interface RenderDiagnostic {
   code: RenderDiagnosticCode;
@@ -37,7 +38,7 @@ export interface RenderResult {
 }
 
 /** Fenced languages with a dedicated local view (map / 3D / diagram / math). */
-export const SPECIAL_LANGUAGES = ["mermaid", "geojson", "topojson", "stl"] as const;
+export const SPECIAL_LANGUAGES = ["mermaid", "geojson", "topojson", "stl", "database"] as const;
 export type SpecialLanguage = (typeof SPECIAL_LANGUAGES)[number];
 
 /**

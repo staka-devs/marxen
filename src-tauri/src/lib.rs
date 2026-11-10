@@ -92,6 +92,9 @@ pub fn run() {
         .manage(presentation::vim_settings::VimSettingsState::new(
             vim_settings_files(),
         ))
+        .manage(presentation::document::DatabaseState {
+            tables: Arc::new(infrastructure::sqlite_tables::SqliteTables),
+        })
         .manage(presentation::source_control::SourceControlState::new(
             Arc::new(infrastructure::git::NativeGit),
         ))
@@ -204,6 +207,8 @@ pub fn run() {
             presentation::document::nvim_input,
             presentation::document::fetch_cursor,
             presentation::document::set_search_pattern,
+            presentation::document::database_query,
+            presentation::document::database_edit,
             presentation::document::fetch_grid,
             presentation::document::fetch_config,
             presentation::ai::ai_credential_state,

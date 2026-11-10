@@ -28,6 +28,7 @@ import { escapeHtml } from "./html";
 import { alertKind, mdastText } from "./mdast";
 import { highlightCode } from "./shiki";
 import { CLOBBER_PREFIX, marxenSanitizeSchema } from "./sanitize-schema";
+import { parseDatabaseBlock } from "../database-block";
 import { isSpecialLanguage, type RenderDiagnostic, type RenderResult, type SourceBlock } from "./types";
 import {
   validateGeoJson,
@@ -154,6 +155,7 @@ const KIND_LABEL: Record<string, string> = {
   topojson: "地図 (TopoJSON)",
   stl: "3D (STL)",
   math: "数式",
+  database: "データベース",
 };
 
 /**
@@ -238,6 +240,7 @@ const SPECIAL_CONTAINER_CLASS: Record<string, string> = {
   geojson: "marxen-map",
   topojson: "marxen-map",
   stl: "marxen-stl",
+  database: "marxen-database",
 };
 
 /**
@@ -317,6 +320,11 @@ function rehypeMarxenBlocks(t: Translator = japaneseTranslator) {
             const topo = validateTopoJson(normalized, t);
             validation = topo;
             topoObject = topo.ok ? topo.objectNames?.[0] : undefined;
+            break;
+          }
+          case "database": {
+            const parsed = parseDatabaseBlock(normalized, t);
+            validation = parsed.ok ? { ok: true } : { ok: false, message: parsed.message };
             break;
           }
           default:

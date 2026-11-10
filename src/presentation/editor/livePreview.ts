@@ -23,6 +23,7 @@ import { renderMarkdownDocument } from "../../domain/render/pipeline";
 import { toggleCheckbox } from "../../domain/markdown-gui";
 import { disposeMarkdownView, hydrateMarkdownView } from "../preview/hydrate";
 import { hydrateLocalImages } from "../images/hydrate-images";
+import { hydrateDatabases, type DatabaseViewer } from "../database/hydrate-databases";
 import type { ImageResolver } from "../../domain/image-sources";
 import type { TextEdit } from "../../contracts/contracts";
 
@@ -35,6 +36,8 @@ export interface LivePreviewCallbacks {
   focusSource?: (from: number, to: number) => void;
   /** Local-image resolver shared with read previews (ADR-0063). */
   resolveImage?: ImageResolver;
+  /** Database view access for the edited document; absent when the feature is off. */
+  database?: DatabaseViewer;
 }
 
 /** Rendered HTML by block key (`kind + text + definitions`). */
@@ -236,6 +239,8 @@ class LiveBlockWidget extends WidgetType {
     // carries the current resolver so rebinds never use a stale loader.
     const resolveImage = readBinding(host)?.getCallbacks().resolveImage;
     if (resolveImage) void hydrateLocalImages(body, resolveImage, controller.signal);
+    const callbacks = readBinding(host)?.getCallbacks();
+    void hydrateDatabases(body, callbacks?.database, controller.signal, callbacks?.translator ?? japaneseTranslator);
   }
 
   /** Source offsets of task markers in document order. */ private taskOffsets(binding: HostBinding): number[] {
@@ -280,6 +285,8 @@ class LiveBlockWidget extends WidgetType {
     const target = event.target as HTMLElement | null;
     const binding = readBinding(host);
     if (!binding) return;
+    // Database views own their cells and buttons; they never map to Markdown source.
+    if (target?.closest?.(".marxen-database")) return;
     const cell = target?.closest?.("td,th") as HTMLTableCellElement | null;
     if (cell && host.contains(cell)) {
       event.stopPropagation();
@@ -325,6 +332,7 @@ class LiveBlockWidget extends WidgetType {
 
   /** Activate keyboard-reachable cells and suppress editor keys. */ private onHostKey(host: HTMLElement, event: KeyboardEvent): void {
     const target = event.target as HTMLElement | null;
+    if (target?.closest?.(".marxen-database")) return;
     const cell = target?.closest?.("td,th");
     if (!cell || !host.contains(cell)) return;
     if (event.key === "Enter" || event.key === " ") {

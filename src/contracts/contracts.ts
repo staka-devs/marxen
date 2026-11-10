@@ -121,3 +121,8 @@ export type GitChange = { path: string,
  */
 status: string, };
 export type GitStatus = { repository: boolean, branch: string | null, changes: Array<GitChange>, };
+export type DatabaseSource = { "kind": "folder", path: string, } | { "kind": "sqlite", path: string, table: string, };
+export type DatabaseEdit = { "kind": "addRow" } | { "kind": "deleteRow", id: string, } | { "kind": "setCell", id: string, column: string, value: string, } | { "kind": "addColumn", name: string, };
+export type DatabaseColumn = { name: string, editable: boolean, };
+export type DatabaseRow = { id: string, cells: { [key in string]: string }, path: string | null, };
+export type DatabaseTable = { columns: Array<DatabaseColumn>, rows: Array<DatabaseRow>, truncated: boolean, };

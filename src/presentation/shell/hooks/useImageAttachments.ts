@@ -230,6 +230,8 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
   const onPasteCapture = useCallback(
     (event: React.ClipboardEvent) => {
       if (!desktop || !registry || !activeRef.current) return;
+      // Fields inside the editor (database cells) take their own pastes.
+      if ((event.target as HTMLElement | null)?.closest?.("input,textarea")) return;
       const id = activeRef.current;
       if (!docsRef.current[id]) return;
       const data = event.clipboardData;

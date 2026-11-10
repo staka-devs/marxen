@@ -11,6 +11,7 @@ import { gitGutter } from "./gitGutter";
 import { searchMatches } from "./searchMatches";
 import { blockCursorWidth } from "./cursorWidth";
 import type { ImageResolver } from "../../domain/image-sources";
+import type { DatabaseViewer } from "../database/hydrate-databases";
 import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../domain/editor-preferences";
 import { useI18n } from "../i18n/I18nProvider";
 import type { EditorMenuPoint } from "./EditorMenu";
@@ -74,6 +75,8 @@ interface Props {
    * it after their HTML mounts, on the widget abort lifecycle.
    */
   resolveImage?: ImageResolver;
+  /** Database view access for live widgets; absent when the feature is off. */
+  database?: DatabaseViewer;
   preferences?: EditorPreferences;
   vimMode?: string;
   allowTextInput?: boolean;
@@ -135,7 +138,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
 
 const NO_RANGES: ReadonlyArray<{ from: number; to: number }> = [];
 
-/** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, snapshot, shouldUseNativeCursor, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true, focusRequest = 0, onEditorMenu, aiBaseline = null, gitBaseline = null, searchRanges = NO_RANGES }: Props) {
+/** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, snapshot, shouldUseNativeCursor, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, database, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true, focusRequest = 0, onEditorMenu, aiBaseline = null, gitBaseline = null, searchRanges = NO_RANGES }: Props) {
   const { t, language } = useI18n();
   const languageRef = useRef(language);
   languageRef.current = language;
@@ -169,12 +172,15 @@ const NO_RANGES: ReadonlyArray<{ from: number; to: number }> = [];
   // cell commits always read the latest props through this getter.
   const resolveImageRef = useRef(resolveImage);
   resolveImageRef.current = resolveImage;
+  const databaseRef = useRef(database);
+  databaseRef.current = database;
   /** Build fresh live-preview callbacks reading latest props through refs. */
   const getLiveCallbacks = useCallback((): LivePreviewCallbacks => {
     return {
       /** Forward widget edits to the current GUI handler. */
       onGuiEdits: (edits) => callbacks.current.onGuiEdits?.(edits, viewRef.current?.state.doc.toString() ?? valueRef.current),
       resolveImage: resolveImageRef.current,
+      database: databaseRef.current,
       translator: translatorRef.current,
       language: languageRef.current,
       /** Move the editor cursor into a source span and focus it. */

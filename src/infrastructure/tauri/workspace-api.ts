@@ -8,6 +8,9 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { WorkspaceEventSource } from "../../application/ports";
 import type {
+  DatabaseEdit,
+  DatabaseSource,
+  DatabaseTable,
   RootScope,
   RootEvent,
   DocumentLocation,
@@ -222,6 +225,10 @@ export const workspaceApi = {
   fetchCursor: (documentId: DocumentId, location?: DocumentLocation) => documentInvoke<CursorUpdate>("fetch_cursor", { documentId, location }),
   /** Set a document's native last search pattern (`@/`). */
   setSearchPattern: (documentId: DocumentId, pattern: string, location?: DocumentLocation) => documentInvoke<void>("set_search_pattern", { documentId, pattern, location }),
+  /** Read the rows of a document's database view. */
+  queryDatabase: (documentId: DocumentId, source: DatabaseSource, location?: DocumentLocation) => documentInvoke<DatabaseTable>("database_query", { documentId, source, location }),
+  /** Apply one database view edit for a document. */
+  editDatabase: (documentId: DocumentId, source: DatabaseSource, edit: DatabaseEdit, location?: DocumentLocation) => documentInvoke<DatabaseTable>("database_edit", { documentId, source, edit, location }),
   /** Report a GUI selection to the native cursor tracker. */
   reportCursor: (update: CursorUpdate, location?: DocumentLocation, block?: boolean) => documentInvoke<CursorUpdate>("report_cursor", { ...update, location, block }),
   /** Fetch a Neovim grid screen batch. */
