@@ -71,6 +71,11 @@ export function maskFrontmatter(text: string): string {
   return front ? text.slice(0, front.end).replace(/[^\r\n]/g, " ") + text.slice(front.end) : text;
 }
 
+/** True when the note opts into database views with `database: true`. */
+export function databasesEnabled(text: string): boolean {
+  return parseFrontmatter(text)?.properties.some((property) => property.key === "database" && property.value.trim().toLowerCase() === "true") ?? false;
+}
+
 /** Edit that sets one existing flat property in `text`, offset by `base`; null if absent or nested. */
 export function setPropertyEdit(text: string, key: string, value: string, base = 0): TextEdit | null {
   const property = parseFrontmatter(text)?.properties.find((item) => item.key === key && item.editable);

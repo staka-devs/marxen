@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ChevronDown, ChevronRight, FileCode2, FileText, Folder, FolderOpen, Image } from "lucide-react";
 import type { WorkspaceEntry, WorkspaceFileKind, RootScope } from "../../contracts/contracts";
 import { entryKind, WORKSPACE_IMAGE_DRAG, WORKSPACE_IMAGE_POINTER_DROP } from "../../domain/workspace-files";
+import { BUNDLE_SUFFIX, isBundleFolder } from "../../domain/bundle";
 import type { WorkbenchCommand } from "../../contracts/workbench";
 import type { ThemeId } from "../../domain/workspace-content";
 import { CommandMenu } from "./CommandMenu";
@@ -36,7 +37,17 @@ export function buildTree(entries: WorkspaceEntry[]): TreeNode[] {
     else ensureDir(parent).children?.push(node);
     return node;
   };
+  const bundles = entries.filter((entry) => entry.directory && isBundleFolder(entry.path)).map((entry) => entry.path);
   for (const entry of entries) {
+    if (bundles.some((bundle) => entry.path.startsWith(`${bundle}/`))) continue;
+    if (entry.directory && bundles.includes(entry.path)) {
+      // The whole bundle opens as its index note; its assets stay out of the tree.
+      const node: TreeNode = { path: `${entry.path}/index.md`, name: entry.name.slice(0, -BUNDLE_SUFFIX.length), directory: false, markdown: true, kind: "markdown" };
+      const parent = entry.path.includes("/") ? entry.path.slice(0, entry.path.lastIndexOf("/")) : null;
+      if (!parent) roots.push(node);
+      else ensureDir(parent).children?.push(node);
+      continue;
+    }
     if (entry.directory) { ensureDir(entry.path); continue; }
     const kind = entryKind(entry);
     if (!kind) continue;

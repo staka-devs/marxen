@@ -1,3 +1,4 @@
+import { BUNDLE_SUFFIX, bundleOf } from "../../../domain/bundle";
 import { localizedFailure, renderLocalizedText } from "../../../domain/localization";
 import type { LocalizedText } from "../../../contracts/localization";
 import { useI18n } from "../../i18n/I18nProvider";
@@ -84,7 +85,7 @@ export interface Workspace {
   busy: boolean;
   generation: number;
   refreshing: boolean;
-  entryKind: "file" | "folder";
+  entryKind: "file" | "folder" | "bundle";
   createdTarget: ExplorerTarget | null;
   /** Capture a relative tree location in the current root generation. */
   targetFor: (path?: string, directory?: boolean, kind?: WorkspaceEntry["kind"], scope?: RootScope) => ExplorerTarget;
@@ -93,7 +94,11 @@ export interface Workspace {
   /** Recheck lifecycle availability synchronously before executing an operation. */
   canOperate: () => boolean;
   /** Open a contextual creation dialog under its captured parent. */
-  beginCreate: (target: ExplorerTarget, folder?: boolean) => void;
+  beginCreate: (target: ExplorerTarget, folder?: boolean | "bundle") => void;
+  /** Pack the bundle at a tree target into a file the user chooses. */
+  exportBundle: (target: ExplorerTarget) => Promise<void>;
+  /** Unpack a chosen `.marxenpack` beside a tree target and open it. */
+  importBundle: (target: ExplorerTarget) => Promise<void>;
   /** Open a captured text, image, or folder rename dialog. */
   beginRename: (target: ExplorerTarget) => Promise<void>;
   /** Refresh the tree while preserving authoritative dirty buffers. */
@@ -246,7 +251,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   const busyRef = useRef(false);
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [entryKind, setEntryKind] = useState<"file" | "folder">("file");
+  const [entryKind, setEntryKind] = useState<"file" | "folder" | "bundle">("file");
   const creationTarget = useRef<ExplorerTarget | null>(null);
   const [createdTarget, setCreatedTarget] = useState<ExplorerTarget | null>(null);
   const renameRequest = useRef<RenameRequest | null>(null);
@@ -313,11 +318,11 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   }, [canOperate, loadEntries, notify]);
 
   /** Start a file or folder dialog beneath the captured folder or file's parent. */
-  const beginCreate = useCallback((target: ExplorerTarget, folder = false) => {
+  const beginCreate = useCallback((target: ExplorerTarget, folder: boolean | "bundle" = false) => {
     if (!canOperate() || !isTargetCurrent(target)) return;
     const parent = target.directory ? target.path : target.path.slice(0, Math.max(0, target.path.lastIndexOf("/")));
     creationTarget.current = target;
-    setEntryKind(folder ? "folder" : "file");
+    setEntryKind(folder === "bundle" ? "bundle" : folder ? "folder" : "file");
     setNewFilePath(parent ? `${parent}/` : "");
     setNewFileOpen(true);
   }, [canOperate, isTargetCurrent]);
@@ -624,7 +629,12 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
         setCreatedTarget(targetFor(path, true, undefined, scopeFor(target)));
         return;
       }
-      const open = await workspaceGateway!.createMarkdown(path, "", scopeFor(target));
+      // A bundle is a `name.marxen` folder whose note is `index.md`, with databases enabled.
+      const bundle = entryKind === "bundle" ? (path.endsWith(BUNDLE_SUFFIX) ? path : `${path}${BUNDLE_SUFFIX}`) : null;
+      if (bundle) await workspaceGateway!.createFolder(bundle, scopeFor(target));
+      const notePath = bundle ? `${bundle}/index.md` : path;
+      const title = (bundle ?? path).split("/").at(-1)!.replace(/\.(marxen|md|markdown)$/i, "");
+      const open = await workspaceGateway!.createMarkdown(notePath, bundle ? `---\ndatabase: true\n---\n# ${title}\n` : "", scopeFor(target));
       if (epoch !== generation.current) return;
       registry.noteSnapshot(open.snapshot);
       const doc = docFromOpen(open);
@@ -633,11 +643,37 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
       setActiveId(doc.documentId);
       setNewFileOpen(false);
       await loadEntries();
-      setCreatedTarget(targetFor(path, false, "markdown", scopeFor(target)));
+      setCreatedTarget(targetFor(notePath, false, "markdown", scopeFor(target)));
     } catch (cause) {
       setNotice(localizedFailure(cause, workspaceErrorText));
     } finally { busyRef.current = false; setBusy(false); }
   }, [registry, workspaceGateway, newFilePath, loadEntries, setDocs, setTabs, setActiveId, notify, canOperate, isTargetCurrent, entryKind, targetFor]);
+
+  /** Pack the bundle at a tree target into a user-chosen `.marxenpack`. */
+  const exportBundle = useCallback(async (target: ExplorerTarget) => {
+    const bundle = bundleOf(target.path);
+    if (!canOperate() || !isTargetCurrent(target) || !bundle || !workspaceGateway?.exportBundle) return;
+    const destination = await dialogGateway?.pickPackDestination?.(t("バンドルを書き出す"), `${bundle.split("/").at(-1)!.slice(0, -BUNDLE_SUFFIX.length)}.marxenpack`);
+    if (!destination) return;
+    try {
+      await workspaceGateway.exportBundle(bundle, destination, scopeFor(target));
+      setNotice(message("バンドルを書き出しました（{{value0}}）。", { value0: destination }));
+    } catch (cause) { setNotice(localizedFailure(cause, workspaceErrorText)); }
+  }, [canOperate, isTargetCurrent, workspaceGateway, dialogGateway, scopeFor, notify, t]);
+
+  /** Unpack a user-chosen `.marxenpack` under a tree target's folder and open its note. */
+  const importBundle = useCallback(async (target: ExplorerTarget) => {
+    if (!canOperate() || !isTargetCurrent(target) || !workspaceGateway?.importBundle) return;
+    const source = await dialogGateway?.pickPack?.(t("バンドルを読み込む"));
+    if (!source) return;
+    const folder = target.directory ? target.path : target.path.slice(0, Math.max(0, target.path.lastIndexOf("/")));
+    try {
+      const notePath = await workspaceGateway.importBundle(source, bundleOf(folder) ? folder.slice(0, Math.max(0, folder.lastIndexOf("/"))) : folder, scopeFor(target));
+      await loadEntries();
+      setCreatedTarget(targetFor(notePath, false, "markdown", scopeFor(target)));
+      setNotice(message("バンドルを読み込みました（{{value0}}）。", { value0: notePath }));
+    } catch (cause) { setNotice(localizedFailure(cause, workspaceErrorText)); }
+  }, [canOperate, isTargetCurrent, workspaceGateway, dialogGateway, scopeFor, loadEntries, targetFor, notify, t]);
 
   /** Rename the dialog target keeping document IDs and updating tabs. */
   const renameFile = useCallback(async () => {
@@ -958,7 +994,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
 
   return {
     roots, entriesByRoot, missingRoots, removingRoot, addWorkspaceFolder, pickFolderAndAdd, beginRemoveRoot, resolveRemoveRoot,
-    busy: busy || layoutLoading.current, generation: generation.current, refreshing, entryKind, createdTarget, targetFor, isTargetCurrent, canOperate, beginCreate, beginRename, refreshEntries,
+    busy: busy || layoutLoading.current, generation: generation.current, refreshing, entryKind, createdTarget, targetFor, isTargetCurrent, canOperate, beginCreate, exportBundle, importBundle, beginRename, refreshEntries,
     wsRoot,
     setWsRoot,
     entries: entries as WorkspaceEntry[],

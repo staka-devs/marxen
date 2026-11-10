@@ -235,6 +235,10 @@ export interface WorkspaceGateway {
   createMarkdown(path: string, text?: string, scope?: import("../contracts/contracts").RootScope): Promise<OpenDocument>;
   /** Create one contained folder under an existing parent without opening a document. */
   createFolder(path: string, scope?: import("../contracts/contracts").RootScope): Promise<WorkspaceEntry>;
+  /** Pack a `name.marxen` bundle folder into a chosen `.marxenpack` file; desktop only. */
+  exportBundle?(path: string, destination: string, scope?: import("../contracts/contracts").RootScope): Promise<void>;
+  /** Unpack a `.marxenpack` into a folder and return the new note's path; desktop only. */
+  importBundle?(source: string, folder: string, scope?: import("../contracts/contracts").RootScope): Promise<string>;
   /** Rename a Markdown or supported UTF-8 text document, keeping its document ID. */
   renameMarkdown(request: SaveRequest, path: string): Promise<OpenDocument>;
   /** Rename a workspace image without a document actor, verifying its captured fingerprint. */
@@ -336,6 +340,10 @@ export interface DialogGateway {
   pickFolder(title?: string): Promise<string | null>;
   /** Native config-file picker; name validated by the caller. */
   pickConfigFile(title?: string): Promise<string | null>;
+  /** Native picker for a `.marxenpack` to import; null when cancelled. */
+  pickPack?(title: string): Promise<string | null>;
+  /** Native save dialog for an exported `.marxenpack`; null when cancelled. */
+  pickPackDestination?(title: string, defaultName: string): Promise<string | null>;
 }
 
 /** Native file-drop subscription. */

@@ -171,6 +171,10 @@ export const workspaceApi = {
   createMarkdown: (path: string, text = "", scope?: RootScope) => rootInvoke<OpenDocument>("create_markdown", { path, text }, scope ?? currentScope),
   /** Create a contained directory using the existing Rust workspace owner. */
   createFolder: (path: string, scope?: RootScope) => rootInvoke<WorkspaceEntry>("create_folder", { path }, scope ?? currentScope),
+  /** Pack a bundle folder into a chosen `.marxenpack` file. */
+  exportBundle: (path: string, destination: string, scope?: RootScope) => rootInvoke<void>("export_bundle", { path, destination }, scope ?? currentScope),
+  /** Unpack a `.marxenpack` into a folder and return the new note path. */
+  importBundle: (source: string, folder: string, scope?: RootScope) => rootInvoke<string>("import_bundle", { source, folder }, scope ?? currentScope),
   /** Rename a Markdown or supported UTF-8 text document, keeping its document ID. */
   renameMarkdown: (request: SaveRequest, path: string) => documentInvoke<OpenDocument>("rename_markdown", { ...request, path }),
   /** Rename a workspace image without a document actor, verifying its captured fingerprint. */

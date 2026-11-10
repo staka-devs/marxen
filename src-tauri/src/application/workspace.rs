@@ -8,6 +8,7 @@ use crate::application::ports::*;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod bundle;
 mod database;
 
 static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);

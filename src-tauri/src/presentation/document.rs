@@ -252,6 +252,30 @@ mod desktop {
         })
     }
     #[tauri::command(async)]
+    /// Pack a bundle folder into a user-chosen `.marxenpack` file.
+    pub fn export_bundle(
+        state: tauri::State<'_, ActorState>,
+        scope: RootScope,
+        path: String,
+        destination: String,
+    ) -> Result<(), WorkspaceError> {
+        with_workspace(&state, &scope, |w| {
+            w.export_bundle(&path, std::path::Path::new(&destination))
+        })
+    }
+    #[tauri::command(async)]
+    /// Unpack a user-chosen `.marxenpack` into a folder and return the new note path.
+    pub fn import_bundle(
+        state: tauri::State<'_, ActorState>,
+        scope: RootScope,
+        source: String,
+        folder: String,
+    ) -> Result<String, WorkspaceError> {
+        with_workspace(&state, &scope, |w| {
+            w.import_bundle(std::path::Path::new(&source), &folder)
+        })
+    }
+    #[tauri::command(async)]
     /// Create a new contained Markdown document through the workspace registry.
     pub fn create_markdown(
         state: tauri::State<'_, ActorState>,

@@ -209,6 +209,8 @@ pub fn run() {
             presentation::document::set_search_pattern,
             presentation::document::database_query,
             presentation::document::database_edit,
+            presentation::document::export_bundle,
+            presentation::document::import_bundle,
             presentation::document::fetch_grid,
             presentation::document::fetch_config,
             presentation::ai::ai_credential_state,

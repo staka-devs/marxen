@@ -1,6 +1,7 @@
 //! Deterministic policy without runtime adapters.
 pub mod ai;
 pub mod ai_account_usage;
+pub mod bundle_pack;
 #[cfg(any(all(feature = "desktop", windows), test))]
 pub mod clipboard_format;
 pub mod coordinates;

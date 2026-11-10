@@ -1282,3 +1282,42 @@ fn folder_database_reads_and_edits_note_properties() {
         )
         .is_err());
 }
+
+#[test]
+/// Pack a bundle with its assets, refuse unsaved notes, and unpack copies without overwriting.
+fn bundle_exports_and_imports_as_a_pack() {
+    let (root, _recovery, mut w) = setup();
+    let out = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("メモ.marxen/assets")).unwrap();
+    fs::write(root.path().join("メモ.marxen/index.md"), "# メモ\n").unwrap();
+    fs::write(root.path().join("メモ.marxen/assets/a.png"), b"\x89PNG").unwrap();
+    let pack = out.path().join("メモ.marxenpack");
+    w.export_bundle("メモ.marxen", &pack).unwrap();
+    assert!(w
+        .export_bundle("メモ.marxen", &out.path().join("x.zip"))
+        .is_err());
+    assert!(w.export_bundle("assets", &pack).is_err());
+
+    let first = w.import_bundle(&pack, "受信").unwrap();
+    assert_eq!(first, "受信/メモ.marxen/index.md");
+    assert_eq!(
+        fs::read(root.path().join("受信/メモ.marxen/assets/a.png")).unwrap(),
+        b"\x89PNG"
+    );
+    assert_eq!(
+        w.import_bundle(&pack, "受信").unwrap(),
+        "受信/メモ-1.marxen/index.md"
+    );
+
+    let open = w.open_markdown("メモ.marxen/index.md").unwrap();
+    let actor = w.actor(&open.snapshot.document_id.0).unwrap();
+    edit(actor, 0, 0, "x");
+    assert!(matches!(
+        w.export_bundle("メモ.marxen", &pack),
+        Err(WorkspaceError::UnsavedChanges { .. })
+    ));
+    fs::write(out.path().join("bad.marxenpack"), b"not a pack").unwrap();
+    assert!(w
+        .import_bundle(&out.path().join("bad.marxenpack"), "")
+        .is_err());
+}

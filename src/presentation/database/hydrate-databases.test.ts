@@ -25,7 +25,7 @@ describe("hydrateDatabases", () => {
   it("explains how to enable the view when no viewer is given", async () => {
     const root = mount("folder: tasks");
     await hydrateDatabases(root, undefined);
-    expect(root.querySelector(".marxen-database")?.textContent).toContain("データベース表示を有効にする");
+    expect(root.querySelector(".marxen-database")?.textContent).toContain("database: true");
   });
 
   it("draws note rows and sends cell edits, row adds and note opens", async () => {

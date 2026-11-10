@@ -76,6 +76,7 @@ import {
 import { COPY_LABELS } from "../../domain/clipboard-text";
 import { offsetToLineCol, lineColToOffset } from "../../domain/coordinates/utf16";
 import type { DatabaseViewer } from "../database/hydrate-databases";
+import { databasesEnabled } from "../../domain/frontmatter";
 import { DEFAULT_EDITOR_PREFERENCES, normalizeEditorPreferences, type EditorPreferences } from "../../domain/editor-preferences";
 import { entryKind } from "../../domain/workspace-files";
 import { docFromOpen, fileLabel } from "../../application/document/document-helpers";
@@ -687,10 +688,12 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   const openNoteRef = useRef(openFileForEditing);
   openNoteRef.current = openFileForEditing;
   const activeDocumentId = active?.documentId;
+  // Databases are allowed by the setting and enabled per note with `database: true` in its frontmatter.
+  const noteDatabases = useMemo(() => databasesEnabled(active?.text ?? ""), [active?.text]);
   const documentScope = active?.location?.scope;
   /** Database views for the active document, only when the opt-in setting is on. */
   const databaseViewer = useMemo<DatabaseViewer | undefined>(() => {
-    if (!preferences.databases || !activeDocumentId || !documentGateway?.queryDatabase || !documentGateway.editDatabase) return undefined;
+    if (!preferences.databases || !noteDatabases || !activeDocumentId || !documentGateway?.queryDatabase || !documentGateway.editDatabase) return undefined;
     const gateway = documentGateway;
     return {
       /** Read a view through the active document. */
@@ -700,7 +703,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       /** Open a folder-view note in the editor. */
       openNote: (path) => { void openNoteRef.current(path, documentScope); },
     };
-  }, [preferences.databases, activeDocumentId, documentScope, documentGateway]);
+  }, [preferences.databases, noteDatabases, activeDocumentId, documentScope, documentGateway]);
   const findCursor = activeSelection ? Math.min(activeSelection.anchor, activeSelection.head) : null;
 
   /** Text before the latest AI change to the active document, for the inline diff. */
@@ -936,7 +939,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
                 <FileTree key={owner.scope.generation} theme={theme} desktop nodes={buildTree(workspace.entriesByRoot[owner.scope.rootId] ?? [])} rootPath={owner.root} rootScope={owner.scope} rootName={owner.root.split(/[\\/]/).filter(Boolean).at(-1)} activePath={sameRoot(activeScope, owner.scope) ? activeImage ?? active?.path ?? null : null} selectedPath={explorerTarget?.rootId === owner.scope.rootId ? explorerTarget.path : null}
                   onRemoveRoot={() => workspace.beginRemoveRoot(owner.scope)} rootRemovalDisabled={workspace.busy}
                   onSelect={(node) => setExplorerTarget(treeTarget(node, owner.scope))} onCommand={(id, node) => runTreeCommand(id, node, owner.scope)}
-                  contextCommands={(node) => ["tree-open", "file-new", "folder-new", "file-rename", "tree-refresh"].map((id) => workbench.command(id, treeTarget(node, owner.scope))!)}
+                  contextCommands={(node) => ["tree-open", "file-new", "folder-new", "bundle-new", "file-rename", "bundle-export", "bundle-import", "tree-refresh"].map((id) => workbench.command(id, treeTarget(node, owner.scope))!)}
                   onOpenFile={(path) => { void openFileForEditing(path, owner.scope); if (window.innerWidth < 768) setSideView(null); }} />
               </div>) : <FileTree theme={theme} nodes={treeNodes} activePath={active?.path ?? null} onOpenFile={(path) => { void openFileForEditing(path); if (window.innerWidth < 768) setSideView(null); }} />}
               {workspace.missingRoots.map((root) => <p key={root} className="px-4 py-2 text-xs text-muted-foreground">{t("フォルダーが見つかりません。復元情報を保持しています: {{root}}", { root })}</p>)}
@@ -1228,12 +1231,12 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             </WorkspaceDialog>
           )}
           {workspace.newFileOpen && (
-            <WorkspaceDialog theme={theme} label={t(workspace.entryKind === "folder" ? "新規フォルダー" : "新規Markdownファイル")} onDismiss={() => workspace.setNewFileOpen(false)}>
+            <WorkspaceDialog theme={theme} label={t(workspace.entryKind === "folder" ? "新規フォルダー" : workspace.entryKind === "bundle" ? "新規バンドルノート" : "新規Markdownファイル")} onDismiss={() => workspace.setNewFileOpen(false)}>
               <form onSubmit={(event) => { event.preventDefault(); void workspace.createFile(); }} className="flex flex-wrap items-center gap-2">
               <input
                 value={workspace.newFilePath}
                 onChange={(event) => workspace.setNewFilePath(event.target.value)}
-                placeholder={workspace.entryKind === "folder" ? t("メモ/新しいフォルダー") : "notes/new.md"}
+                placeholder={workspace.entryKind === "folder" ? t("メモ/新しいフォルダー") : workspace.entryKind === "bundle" ? "notes/new.marxen" : "notes/new.md"}
                 aria-label={t(workspace.entryKind === "folder" ? "新規フォルダーのパス" : "新規ファイルのパス")}
                 className="min-w-40 flex-1 rounded-md border border-border bg-background px-3 py-1.5"
               />

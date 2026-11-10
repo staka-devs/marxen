@@ -186,7 +186,7 @@ export async function hydrateDatabases(root: HTMLElement, viewer: DatabaseViewer
       container.addEventListener(type, (event) => event.stopPropagation());
     }
     if (!viewer) {
-      container.replaceChildren(node("p", "marxen-database-note-text", t("設定 → エディターで「データベース表示を有効にする」をオンにすると表で表示します。")));
+      container.replaceChildren(node("p", "marxen-database-note-text", t("設定 → エディターで「データベース表示を有効にする」をオンにし、このノートの frontmatter に database: true を書くと表で表示します。")));
       return;
     }
     const view: View = { container, source: parsed.source, viewer, t, signal };
