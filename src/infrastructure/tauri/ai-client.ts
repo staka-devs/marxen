@@ -116,6 +116,12 @@ export async function replyPermission(runId: AiRunId, requestId: string, optionI
   await invoke("ai_permission_reply", { runId, requestId, optionId });
 }
 
+/** ACP presets whose agent command is installed; nothing is launched. */
+export async function installedPresets(): Promise<string[]> {
+  requireDesktop();
+  return invoke<string[]>("ai_installed_presets");
+}
+
 /** Owned prompt run with its cancellation handle. */
 export interface PromptSession {
   runId: AiRunId;
@@ -206,6 +212,8 @@ export const aiGateway: AiGateway = {
   cancelPromptSafe,
   /** Answer a pending permission request with the exact chosen option ID. */
   replyPermission,
+  /** ACP presets whose agent command is installed. */
+  installedPresets,
   /** Read credential presence for a provider. */
   getCredentialState,
   /** Store a secret in the OS store. */

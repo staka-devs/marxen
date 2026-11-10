@@ -620,7 +620,15 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   if (!staging.agentBusy && !staging.inlineBusy) settledAccountScope.current = selectedAccountScope;
   const sessionScopeKey = settledAccountScope.current;
   const aiModels = useAiModels(aiProvider, aiGateway, sessionScopeKey);
-  const modelControls = <AiModelControls provider={aiProvider} onProvider={setAiProvider} {...aiModels} preferences={aiView.preferences} onManageVisibility={() => setAiVisibilityOpen(true)} onRefresh={() => void aiModels.refresh()} disabled={staging.agentBusy || staging.inlineBusy} connectionSelection={connectionControls ?? undefined} />;
+  // Agents that are not installed stay out of the pickers; unknown until the native check answers.
+  const [installedPresets, setInstalledPresets] = useState<ReadonlySet<string> | null>(null);
+  useEffect(() => {
+    if (!desktop || !aiGateway?.installedPresets) return;
+    let live = true;
+    aiGateway.installedPresets().then((presets) => { if (live) setInstalledPresets(new Set(presets)); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [desktop, aiGateway]);
+  const modelControls = <AiModelControls provider={aiProvider} onProvider={setAiProvider} {...aiModels} preferences={aiView.preferences} onManageVisibility={() => setAiVisibilityOpen(true)} onRefresh={() => void aiModels.refresh()} disabled={staging.agentBusy || staging.inlineBusy} connectionSelection={connectionControls ?? undefined} installed={installedPresets} />;
   // Read-through aliases for narrowing-heavy JSX; ownership stays in hooks.
   /** Active document for pane rendering. */
   const active = session.active;
@@ -1557,7 +1565,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
           )}
         </ResizableAiPane>
       )}
-      {aiVisibilityOpen && <AiVisibilityDialog preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} connections={apiConnections.connections} saveFailed={aiView.saveFailed} onClose={closeAiVisibility} />}
+      {aiVisibilityOpen && <AiVisibilityDialog preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} connections={apiConnections.connections} saveFailed={aiView.saveFailed} installed={installedPresets} onClose={closeAiVisibility} />}
       </div>
       <footer className="marxen-status flex h-6 shrink-0 items-center gap-3 whitespace-nowrap border-t border-border bg-card px-3 text-[11px] text-muted-foreground">
         {desktop && active && <span data-testid="vim-footer-mode" data-mode={vimMode} className="marxen-vim-mode -ml-3 flex h-6 shrink-0 items-center px-3 font-semibold">{MODE_JA[vimMode] ? t(MODE_JA[vimMode] as LabelKey) : vimMode}</span>}

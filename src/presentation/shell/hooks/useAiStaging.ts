@@ -297,7 +297,14 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
           if (mode !== "workspace" || !isolationGateway) throw cause;
           const written = await isolationGateway.fetchDiff(copyId);
           const files = await isolationGateway.fetchNewFiles(copyId).catch(() => []);
-          if (!written.some((diff) => diff.changed) && files.length === 0) throw cause;
+          // Nothing written: the agent only answered, which is a normal reply, not a failed edit.
+          if (!written.some((diff) => diff.changed) && files.length === 0) {
+            setDiffs(written);
+            setNewFiles([]);
+            setReviewMessage(null);
+            setReviewStatus(null);
+            return;
+          }
           staged = { diffs: written, newFiles: files, drifted: written.some((diff) => diff.drifted) };
           setDiffs(written);
           setNewFiles(files);

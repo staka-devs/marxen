@@ -353,6 +353,8 @@ export default function AiPanel({
   }, [conversation?.messages.length, conversation?.messages.at(-1)?.text.length, conversation?.messages.at(-1)?.segments?.length]);
 
   const running = (conversation ? isBusy(conversation.messages) : false) || resolving || ownedBusy;
+  // The tool the agent is working on right now, so the progress line says what is happening.
+  const activeTool = conversation?.messages.at(-1)?.tools?.filter((tool) => tool.status === "in_progress" || tool.status === "pending").at(-1)?.title ?? null;
   const differentProvider = conversation?.providerKey !== providerKey;
   const anthropicBlocked = provider.kind === "anthropic" && !(provider.anthropic?.enabled ?? false);
   const canSend = !running && !disabled && !differentProvider && contexts.length > 0 && prompt.trim().length > 0 && !anthropicBlocked;
@@ -401,6 +403,10 @@ export default function AiPanel({
             toolCallId: event.payload.toolCallId,
             title: event.payload.title,
             options: event.payload.options,
+            kind: event.payload.kind,
+            detail: event.payload.detail,
+            content: event.payload.content,
+            locations: event.payload.locations,
           }, "cancelled"),
         }));
         return;
@@ -449,6 +455,10 @@ export default function AiPanel({
             toolCallId: event.payload.toolCallId,
             title: event.payload.title,
             options: event.payload.options,
+            kind: event.payload.kind,
+            detail: event.payload.detail,
+            content: event.payload.content,
+            locations: event.payload.locations,
           }, capturedMode === "ask" ? "denied" : "pending"),
         }));
         break;
@@ -785,7 +795,10 @@ export default function AiPanel({
           <p role="alert" className="ai-chat-message text-xs font-medium text-red-600">{describeAiError(streamError, t)}</p>
         )}
         {running && (
-          <p className="ai-chat-message text-[11px] text-muted-foreground">{t("応答を生成しています…")}</p>
+          <p className="ai-chat-message flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span aria-hidden="true" className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+            {activeTool ? t("{{value0}} を実行しています…", { value0: activeTool }) : t("応答を生成しています…")}
+          </p>
         )}
       </div>
       {review && <div className="max-h-72 min-h-0 shrink-0 overflow-y-auto">{review}</div>}
@@ -803,7 +816,7 @@ export default function AiPanel({
               event.preventDefault();
               if (canSend) void handleSend();
             }}
-            placeholder={t("AI への指示を書きます（Enter で送信、Shift+Enter で改行）")}
+            placeholder={t("AI への指示")}
           />
           <div className="mt-1 flex flex-wrap items-center gap-1">
             <div role="group" aria-label={t("プロンプトの種類")} className="min-w-0 shrink-0">

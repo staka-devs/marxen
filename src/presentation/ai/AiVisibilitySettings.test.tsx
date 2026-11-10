@@ -39,7 +39,7 @@ describe("AI visibility management", () => {
   it("distinguishes empty and unknown catalogs, reports no matches and persistence failure", () => {
     render(<Harness save={() => false} />);
     expect(screen.getByText("モデル候補なし（接続先の設定を使用）")).toBeVisible();
-    expect(screen.getAllByText("モデル候補を取得するには接続を確認してください。")).toHaveLength(4);
+    expect(screen.queryByText("モデル候補を取得するには接続を確認してください。")).toBeNull();
     expect(screen.queryByRole("checkbox", { name: "OpenAI Chat Completions の候補を表示" })).toBeNull();
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "no-such-advertised-id" } });
     expect(screen.getByText("一致する接続先やモデルがありません。")).toHaveAttribute("role", "status");
@@ -96,4 +96,10 @@ describe("AI visibility management", () => {
     fireEvent.change(screen.getByRole("searchbox", { name: "接続先とモデルを検索" }), { target: { value: "no-such-connection" } });
     expect(screen.getByText("一致する接続先やモデルがありません。")).toBeVisible();
   });
+});
+
+it("lists only installed agents once the native check answers", () => {
+  render(<AiVisibilitySettings preferences={defaultAiViewPreferences()} onPreferences={vi.fn()} advertisedProviders={[]} installed={new Set(["codex"])} />);
+  expect(screen.getByRole("checkbox", { name: "Codex の候補を表示" })).toBeInTheDocument();
+  expect(screen.queryByRole("checkbox", { name: "Devin の候補を表示" })).toBeNull();
 });

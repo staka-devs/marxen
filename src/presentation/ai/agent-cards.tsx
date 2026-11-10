@@ -3,7 +3,8 @@ import { FileText } from "lucide-react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { Translator } from "../../contracts/localization";
 import type { ChatPermission, ChatTool } from "../../domain/conversation/ai-conversation";
-import type { PlanEntry } from "../../contracts/ai-contracts";
+import type { PlanEntry, ToolCallContent } from "../../contracts/ai-contracts";
+import type { LabelKey } from "../../contracts/localization";
 import type { IsolationDiff, StagedNewFile } from "../../contracts/isolation-contracts";
 
 /**
@@ -46,6 +47,74 @@ export function toolStatusLabel(status: ChatTool["status"], t: Translator): stri
   }
 }
 
+const KIND_LABELS: Record<string, LabelKey> = {
+  read: "読み取り", edit: "編集", delete: "削除", move: "移動", search: "検索",
+  execute: "コマンド実行", think: "思考", fetch: "ネットワーク取得", switch_mode: "モード切替",
+};
+
+/** Last path segment, so long absolute agent paths stay readable. */
+function fileName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+}
+
+/** Changed lines of one diff block, removed lines first, capped for the chat column. */
+function diffLines(oldText: string | null, newText: string): Array<{ sign: "-" | "+"; text: string }> {
+  const before = (oldText ?? "").split("\n");
+  const after = newText.split("\n");
+  let start = 0;
+  while (start < before.length && start < after.length && before[start] === after[start]) start += 1;
+  let endBefore = before.length;
+  let endAfter = after.length;
+  while (endBefore > start && endAfter > start && before[endBefore - 1] === after[endAfter - 1]) { endBefore -= 1; endAfter -= 1; }
+  return [
+    ...before.slice(start, endBefore).map((text) => ({ sign: "-" as const, text })),
+    ...after.slice(start, endAfter).map((text) => ({ sign: "+" as const, text })),
+  ].slice(0, 12);
+}
+
+/**
+ * What a tool call acts on: its kind, command or target, files, output and diffs.
+ *
+ * Shared by tool progress and permission cards so an approval shows exactly
+ * what will run or change.
+ */
+export function ToolDetails({ kind, detail, locations, content }: { kind?: string; detail?: string; locations?: Array<{ path: string; line?: number }>; content?: ToolCallContent[] }) {
+  const { t } = useI18n();
+  const label = kind && KIND_LABELS[kind] ? t(KIND_LABELS[kind]) : null;
+  const text = content?.flatMap((item) => (item.type === "content" ? [item.text] : [])).join("\n").trim();
+  const diffs = content?.flatMap((item) => (item.type === "diff" ? [item] : [])) ?? [];
+  return (
+    <>
+      {(label || detail) && (
+        <p className="mt-1 flex items-start gap-1.5">
+          {label && <span className="shrink-0 rounded bg-muted px-1 text-[10px] leading-4 text-muted-foreground">{label}</span>}
+          {detail && <code className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-[11px]">{detail}</code>}
+        </p>
+      )}
+      {locations && locations.length > 0 && diffs.length === 0 && (
+        <ul aria-label={t("対象ファイル")} className="mt-1 space-y-0.5 text-muted-foreground">
+          {locations.map((location, index) => (
+            <li key={`${location.path}-${index}`} title={location.path} className="truncate font-mono text-[11px]">
+              {fileName(location.path)}{location.line !== undefined ? `:${location.line}` : ""}
+            </li>
+          ))}
+        </ul>
+      )}
+      {diffs.map((diff, index) => (
+        <div key={`${diff.path}-${index}`} className="mt-1 overflow-hidden rounded border border-border">
+          <p title={diff.path} className="truncate bg-muted px-1.5 font-mono text-[11px] text-muted-foreground">{fileName(diff.path)}</p>
+          <pre className="max-h-40 overflow-auto px-1.5 py-0.5 font-mono text-[11px] leading-4">
+            {diffLines(diff.old_text, diff.new_text).map((line, row) => (
+              <div key={row} className={line.sign === "+" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}>{line.sign} {line.text}</div>
+            ))}
+          </pre>
+        </div>
+      ))}
+      {text && <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-all rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] leading-4">{text.split("\n").slice(-12).join("\n")}</pre>}
+    </>
+  );
+}
+
 /**
  * Visible tool progress card for one agent tool call in chat.
  *
@@ -62,16 +131,7 @@ export function ToolCard({ tool }: { tool: ChatTool }) {
         <span className="min-w-0 flex-1 truncate font-medium">{tool.title}</span>
         <span className="shrink-0 text-muted-foreground">{toolStatusLabel(tool.status, t)}</span>
       </p>
-      {tool.locations && tool.locations.length > 0 && (
-        <ul aria-label={t("対象ファイル")} className="mt-1 space-y-0.5 text-muted-foreground">
-          {tool.locations.map((location, index) => (
-            <li key={`${location.path}-${index}`} className="truncate font-mono text-[11px]">
-              {location.path}
-              {location.line !== undefined ? `:${location.line}` : ""}
-            </li>
-          ))}
-        </ul>
-      )}
+      <ToolDetails kind={tool.kind} locations={tool.locations} content={tool.content} />
     </div>
   );
 }
@@ -146,6 +206,7 @@ export function PermissionCard({ permission, onChoose }: PermissionCardProps) {
   return (
     <div data-testid={`permission-card-${permission.requestId}`} className="ai-permission-card mt-1 rounded border border-amber-500/40 px-2 py-1.5 text-xs">
       <p className="font-medium">{permission.title}</p>
+      <ToolDetails kind={permission.kind} detail={permission.detail} locations={permission.locations} content={permission.content} />
       {permission.state === "pending" && permission.interactive ? (
         <div className="mt-1 flex flex-wrap gap-1" role="group" aria-label={t("許可の選択")}>
           {permission.options.map((option) => (
