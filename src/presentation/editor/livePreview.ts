@@ -24,6 +24,7 @@ import { toggleCheckbox } from "../../domain/markdown-gui";
 import { disposeMarkdownView, hydrateMarkdownView } from "../preview/hydrate";
 import { hydrateLocalImages } from "../images/hydrate-images";
 import { inlineMarks } from "../../domain/render/inline-marks";
+import { setPropertyEdit } from "../../domain/frontmatter";
 import { hydrateDatabases, type DatabaseViewer } from "../database/hydrate-databases";
 import type { ImageResolver } from "../../domain/image-sources";
 import type { TextEdit } from "../../contracts/contracts";
@@ -231,6 +232,26 @@ class LiveBlockWidget extends WidgetType {
     body.querySelectorAll("td,th").forEach((cell) => {
       if (!cell.hasAttribute("tabindex")) cell.setAttribute("tabindex", "0");
     });
+    // Frontmatter values edit in place; nested YAML stays read-only text.
+    body.querySelectorAll<HTMLElement>("table.marxen-properties td[data-editable]").forEach((cell) => {
+      const input = document.createElement("input");
+      input.className = "marxen-property-input";
+      input.value = cell.textContent ?? "";
+      input.dataset.property = cell.dataset.property ?? "";
+      input.setAttribute("aria-label", cell.dataset.property ?? "");
+      for (const type of ["compositionstart", "compositionend", "paste"]) input.addEventListener(type, (event) => event.stopPropagation());
+      input.addEventListener("keydown", (event) => {
+        event.stopPropagation();
+        if (event.isComposing) return;
+        if (event.key === "Enter") input.blur();
+        if (event.key === "Escape") {
+          input.value = cell.dataset.stored ?? "";
+          input.blur();
+        }
+      });
+      cell.dataset.stored = input.value;
+      cell.replaceChildren(input);
+    });
     abortHost(host);
     const controller = new AbortController();
     (host as unknown as { __liveController?: AbortController }).__liveController = controller;
@@ -258,6 +279,10 @@ class LiveBlockWidget extends WidgetType {
 
   /** Toggle checkboxes via range edits, reverting optimistic flips. */ private onHostChange(host: HTMLElement, view: EditorView, event: Event): void {
     const target = event.target as HTMLElement | null;
+    if (target instanceof HTMLInputElement && target.classList.contains("marxen-property-input") && host.contains(target)) {
+      this.commitProperty(host, view, target);
+      return;
+    }
     const box = target?.closest?.('li.task-list-item > input[type="checkbox"]') as HTMLInputElement | null;
     if (!box || !host.contains(box)) return;
     const binding = readBinding(host);
@@ -280,6 +305,16 @@ class LiveBlockWidget extends WidgetType {
     } catch {
       // Invalid marker positions never reach the backend.
     }
+  }
+
+  /** Send one frontmatter value as a range edit; the snapshot redraws the widget. */ private commitProperty(host: HTMLElement, view: EditorView, input: HTMLInputElement): void {
+    const binding = readBinding(host);
+    if (!binding) return;
+    const docText = view.state.doc.toString();
+    const at = relocateBlock(docText, binding.text, binding.from);
+    if (at < 0) return;
+    const edit = setPropertyEdit(binding.text, input.dataset.property ?? "", input.value, at);
+    if (edit) binding.getCallbacks().onGuiEdits?.([edit]);
   }
 
   /** Select table cells or reveal link sources without navigation. */ private onHostClick(host: HTMLElement, view: EditorView, event: MouseEvent): void {

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { expect, it, vi } from "vitest";
 import { CodeMirrorEditor } from "./CodeMirrorEditor";
@@ -127,4 +127,20 @@ it("styles inline spans in the active block and hides their markers until the cu
   expect(view.contentDOM.textContent).toContain("**太字**");
   expect(view.contentDOM.textContent).not.toContain("https://e.com");
   expect(view.state.doc.toString()).toBe(text);
+});
+
+it("shows frontmatter as editable properties and sends a value edit", async () => {
+  const text = "---\nstatus: todo\n---\n# 見出し\n\n本文\n";
+  const onGuiEdits = vi.fn();
+  render(<CodeMirrorEditor value={text} ariaLabel="検証" livePreview onGuiEdits={onGuiEdits} initialSelection={{ anchor: text.length, head: text.length }} />);
+  const view = editorView();
+  const input = await waitFor(() => {
+    const found = view.contentDOM.querySelector<HTMLInputElement>("input.marxen-property-input");
+    if (!found) throw new Error("properties not rendered");
+    return found;
+  });
+  expect(input.value).toBe("todo");
+  expect(view.contentDOM.querySelector(".marxen-live-heading, h1")).toBeTruthy();
+  fireEvent.change(input, { target: { value: "done" } });
+  expect(onGuiEdits).toHaveBeenCalledWith([{ range: { start: 12, end: 16 }, text: "done" }], text);
 });

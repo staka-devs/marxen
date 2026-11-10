@@ -204,3 +204,12 @@ describe("parseMarkdownBlocks", () => {
     ]);
   });
 });
+
+it("renders leading frontmatter as a properties table instead of a rule and heading", async () => {
+  const result = await renderMarkdownDocument("---\nstatus: \"a <b>\"\n---\n# 本文\n");
+  expect(result.html).toContain('<table class="marxen-properties"');
+  expect(result.html).toContain("a &lt;b&gt;");
+  expect(result.html).not.toContain("<hr");
+  expect(result.blocks[0]).toEqual({ kind: "frontmatter", startLine: 1, endLine: 3 });
+  expect(result.blocks[1]).toMatchObject({ kind: "heading", startLine: 4 });
+});

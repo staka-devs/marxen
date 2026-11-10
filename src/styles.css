@@ -305,3 +305,11 @@ article.marxen-md { padding: 32px max(24px, calc((100% - 960px) / 2)) 80px; }
 .marxen-editor .marxen-live-code { font-family: "Cascadia Code", "Consolas", monospace; font-size: 0.9em; background: var(--muted); border-radius: 3px; padding: 0 0.15em; }
 .marxen-editor .marxen-live-link { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
 .marxen-editor .marxen-live-marker { color: var(--muted-foreground); }
+
+/* Frontmatter properties (live and read previews). */
+.marxen-md table.marxen-properties { border-collapse: collapse; margin: 0 0 1em; font-size: 0.9em; }
+.marxen-md table.marxen-properties th { color: var(--muted-foreground); font-weight: 500; text-align: left; padding: 0.2rem 1rem 0.2rem 0; border: 0; white-space: nowrap; vertical-align: top; }
+.marxen-md table.marxen-properties td { border: 0; padding: 0.1rem 0; white-space: pre-line; }
+.marxen-md .marxen-property-input { width: 100%; min-width: 12rem; border: 1px solid transparent; border-radius: 4px; padding: 0.15rem 0.4rem; background: transparent; color: inherit; font: inherit; outline: none; }
+.marxen-md .marxen-property-input:hover { border-color: var(--border); }
+.marxen-md .marxen-property-input:focus { border-color: var(--primary); }
