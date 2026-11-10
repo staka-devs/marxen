@@ -308,7 +308,7 @@ article.marxen-md { padding: 32px max(24px, calc((100% - 960px) / 2)) 80px; }
 
 /* Frontmatter properties (live and read previews). */
 .marxen-md table.marxen-properties { border-collapse: collapse; margin: 0 0 1em; font-size: 0.9em; }
-.marxen-md table.marxen-properties th { color: var(--muted-foreground); font-weight: 500; text-align: left; padding: 0.2rem 1rem 0.2rem 0; border: 0; white-space: nowrap; vertical-align: top; }
+.marxen-md table.marxen-properties th { background: transparent; color: var(--muted-foreground); font-weight: 500; text-align: left; padding: 0.2rem 1rem 0.2rem 0; border: 0; white-space: nowrap; vertical-align: top; }
 .marxen-md table.marxen-properties td { border: 0; padding: 0.1rem 0; white-space: pre-line; }
 .marxen-md .marxen-property-input { width: 100%; min-width: 12rem; border: 1px solid transparent; border-radius: 4px; padding: 0.15rem 0.4rem; background: transparent; color: inherit; font: inherit; outline: none; }
 .marxen-md .marxen-property-input:hover { border-color: var(--border); }
@@ -319,3 +319,5 @@ article.marxen-md { padding: 32px max(24px, calc((100% - 960px) / 2)) 80px; }
 .marxen-editor .marxen-live-number { color: var(--muted-foreground); }
 .marxen-editor .marxen-live-task { margin: 0 0.4em 0 0.1em; vertical-align: -0.1em; cursor: pointer; }
 .marxen-editor .cm-line.marxen-live-quote-line { border-left: 3px solid var(--border); padding-left: 0.8em; color: var(--muted-foreground); }
+/* Plain items in a list that also has tasks keep their bullet. */
+.marxen-md ul.contains-task-list > li:not(.task-list-item) { list-style: disc; margin-left: 1.1em; }
