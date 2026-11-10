@@ -226,6 +226,7 @@ mod desktop {
     }
     #[tauri::command(async)]
     /// Import an external image and insert its reference through the revision-checked use case.
+    #[allow(clippy::too_many_arguments)]
     pub fn import_external_image(
         state: tauri::State<'_, ActorState>,
         location: DocumentLocation,
@@ -502,6 +503,7 @@ mod desktop {
     }
     #[tauri::command(async)]
     /// Import supplied image bytes and replace an exact revision-tagged UTF-16 range.
+    #[allow(clippy::too_many_arguments)]
     pub fn paste_image(
         state: tauri::State<'_, ActorState>,
         location: DocumentLocation,
