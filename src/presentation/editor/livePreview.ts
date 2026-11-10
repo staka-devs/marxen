@@ -23,6 +23,7 @@ import { renderMarkdownDocument } from "../../domain/render/pipeline";
 import { toggleCheckbox } from "../../domain/markdown-gui";
 import { disposeMarkdownView, hydrateMarkdownView } from "../preview/hydrate";
 import { hydrateLocalImages } from "../images/hydrate-images";
+import { inlineMarks } from "../../domain/render/inline-marks";
 import { hydrateDatabases, type DatabaseViewer } from "../database/hydrate-databases";
 import type { ImageResolver } from "../../domain/image-sources";
 import type { TextEdit } from "../../contracts/contracts";
@@ -345,6 +346,28 @@ class LiveBlockWidget extends WidgetType {
   }
 }
 
+const HIDDEN = Decoration.replace({});
+const MARKER = Decoration.mark({ class: "marxen-live-marker" });
+
+/**
+ * Style inline spans of the raw active block and hide their markers.
+ *
+ * Markers stay visible (muted) while the selection touches their span, so
+ * Vim motions always land on real characters. Offsets are never changed.
+ */
+function inlineDecorations(decorations: Range<Decoration>[], text: string, base: number, selFrom: number, selTo: number): void {
+  for (const mark of inlineMarks(text)) {
+    const from = base + mark.from;
+    const to = base + mark.to;
+    const contentFrom = base + mark.contentFrom;
+    const contentTo = base + mark.contentTo;
+    if (contentTo > contentFrom) decorations.push(Decoration.mark({ class: `marxen-live-${mark.kind}` }).range(contentFrom, contentTo));
+    const markers = selFrom <= to && selTo >= from ? MARKER : HIDDEN;
+    if (contentFrom > from) decorations.push(markers.range(from, contentFrom));
+    if (to > contentTo) decorations.push(markers.range(contentTo, to));
+  }
+}
+
 /** Render inactive blocks, style active headings, and compact unselected separator lines without changing source offsets. */ function buildDecorations(docText: string, selFrom: number, selTo: number, defs: string, getCallbacks: () => LivePreviewCallbacks): DecorationSet {
   const decorations: Range<Decoration>[] = [];
   const blocks = computeLiveBlocks(docText);
@@ -366,6 +389,7 @@ class LiveBlockWidget extends WidgetType {
           offset += line.length + 1;
         }
       }
+      if (block.kind !== "code" && block.kind !== "math" && block.kind !== "html") inlineDecorations(decorations, text, block.from, selFrom, selTo);
       continue;
     }
     const text = docText.slice(block.from, block.to);

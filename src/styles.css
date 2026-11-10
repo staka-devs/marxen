@@ -297,3 +297,11 @@ article.marxen-md { padding: 32px max(24px, calc((100% - 960px) / 2)) 80px; }
 .marxen-md .marxen-database-link:hover { text-decoration: underline; }
 .marxen-md .marxen-database-actions { width: 2.5rem; text-align: center; }
 .marxen-md .marxen-database-note-text { color: var(--muted-foreground, #6b7280); font-size: 0.85rem; }
+
+/* Inline spans of the block under the cursor (live preview). */
+.marxen-editor .marxen-live-strong { font-weight: 700; }
+.marxen-editor .marxen-live-emphasis { font-style: italic; }
+.marxen-editor .marxen-live-delete { text-decoration: line-through; }
+.marxen-editor .marxen-live-code { font-family: "Cascadia Code", "Consolas", monospace; font-size: 0.9em; background: var(--muted); border-radius: 3px; padding: 0 0.15em; }
+.marxen-editor .marxen-live-link { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.marxen-editor .marxen-live-marker { color: var(--muted-foreground); }

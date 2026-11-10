@@ -114,3 +114,17 @@ it("rejects composition if native mode stops permitting input before commit", ()
   expect(onGuiEdits).not.toHaveBeenCalled();
   expect(view.state.doc.toString()).toBe("前後");
 });
+
+it("styles inline spans in the active block and hides their markers until the cursor touches them", () => {
+  const text = "前 **太字** と [リンク](https://e.com) 後\n";
+  render(<CodeMirrorEditor value={text} ariaLabel="検証" livePreview initialSelection={{ anchor: 0, head: 0 }} />);
+  const view = editorView();
+  expect(view.contentDOM.querySelector(".marxen-live-strong")).toHaveTextContent("太字");
+  expect(view.contentDOM.querySelector(".marxen-live-link")).toHaveTextContent("リンク");
+  expect(view.contentDOM.textContent).not.toContain("**");
+  expect(view.contentDOM.textContent).not.toContain("https://e.com");
+  act(() => view.dispatch({ selection: { anchor: text.indexOf("太字") } }));
+  expect(view.contentDOM.textContent).toContain("**太字**");
+  expect(view.contentDOM.textContent).not.toContain("https://e.com");
+  expect(view.state.doc.toString()).toBe(text);
+});
