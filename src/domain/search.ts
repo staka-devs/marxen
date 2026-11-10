@@ -33,3 +33,26 @@ export function parseSubstituteCommand(text: string): { pattern: string; replace
 export function searchIdentity(root: string | null, query: string, options: SearchOptions): string {
   return JSON.stringify([root, query, options.caseSensitive, options.wholeWord, options.regex]);
 }
+
+/**
+ * Translate a GUI find query into a Vim search pattern for `@/`, so `n`/`N` follow the find bar.
+ *
+ * Literal text uses very-nomagic `\V` (only backslash is special); regex mode uses very-magic `\v`.
+ */
+export function vimSearchPattern(query: string, options: SearchOptions): string {
+  // shortcut: `\v` approximates the native regex dialect; translate classes like `\d`/`(?:` if users hit gaps.
+  const body = options.regex ? query : query.replaceAll("\\", "\\\\");
+  const word = options.wholeWord ? (options.regex ? `<(${body})>` : `\\<${body}\\>`) : body;
+  return `${options.caseSensitive ? "\\C" : "\\c"}${options.regex ? "\\v" : "\\V"}${word}`;
+}
+
+/**
+ * Read the pattern of a Vim search command line (`/pat` or `?pat`) while it is typed.
+ *
+ * Returns null for Ex commands and for the empty pattern (Vim's "repeat last search").
+ */
+export function parseSearchCommand(text: string): string | null {
+  if (text[0] !== "/" && text[0] !== "?") return null;
+  const pattern = text.slice(1);
+  return pattern === "" ? null : pattern;
+}

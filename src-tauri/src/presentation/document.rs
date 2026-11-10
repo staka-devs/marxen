@@ -226,18 +226,23 @@ mod desktop {
     }
     #[tauri::command(async)]
     /// Import an external image and insert its reference through the revision-checked use case.
+    #[allow(clippy::too_many_arguments)]
     pub fn import_external_image(
         state: tauri::State<'_, ActorState>,
         location: DocumentLocation,
         document_id: String,
         base_revision: u32,
         path: String,
+        folder: String,
+        name: String,
         range: Utf16Range,
     ) -> Result<PasteResult, WorkspaceError> {
         with_document(&state, document_id.clone(), &location, |w| {
             w.import_external_image(
                 request(document_id, base_revision),
                 std::path::Path::new(&path),
+                &folder,
+                &name,
                 range,
             )
         })
@@ -498,17 +503,25 @@ mod desktop {
     }
     #[tauri::command(async)]
     /// Import supplied image bytes and replace an exact revision-tagged UTF-16 range.
+    #[allow(clippy::too_many_arguments)]
     pub fn paste_image(
         state: tauri::State<'_, ActorState>,
         location: DocumentLocation,
         document_id: String,
         base_revision: u32,
+        folder: String,
         name: String,
         bytes: Vec<u8>,
         range: Utf16Range,
     ) -> Result<PasteResult, WorkspaceError> {
         with_document(&state, document_id.clone(), &location, |w| {
-            w.paste_image(request(document_id, base_revision), &name, &bytes, range)
+            w.paste_image(
+                request(document_id, base_revision),
+                &folder,
+                &name,
+                &bytes,
+                range,
+            )
         })
     }
     #[tauri::command(async)]
@@ -594,6 +607,18 @@ mod desktop {
     ) -> Result<CursorUpdate, WorkspaceError> {
         with_document(&state, document_id.clone(), &location, |w| {
             Ok(w.actor(&document_id)?.cursor()?)
+        })
+    }
+    #[tauri::command(async)]
+    /// Make the GUI find bar's query the document's native last search pattern.
+    pub fn set_search_pattern(
+        state: tauri::State<'_, ActorState>,
+        location: DocumentLocation,
+        document_id: String,
+        pattern: String,
+    ) -> Result<(), WorkspaceError> {
+        with_document(&state, document_id.clone(), &location, |w| {
+            Ok(w.actor(&document_id)?.set_search_pattern(&pattern)?)
         })
     }
     #[tauri::command(async)]

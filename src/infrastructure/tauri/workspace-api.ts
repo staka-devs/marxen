@@ -161,9 +161,9 @@ export const workspaceApi = {
   /** Insert a workspace image reference at the given UTF-16 range. */
   insertWorkspaceImage: (request: SaveRequest, path: string, range: Utf16Range) =>
     documentInvoke<DocumentSnapshot>("insert_workspace_image", { ...request, path, range }),
-  /** Copy an external image into the workspace and insert a reference. */
-  importExternalImage: (request: SaveRequest, path: string, range: Utf16Range) =>
-    documentInvoke<PasteResult>("import_external_image", { ...request, path, range }),
+  /** Copy an external image into a document-relative folder under the given name and insert a reference. */
+  importExternalImage: (request: SaveRequest, path: string, range: Utf16Range, folder: string, name: string) =>
+    documentInvoke<PasteResult>("import_external_image", { ...request, path, folder, name, range }),
   /** Create a new Markdown document with optional initial text. */
   createMarkdown: (path: string, text = "", scope?: RootScope) => rootInvoke<OpenDocument>("create_markdown", { path, text }, scope ?? currentScope),
   /** Create a contained directory using the existing Rust workspace owner. */
@@ -206,9 +206,9 @@ export const workspaceApi = {
   discardRecovery: (documentId: DocumentId) => invoke<void>("discard_recovery", { documentId, location: recoveryLocations.get(documentId) }),
   /** Load a document-relative image for preview hydration. */
   loadImage: (documentId: DocumentId, path: string) => documentInvoke<ImageData>("load_relative_image", { documentId, path }),
-  /** Paste image bytes, replacing the given UTF-16 range. */
-  pasteImage: (request: SaveRequest, name: string, bytes: Uint8Array, range: Utf16Range) =>
-    documentInvoke<PasteResult>("paste_image", { ...request, name, bytes: Array.from(bytes), range }),
+  /** Paste image bytes into a document-relative folder, replacing the given UTF-16 range. */
+  pasteImage: (request: SaveRequest, name: string, bytes: Uint8Array, range: Utf16Range, folder: string) =>
+    documentInvoke<PasteResult>("paste_image", { ...request, folder, name, bytes: Array.from(bytes), range }),
   /** Feed raw keys through real Neovim. */
   input: (request: SaveRequest, keys: string) => documentInvoke<DocumentSnapshot>("nvim_input", { ...request, keys }),
   /** Fetch the current Neovim mode for a document. */
@@ -220,6 +220,8 @@ export const workspaceApi = {
     documentInvoke<boolean>("has_nvim_mapping", { documentId, mode, lhs, location }),
   /** Fetch the last known native cursor for a document. */
   fetchCursor: (documentId: DocumentId, location?: DocumentLocation) => documentInvoke<CursorUpdate>("fetch_cursor", { documentId, location }),
+  /** Set a document's native last search pattern (`@/`). */
+  setSearchPattern: (documentId: DocumentId, pattern: string, location?: DocumentLocation) => documentInvoke<void>("set_search_pattern", { documentId, pattern, location }),
   /** Report a GUI selection to the native cursor tracker. */
   reportCursor: (update: CursorUpdate, location?: DocumentLocation, block?: boolean) => documentInvoke<CursorUpdate>("report_cursor", { ...update, location, block }),
   /** Fetch a Neovim grid screen batch. */

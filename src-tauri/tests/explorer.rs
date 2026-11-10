@@ -256,23 +256,44 @@ fn external_import_is_bounded_contained_and_rejects_stale_before_writes() {
         "x",
     );
     assert!(w
-        .import_external_image(request(&doc.snapshot), &source, range(2, 2))
+        .import_external_image(
+            request(&doc.snapshot),
+            &source,
+            "images",
+            "drop.png",
+            range(2, 2)
+        )
         .is_err());
     assert!(!root.path().join("images").exists());
     let imported = w
-        .import_external_image(request(&changed), &source, range(2, 3))
+        .import_external_image(
+            request(&changed),
+            &source,
+            "images",
+            "drop.png",
+            range(2, 3),
+        )
         .unwrap();
     assert_eq!(imported.path, "images/drop.png");
     assert_eq!(imported.snapshot.text, "😀![](images/drop.png)");
     assert_eq!(fs::read(root.path().join(&imported.path)).unwrap(), PNG);
     assert_eq!(fs::read(&source).unwrap(), PNG);
-    assert!(w
-        .import_external_image(request(&imported.snapshot), &source, range(2, 2))
-        .is_err());
-    assert!(w
+    let again = w
         .import_external_image(
             request(&imported.snapshot),
+            &source,
+            "images",
+            "drop.png",
+            range(2, 2),
+        )
+        .unwrap();
+    assert_eq!(again.path, "images/drop-1.png");
+    assert!(w
+        .import_external_image(
+            request(&again.snapshot),
             Path::new("relative.png"),
+            "images",
+            "drop.png",
             range(2, 2)
         )
         .is_err());
@@ -282,13 +303,25 @@ fn external_import_is_bounded_contained_and_rejects_stale_before_writes() {
         .set_len(marxen_lib::domain::storage::MAX_IMAGE_BYTES as u64 + 1)
         .unwrap();
     assert!(w
-        .import_external_image(request(&imported.snapshot), &large, range(2, 2))
+        .import_external_image(
+            request(&again.snapshot),
+            &large,
+            "images",
+            "drop.png",
+            range(2, 2)
+        )
         .is_err());
     assert!(!root.path().join("images/large.png").exists());
     fs::write(root.path().join("plain.txt"), "text").unwrap();
     let text = w.open_text_file("plain.txt").unwrap();
     assert!(w
-        .import_external_image(request(&text.snapshot), &source, range(0, 0))
+        .import_external_image(
+            request(&text.snapshot),
+            &source,
+            "images",
+            "drop.png",
+            range(0, 0)
+        )
         .is_err());
 }
 
@@ -317,7 +350,13 @@ fn image_directory_junction_cannot_import_outside_workspace() {
     }
     let doc = w.create("a.md", "").unwrap();
     assert!(w
-        .paste_image(request(&doc.snapshot), "escape.png", PNG, range(0, 0))
+        .paste_image(
+            request(&doc.snapshot),
+            "images",
+            "escape.png",
+            PNG,
+            range(0, 0)
+        )
         .is_err());
     assert!(!outside.path().join("escape.png").exists());
     assert!(w.load_workspace_image("images/escape.png").is_err());

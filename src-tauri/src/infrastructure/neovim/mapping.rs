@@ -76,7 +76,9 @@ pub fn has_mapping(client: &EmbedClient, mode: &str, lhs: &str) -> Result<bool, 
                   for _, mapping in ipairs(mappings) do
                     -- Neovim's built-in <Tab>/<S-Tab> snippet jump only passes the key through
                     -- unless a snippet is active, so it must not hide the app's Tab handling.
-                    local builtin = (mapping.desc or ''):find('^vim%.snippet%.jump') and not vim.snippet.active()
+                    -- pcall: a runtime without vim.snippet must not fail every keystroke.
+                    local ok, active = pcall(function() return vim.snippet.active() end)
+                    local builtin = (mapping.desc or ''):find('^vim%.snippet%.jump') and not (ok and active)
                     local mapped = vim.api.nvim_replace_termcodes(mapping.lhs, true, true, true)
                     if not builtin and mapped:sub(1, #typed) == typed then return true end
                   end

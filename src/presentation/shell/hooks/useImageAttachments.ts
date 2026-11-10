@@ -16,6 +16,7 @@ import { bytesToDataUrl } from "../../../domain/clipboard-text";
 import { sameRoot } from "../../../domain/document-location";
 import type { WorkspaceInfo, DocumentSnapshot } from "../../../contracts/contracts";
 import { isMarkdownPath } from "../../../domain/workspace-files";
+import { imageFileName } from "../../../domain/image-name";
 import { READONLY_MESSAGE, StaleResync, workspaceErrorText } from "../../../domain/document-errors";
 import type { NoticeKind } from "../../workspace/Notifications";
 import type { ImageDrop } from "../../workspace/ImageDropZone";
@@ -40,6 +41,10 @@ export interface ImageAttachmentsArgs {
   imageLoader?: ImageLoader;
   /** Reload workspace entries after workspace image drops. */
   loadEntries: () => Promise<unknown>;
+  /** Destination folder for pasted and dropped images (default `images`). */
+  imageFolder?: string;
+  /** File-name pattern for pasted and dropped images (default `{name}`). */
+  imageName?: string;
 }
 
 /** Image attachment operations and preview resolvers. */
@@ -73,6 +78,8 @@ export interface ImageAttachments {
 export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachments {
   const { message } = useI18n();
   const { desktop, roots, notify, session, vim, workspaceGateway, imageLoader, loadEntries } = args;
+  const folder = args.imageFolder ?? "images";
+  const pattern = args.imageName ?? "{name}";
   const currentRoots = useRef(roots);
   currentRoots.current = roots;
   const setNotice = notify;
@@ -191,7 +198,7 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
         try {
           const bytes = new Uint8Array(await file.arrayBuffer());
           const result = await registry.pasteImage(
-            { request: { documentId: id, baseRevision: revision }, name: file.name, bytes, range: cursor },
+            { request: { documentId: id, baseRevision: revision }, folder, name: imageFileName(pattern, file.name, new Date()), bytes, range: cursor },
           );
           revision = result.snapshot.revision;
           const inserted = result.snapshot.text.length - previousLength;
@@ -216,7 +223,7 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
         }
       }
     },
-    [registry, mergeSnapshot, sayStale, echoCursor, isSelectionGenCurrent, bumpSelectionGen, docsRef, caretRef, setSelections, notify],
+    [registry, folder, pattern, mergeSnapshot, sayStale, echoCursor, isSelectionGenCurrent, bumpSelectionGen, docsRef, caretRef, setSelections, notify],
   );
 
   /** Capture paste synchronously routing text-or-image exactly once. */
@@ -296,11 +303,11 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
           if (crossRoot) {
             const image = await workspaceGateway!.loadWorkspaceImage(path, source.scope);
             if (!currentRoots.current?.some((root) => sameRoot(root.scope, source.scope)) || !docsRef.current[id]) return;
-            result = (await registry.pasteImage({ request: ownedRequest, name: path.split("/").at(-1)!, bytes: new Uint8Array(image.bytes), range: cursor })).snapshot;
+            result = (await registry.pasteImage({ request: ownedRequest, folder, name: imageFileName(pattern, path.split("/").at(-1)!, new Date()), bytes: new Uint8Array(image.bytes), range: cursor })).snapshot;
           } else if (drop.kind === "workspace") {
             result = await registry.insertWorkspaceImage(ownedRequest, path, cursor);
           } else {
-            result = (await registry.importExternalImage(ownedRequest, path, cursor)).snapshot;
+            result = (await registry.importExternalImage(ownedRequest, path, cursor, folder, imageFileName(pattern, path.split(/[\\/]/).at(-1)!, new Date()))).snapshot;
           }
           revision = result.revision;
           const next = cursor.end + result.text.length - length;
@@ -320,7 +327,7 @@ export function useImageAttachments(args: ImageAttachmentsArgs): ImageAttachment
         else setNotice(localizedFailure(cause, workspaceErrorText), "error");
       }
     })();
-  }, [roots, workspaceGateway, registry, pasteImageFiles, bumpSelectionGen, mergeSnapshot, isSelectionGenCurrent, echoCursor, loadEntries, sayStale, docsRef, activeRef, caretRef, setSelections, notify]);
+  }, [roots, folder, pattern, workspaceGateway, registry, pasteImageFiles, bumpSelectionGen, mergeSnapshot, isSelectionGenCurrent, echoCursor, loadEntries, sayStale, docsRef, activeRef, caretRef, setSelections, notify]);
 
   /** Current selection as a half-open range for drop positioning. */
   const dropSelection = active ? {

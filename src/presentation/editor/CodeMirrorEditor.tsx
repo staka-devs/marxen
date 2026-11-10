@@ -8,6 +8,7 @@ import type { DocumentSnapshot, TextEdit } from "../../contracts/contracts";
 import { createLivePreview, type LivePreviewCallbacks } from "./livePreview";
 import { aiDiff } from "./aiDiff";
 import { gitGutter } from "./gitGutter";
+import { searchMatches } from "./searchMatches";
 import { blockCursorWidth } from "./cursorWidth";
 import type { ImageResolver } from "../../domain/image-sources";
 import { DEFAULT_EDITOR_PREFERENCES, type EditorPreferences } from "../../domain/editor-preferences";
@@ -82,6 +83,8 @@ interface Props {
   aiBaseline?: string | null;
   /** The file's text at Git HEAD; when set, the gutter marks lines changed since then. */
   gitBaseline?: string | null;
+  /** Find-bar or Vim search matches to highlight, as UTF-16 document ranges. */
+  searchRanges?: ReadonlyArray<{ from: number; to: number }>;
 }
 
 /** Common prefix/suffix diff as a single wire range edit. */
@@ -130,7 +133,9 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   return [{ range: { start, end: endBefore }, text: after.slice(start, endAfter) }];
 }
 
-/** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, snapshot, shouldUseNativeCursor, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true, focusRequest = 0, onEditorMenu, aiBaseline = null, gitBaseline = null }: Props) {
+const NO_RANGES: ReadonlyArray<{ from: number; to: number }> = [];
+
+/** CodeMirror 6 editor with live preview, IME gating, and cursor echo. */ export function CodeMirrorEditor({ value, snapshot, shouldUseNativeCursor, editable = true, ariaLabel, testId, onGuiEdits, onSelectionChange, initialSelection, externalCursor, livePreview = false, resolveImage, preferences = DEFAULT_EDITOR_PREFERENCES, vimMode = "insert", allowTextInput = true, focusRequest = 0, onEditorMenu, aiBaseline = null, gitBaseline = null, searchRanges = NO_RANGES }: Props) {
   const { t, language } = useI18n();
   const languageRef = useRef(language);
   languageRef.current = language;
@@ -144,6 +149,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   const accessibilityRef = useRef(new Compartment());
   const aiDiffRef = useRef(new Compartment());
   const gitGutterRef = useRef(new Compartment());
+  const searchRef = useRef(new Compartment());
   const syncing = useRef(false);
   const composing = useRef(false);
   const printableKey = useRef<string | undefined>(undefined);
@@ -213,6 +219,7 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
           blockCursorWidth,
           appearanceRef.current.of([]),
           gitGutterRef.current.of(gitGutter(gitBaseline)),
+          searchRef.current.of(searchMatches(searchRanges)),
           editableRef.current.of(EditorView.editable.of(editableRefValue.current)),
           liveRef.current.of([]),
           aiDiffRef.current.of(aiDiff(aiBaseline)),
@@ -410,6 +417,10 @@ export function singleEditFromDiff(before: string, after: string): TextEdit[] | 
   useEffect(() => {
     viewRef.current?.dispatch({ effects: gitGutterRef.current.reconfigure(gitGutter(gitBaseline)) });
   }, [gitBaseline]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: searchRef.current.reconfigure(searchMatches(searchRanges)) });
+  }, [searchRanges]);
 
   // Vim cursor echo: apply once per sequence token without disturbing
   // composition or the user's active selection gestures. The programmatic

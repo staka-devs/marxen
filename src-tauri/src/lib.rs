@@ -203,6 +203,7 @@ pub fn run() {
             presentation::document::redo_document,
             presentation::document::nvim_input,
             presentation::document::fetch_cursor,
+            presentation::document::set_search_pattern,
             presentation::document::fetch_grid,
             presentation::document::fetch_config,
             presentation::ai::ai_credential_state,

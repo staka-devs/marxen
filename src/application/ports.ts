@@ -118,10 +118,10 @@ export interface DocumentGateway {
   configure(request: SaveRequest, path: string | null): Promise<NvimConfig>;
   /** Insert a workspace image reference. */
   insertWorkspaceImage(request: SaveRequest, path: string, range: Utf16Range): Promise<DocumentSnapshot>;
-  /** Import an external image and insert a reference. */
-  importExternalImage(request: SaveRequest, path: string, range: Utf16Range): Promise<PasteResult>;
-  /** Paste image bytes replacing the exact range. */
-  pasteImage(args: { request: SaveRequest; name: string; bytes: Uint8Array; range: Utf16Range }): Promise<PasteResult>;
+  /** Import an external image into a document-relative folder under the given name and insert a reference. */
+  importExternalImage(request: SaveRequest, path: string, range: Utf16Range, folder: string, name: string): Promise<PasteResult>;
+  /** Paste image bytes into a document-relative folder, replacing the exact range. */
+  pasteImage(args: { request: SaveRequest; folder: string; name: string; bytes: Uint8Array; range: Utf16Range }): Promise<PasteResult>;
   /** Fetch the authoritative snapshot. */
   fetchSnapshot(documentId: DocumentId): Promise<DocumentSnapshot>;
   /** Fetch the native mode with revision. */
@@ -136,6 +136,8 @@ export interface DocumentGateway {
   reportCursor(update: CursorUpdate): Promise<CursorUpdate>;
   /** Fetch a grid screen batch. */
   fetchGrid(documentId: DocumentId, width?: number, height?: number): Promise<GridUpdate>;
+  /** Make a Vim pattern the native last search so `n`/`N` follow the GUI find bar; desktop only. */
+  setSearchPattern?(documentId: DocumentId, pattern: string): Promise<void>;
   /** Fetch the Neovim config state. */
   fetchConfig(documentId: DocumentId): Promise<NvimConfig>;
 }
@@ -186,12 +188,14 @@ export interface DocumentTransport {
   configure(request: SaveRequest, path: string | null): Promise<NvimConfig>;
   /** Insert a workspace image reference at the given UTF-16 range. */
   insertWorkspaceImage(request: SaveRequest, path: string, range: Utf16Range): Promise<DocumentSnapshot>;
-  /** Copy an external image into the workspace and insert a reference. */
-  importExternalImage(request: SaveRequest, path: string, range: Utf16Range): Promise<PasteResult>;
-  /** Paste image bytes, replacing the given UTF-16 range. */
-  pasteImage(request: SaveRequest, name: string, bytes: Uint8Array, range: Utf16Range): Promise<PasteResult>;
+  /** Copy an external image into a document-relative folder under the given name and insert a reference. */
+  importExternalImage(request: SaveRequest, path: string, range: Utf16Range, folder: string, name: string): Promise<PasteResult>;
+  /** Paste image bytes into a document-relative folder, replacing the given UTF-16 range. */
+  pasteImage(request: SaveRequest, name: string, bytes: Uint8Array, range: Utf16Range, folder: string): Promise<PasteResult>;
   /** Fetch a Neovim grid screen batch. */
   fetchGrid(documentId: DocumentId, width?: number, height?: number): Promise<GridUpdate>;
+  /** Set the native last search pattern of one document. */
+  setSearchPattern?(documentId: DocumentId, pattern: string, location?: DocumentLocation): Promise<void>;
   /** Fetch the current Neovim config state for a document. */
   fetchConfig(documentId: DocumentId, location?: DocumentLocation): Promise<NvimConfig>;
 }

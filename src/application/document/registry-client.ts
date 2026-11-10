@@ -38,6 +38,8 @@ import { supportsEditorSelection } from "../../domain/editor-menu";
 /** Paste-image arguments pairing a save request with bytes and a range. */
 export interface PasteImageArgs {
   request: SaveRequest;
+  /** Destination folder relative to the document, or to the workspace root when it starts with `/`. */
+  folder: string;
   name: string;
   bytes: Uint8Array;
   range: Utf16Range;
@@ -619,10 +621,10 @@ export class RegistryClient {
    * Bumps the tracked revision from the returned snapshot so chained drops
    * build on the fresh text.
    */
-  importExternalImage(request: SaveRequest, path: string, range: Utf16Range) {
+  importExternalImage(request: SaveRequest, path: string, range: Utf16Range, folder: string, name: string) {
     return this.enqueue(request.documentId, async () => {
       try {
-        const result = await this.transport.importExternalImage(this.withLocation(request), path, range);
+        const result = await this.transport.importExternalImage(this.withLocation(request), path, range, folder, name);
         this.bump(result.snapshot);
         return result;
       } catch (cause) {
@@ -640,7 +642,7 @@ export class RegistryClient {
    */
   pasteImage(args: PasteImageArgs) {
     return this.enqueue(args.request.documentId, async () => {
-      const result = await this.transport.pasteImage(this.withLocation(args.request), args.name, args.bytes, args.range);
+      const result = await this.transport.pasteImage(this.withLocation(args.request), args.name, args.bytes, args.range, args.folder);
       this.bump(result.snapshot);
       return result;
     });
@@ -678,6 +680,11 @@ export class RegistryClient {
    */
   fetchCursor(documentId: DocumentId): Promise<CursorUpdate> {
     return this.transport.fetchCursor(documentId, this.location(documentId));
+  }
+
+  /** Install a Vim pattern as the document's native last search (`@/`). */
+  async setSearchPattern(documentId: DocumentId, pattern: string): Promise<void> {
+    await this.transport.setSearchPattern?.(documentId, pattern, this.location(documentId));
   }
 
   /**

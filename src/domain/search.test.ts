@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSubstituteCommand } from "./search";
+import { parseSearchCommand, parseSubstituteCommand, vimSearchPattern } from "./search";
 
 describe("parseSubstituteCommand", () => {
   it.each([
@@ -15,5 +15,21 @@ describe("parseSubstituteCommand", () => {
 
   it.each([":set nu", ":sort /x/", ":s//a", "/test", ":", ":w"])("ignores %j", (text) => {
     expect(parseSubstituteCommand(text)).toBeNull();
+  });
+});
+
+describe("Vim search bridge", () => {
+  it("reads typed / and ? patterns only", () => {
+    expect(parseSearchCommand("/foo")).toBe("foo");
+    expect(parseSearchCommand("?a b")).toBe("a b");
+    expect(parseSearchCommand("/")).toBeNull();
+    expect(parseSearchCommand(":s/a/b")).toBeNull();
+  });
+
+  it("turns find bar queries into Vim patterns", () => {
+    const literal = { caseSensitive: false, wholeWord: false, regex: false };
+    expect(vimSearchPattern("a.b\\c", literal)).toBe(String.raw`\c\Va.b\\c`);
+    expect(vimSearchPattern("foo", { ...literal, caseSensitive: true, wholeWord: true })).toBe(String.raw`\C\V\<foo\>`);
+    expect(vimSearchPattern("a|b", { ...literal, regex: true, wholeWord: true })).toBe(String.raw`\c\v<(a|b)>`);
   });
 });

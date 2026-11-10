@@ -1039,11 +1039,13 @@ impl Workspace {
         })?)
     }
 
-    /// Validate bounded external image bytes before importing them into the workspace.
+    /// Validate bounded external image bytes before importing them under the requested folder and name.
     pub fn import_external_image(
         &self,
         request: SaveRequest,
         path: &Path,
+        folder: &str,
+        name: &str,
         range: Utf16Range,
     ) -> Result<PasteResult, WorkspaceError> {
         if !path.is_absolute() {
@@ -1051,17 +1053,17 @@ impl Workspace {
         }
         let bytes = self.storage.read_image_bytes(path)?;
         image_mime(path, &bytes)?;
-        let name = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .ok_or(WorkspaceError::InvalidPath)?;
-        self.paste_image(request, name, &bytes, range)
+        self.paste_image(request, folder, name, &bytes, range)
     }
 
-    /// Import image bytes into the attachment folder and replace the exact GUI range atomically.
+    /// Import image bytes into a document-relative folder and replace the exact GUI range atomically.
+    ///
+    /// An existing file of the same name gets a `-1`, `-2`, ... suffix instead of failing,
+    /// because clipboard images all arrive under one generic name.
     pub fn paste_image(
         &self,
         request: SaveRequest,
+        folder: &str,
         name: &str,
         bytes: &[u8],
         range: Utf16Range,
@@ -1090,30 +1092,73 @@ impl Workspace {
         )
         .map_err(|error| WorkspaceError::Contract { error })?;
         let parent = document.parent().ok_or(WorkspaceError::InvalidPath)?;
-        let folder = parent.join("images");
-        let relative_folder = storage::relative(&self.root, &folder)?;
-        self.storage.resolve(&self.root, &relative_folder)?;
-        if !self.storage.exists(&folder) {
-            self.storage.create_dir(&folder)?;
+        // A leading slash anchors the folder at the workspace root instead of the document.
+        let from_root = folder.starts_with(['/', '\\']);
+        let up = match from_root {
+            true => storage::relative(&self.root, parent)?
+                .split('/')
+                .filter(|segment| !segment.is_empty())
+                .count(),
+            false => 0,
+        };
+        let segments: Vec<&str> = folder
+            .split(['/', '\\'])
+            .filter(|segment| !segment.is_empty() && *segment != ".")
+            .collect();
+        let mut directory = match from_root {
+            true => self.root.clone(),
+            false => parent.to_path_buf(),
+        };
+        // One level at a time: containment is checked before each directory is created.
+        for segment in &segments {
+            directory.push(segment);
+            let level = self
+                .storage
+                .resolve(&self.root, &storage::relative(&self.root, &directory)?)?;
+            if !self.storage.exists(&level) {
+                self.storage.create_dir(&level)?;
+            }
         }
-        let path = format!("{relative_folder}/{name}");
-        let target = self.storage.resolve(&self.root, &path)?;
+        let relative_folder = storage::relative(&self.root, &directory)?;
+        let (stem, extension) = name.rsplit_once('.').ok_or(WorkspaceError::InvalidImage)?;
+        let (file, path, target) = (0..1000)
+            .map(|n| match n {
+                0 => name.to_owned(),
+                n => format!("{stem}-{n}.{extension}"),
+            })
+            .find_map(|file| {
+                let path = match relative_folder.as_str() {
+                    "" => file.clone(),
+                    folder => format!("{folder}/{file}"),
+                };
+                match self.storage.resolve(&self.root, &path) {
+                    Ok(target) => match self.storage.read_disk(&target) {
+                        Ok(None) => Some(Ok((file, path, target))),
+                        Ok(Some(_)) => None,
+                        Err(error) => Some(Err(error)),
+                    },
+                    Err(error) => Some(Err(error)),
+                }
+            })
+            .ok_or(WorkspaceError::AlreadyExists)??;
         image_mime(&target, bytes)?;
-        let encoded = encode_image_name(name);
+        let link = std::iter::repeat_n("..", up)
+            .chain(segments.iter().copied())
+            .chain([file.as_str()])
+            .map(encode_image_name)
+            .collect::<Vec<_>>()
+            .join("/");
         let edits = EditRequest {
             document_id: request.document_id,
             base_revision: request.base_revision,
             source: EditSource::Gui,
             edits: vec![TextEdit {
                 range,
-                text: format!("![](images/{encoded})"),
+                text: format!("![]({link})"),
             }],
         };
         crate::domain::validation::validate_edit(&snapshot, &edits)
             .map_err(|error| WorkspaceError::Contract { error })?;
-        if self.storage.read_disk(&target)?.is_some() {
-            return Err(WorkspaceError::AlreadyExists);
-        }
         self.storage
             .atomic_write(&target, bytes, None, Some(&self.root))?;
         // IPC holds the workspace mutex, so no other GUI edit can interleave.
