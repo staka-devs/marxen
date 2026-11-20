@@ -1,3 +1,4 @@
+import { InfoHint } from "../ui/info-hint";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, FileText, Replace } from "lucide-react";
 import { searchGroupKey, rootFileLabel } from "../../domain/workspace-roots";
@@ -100,8 +101,8 @@ export function SearchPanel({ query, onQuery, hits, searching, canReplace, repla
         <button type="button" disabled={!canReplace} aria-pressed={searchOptions.caseSensitive} aria-label={t("大文字と小文字を区別")} onClick={() => onSearchOptions({ ...searchOptions, caseSensitive: !searchOptions.caseSensitive })} className="rounded border border-border px-2 text-xs aria-pressed:bg-muted disabled:opacity-50">{t("Aa")}</button>
         <button type="button" disabled={!canReplace} aria-pressed={searchOptions.wholeWord} aria-label={t("単語単位で検索")} onClick={() => onSearchOptions({ ...searchOptions, wholeWord: !searchOptions.wholeWord })} className="rounded border border-border px-2 text-xs aria-pressed:bg-muted disabled:opacity-50">{t("単語")}</button>
         <button type="button" disabled={!canReplace} aria-pressed={searchOptions.regex} aria-label={t("正規表現で検索")} onClick={() => onSearchOptions({ ...searchOptions, regex: !searchOptions.regex })} className="rounded border border-border px-2 text-xs aria-pressed:bg-muted disabled:opacity-50">.*</button>
+        {!canReplace && <InfoHint text={t("大文字小文字を区別する文字列検索のみ対応。")} />}
       </div>
-      {!canReplace && <p className="mt-1 text-[10px] text-muted-foreground">{t("大文字小文字を区別する文字列検索のみ対応。")}</p>}
       {canReplace && replaceOpen && <div id="search-replace-panel" className="mt-2 flex gap-1">
         <input value={replaceText} onChange={(event) => onReplaceText(event.target.value)} placeholder={t("置換後…")} aria-label={t("置換後の文字列")} className="h-7 min-w-0 flex-1 rounded-sm border border-border bg-background px-2 text-xs" />
         <button type="button" onClick={onReplaceAll} disabled={!actionsEnabled || !!searchLimit || hits.length === 0} aria-label={t("すべて置換する")} className="rounded border border-border px-2 text-xs disabled:opacity-50">{t("一括置換")}</button>

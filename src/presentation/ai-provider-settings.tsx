@@ -1,3 +1,4 @@
+import { InfoHint } from "./ui/info-hint";
 import type { LocalizedText } from "../contracts/localization";
 import { localizedFailure, renderLocalizedText } from "../domain/localization";
 import type { LabelKey } from "../contracts/localization";
@@ -456,9 +457,9 @@ export default function AiProviderSettings({ provider, onProvider, openToken, ga
               placeholder={t("API キーなど")}
             />
             <Button size="sm" onClick={() => void handleSaveCredential()} disabled={secretInput.length === 0}>{t("保存")}</Button>
+            <InfoHint text={t("OS の資格情報ストアに保存します。")} />
           </div>
           {credentialMessage && <p className="mt-1 text-[11px] text-muted-foreground">{renderLocalizedText(credentialMessage, t)}</p>}
-          <p className="mt-2 text-xs text-muted-foreground">{t("OS の資格情報ストアに保存します。")}</p>
         </div>}
         <div className="border-t border-border pt-2">
           <p className="text-xs font-medium">{t("接続テスト")}</p>

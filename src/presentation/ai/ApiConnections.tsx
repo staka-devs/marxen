@@ -1,3 +1,4 @@
+import { InfoHint } from "../ui/info-hint";
 import type { LabelKey } from "../../contracts/localization";
 import type { LocalizedText } from "../../contracts/localization";
 import { localizedFailure, renderLocalizedText } from "../../domain/localization";
@@ -245,8 +246,8 @@ export function ApiConnectionDialog({ initial, isNew, connectionGateway, onSave,
                   onChange={(event) => setSecretInput(event.target.value)}
                   placeholder={t("API キーなど")}
                 />
+                <InfoHint text={t("OS の資格情報ストアに保存します。")} />
               </div>
-              <p className="mt-1 text-[11px] text-muted-foreground">{t("OS の資格情報ストアに保存します。")}</p>
             </div>
           ) : (
             <div className="border-t border-border pt-2">
@@ -269,9 +270,9 @@ export function ApiConnectionDialog({ initial, isNew, connectionGateway, onSave,
                   placeholder={t("API キーなど")}
                 />
                 <Button size="sm" aria-label={t("API キーを保存")} title={t("API キーを保存")} onClick={() => void handleSaveCredential()} disabled={secretInput.length === 0}>{t("保存")}</Button>
+                <InfoHint text={t("OS の資格情報ストアに保存します。")} />
               </div>
               {credentialMessage && <p className="mt-1 text-[11px] text-muted-foreground">{renderLocalizedText(credentialMessage, t)}</p>}
-              <p className="mt-2 text-xs text-muted-foreground">{t("OS の資格情報ストアに保存します。")}</p>
             </div>
           )}
           {errors.length > 0 && (

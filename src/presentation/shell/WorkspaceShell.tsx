@@ -1,9 +1,12 @@
+import { InfoHint } from "../ui/info-hint";
 import { aiAccountScope } from "../../domain/ai-account-scope";
 import type { AccountSnapshot } from "../../contracts/provider-accounts";
 import { localizedFailure } from "../../domain/localization";
 import type { LocalizedText } from "../../contracts/localization";
 import type { LabelKey } from "../../contracts/localization";
 import { useI18n } from "../i18n/I18nProvider";
+import { StatusBar } from "./StatusBar";
+import { ShellDialogs } from "./ShellDialogs";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { schemeStylesheet } from "../../domain/color-scheme";
 import { parseSearchCommand, parseSubstituteCommand, SUBSTITUTE_SEARCH_OPTIONS, vimSearchPattern } from "../../domain/search";
@@ -73,7 +76,6 @@ import type { ThemeId } from "../../domain/workspace-content";
 import {
   workspaceErrorText,
 } from "../../domain/document-errors";
-import { COPY_LABELS } from "../../domain/clipboard-text";
 import { offsetToLineCol, lineColToOffset } from "../../domain/coordinates/utf16";
 import type { DatabaseViewer } from "../database/hydrate-databases";
 import { databasesEnabled } from "../../domain/frontmatter";
@@ -163,17 +165,6 @@ export interface WorkspaceShellProps {
   /** True on desktop; browser demo stays read-only. */
   desktop?: boolean;
 }
-
-const MODE_JA: Record<string, string> = {
-  normal: "ノーマル",
-  insert: "挿入",
-  replace: "置換",
-  visual: "選択",
-  visual_line: "行選択",
-  visual_block: "矩形選択",
-  command_line: "コマンド",
-  terminal: "ターミナル",
-};
 
 const MODE_LABEL: Record<ViewMode, string> = {
   live: "ライブプレビュー",
@@ -1194,84 +1185,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               </div>
             </WorkspaceDialog>
           )}
-          {recoveryPromptOpen && workspace.recovery.length > 0 && !session.closeDecision && !isConflicted && !workspace.newFileOpen && !workspace.renameDoc && (
-            <WorkspaceDialog theme={theme} label={t("未保存の文書を復元")} testId="recovery-dialog" onDismiss={() => setRecoveryPromptOpen(false)}>
-              <p className="mb-3 text-muted-foreground">{t("前回終了時の未保存の変更があります。復元する文書を選んでください。")}</p>
-              <ul className="divide-y divide-border">
-                {workspace.recovery.map((entry) => (
-                  <li key={entry.documentId} className="flex flex-wrap items-center gap-2 py-2">
-                    <span className="min-w-0 flex-1 break-words" title={entry.path ?? undefined}>
-                      {entry.path ?? entry.documentId}
-                      {entry.conflict ? t("（ディスクも変更あり）") : ""}
-                    </span>
-                    <button type="button" onClick={() => void workspace.restoreEntry(entry.documentId, false)} className="rounded border border-border px-2 py-1">
-                      {t("復元する")}</button>
-                    <button type="button" onClick={() => void workspace.restoreEntry(entry.documentId, true)} className="rounded border border-border px-2 py-1">
-                      {t("破棄する")}</button>
-                  </li>
-                ))}
-              </ul>
-              <div className="mt-4 flex justify-end"><button type="button" onClick={() => setRecoveryPromptOpen(false)} className="rounded-md border border-border px-3 py-1">{t("後で")}</button></div>
-            </WorkspaceDialog>
-          )}
-          {workspace.removingRoot && (
-            <WorkspaceDialog theme={theme} label={t("フォルダーをワークスペースから取り除く")} testId="remove-root-dialog" onDismiss={() => { if (!workspace.busy) void workspace.resolveRemoveRoot("cancel"); }}>
-              <p className="mb-2 break-all">{workspace.removingRoot.root}</p>
-              <p className="mb-2">{t("このフォルダーのタブを閉じます。未保存の変更をどうしますか。")}</p>
-              <div className="flex flex-wrap gap-2">
-                <button type="button" disabled={workspace.busy} onClick={() => void workspace.resolveRemoveRoot("save")} className="rounded-md border border-border px-3 py-1">{t("保存して閉じる")}</button>
-                <button type="button" disabled={workspace.busy} onClick={() => void workspace.resolveRemoveRoot("discard")} className="rounded-md border border-border px-3 py-1">{t("破棄して閉じる")}</button>
-                <button type="button" disabled={workspace.busy} onClick={() => void workspace.resolveRemoveRoot("cancel")} className="rounded-md border border-border px-3 py-1">{t("キャンセル")}</button>
-              </div>
-            </WorkspaceDialog>
-          )}
-          {session.closeDecision && (
-            <WorkspaceDialog theme={theme} label={t("閉じる確認")} testId="close-dialog" onDismiss={() => void session.resolveCloseDecision("cancel")}>
-              <p className="mb-2">{t("未保存の変更があります。どうしますか。")}</p>
-              <div className="flex gap-2">
-                <button type="button" onClick={() => void session.resolveCloseDecision("save")} className="rounded-md border border-border px-3 py-1">
-                  {t("保存して閉じる")}</button>
-                <button type="button" onClick={() => void session.resolveCloseDecision("discard")} className="rounded-md border border-border px-3 py-1">
-                  {t("破棄して閉じる")}</button>
-                <button type="button" onClick={() => void session.resolveCloseDecision("cancel")} className="rounded-md border border-border px-3 py-1">
-                  {t("キャンセル")}</button>
-              </div>
-            </WorkspaceDialog>
-          )}
-          {workspace.newFileOpen && (
-            <WorkspaceDialog theme={theme} label={t(workspace.entryKind === "folder" ? "新規フォルダー" : workspace.entryKind === "bundle" ? "新規バンドルノート" : "新規Markdownファイル")} onDismiss={() => workspace.setNewFileOpen(false)}>
-              <form onSubmit={(event) => { event.preventDefault(); void workspace.createFile(); }} className="flex flex-wrap items-center gap-2">
-              <input
-                value={workspace.newFilePath}
-                onChange={(event) => workspace.setNewFilePath(event.target.value)}
-                placeholder={workspace.entryKind === "folder" ? t("メモ/新しいフォルダー") : workspace.entryKind === "bundle" ? "notes/new.marxen" : "notes/new.md"}
-                aria-label={t(workspace.entryKind === "folder" ? "新規フォルダーのパス" : "新規ファイルのパス")}
-                className="min-w-40 flex-1 rounded-md border border-border bg-background px-3 py-1.5"
-              />
-              <button type="submit" disabled={workspace.busy} className="rounded-md border border-border px-3 py-1">
-                {t("作成する")}</button>
-              <button type="button" onClick={() => workspace.setNewFileOpen(false)} className="rounded-md border border-border px-3 py-1">
-                {t("閉じる")}</button>
-              </form>
-            </WorkspaceDialog>
-          )}
-          {workspace.renameDoc && (
-            <WorkspaceDialog theme={theme} label={t("名前の変更")} onDismiss={() => workspace.setRenameDoc(null)}>
-              <form onSubmit={(event) => { event.preventDefault(); void workspace.renameFile(); }} className="flex flex-wrap items-center gap-2">
-              <input
-                value={workspace.renamePath}
-                onChange={(event) => workspace.setRenamePath(event.target.value)}
-                placeholder="メモ/新名.md"
-                aria-label={t("新しいパス")}
-                className="min-w-40 flex-1 rounded-md border border-border bg-background px-3 py-1.5"
-              />
-              <button type="submit" disabled={workspace.busy} className="rounded-md border border-border px-3 py-1">
-                {t("変更する")}</button>
-              <button type="button" onClick={() => workspace.setRenameDoc(null)} className="rounded-md border border-border px-3 py-1">
-                {t("閉じる")}</button>
-              </form>
-            </WorkspaceDialog>
-          )}
+          <ShellDialogs theme={theme} workspace={workspace} session={session} recoveryOpen={recoveryPromptOpen} onRecoveryClose={() => setRecoveryPromptOpen(false)} isConflicted={isConflicted} />
 
         <main
           className="relative grid min-h-0 min-w-0 flex-1 overflow-hidden"
@@ -1479,8 +1393,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
         </WorkspaceDialog>}
         {helpOpen && <WorkspaceDialog theme={theme} label={t("キーボードショートカット")} onDismiss={() => setHelpOpen(false)}>
           <dl className="space-y-2">{workbench.commands.filter((item) => item.shortcut).map((item) => <div key={item.id} className="flex justify-between gap-3"><dt>{item.label}</dt><dd><kbd>{item.shortcut}</kbd></dd></div>)}</dl>
-          <h3 className="mt-4 text-sm font-semibold">{t("vimrcで定義する")}</h3>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">{t("アプリの操作は :Marxen <操作名> で呼び出せます。vimrcのマッピングが優先されます。")}</p>
+          <h3 className="mt-4 flex items-center gap-1 text-sm font-semibold">{t("vimrcで定義する")}<InfoHint text={t("アプリの操作は :Marxen <操作名> で呼び出せます。vimrcのマッピングが優先されます。")} /></h3>
           <pre className="mt-2 overflow-x-auto rounded-sm border border-border bg-card p-2 font-mono text-[11px] leading-5">{"nnoremap <C-s> <Cmd>Marxen file-save<CR>\nnnoremap <C-p> <Cmd>Marxen palette-quickopen<CR>\nnnoremap <C-S-p> <Cmd>Marxen palette-open<CR>\nnoremap <C-,> <Cmd>Marxen palette-settings<CR>\nnoremap <C-S-i> <Cmd>Marxen inline-chat<CR>\nnoremap <M-i> <Cmd>Marxen palette-ai<CR>\n\" 既定を全部消してvimrcだけで定義する\nlet g:marxen_default_shortcuts = 0"}</pre>
         </WorkspaceDialog>}
         {settings && (
@@ -1567,23 +1480,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       )}
       {aiVisibilityOpen && <AiVisibilityDialog preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} connections={apiConnections.connections} saveFailed={aiView.saveFailed} installed={installedPresets} onClose={closeAiVisibility} />}
       </div>
-      <footer className="marxen-status flex h-6 shrink-0 items-center gap-3 whitespace-nowrap border-t border-border bg-card px-3 text-[11px] text-muted-foreground">
-        {desktop && active && <span data-testid="vim-footer-mode" data-mode={vimMode} className="marxen-vim-mode -ml-3 flex h-6 shrink-0 items-center px-3 font-semibold">{MODE_JA[vimMode] ? t(MODE_JA[vimMode] as LabelKey) : vimMode}</span>}
-        <span className="min-w-0 flex-1" />
-        {cursorPos && <span data-testid="cursor" title={t("カーソル位置")}><span className="sr-only">{t("カーソル")}{" "}</span>{cursorPos}</span>}
-        {/* Only states that need attention are visible; the normal ones stay for screen readers. */}
-        <span data-testid="dirty" className={active?.dirty ? undefined : "sr-only"}>{!active ? "" : active.dirty ? t("未保存") : t("保存済み")}</span>
-        {desktop && session.copyReady === activeId && <span data-testid="copy-ready" className="min-w-0 max-w-72 truncate" title={Object.entries(workspace.copyKeys).map(([format, key]) => `${key} ${t(COPY_LABELS[format as keyof typeof COPY_LABELS] as LabelKey)}`).join(" / ")}>{t("コピー形式を選択")}</span>}
-        {!desktop && <span data-testid="readonly-note" title={t("ブラウザ表示は読み取り専用です")} className="shrink-0 rounded-sm border border-border px-1.5 py-0.5 text-[10px]">{t("読み取り専用")}</span>}
-        <span role="status" className={workspace.runtime?.connection === "connected" ? "sr-only" : "shrink-0"}>
-          {workspace.runtime ? (workspace.runtime.connection === "disconnected" ? t("Neovim 未接続") : workspace.runtime.connection === "connected" ? t("Neovim 接続済み") : workspace.runtime.detail) : t("接続状態を確認中…")}
-        </span>
-        {/* Diagnostics stay readable to assistive tech and tests without taking screen space. */}
-        <span className="sr-only">
-          <span data-testid="revision">{t("リビジョン {{value0}}", { value0: active?.revision ?? "—" })}</span>
-          {desktop && session.vimKeys !== "" && <span data-testid="vim-keys">{t("Vim入力 {{value0}}", { value0: session.vimKeys })}</span>}
-        </span>
-      </footer>
+      <StatusBar desktop={desktop} active={active} vimMode={vimMode} cursorPos={cursorPos} copyReady={session.copyReady === activeId} copyKeys={workspace.copyKeys} vimKeys={session.vimKeys} runtime={workspace.runtime} />
     </div>
   );
 }

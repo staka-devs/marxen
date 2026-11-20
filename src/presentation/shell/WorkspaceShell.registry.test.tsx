@@ -1028,7 +1028,9 @@ it("writes nothing when a concurrent edit shifts the text under a collapsed care
   const editor = screen.getByTestId("editor-primary");
   fireEvent.keyDown(editor, { key: "v", ctrlKey: true });
   pasteEvent(editor, "Q");
-  await waitFor(() => expect(screen.getByRole("alert")).toBeVisible());
+  // The stale paste resyncs silently (Issue #130): the view shows the external edit, nothing is written.
+  await waitFor(() => expect(screen.getByTestId("editor-primary")).toHaveTextContent("外部"));
+  expect(screen.queryByRole("alert")).toBeNull();
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "apply_gui_edits")).toHaveLength(0);
   expect(mockedInvoke.mock.calls.filter(([command]) => command === "nvim_input")).toHaveLength(0);
   expect(scenario.files.get("メモ/a.md")!.text.startsWith("外部\n# A")).toBe(true);

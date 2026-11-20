@@ -1,3 +1,4 @@
+import { InfoHint } from "../ui/info-hint";
 import { useEffect, useRef, useState } from "react";
 import type { ProviderAccountGateway } from "../../application/ai/provider-account-ports";
 import type { AccountHost, AccountProvider, AccountSnapshot, ProviderAccount, ProviderAccountUsage } from "../../contracts/provider-accounts";
@@ -101,9 +102,8 @@ export function ProviderAccountsSettings({ gateway, onSnapshot }: Props) {
   }
 
   return <section className="space-y-3 border-t border-border pt-4" aria-label={t("プロバイダーアカウント")}>
-    <h3 className="text-sm font-semibold">{t("プロバイダーアカウント")}</h3>
+    <h3 className="flex items-center gap-1 text-sm font-semibold">{t("プロバイダーアカウント")}<InfoHint text={t("選択は次の ACP 起動に適用します。既存の会話は元のアカウントを維持します。")} /></h3>
     <Button size="sm" variant="outline" disabled={!gateway || busy} onClick={() => { void perform(async () => { const id = attempt.current; const updated = await gateway!.snapshot(); if (id === attempt.current) { setSnapshot(updated); onSnapshot?.(updated); setUsage(null); setPresence(null); } }); }}>{t("設定を再読み込み")}</Button>
-    <p className="text-xs text-muted-foreground">{t("選択は次の ACP 起動に適用します。既存の会話は元のアカウントを維持します。")}</p>
     {!gateway && <p role="status">{t("AI 機能はデスクトップアプリで利用します。")}</p>}
     <label className="flex items-center gap-2 text-xs">{t("プロバイダーアカウント")}<StyledSelect label={t("プロバイダーアカウント")} value={provider} onChange={(value) => { resetView(); setProvider(value as AccountProvider); }}>
       {ACCOUNT_PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
@@ -140,7 +140,7 @@ export function ProviderAccountsSettings({ gateway, onSnapshot }: Props) {
       {provider === "opencode_go" && <label className="block text-xs">{t("OpenCode ワークスペース ID（空欄で自動検出）")}<input className="ml-2 rounded border bg-background p-1" maxLength={132} value={editing.workspaceId} onChange={event => setDraft({ ...editing, workspaceId: event.target.value })} /></label>}
       <label className="block text-xs">{t(spec.credential)}<input className="ml-2 rounded border bg-background p-1" type="password" autoComplete="new-password" spellCheck={false} disabled={webCredentials && removeApiKey} value={secret} onChange={event => setSecret(event.target.value)} /></label>
       {webCredentials && <><p className="text-xs">{t(selected?.hasApiKey ? "API キー保存済み" : "API キー未保存")}</p><label className="block text-xs"><input type="checkbox" checked={removeApiKey} onChange={event => { setRemoveApiKey(event.target.checked); if (event.target.checked) setSecret(""); }} />{t("保存済み API キーを削除")}</label><label className="block text-xs">{t(provider === "minimax" ? "MiniMax の Cookie ヘッダー" : "OpenCode Go の Cookie ヘッダー")}<input className="ml-2 rounded border bg-background p-1" type="password" autoComplete="new-password" spellCheck={false} disabled={removeCookie} value={cookie} onChange={event => setCookie(event.target.value)} /></label><p className="text-xs">{t(selected?.hasCookie ? "Cookie 保存済み" : "Cookie 未保存")}</p><label className="block text-xs"><input type="checkbox" checked={removeCookie} onChange={event => { setRemoveCookie(event.target.checked); if (event.target.checked) setCookie(""); }} />{t("保存済み Cookie を削除")}</label></>}
-      <p className="text-xs text-muted-foreground">{t("空欄なら保存済みの認証情報を維持します。値は再表示しません。")}</p>
+      <InfoHint text={t("空欄なら保存済みの認証情報を維持します。値は再表示しません。")} />
       <Button size="sm" disabled={!editing.name.trim()} onClick={() => { void perform(saveAccount); }}>{t("アカウントを保存")}</Button>
       {draft && <Button size="sm" variant="outline" onClick={() => { setDraft(null); resetCredentials(); }}>{t("キャンセル")}</Button>}
       {selected && !draft && <Button size="sm" variant="outline" onClick={() => setConfirmDelete(true)}>{t("アカウントを削除")}</Button>}
