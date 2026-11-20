@@ -426,7 +426,7 @@ fn mode_instruction(mode: PromptMode) -> &'static str {
             "指定範囲の書き換え案を提示してください。編集中の文書は変更しません。"
         }
         PromptMode::Workspace => {
-            "作業コピー内の修正案を提示してください。提案テキストのみを返し、直接書き込みません。"
+            "文書の変更を頼まれたら、作業コピーのファイルを直接編集してください。編集はそのまま文書に反映され、利用者があとで取り消せます。質問には回答だけを返してください。"
         }
     }
 }
@@ -1299,6 +1299,14 @@ pub struct ParsedPermission {
     pub title: String,
     /// User-choosable options in wire order.
     pub options: Vec<PermissionOption>,
+    /// What kind of tool asks, so the card and auto-approval know its effect.
+    pub kind: Option<AcpToolKind>,
+    /// Command, path, URL or query from the tool's raw input, for the card.
+    pub detail: Option<String>,
+    /// Proposed text and diffs the tool would write.
+    pub content: Option<Vec<ToolCallContent>>,
+    /// Files the tool would touch.
+    pub locations: Option<Vec<ToolCallLocation>>,
 }
 
 /// Stringify a JSON-RPC request ID (number or string) for permission bookkeeping.
@@ -1370,7 +1378,56 @@ pub fn parse_permission_request(id: &Value, params: &Value) -> Option<ParsedPerm
         tool_call_id,
         title,
         options: parsed,
+        kind: tool_call
+            .and_then(|call| call.get("kind"))
+            .map(|kind| parse_tool_kind(Some(kind))),
+        detail: tool_call
+            .and_then(|call| call.get("rawInput"))
+            .and_then(permission_detail),
+        content: tool_call.and_then(parse_tool_content_list),
+        locations: tool_call.and_then(parse_tool_locations),
     })
+}
+
+/// Summarize what a tool will act on from its raw input: command, path, URL or query lines.
+fn permission_detail(raw: &Value) -> Option<String> {
+    const KEYS: [&str; 9] = [
+        "command",
+        "cmd",
+        "path",
+        "file_path",
+        "filePath",
+        "url",
+        "pattern",
+        "query",
+        "description",
+    ];
+    let lines: Vec<String> = KEYS
+        .iter()
+        .filter_map(|key| {
+            let value = raw.get(*key)?;
+            let text = match value {
+                Value::String(text) => text.clone(),
+                Value::Array(items) => items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                _ => return None,
+            };
+            (!text.trim().is_empty()).then(|| text.trim().to_owned())
+        })
+        .collect();
+    let detail: String = lines.join("\n").chars().take(600).collect();
+    (!detail.is_empty()).then_some(detail)
+}
+
+/// Tool kinds approved without asking: they only read, or edit the isolated copy whose changes stay undoable.
+pub fn permission_auto_allowed(kind: Option<AcpToolKind>) -> bool {
+    matches!(
+        kind,
+        Some(AcpToolKind::Read | AcpToolKind::Search | AcpToolKind::Think | AcpToolKind::Edit)
+    )
 }
 
 /// Build the `result` payload answering `session/request_permission` with an explicit user choice.
@@ -1941,5 +1998,35 @@ pub fn error_detail(error: &AiError) -> String {
         }
         AiError::ClaudeCodeRefused { command } => format!("{command} は起動しません"),
         AiError::CredentialStoreFailed { detail } => detail.clone(),
+    }
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::*;
+
+    #[test]
+    /// Carry the tool kind, command and diff of a permission request, and approve only safe kinds automatically.
+    fn permission_requests_carry_what_the_tool_will_do() {
+        let params = serde_json::json!({
+            "sessionId": "s",
+            "options": [{ "optionId": "ok", "name": "Allow", "kind": "allow_once" }],
+            "toolCall": {
+                "toolCallId": "t1",
+                "title": "Run tests",
+                "kind": "execute",
+                "rawInput": { "command": ["npm", "test"], "description": "unit tests" },
+                "content": [{ "type": "diff", "path": "/w/a.md", "oldText": "a", "newText": "b" }],
+                "locations": [{ "path": "/w/a.md" }]
+            }
+        });
+        let parsed = parse_permission_request(&serde_json::json!(1), &params).unwrap();
+        assert_eq!(parsed.kind, Some(AcpToolKind::Execute));
+        assert_eq!(parsed.detail.as_deref(), Some("npm test\nunit tests"));
+        assert_eq!(parsed.content.as_ref().map(Vec::len), Some(1));
+        assert_eq!(parsed.locations.as_ref().map(Vec::len), Some(1));
+        assert!(!permission_auto_allowed(parsed.kind));
+        assert!(permission_auto_allowed(Some(AcpToolKind::Edit)));
+        assert!(!permission_auto_allowed(None));
     }
 }

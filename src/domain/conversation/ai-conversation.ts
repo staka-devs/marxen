@@ -13,6 +13,7 @@ import type {
   ContextSummary,
   PermissionOption,
   PlanEntry,
+  ToolCallContent,
   ProposalText,
   PromptContext,
   PromptMode,
@@ -30,6 +31,8 @@ export interface ChatTool {
   kind: string;
   status: "pending" | "in_progress" | "completed" | "failed" | "cancelled";
   locations?: Array<{ path: string; line?: number }>;
+  /** Text output and diffs the tool reported, shown so the user sees what it is doing. */
+  content?: ToolCallContent[];
 }
 
 /** Surfaced permission request with actual user-choosable options. */
@@ -45,6 +48,14 @@ export interface ChatPermission {
   resolvedOptionId?: string;
   /** Buttons act on the live run; false in read-only Ask turns. */
   interactive: boolean;
+  /** Tool kind (execute, fetch, delete, ...) so the card says what is being allowed. */
+  kind?: string;
+  /** Command, path, URL or query the tool will act on. */
+  detail?: string;
+  /** Proposed text and diffs. */
+  content?: ToolCallContent[];
+  /** Files the tool would touch. */
+  locations?: Array<{ path: string; line?: number }>;
 }
 
 export interface ChatMessage {
@@ -157,6 +168,7 @@ export function upsertToolCall(messages: ChatMessage[], assistantId: string, too
       kind: tool.kind,
       status: tool.status,
       locations: tool.locations?.map((location) => ({ ...location })),
+      content: tool.content,
     };
     const index = tools.findIndex((item) => item.id === record.id);
     if (index >= 0) tools[index] = { ...tools[index], ...record };
@@ -182,6 +194,7 @@ export function applyToolUpdate(messages: ChatMessage[], assistantId: string, up
         kind: update.kind ?? tool.kind,
         status: update.status ?? tool.status,
         locations: update.locations ? update.locations.map((location) => ({ ...location })) : tool.locations,
+        content: update.content ?? tool.content,
       };
     });
     return { ...message, tools };
@@ -213,7 +226,7 @@ export function setChatPlan(messages: ChatMessage[], assistantId: string, entrie
 export function addChatPermission(
   messages: ChatMessage[],
   assistantId: string,
-  permission: { requestId: string; runId: string; toolCallId?: string; title: string; options: PermissionOption[] },
+  permission: { requestId: string; runId: string; toolCallId?: string; title: string; options: PermissionOption[]; kind?: string; detail?: string; content?: ToolCallContent[]; locations?: Array<{ path: string; line?: number }> },
   mode: "pending" | "denied" | "cancelled",
 ): ChatMessage[] {
   return messages.map((message) => {
@@ -228,6 +241,10 @@ export function addChatPermission(
       options: permission.options.map((option) => ({ ...option })),
       state: mode,
       interactive: mode === "pending",
+      kind: permission.kind,
+      detail: permission.detail,
+      content: permission.content,
+      locations: permission.locations?.map((location) => ({ ...location })),
     });
     return { ...message, permissions, segments: addSegment(message, { type: "permission", id: permission.requestId }) };
   });

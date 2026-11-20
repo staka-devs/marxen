@@ -298,6 +298,8 @@ export interface AiGateway {
   cancelPromptSafe(stop: () => Promise<void>): Promise<void>;
   /** Answer a pending permission request with the exact chosen option ID. */
   replyPermission(runId: AiRunId, requestId: string, optionId: string): Promise<void>;
+  /** ACP presets whose agent command is installed; nothing is launched. Desktop only. */
+  installedPresets?(): Promise<string[]>;
   /** Read credential presence for a provider. */
   getCredentialState(kind: AiProviderKind): Promise<CredentialRef>;
   /** Store a secret in the OS store. */

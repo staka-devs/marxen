@@ -252,6 +252,10 @@ fn answer_permission_interactive(
             tool_call_id: parsed.tool_call_id.clone(),
             title: parsed.title.clone(),
             options: options.clone(),
+            kind: parsed.kind,
+            detail: parsed.detail.clone(),
+            content: parsed.content.clone(),
+            locations: parsed.locations.clone(),
         }));
         let mode = if cancelled {
             PermissionAnswer::Cancelled
@@ -259,6 +263,20 @@ fn answer_permission_interactive(
             PermissionAnswer::Deny
         };
         return conn.answer_agent_request(req_id, "session/request_permission", req_params, mode);
+    }
+    // Reads, searches and edits of the isolated copy need no prompt: edits stay undoable after they apply.
+    if permission_auto_allowed(parsed.kind) {
+        if let Some(allow) = options
+            .iter()
+            .find(|option| option.kind == PermissionOptionKind::AllowOnce)
+        {
+            let reply = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": answer_permission_by_id(&allow.option_id, false),
+            });
+            return conn.write(&reply);
+        }
     }
     if registry
         .register_permission(run_id, &request_id, &parsed.session_id, options.clone())
@@ -274,6 +292,10 @@ fn answer_permission_interactive(
         tool_call_id: parsed.tool_call_id.clone(),
         title: parsed.title.clone(),
         options,
+        kind: parsed.kind,
+        detail: parsed.detail,
+        content: parsed.content,
+        locations: parsed.locations,
     }));
     let wait_until = permission_wait_until(run_started, timeout, Instant::now());
     loop {

@@ -16,8 +16,8 @@ import { japaneseTranslator } from "../../domain/localization";
 // lifecycles as the read preview; destroying a widget aborts its pass and
 // disposes its maps and GL resources.
 
-import { Decoration, EditorView, GutterMarker, WidgetType, gutterLineClass, type DecorationSet } from "@codemirror/view";
-import { RangeSet, StateField, type Extension, type Range } from "@codemirror/state";
+import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
+import { StateField, type Extension, type Range } from "@codemirror/state";
 import { computeLiveBlocks, extractLinkDefinitions, findTableCellRange, type LiveBlock } from "../../domain/render/blocks";
 import { renderMarkdownDocument } from "../../domain/render/pipeline";
 import { toggleCheckbox } from "../../domain/markdown-gui";
@@ -422,12 +422,6 @@ class MarkerWidget extends WidgetType {
   }
 }
 
-/** Gutter class for compact blank lines. */
-class GapGutterMarker extends GutterMarker {
-  elementClass = "marxen-live-gap-gutter";
-}
-const GAP_GUTTER = new GapGutterMarker();
-
 const QUOTE_LINE = Decoration.line({ class: "marxen-live-quote-line" });
 
 /**
@@ -502,17 +496,6 @@ function inlineDecorations(decorations: Range<Decoration>[], text: string, base:
         block: true,
       }).range(block.from, block.to));
   }
-  let offset = 0;
-  let blockIndex = 0;
-  for (const line of docText.split("\n")) {
-    while (blockIndex < blocks.length && blocks[blockIndex].to < offset) blockIndex += 1;
-    const block = blocks[blockIndex];
-    const insideBlock = block && block.from <= offset && offset < block.to;
-    if (line.trim() === "" && !insideBlock && !(selFrom <= offset + line.length && selTo >= offset)) {
-      decorations.push(Decoration.line({ class: "marxen-live-gap" }).range(offset));
-    }
-    offset += line.length + 1;
-  }
   return Decoration.set(decorations, true);
 }
 
@@ -572,15 +555,7 @@ function inlineDecorations(decorations: Range<Decoration>[], text: string, base:
       return true;
     },
   });
-  // Compact blank lines get a matching gutter class so their numbers shrink instead of overlapping.
-  const gapGutter = gutterLineClass.compute([field], (state) => {
-    const markers: Range<GutterMarker>[] = [];
-    state.field(field).between(0, state.doc.length, (from, _to, value) => {
-      if (value.spec.class === "marxen-live-gap") markers.push(GAP_GUTTER.range(from));
-    });
-    return RangeSet.of(markers, true);
-  });
-  return [field, activation, gapGutter];
+  return [field, activation];
 }
 
 export type { LiveBlock };

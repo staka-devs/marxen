@@ -66,7 +66,11 @@ export type PermissionOption = { optionId: string, name: string, kind: Permissio
 export type StreamToolCall = { runId: AiRunId, toolCall: AcpToolCall, };
 export type StreamToolCallUpdate = { runId: AiRunId, update: AcpToolCallUpdate, };
 export type StreamPlan = { runId: AiRunId, entries: Array<PlanEntry>, };
-export type StreamPermission = { runId: AiRunId, requestId: string, sessionId: AcpSessionId, toolCallId?: string, title: string, options: Array<PermissionOption>, };
+export type StreamPermission = { runId: AiRunId, requestId: string, sessionId: AcpSessionId, toolCallId?: string, title: string, options: Array<PermissionOption>, kind?: AcpToolKind, 
+/**
+ * Command, path, URL or query the tool will act on.
+ */
+detail?: string, content?: Array<ToolCallContent>, locations?: Array<ToolCallLocation>, };
 export type StreamDone = { runId: AiRunId, proposal: ProposalText, sent: Array<ContextSummary>, };
 export type StreamError = { runId: AiRunId | null, error: AiError, };
 export type StreamCancelled = { runId: AiRunId, };

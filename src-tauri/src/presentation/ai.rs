@@ -123,6 +123,13 @@ pub fn ai_permission_reply(
 ) -> Result<(), AiError> {
     service.reply_permission(run_id, request_id, option_id)
 }
+#[tauri::command(async)]
+/// Return the ACP presets whose agent command is installed; nothing is launched.
+pub fn ai_installed_presets(
+    service: tauri::State<'_, AiService>,
+) -> Vec<crate::contracts::ai::AcpPreset> {
+    service.installed_presets()
+}
 #[tauri::command]
 /// Return the latest reported ACP usage for popup refresh.
 /// This is read-only: it never sends a prompt or starts inference.

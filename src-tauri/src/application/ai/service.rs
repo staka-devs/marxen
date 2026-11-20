@@ -73,6 +73,25 @@ fn release_scoped_run(isolation: &Arc<Mutex<IsolationManager>>, copy_id: &Isolat
 }
 
 impl AiService {
+    /// Presets whose agent command is installed, so pickers can hide the rest. Nothing is launched.
+    pub fn installed_presets(&self) -> Vec<crate::contracts::ai::AcpPreset> {
+        use crate::contracts::ai::AcpPreset;
+        [
+            AcpPreset::Codex,
+            AcpPreset::Opencode,
+            AcpPreset::Copilot,
+            AcpPreset::ClaudeCode,
+            AcpPreset::Devin,
+        ]
+        .into_iter()
+        .filter(|preset| {
+            self.transport
+                .resolve_launch(&crate::domain::ai::preset_argv(*preset))
+                .is_ok()
+        })
+        .collect()
+    }
+
     /// Return credential presence without returning the stored secret to the caller.
     pub fn credential_state(&self, kind: AiProviderKind) -> Result<CredentialRef, AiError> {
         Ok(CredentialRef {

@@ -644,6 +644,19 @@ pub struct StreamPermission {
     pub tool_call_id: Option<String>,
     pub title: String,
     pub options: Vec<PermissionOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub kind: Option<AcpToolKind>,
+    /// Command, path, URL or query the tool will act on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub content: Option<Vec<ToolCallContent>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub locations: Option<Vec<ToolCallLocation>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

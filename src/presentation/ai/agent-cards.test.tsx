@@ -186,3 +186,13 @@ describe("agent cards", () => {
     expect(onChoose).toHaveBeenCalledTimes(1);
   });
 });
+
+it("shows what an approval would run and change", () => {
+  render(<PermissionCard permission={{ requestId: "r", runId: "run", title: "Run tests", options: [{ optionId: "ok", name: "許可", kind: "allow_once" }], state: "pending", interactive: true, kind: "execute", detail: "npm test", content: [{ type: "diff", path: "/w/notes/a.md", old_text: "古い\n共通", new_text: "新しい\n共通" }] }} />);
+  expect(screen.getByText("コマンド実行")).toBeInTheDocument();
+  expect(screen.getByText("npm test")).toBeInTheDocument();
+  expect(screen.getByText("a.md")).toBeInTheDocument();
+  expect(screen.getByText("- 古い")).toBeInTheDocument();
+  expect(screen.getByText("+ 新しい")).toBeInTheDocument();
+  expect(screen.queryByText("- 共通")).toBeNull();
+});
