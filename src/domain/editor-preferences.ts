@@ -32,6 +32,8 @@ export interface EditorPreferences {
   imageName: string;
   /** Opt-in: show fenced `database` blocks as editable tables. */
   databases: boolean;
+  /** Ask before appending `.md` to a new file name; off appends silently. */
+  confirmMarkdownExtension: boolean;
 }
 
 /** First-run defaults: dark theme with readable Japanese typography. */
@@ -40,7 +42,7 @@ export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
   wordWrap: true, lineNumbers: true, highlightActiveLine: true,
   hardBreakOnEnter: false,
   notificationPosition: "bottom-right",
-  imageFolder: "images", imageName: "{name}", databases: false,
+  imageFolder: "images", imageName: "{name}", databases: false, confirmMarkdownExtension: false,
 };
 
 /**
@@ -73,5 +75,6 @@ export function normalizeEditorPreferences(value: unknown): EditorPreferences {
     imageFolder: text("imageFolder", fallback.imageFolder),
     imageName: text("imageName", fallback.imageName).trim() || fallback.imageName,
     databases: bool("databases", fallback.databases),
+    confirmMarkdownExtension: bool("confirmMarkdownExtension", fallback.confirmMarkdownExtension),
   };
 }

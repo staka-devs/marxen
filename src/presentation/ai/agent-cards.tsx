@@ -52,6 +52,11 @@ const KIND_LABELS: Record<string, LabelKey> = {
   execute: "コマンド実行", think: "思考", fetch: "ネットワーク取得", switch_mode: "モード切替",
 };
 
+/** Strip the agent's private working-copy folder from text, leaving workspace-relative names. */
+export function withoutStaging(text: string): string {
+  return text.replace(/(?:[A-Za-z]:)?[\\/]?(?:[^\s\\/]+[\\/])*marxen-staging[\\/][^\s\\/]+(?:[\\/]|(?=\s|$))/g, "");
+}
+
 /** Last path segment, so long absolute agent paths stay readable. */
 function fileName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
@@ -83,26 +88,28 @@ export function ToolDetails({ kind, detail, locations, content }: { kind?: strin
   const label = kind && KIND_LABELS[kind] ? t(KIND_LABELS[kind]) : null;
   const text = content?.flatMap((item) => (item.type === "content" ? [item.text] : [])).join("\n").trim();
   const diffs = content?.flatMap((item) => (item.type === "diff" ? [item] : [])) ?? [];
+  // The working-copy folder itself is not a file the user knows; only real files are listed.
+  const files = (locations ?? []).map((location) => ({ ...location, path: withoutStaging(location.path) })).filter((location) => location.path !== "").map((location) => ({ ...location, path: fileName(location.path) }));
   return (
     <>
       {(label || detail) && (
         <p className="mt-1 flex items-start gap-1.5">
           {label && <span className="shrink-0 rounded bg-muted px-1 text-[10px] leading-4 text-muted-foreground">{label}</span>}
-          {detail && <code className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-[11px]">{detail}</code>}
+          {detail && <code className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-[11px]">{withoutStaging(detail)}</code>}
         </p>
       )}
-      {locations && locations.length > 0 && diffs.length === 0 && (
+      {files.length > 0 && diffs.length === 0 && (
         <ul aria-label={t("対象ファイル")} className="mt-1 space-y-0.5 text-muted-foreground">
-          {locations.map((location, index) => (
-            <li key={`${location.path}-${index}`} title={location.path} className="truncate font-mono text-[11px]">
-              {fileName(location.path)}{location.line !== undefined ? `:${location.line}` : ""}
+          {files.map((location, index) => (
+            <li key={`${location.path}-${index}`} className="truncate font-mono text-[11px]">
+              {location.path}{location.line !== undefined ? `:${location.line}` : ""}
             </li>
           ))}
         </ul>
       )}
       {diffs.map((diff, index) => (
         <div key={`${diff.path}-${index}`} className="mt-1 overflow-hidden rounded border border-border">
-          <p title={diff.path} className="truncate bg-muted px-1.5 font-mono text-[11px] text-muted-foreground">{fileName(diff.path)}</p>
+          <p className="truncate bg-muted px-1.5 font-mono text-[11px] text-muted-foreground">{fileName(withoutStaging(diff.path) || diff.path)}</p>
           <pre className="max-h-40 overflow-auto px-1.5 py-0.5 font-mono text-[11px] leading-4">
             {diffLines(diff.old_text, diff.new_text).map((line, row) => (
               <div key={row} className={line.sign === "+" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}>{line.sign} {line.text}</div>
@@ -110,7 +117,7 @@ export function ToolDetails({ kind, detail, locations, content }: { kind?: strin
           </pre>
         </div>
       ))}
-      {text && <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-all rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] leading-4">{text.split("\n").slice(-12).join("\n")}</pre>}
+      {text && <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-all rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] leading-4">{withoutStaging(text.split("\n").slice(-12).join("\n"))}</pre>}
     </>
   );
 }
@@ -124,15 +131,17 @@ export function ToolDetails({ kind, detail, locations, content }: { kind?: strin
  */
 export function ToolCard({ tool }: { tool: ChatTool }) {
   const { t } = useI18n();
+  // Running tools stay open so the user sees what happens; finished ones fold to their title line.
+  const running = tool.status === "pending" || tool.status === "in_progress";
   return (
-    <div data-testid={`tool-card-${tool.id}`} className="ai-tool-card mt-1 rounded border border-border px-2 py-1.5 text-xs">
-      <p className="flex items-center gap-1.5">
+    <details data-testid={`tool-card-${tool.id}`} open={running || undefined} className="ai-tool-card mt-1 rounded border border-border px-2 py-1.5 text-xs">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5">
         <span aria-hidden="true">{tool.status === "completed" ? "✓" : tool.status === "failed" ? "✕" : tool.status === "cancelled" ? "■" : "… "}</span>
-        <span className="min-w-0 flex-1 truncate font-medium">{tool.title}</span>
+        <span className="min-w-0 flex-1 truncate font-medium">{withoutStaging(tool.title)}</span>
         <span className="shrink-0 text-muted-foreground">{toolStatusLabel(tool.status, t)}</span>
-      </p>
+      </summary>
       <ToolDetails kind={tool.kind} locations={tool.locations} content={tool.content} />
-    </div>
+    </details>
   );
 }
 
@@ -205,7 +214,7 @@ export function PermissionCard({ permission, onChoose }: PermissionCardProps) {
   }
   return (
     <div data-testid={`permission-card-${permission.requestId}`} className="ai-permission-card mt-1 rounded border border-amber-500/40 px-2 py-1.5 text-xs">
-      <p className="font-medium">{permission.title}</p>
+      <p className="font-medium">{withoutStaging(permission.title)}</p>
       <ToolDetails kind={permission.kind} detail={permission.detail} locations={permission.locations} content={permission.content} />
       {permission.state === "pending" && permission.interactive ? (
         <div className="mt-1 flex flex-wrap gap-1" role="group" aria-label={t("許可の選択")}>

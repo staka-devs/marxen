@@ -31,6 +31,7 @@ import type {
 import type { DocumentSession } from "./useDocumentSession";
 import { useWorkspaceSearch } from "./useWorkspaceSearch";
 import { useNeovimConfig } from "./useNeovimConfig";
+import { markdownPath } from "../../../domain/markdown-name";
 
 /** Captured rename source across documents, images, and folders with its tree context. */
 type RenameRequest =
@@ -64,6 +65,8 @@ export interface WorkspaceArgs {
   routeVimKeys: (id: string, keys: string) => Promise<void>;
   /** Called after a workspace opens so the shell can reset folder UI. */
   onWorkspaceOpened?: () => void;
+  /** Ask before appending `.md` to a new file name without it. */
+  confirmMarkdownExtension?: boolean;
 }
 
 /** Workspace lifecycle state and operations. */
@@ -180,7 +183,11 @@ export interface Workspace {
   /** Pick a folder natively and open it, staying read-only in browser. */
   pickFolderAndOpen: () => Promise<void>;
   /** Create a Markdown file from the dialog path and open it. */
-  createFile: () => Promise<void>;
+  createFile: (extension?: "append" | "keep") => Promise<void>;
+  /** A new file name awaiting the `.md` decision, when confirmation is on. */
+  markdownPrompt: { path: string; withExtension: string } | null;
+  /** Resolve the `.md` decision: append it, keep the typed name, or cancel. */
+  resolveMarkdownPrompt: (choice: "append" | "keep" | "cancel") => void;
   /** Rename the dialog target keeping document IDs and updating tabs. */
   renameFile: () => Promise<void>;
   /** Restore or discard a crash-recovery entry by ID. */
@@ -209,7 +216,7 @@ export interface Workspace {
  */
 export function useWorkspace(args: WorkspaceArgs): Workspace {
   const { t, message } = useI18n();
-  const { desktop, metadataStore, notify, session, workspaceGateway, eventSource, runtimeGateway, dialogGateway, showRaw, settingsOpen, routeVimKeys, onWorkspaceOpened } = args;
+  const { desktop, metadataStore, notify, session, workspaceGateway, eventSource, runtimeGateway, dialogGateway, showRaw, settingsOpen, routeVimKeys, onWorkspaceOpened, confirmMarkdownExtension = false } = args;
   const setNotice = notify;
   const {
     registry,
@@ -258,6 +265,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   const [gridRev, setGridRev] = useState<number | null>(null);
   const config = useNeovimConfig({ session, notify, settingsOpen });
   const [newFileOpen, setNewFileOpen] = useState(false);
+  const [markdownPrompt, setMarkdownPrompt] = useState<{ path: string; withExtension: string } | null>(null);
   const [newFilePath, setNewFilePath] = useState("");
   const [renameDoc, setRenameDoc] = useState<string | null>(null);
   const [renamePath, setRenamePath] = useState("");
@@ -596,7 +604,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   }, [registry, dialogGateway, openWorkspaceFolder, notify, canOperate]);
 
   /** Create a Markdown file from the dialog path and open it. */
-  const createFile = useCallback(async () => {
+  const createFile = useCallback(async (extension?: "append" | "keep") => {
     const target = creationTarget.current;
     if (!canOperate() || !target || !isTargetCurrent(target)) return;
     if (!registry) {
@@ -622,7 +630,14 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
       // A bundle is a `name.marxen` folder whose note is `index.md`, with databases enabled.
       const bundle = entryKind === "bundle" ? (path.endsWith(BUNDLE_SUFFIX) ? path : `${path}${BUNDLE_SUFFIX}`) : null;
       if (bundle) await workspaceGateway!.createFolder(bundle, scopeFor(target));
-      const notePath = bundle ? `${bundle}/index.md` : path;
+      // Every new note is Markdown: append .md unless the user chose to keep the typed name.
+      const withExtension = markdownPath(path);
+      if (!bundle && withExtension !== path && confirmMarkdownExtension && extension === undefined) {
+        setMarkdownPrompt({ path, withExtension });
+        return;
+      }
+      setMarkdownPrompt(null);
+      const notePath = bundle ? `${bundle}/index.md` : extension === "keep" ? path : withExtension;
       const title = (bundle ?? path).split("/").at(-1)!.replace(/\.(marxen|md|markdown)$/i, "");
       const open = await workspaceGateway!.createMarkdown(notePath, bundle ? `---\ndatabase: true\n---\n# ${title}\n` : "", scopeFor(target));
       if (epoch !== generation.current) return;
@@ -637,7 +652,13 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     } catch (cause) {
       setNotice(localizedFailure(cause, workspaceErrorText));
     } finally { busyRef.current = false; setBusy(false); }
-  }, [registry, workspaceGateway, newFilePath, loadEntries, setDocs, setTabs, setActiveId, notify, canOperate, isTargetCurrent, entryKind, targetFor]);
+  }, [registry, workspaceGateway, newFilePath, loadEntries, setDocs, setTabs, setActiveId, notify, canOperate, isTargetCurrent, entryKind, targetFor, confirmMarkdownExtension]);
+
+  /** Resolve the pending `.md` decision for a new file. */
+  const resolveMarkdownPrompt = useCallback((choice: "append" | "keep" | "cancel") => {
+    if (choice === "cancel") setMarkdownPrompt(null);
+    else void createFile(choice);
+  }, [createFile]);
 
   /** Pack the bundle at a tree target into a user-chosen `.marxenpack`. */
   const exportBundle = useCallback(async (target: ExplorerTarget) => {
@@ -962,6 +983,8 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     ...config,
     newFileOpen,
     setNewFileOpen,
+    markdownPrompt,
+    resolveMarkdownPrompt,
     newFilePath,
     setNewFilePath,
     renameDoc,

@@ -579,6 +579,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
     routeVimKeys: vim.routeVimKeys,
     /** Reset folder UI after a workspace opens. */
     onWorkspaceOpened: () => { setManualFolder(false); setExplorerTarget(null); },
+    confirmMarkdownExtension: preferences.confirmMarkdownExtension,
   });
   const recoveryKey = workspace.recovery.map((entry) => entry.documentId).join("\0");
   useEffect(() => { setRecoveryPromptOpen(recoveryKey.length > 0); }, [recoveryKey]);
@@ -1271,9 +1272,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
               <div className="w-full max-w-sm">
                 <FileText size={36} strokeWidth={1} className="mb-5 text-muted-foreground/40" aria-hidden="true" />
                 <h1 className="text-2xl font-semibold tracking-tight">Marxen</h1>
-                <p className="mt-2 text-sm text-muted-foreground">{t("Markdown を書くためのワークスペース")}</p>
                 <div className="mt-8 flex flex-col gap-1">
-                  {desktop && <p className="text-xs text-muted-foreground">{t("ファイルメニューからフォルダーを開いてください。")}</p>}
+                  {desktop && workspace.roots.length === 0 && <p className="text-xs text-muted-foreground">{t("ファイルメニューからフォルダーを開いてください。")}</p>}
                   <button type="button" onClick={() => setQuickOpen(true)} className="flex h-10 items-center justify-between rounded px-2 text-left text-sm hover:bg-muted"><span className="flex items-center gap-3"><Search size={16} className="text-muted-foreground" />{t("ファイルを探す")}</span><kbd className="text-xs text-muted-foreground">Ctrl+P</kbd></button>
                   <button type="button" onClick={() => setPalette(true)} className="flex h-10 items-center justify-between rounded px-2 text-left text-sm hover:bg-muted"><span className="flex items-center gap-3"><Ellipsis size={16} className="text-muted-foreground" />{t("コマンドを実行")}</span><kbd className="text-xs text-muted-foreground">Ctrl+Shift+P</kbd></button>
                 </div>
@@ -1453,7 +1453,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
             aiGateway={aiGateway}
             connectionControls={connectionControls}
             sessionScopeKey={sessionScopeKey}
-            review={<ReviewPanel
+            review={staging.applied && staging.aiChanges.length > 0 && !staging.reviewMessage ? null : <ReviewPanel
               documentLabels={contextLabels}
               copyId={staging.staging?.copyId ?? null}
               diffs={staging.diffs}
@@ -1480,7 +1480,7 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       )}
       {aiVisibilityOpen && <AiVisibilityDialog preferences={aiView.preferences} onPreferences={aiView.updatePreferences} advertisedProviders={aiModels.advertisedProviders} connections={apiConnections.connections} saveFailed={aiView.saveFailed} installed={installedPresets} onClose={closeAiVisibility} />}
       </div>
-      <StatusBar desktop={desktop} active={active} vimMode={vimMode} cursorPos={cursorPos} copyReady={session.copyReady === activeId} copyKeys={workspace.copyKeys} vimKeys={session.vimKeys} runtime={workspace.runtime} />
+      <StatusBar desktop={desktop} active={active} vimMode={vimMode} cursorPos={cursorPos} copyReady={activeId !== null && session.copyReady === activeId} copyKeys={workspace.copyKeys} vimKeys={session.vimKeys} runtime={workspace.runtime} />
     </div>
   );
 }

@@ -7,7 +7,8 @@ import { workspaceApi } from "../../../infrastructure/tauri/workspace-api";
 import type { DocumentSnapshot, WorkspaceEntry } from "../../../contracts/contracts";
 
 /** Mount real workspace/session owners over a bounded simulated transport. */
-function fixture() {
+/** Hook fixture; `confirmMarkdownExtension` turns on the .md confirmation. */
+function fixture(confirmMarkdownExtension = false) {
   const snapshot: DocumentSnapshot = { documentId: "owned", revision: 17, text: "日本😀 dirty", dirty: true };
   const entries: WorkspaceEntry[] = [{ path: "notes", name: "notes", directory: true, markdown: false }];
   const gateway = {
@@ -59,7 +60,7 @@ function fixture() {
   const hook = renderHook(() => {
     const session = useDocumentSession({ desktop: true, documentGateway: registry, workspaceGateway: gateway, notify });
     const workspace = useWorkspace({ desktop: true, session, workspaceGateway: gateway, notify, showRaw: false, settingsOpen: false,
-      runtimeGateway, eventSource, routeVimKeys,
+      runtimeGateway, eventSource, routeVimKeys, confirmMarkdownExtension,
     });
     return { workspace, session };
   });
@@ -208,4 +209,24 @@ it("refuses roots and folders with open dirty text descendants without closing d
   await act(async () => f.result.current.workspace.beginRename(f.result.current.workspace.targetFor()));
   expect(f.result.current.workspace.renameDoc).toBeNull();
   expect(f.gateway.renameFolder).not.toHaveBeenCalled();
+});
+
+it("appends .md to new file names, asking first only when confirmation is on", async () => {
+  const quiet = fixture();
+  await act(async () => quiet.result.current.workspace.openWorkspaceFolder("C:/a"));
+  act(() => quiet.result.current.workspace.beginCreate(quiet.result.current.workspace.targetFor("notes", true)));
+  act(() => quiet.result.current.workspace.setNewFilePath("notes/.draft"));
+  await act(async () => quiet.result.current.workspace.createFile());
+  expect(quiet.gateway.createMarkdown).toHaveBeenCalledExactlyOnceWith("notes/.draft.md", "", expect.anything());
+
+  const asking = fixture(true);
+  await act(async () => asking.result.current.workspace.openWorkspaceFolder("C:/a"));
+  act(() => asking.result.current.workspace.beginCreate(asking.result.current.workspace.targetFor("notes", true)));
+  act(() => asking.result.current.workspace.setNewFilePath("notes/todo"));
+  await act(async () => asking.result.current.workspace.createFile());
+  expect(asking.gateway.createMarkdown).not.toHaveBeenCalled();
+  expect(asking.result.current.workspace.markdownPrompt).toEqual({ path: "notes/todo", withExtension: "notes/todo.md" });
+  await act(async () => asking.result.current.workspace.resolveMarkdownPrompt("keep"));
+  expect(asking.gateway.createMarkdown).toHaveBeenCalledExactlyOnceWith("notes/todo", "", expect.anything());
+  expect(asking.result.current.workspace.markdownPrompt).toBeNull();
 });

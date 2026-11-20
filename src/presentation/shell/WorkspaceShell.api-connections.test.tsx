@@ -1,3 +1,4 @@
+import { chooseProvider, openPicker, pickerTrigger } from "../ai/picker-test-helpers";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AiGateway, ApiConnectionGateway, ApiConnectionStore, AiProfileStore, DocumentGateway, IsolationGateway, RuntimeGateway, WorkspaceGateway } from "../../application/ports";
@@ -207,9 +208,10 @@ describe("shell named-connection selection identity", () => {
     selectHistory(pane, "old protocol conversation");
     expect(connections.current()).toEqual(saved);
     expect(connections.state.saves).toBe(saves);
-    expect(within(pane).getByRole("combobox", { name: "チャットの接続先" })).toHaveTextContent("API-A");
-    expect(within(pane).getByLabelText("チャットのモデル")).toHaveValue("current-model");
-    fireEvent.change(within(pane).getByLabelText("チャットのモデル"), { target: { value: "explicit-model" } });
+    expect(pickerTrigger(pane)).toHaveAttribute("data-provider", "API-A");
+    const panel = openPicker(pane);
+    expect(within(panel).getByLabelText("チャットのモデル")).toHaveValue("current-model");
+    fireEvent.change(within(panel).getByLabelText("チャットのモデル"), { target: { value: "explicit-model" } });
     expect(connections.current().connections).toEqual([{ ...saved.connections[0], model: "explicit-model" }, other]);
   });
 
@@ -231,16 +233,15 @@ describe("shell named-connection selection identity", () => {
       <WorkspaceShell desktop runtimeGateway={runtimeGateway} aiGateway={aiGateway} aiViewPreferencesStore={views} apiConnectionStore={connections.store} aiProfileStore={profiles.store} apiConnectionGateway={credentials.gateway} />,
     );
     const pane = openChat();
-    expect(within(pane).getByRole("combobox", { name: "チャットの接続先" })).toHaveTextContent("API-A");
-    fireEvent.click(within(pane).getByRole("combobox", { name: "チャットの接続先" }));
-    fireEvent.click(screen.getByRole("option", { name: "Codex" }));
+    expect(pickerTrigger(pane)).toHaveAttribute("data-provider", "API-A");
+    chooseProvider("Codex", pane);
     expect(connections.current().activeId).toBeNull();
     firstRender.unmount();
     render(
       <WorkspaceShell desktop runtimeGateway={runtimeGateway} aiGateway={aiGateway} aiViewPreferencesStore={views} apiConnectionStore={connections.store} aiProfileStore={profiles.store} apiConnectionGateway={credentials.gateway} />,
     );
     const second = openChat();
-    expect(within(second).getByRole("combobox", { name: "チャットの接続先" })).toHaveTextContent("Codex");
+    expect(pickerTrigger(second)).toHaveAttribute("data-provider", "Codex");
     expect(connections.current().activeId).toBeNull();
   });
 
@@ -261,7 +262,7 @@ describe("shell named-connection selection identity", () => {
     expect(connections.current().connections.find((item) => item.id === "api-a")).toEqual(first);
     expect(connections.current().connections.find((item) => item.id === "api-b")).toEqual(second);
     const pane = openChat();
-    expect(within(pane).getByRole("combobox", { name: "チャットの接続先" })).toHaveTextContent("API-B");
+    expect(pickerTrigger(pane)).toHaveAttribute("data-provider", "API-B");
   });
 
   it("blocks selection side effects when metadata persistence fails", () => {
@@ -280,7 +281,7 @@ describe("shell named-connection selection identity", () => {
     fireEvent.click(within(list).getByText("API-B"));
     expect(connections.state.saves).toBeGreaterThan(0);
     const pane = openChat();
-    expect(within(pane).getByRole("combobox", { name: "チャットの接続先" })).toHaveTextContent("API-A");
+    expect(pickerTrigger(pane)).toHaveAttribute("data-provider", "API-A");
     expect(credentials.calls.deleted).toEqual([]);
   });
 

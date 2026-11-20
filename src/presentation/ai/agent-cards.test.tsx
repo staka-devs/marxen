@@ -196,3 +196,12 @@ it("shows what an approval would run and change", () => {
   expect(screen.getByText("+ 新しい")).toBeInTheDocument();
   expect(screen.queryByText("- 共通")).toBeNull();
 });
+
+it("hides the agent's working-copy folder and folds finished tools", () => {
+  const { container } = render(<ToolCard tool={{ id: "t", title: String.raw`Users\me\AppData\Local\Temp\marxen-staging\copy_1a_1\memo.md`, kind: "read", status: "completed", locations: [{ path: String.raw`C:\Users\me\AppData\Local\Temp\marxen-staging\copy_1a_1` }, { path: String.raw`C:\Users\me\AppData\Local\Temp\marxen-staging\copy_1a_1\notes\a.md`, line: 3 }] }} />);
+  expect(screen.getByText("memo.md")).toBeInTheDocument();
+  expect(container.textContent).not.toContain("marxen-staging");
+  expect(container.textContent).not.toContain("copy_1a_1");
+  expect(screen.getByText("a.md:3")).toBeInTheDocument();
+  expect(container.querySelector("details")?.open).toBe(false);
+});

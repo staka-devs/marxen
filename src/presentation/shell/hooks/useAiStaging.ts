@@ -573,7 +573,6 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
           : summary.messages.status;
         setReviewMessage(null);
         setReviewStatus(doneMessage);
-        setNotice(doneMessage);
       }
       try {
         if (activeRef.current) await refreshModeCursor(activeRef.current);
@@ -659,7 +658,6 @@ export function useAiStaging(args: AiStagingArgs): AiStaging {
         const doneMessage = message("保存しました（{{value0}}件）。", { value0: merged.length });
         setReviewMessage(null);
         setReviewStatus(doneMessage);
-        setNotice(doneMessage);
       }
     } catch (cause) {
       setReviewMessage(localizedFailure(cause, describeIsolationError));

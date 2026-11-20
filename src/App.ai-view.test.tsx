@@ -1,3 +1,4 @@
+import { openPicker, pickerTrigger } from "./presentation/ai/picker-test-helpers";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
@@ -38,8 +39,7 @@ it("creates one composition store and shares persisted settings with the actual 
   fireEvent.click(screen.getByRole("button", { name: "チャットを切り替える" }));
   const pane = screen.getByTestId("ai-sidebar");
   expect(pane).toHaveStyle({ width: "480px" });
-  fireEvent.click(within(pane).getByRole("button", { name: "接続して候補を確認" }));
-  await within(pane).findByRole("combobox", { name: "チャットのモデル" });
+  await within(openPicker(pane)).findByRole("listbox", { name: "チャットのモデル" });
   fireEvent.click(screen.getByRole("button", { name: "設定表示切替" }));
   const settings = screen.getByRole("dialog", { name: "設定" });
   fireEvent.click(within(settings).getByRole("button", { name: "AI" }));
@@ -50,8 +50,8 @@ it("creates one composition store and shares persisted settings with the actual 
   fireEvent.click(within(visibility).getByRole("checkbox", { name: "Published model を表示" }));
   fireEvent.click(within(visibility).getByRole("checkbox", { name: "チャットに接続先の選択欄を表示" }));
   fireEvent.click(within(settings).getByRole("button", { name: "設定を閉じる" }));
-  expect(within(pane).queryByRole("combobox", { name: "チャットの接続先" })).toBeNull();
-  expect(within(pane).getByRole("combobox", { name: "チャットのモデル" })).toHaveTextContent("Published model");
+  expect(within(openPicker(pane)).queryByRole("tablist", { name: "チャットの接続先" })).toBeNull();
+  expect(pickerTrigger(pane)).toHaveTextContent("Published model");
   fireEvent.keyDown(within(pane).getByRole("separator"), { key: "ArrowLeft" });
   fireEvent.click(screen.getByRole("button", { name: "設定表示切替" }));
   expect(within(screen.getByRole("dialog", { name: "設定" })).getByText("希望するチャット幅: 496px")).toBeVisible();
@@ -62,9 +62,9 @@ it("creates one composition store and shares persisted settings with the actual 
   expect(createStore).toHaveBeenCalledTimes(2);
   fireEvent.click(screen.getByRole("button", { name: "チャットを切り替える" }));
   expect(screen.getByTestId("ai-sidebar")).toHaveStyle({ width: "496px" });
-  expect(within(screen.getByTestId("ai-sidebar")).queryByRole("combobox", { name: "チャットの接続先" })).toBeNull();
+  expect(within(openPicker(screen.getByTestId("ai-sidebar"))).queryByRole("tablist", { name: "チャットの接続先" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "設定表示切替" }));
   expect(screen.getByRole("checkbox", { name: "チャットに接続先の選択欄を表示" })).not.toBeChecked();
   expect(viewStorage.loadAiViewPreferences()).toMatchObject({ hiddenModels: [{ provider: "codex", optionId: "actual.model", value: "published/id" }], showProviderSelector: false, chatPaneWidth: 496 });
-  expect(testConnection).toHaveBeenCalledOnce();
+  expect(testConnection).toHaveBeenCalledTimes(2);
 });

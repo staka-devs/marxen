@@ -105,6 +105,16 @@ export function ShellDialogs({ theme, workspace, session, recoveryOpen, onRecove
         </form>
       </WorkspaceDialog>
     )}
+      {workspace.markdownPrompt && (
+        <WorkspaceDialog theme={theme} label={t("Markdown の拡張子")} testId="markdown-extension-dialog" onDismiss={() => workspace.resolveMarkdownPrompt("cancel")}>
+          <p className="mb-3 break-all">{t("「{{value0}}」として作成しますか？", { value0: workspace.markdownPrompt.withExtension })}</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" disabled={workspace.busy} onClick={() => workspace.resolveMarkdownPrompt("append")} className="rounded-md border border-border px-3 py-1">{t(".md を付けて作成")}</button>
+            <button type="button" disabled={workspace.busy} onClick={() => workspace.resolveMarkdownPrompt("keep")} className="rounded-md border border-border px-3 py-1">{t("入力した名前で作成")}</button>
+            <button type="button" onClick={() => workspace.resolveMarkdownPrompt("cancel")} className="rounded-md border border-border px-3 py-1">{t("キャンセル")}</button>
+          </div>
+        </WorkspaceDialog>
+      )}
     </>
   );
 }
