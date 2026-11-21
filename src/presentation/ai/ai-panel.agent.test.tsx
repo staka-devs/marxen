@@ -61,7 +61,7 @@ describe("agentic chat", () => {
     });
     renderPanel();
     fireEvent.click(screen.getByRole("combobox", { name: "モード" }));
-    fireEvent.click(screen.getByRole("option", { name: /文書編集/ }));
+    fireEvent.click(screen.getByRole("option", { name: /エージェント/ }));
     fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "直して" } });
     fireEvent.click(screen.getByRole("button", { name: "送信" }));
     await vi.waitFor(() => expect(handler).not.toBeNull());
@@ -115,7 +115,7 @@ describe("agentic chat", () => {
     });
     const gateway = renderPanel();
     fireEvent.click(screen.getByRole("combobox", { name: "モード" }));
-    fireEvent.click(screen.getByRole("option", { name: /文書編集/ }));
+    fireEvent.click(screen.getByRole("option", { name: /エージェント/ }));
     fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "直して" } });
     fireEvent.click(screen.getByRole("button", { name: "送信" }));
     await vi.waitFor(() => expect(handler).not.toBeNull());
@@ -208,7 +208,7 @@ describe("agentic chat", () => {
     });
     renderPanel({ replyPermission });
     fireEvent.click(screen.getByRole("combobox", { name: "モード" }));
-    fireEvent.click(screen.getByRole("option", { name: /文書編集/ }));
+    fireEvent.click(screen.getByRole("option", { name: /エージェント/ }));
     fireEvent.change(screen.getByLabelText("プロンプト"), { target: { value: "直して" } });
     fireEvent.click(screen.getByRole("button", { name: "送信" }));
     await vi.waitFor(() => expect(handler).not.toBeNull());

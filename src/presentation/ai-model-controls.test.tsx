@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, cleanup } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within, cleanup } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
 import { AiModelControls } from "./ai-model-controls";
@@ -8,6 +8,8 @@ import type { AiProviderConfig, AcpConfigOption } from "../contracts/ai-contract
 import type { AiGateway } from "../application/ports";
 import { defaultAiViewPreferences } from "../domain/ai-view-preferences";
 import { buildProviderConfigFromConnection } from "../domain/ai-connections";
+import { chooseEffort, chooseModel, chooseProvider, openPicker, pickerTrigger } from "./ai/picker-test-helpers";
+import { modelVendor, shortModelName } from "./ai-model-controls";
 import type { ApiConnection } from "../contracts/ai-contracts";
 afterEach(cleanup);
 const options: AcpConfigOption[] = [
@@ -22,11 +24,6 @@ function Harness({ gateway }: { gateway: AiGateway }) {
 }
 /** Read the last controlled provider to inspect actual wire selections. */
 function currentProvider(): AiProviderConfig { return JSON.parse(screen.getByTestId("provider").textContent!); }
-/** Select a visible choice through the same popup interaction used by the product. */
-function choose(label: string, name: string) {
-  fireEvent.click(screen.getByRole("combobox", { name: label }));
-  fireEvent.click(screen.getByRole("option", { name }));
-}
 describe("chat model selection", () => {
   it("hides only the named connection ID while retaining the active connection and model", () => {
     const first: ApiConnection = { id: "api-a", name: "Twin", protocol: "openai_chat_completions", endpoint: "https://a.example/v1", model: "model-a" };
@@ -39,20 +36,18 @@ describe("chat model selection", () => {
     const preferences = { ...defaultAiViewPreferences(), hiddenConnectionIds: [first.id], hiddenProviders: ["openai_chat_completions" as const] };
     const props = { provider, onProvider, options: [], loading: false, discovered: false, error: null, onRefresh, onManageVisibility, connectionSelection: { list: { version: 1 as const, initialized: true, activeId: first.id, connections: [first, second] }, activeId: first.id, onSelect } };
     const { rerender } = render(<AiModelControls {...props} preferences={preferences} />);
-    const trigger = screen.getByRole("combobox", { name: "チャットの接続先" });
-    expect(trigger).toHaveTextContent("Twin");
-    expect(screen.getByRole("textbox", { name: "チャットのモデル" })).toHaveValue("model-a");
-    fireEvent.click(trigger);
-    expect(screen.getAllByRole("option", { name: "Twin" })).toHaveLength(1);
-    expect(screen.getByRole("option", { name: "Twin" })).toHaveAttribute("aria-description", "model-a • https://b.example/v1");
-    fireEvent.keyDown(screen.getByRole("combobox", { name: "接続先を検索" }), { key: "Escape" });
-    expect(screen.getByText("選択中の候補は非表示です")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "AI の表示設定" }));
+    expect(pickerTrigger()).toHaveAttribute("data-provider", "Twin");
+    expect(pickerTrigger()).toHaveTextContent("model-a");
+    const panel = openPicker();
+    expect(within(panel).getByRole("textbox", { name: "チャットのモデル" })).toHaveValue("model-a");
+    expect(within(panel).getAllByRole("tab", { name: "Twin" })).toHaveLength(1);
+    expect(within(panel).getByRole("tab", { name: "Twin" })).toHaveAttribute("title", "model-a • https://b.example/v1");
+    expect(within(panel).getByText("選択中の候補は非表示です")).toBeVisible();
+    fireEvent.click(within(panel).getByRole("button", { name: "AI の表示設定" }));
     expect(onManageVisibility).toHaveBeenCalledOnce();
     rerender(<AiModelControls {...props} preferences={{ ...preferences, hiddenConnectionIds: [] }} />);
     expect(screen.queryByText("選択中の候補は非表示です")).toBeNull();
-    fireEvent.click(trigger);
-    expect(screen.getAllByRole("option", { name: "Twin" })).toHaveLength(2);
+    expect(within(openPicker()).getAllByRole("tab", { name: "Twin" })).toHaveLength(2);
     expect(onProvider).not.toHaveBeenCalled();
     expect(onSelect).not.toHaveBeenCalled();
     expect(onRefresh).not.toHaveBeenCalled();
@@ -64,27 +59,28 @@ describe("chat model selection", () => {
     const onProvider = vi.fn();
     const onRefresh = vi.fn();
     render(<AiModelControls provider={provider} onProvider={onProvider} options={options} loading={false} discovered error={null} onRefresh={onRefresh} />);
-    choose("チャットの接続先", "Codex");
-    choose("チャットのモデル", "Fixture A");
+    chooseProvider("Codex");
+    chooseModel("Fixture A");
     expect(onProvider).not.toHaveBeenCalled(); expect(onRefresh).not.toHaveBeenCalled();
     expect(provider.acp!.selections).toHaveLength(2);
   });
-  it("only discovers on request, stores advertised model/effort, and clears dependent effort", async () => {
+  it("discovers when the picker opens, stores advertised model/effort, and clears dependent effort", async () => {
     const testConnection = vi.fn().mockResolvedValue({ ok: true, detail: "fixture", configOptions: options });
     render(<Harness gateway={{ testConnection } as unknown as AiGateway} />);
     expect(testConnection).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "接続して候補を確認" }));
-    await screen.findByRole("combobox", { name: "チャットのモデル" });
+    openPicker();
+    await screen.findByRole("listbox", { name: "チャットのモデル" });
     expect(testConnection).toHaveBeenCalledWith(defaultProviderConfig("acp"), true);
-    choose("チャットの推論強度", "Xhigh");
-    choose("チャットのモデル", "Fixture B");
+    expect(pickerTrigger()).toHaveTextContent("Fixture A (High)");
+    chooseEffort("Xhigh");
+    chooseModel("Fixture B");
     expect(testConnection).toHaveBeenCalledTimes(1);
     expect(currentProvider().acp?.selections).toEqual([{ id: "model", value: "fixture-b" }]);
-    choose("チャットの推論強度", "Xhigh");
+    chooseEffort("Xhigh");
     expect(currentProvider().acp?.selections).toEqual([{ id: "model", value: "fixture-b" }, { id: "reasoning", value: "xhigh" }]);
-    choose("チャットの接続先", "GitHub Copilot");
+    chooseProvider("GitHub Copilot");
     expect(currentProvider().acp?.preset).toBe("copilot");
-    expect(screen.queryByRole("combobox", { name: "チャットのモデル" })).toBeNull();
+    expect(screen.queryByRole("listbox", { name: "チャットのモデル" })).toBeNull();
   });
   it("keeps hidden current values readable without changing connection or model", () => {
     const provider = defaultProviderConfig("acp");
@@ -94,13 +90,12 @@ describe("chat model selection", () => {
     const onManageVisibility = vi.fn();
     const preferences = { ...defaultAiViewPreferences(), hiddenProviders: ["codex" as const], hiddenModels: [{ provider: "codex" as const, optionId: "model", value: "fixture-a" }] };
     render(<AiModelControls provider={provider} onProvider={onProvider} options={options} loading={false} discovered error={null} onRefresh={onRefresh} preferences={preferences} onManageVisibility={onManageVisibility} />);
-    expect(screen.getByRole("combobox", { name: "チャットの接続先" })).toHaveTextContent("Codex");
-    expect(screen.getByRole("combobox", { name: "チャットのモデル" })).toHaveTextContent("Fixture A");
-    fireEvent.click(screen.getByRole("combobox", { name: "チャットのモデル" }));
-    expect(screen.queryByRole("option", { name: /Fixture A/ })).toBeNull();
-    expect(screen.getByRole("option", { name: /Fixture B/ })).toBeVisible();
-    fireEvent.keyDown(screen.getByRole("combobox", { name: "モデルを検索" }), { key: "Escape" });
-    fireEvent.click(screen.getByRole("button", { name: "AI の表示設定" }));
+    expect(pickerTrigger()).toHaveAttribute("data-provider", "Codex");
+    expect(pickerTrigger()).toHaveTextContent("Fixture A");
+    const panel = openPicker();
+    expect(within(panel).queryByRole("option", { name: /Fixture A/ })).toBeNull();
+    expect(within(panel).getByRole("option", { name: /Fixture B/ })).toBeVisible();
+    fireEvent.click(within(panel).getByRole("button", { name: "AI の表示設定" }));
     expect(onManageVisibility).toHaveBeenCalledOnce();
     expect(onProvider).not.toHaveBeenCalled(); expect(onRefresh).not.toHaveBeenCalled();
   });
@@ -108,9 +103,11 @@ describe("chat model selection", () => {
     const props = { provider: defaultProviderConfig("acp"), onProvider: vi.fn(), options, loading: false, discovered: true, error: null, onRefresh: vi.fn(), onManageVisibility: vi.fn() };
     const preferences = { ...defaultAiViewPreferences(), showProviderSelector: false, showModelSelector: false };
     const { rerender } = render(<AiModelControls {...props} preferences={preferences} />);
-    expect(screen.queryByRole("combobox")).toBeNull();
-    expect(screen.getByRole("button", { name: "接続して候補を確認" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "AI の表示設定" })).toBeEnabled();
+    const panel = openPicker();
+    expect(within(panel).queryByRole("tablist")).toBeNull();
+    expect(within(panel).queryByRole("listbox")).toBeNull();
+    expect(within(panel).getByRole("button", { name: "接続して候補を確認" })).toBeEnabled();
+    expect(within(panel).getByRole("button", { name: "AI の表示設定" })).toBeEnabled();
     rerender(<AiModelControls {...props} provider={defaultProviderConfig("openai_chat_completions")} preferences={preferences} />);
     expect(screen.queryByRole("textbox", { name: "チャットのモデル" })).toBeNull();
     expect(props.onProvider).not.toHaveBeenCalled();
@@ -120,8 +117,9 @@ describe("chat model selection", () => {
     provider.acp!.selections = [{ id: "opaque.option", value: "retained-value" }];
     const onProvider = vi.fn();
     render(<AiModelControls provider={provider} onProvider={onProvider} options={[]} loading={false} discovered error={null} onRefresh={vi.fn()} />);
-    expect(screen.queryByRole("combobox", { name: "チャットのモデル" })).toBeNull();
-    expect(screen.getByText("モデル候補なし（接続先の設定を使用）")).toBeVisible();
+    const panel = openPicker();
+    expect(within(panel).queryByRole("listbox", { name: "チャットのモデル" })).toBeNull();
+    expect(within(panel).getByText("モデル候補なし（接続先の設定を使用）")).toBeVisible();
     expect(onProvider).not.toHaveBeenCalled();
     expect(provider.acp!.selections).toEqual([{ id: "opaque.option", value: "retained-value" }]);
   });
@@ -130,7 +128,7 @@ describe("chat model selection", () => {
     const provider = defaultProviderConfig("openai_chat_completions");
     provider.openai = { endpoint: "http://localhost:8080/v1", model: "local-a" };
     render(<AiModelControls provider={provider} onProvider={onProvider} options={[]} loading={false} discovered={false} error={null} onRefresh={vi.fn()} />);
-    fireEvent.change(screen.getByRole("textbox", { name: "チャットのモデル" }), { target: { value: "local-b" } });
+    fireEvent.change(within(openPicker()).getByRole("textbox", { name: "チャットのモデル" }), { target: { value: "local-b" } });
     expect(onProvider).toHaveBeenCalledWith({ ...provider, openai: { endpoint: "http://localhost:8080/v1", model: "local-b" } });
   });
   it("fences late discovery from a previous connection", async () => {
@@ -176,9 +174,29 @@ it("shows API connections only after registration and uses their names", () => {
   const provider = defaultProviderConfig("acp");
   const props = { provider, onProvider: vi.fn(), options: [], loading: false, discovered: false, error: null, onRefresh: vi.fn() };
   render(<AiModelControls {...props} />);
-  fireEvent.click(screen.getByRole("combobox", { name: "チャットの接続先" }));
-  expect(screen.queryByRole("option", { name: "OpenAI Chat Completions" })).toBeNull();
-  expect(screen.queryByRole("option", { name: "OpenAI Responses" })).toBeNull();
-  expect(screen.queryByRole("option", { name: "Anthropic API" })).toBeNull();
-  expect(screen.getByRole("option", { name: "Claude Code" })).toBeVisible();
+  const panel = openPicker();
+  expect(within(panel).queryByRole("tab", { name: "OpenAI Chat Completions" })).toBeNull();
+  expect(within(panel).queryByRole("tab", { name: "OpenAI Responses" })).toBeNull();
+  expect(within(panel).queryByRole("tab", { name: "Anthropic API" })).toBeNull();
+  expect(within(panel).getByRole("tab", { name: "Claude Code" })).toBeVisible();
+});
+
+it("shows the vendor of each model and only installed agents as tabs", () => {
+  expect(modelVendor("gpt-6.1-sol 6.1 Sol")).toBe("openai");
+  expect(modelVendor("opencode/claude-opus-5-5 Claude Opus 5.5")).toBe("anthropic");
+  expect(modelVendor("opencode/gemini-4-argon Gemini 4 Argon")).toBe("gemini");
+  expect(modelVendor("opencode/kimi-k3 Kimi K3")).toBe("kimi");
+  expect(modelVendor("opencode/deepseek-v4-pro DeepSeek V4 Pro")).toBe("deepseek");
+  expect(modelVendor("opencode/qwen3.6-plus Qwen3.6 Plus")).toBe("qwen");
+  expect(modelVendor("opencode/glm-5.3 GLM-5.3")).toBe("glm");
+  expect(modelVendor("opencode/minimax-m3 MiniMax-M3")).toBe("minimax");
+  expect(modelVendor("opencode/grok-4.7 Grok 4.7")).toBe("grok");
+  expect(modelVendor("opencode/mimo-v2.6-flash-free MiMo-V2.6-Flash Free")).toBe("xiaomi");
+  expect(modelVendor("opencode/nemotron-3.5-super Nemotron 3.5")).toBe("nvidia");
+  expect(modelVendor("opencode/big-pickle Big Pickle")).toBe("other");
+  expect(shortModelName("Personal / OpenCode/Claude Fable 5.1")).toBe("Claude Fable 5.1");
+  expect(shortModelName("6.1 Sol")).toBe("6.1 Sol");
+  render(<AiModelControls provider={defaultProviderConfig("acp")} onProvider={vi.fn()} options={options} loading={false} discovered error={null} onRefresh={vi.fn()} installed={new Set(["opencode"])} />);
+  const panel = openPicker();
+  expect(within(panel).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Codex", "OpenCode"]);
 });

@@ -274,7 +274,12 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
   const activeImage = activeId ? imageTabs[activeId] : undefined;
   const activeIsMarkdown = active !== null && isMarkdownPath(active.path);
 
-  /** Replace the view with a stale-rejected snapshot and notice once. */
+  /**
+   * Replace the view with a stale-rejected snapshot.
+   *
+   * The resync repairs itself, so nothing is announced (Issue #130): the
+   * view simply shows the authoritative text again.
+   */
   const sayStale = useCallback((snapshot: DocumentSnapshot) => {
     const id = snapshot.documentId;
     setDocs((prev) => {
@@ -282,8 +287,7 @@ export function useDocumentSession(args: DocumentSessionArgs): DocumentSession {
       if (!doc || snapshot.revision < doc.revision) return prev;
       return { ...prev, [id]: applySnapshot(doc, snapshot) };
     });
-    setNotice(localizedFailure(new StaleResync(snapshot), workspaceErrorText), "error");
-  }, [notify]);
+  }, []);
 
   /** Merge an authoritative snapshot keeping newer-or-equal revisions. */
   const mergeSnapshot = useCallback(

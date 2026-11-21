@@ -371,9 +371,9 @@ it("treats an unchanged scope as success alongside an applied document", async (
   };
   await registerAndSend();
   await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("isolation_approve", { copyId: "copy_1" }));
-  const results = await screen.findByLabelText("承認結果");
-  expect(results).toHaveTextContent(/a\.md.*適用/);
-  expect(results).toHaveTextContent(/文書.*変更なし/);
+  // Success is reported once, by the editor's AI change bar; the chat repeats nothing.
+  expect(await screen.findByText("AI が変更しました")).toBeInTheDocument();
+  expect(screen.queryByLabelText("承認結果")).not.toBeInTheDocument();
   expect(screen.queryByText(/未適用/)).not.toBeInTheDocument();
   expect(screen.queryByText(/all-or-nothing/i)).not.toBeInTheDocument();
 });
@@ -413,7 +413,7 @@ it("applies files an agent edited directly when its workspace reply is prose", a
   await openDocAndAi();
   const sidebar = screen.getByTestId("ai-sidebar");
   fireEvent.click(within(sidebar).getByRole("combobox", { name: "モード" }));
-  fireEvent.click(screen.getByRole("option", { name: /文書編集/ }));
+  fireEvent.click(screen.getByRole("option", { name: /エージェント/ }));
   fireEvent.change(within(sidebar).getByLabelText("プロンプト"), { target: { value: "直して" } });
   fireEvent.click(within(sidebar).getByRole("button", { name: "送信" }));
   await waitFor(() => expect(handler).not.toBeNull());

@@ -322,3 +322,7 @@ article.marxen-md { padding: 32px max(24px, calc((100% - 960px) / 2)) 80px; }
 .marxen-md ul.contains-task-list > li:not(.task-list-item) { list-style: disc; margin-left: 1.1em; }
 /* Diagrams, maps and models speak for themselves; their kind label is not shown. */
 .marxen-md .marxen-special-title { display: none; }
+
+/* Provider tabs scroll sideways without showing a scrollbar. */
+.ai-agent-tabs { scrollbar-width: none; }
+.ai-agent-tabs::-webkit-scrollbar { display: none; }

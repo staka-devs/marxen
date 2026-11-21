@@ -418,7 +418,7 @@ describe("agent chat", () => {
     render(<AiPanel startPrompt={mockStartPrompt} contexts={contexts} staging={staging} contextLabels={labels} />);
     expect(screen.getByRole("group", { name: "プロンプトの種類" })).toBeVisible();
     fireEvent.click(screen.getByRole("combobox", { name: "モード" }));
-    for (const label of ["相談", "執筆", "推敲", "文書編集"]) expect(screen.getByRole("option", { name: new RegExp(label) })).toBeVisible();
+    for (const label of ["相談", "執筆", "推敲", "エージェント"]) expect(screen.getByRole("option", { name: new RegExp(label) })).toBeVisible();
   });
 
   it("closes the pane through the optional header control", () => {

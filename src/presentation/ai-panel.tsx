@@ -727,32 +727,6 @@ export default function AiPanel({
         )}
       </div>
       {historyOpen ? <ChatHistory conversations={conversations} activeId={conversationId} onSelect={(id) => { handleSelectConversation(id); setHistoryOpen(false); }} onDelete={handleDeleteConversation} onDeleteAll={handleDeleteAllConversations} /> : <>
-      <div className="ai-chat-chips flex shrink-0 flex-wrap items-center gap-1" aria-label={t("送信対象")}>
-        {contexts.length === 0 ? (
-          <span className="text-[11px] text-muted-foreground">{t("送信対象がありません。")}</span>
-        ) : (
-          contexts.map((context) => (
-            <span key={context.documentId} className="ai-chat-chip inline-flex max-w-full items-center gap-0.5 rounded border border-border px-1.5 py-px text-[11px] leading-5 text-muted-foreground">
-              <span
-                className="truncate"
-              >
-                {labelFor(contextLabels, context.documentId, t)}
-              </span>
-              {onRemoveContext && (
-                <button
-                  type="button"
-                  aria-label={t("{{value0}}を外す", { value0: (labelFor(contextLabels, context.documentId, t)) })}
-                  title={t("外す")}
-                  className="rounded px-0.5 leading-none hover:bg-muted hover:text-foreground"
-                  onClick={() => onRemoveContext(context.documentId)}
-                >
-                  ×
-                </button>
-              )}
-            </span>
-          ))
-        )}
-      </div>
       <div ref={transcriptRef} aria-live="polite" aria-label={t("会話")} className="ai-chat-transcript min-h-0 flex-1 overflow-y-auto py-1.5">
         {conversation.messages.length === 0 ? (
           <div className="ai-chat-empty px-1 py-2">
@@ -804,6 +778,40 @@ export default function AiPanel({
       {review && <div className="max-h-72 min-h-0 shrink-0 overflow-y-auto">{review}</div>}
       <div className="ai-chat-composer shrink-0 border-t border-border pt-1.5">
         <div className="ai-chat-composer-box px-1.5 pb-1.5 pt-1">
+          {/* Attached documents sit inside the composer, like other agent chats. */}
+          <div className="ai-chat-chips mb-1 flex flex-wrap items-center gap-1" aria-label={t("送信対象")}>
+            {contexts.length === 0 ? (
+              <span data-testid="ai-composer-empty-hint" className="text-[11px] text-muted-foreground">
+                {t("送信対象がありません。")}
+                {contextsDismissed && onRestoreContexts && (
+                  <button type="button" onClick={onRestoreContexts} className="ml-1 underline hover:text-foreground">
+                    {t("現在の選択を送る")}
+                  </button>
+                )}
+              </span>
+            ) : (
+              contexts.map((context) => (
+                <span key={context.documentId} className="ai-chat-chip inline-flex max-w-full items-center gap-0.5 rounded border border-border px-1.5 py-px text-[11px] leading-5 text-muted-foreground">
+                  <span
+                    className="truncate"
+                  >
+                    {labelFor(contextLabels, context.documentId, t)}
+                  </span>
+                  {onRemoveContext && (
+                    <button
+                      type="button"
+                      aria-label={t("{{value0}}を外す", { value0: (labelFor(contextLabels, context.documentId, t)) })}
+                      title={t("外す")}
+                      className="rounded px-0.5 leading-none hover:bg-muted hover:text-foreground"
+                      onClick={() => onRemoveContext(context.documentId)}
+                    >
+                      ×
+                    </button>
+                  )}
+                </span>
+              ))
+            )}
+          </div>
           <textarea
             aria-label={t("プロンプト")}
             className="ai-chat-composer-input block max-h-40 min-h-14 w-full overflow-y-auto px-1 py-1 text-[13px] leading-6"
@@ -818,7 +826,7 @@ export default function AiPanel({
             }}
             placeholder={t("AI への指示")}
           />
-          <div className="mt-1 flex flex-wrap items-center gap-1">
+          <div className="mt-1 flex flex-nowrap items-center gap-1">
             <div role="group" aria-label={t("プロンプトの種類")} className="min-w-0 shrink-0">
               <ChoiceMenu label={t("モード")} value={mode} onChange={(value) => setMode(value as PromptMode)} disabled={running || disabled} choices={MODE_ORDER.map((value) => ({ value, label: t(MODE_LABELS[value] as LabelKey) }))} />
             </div>
@@ -842,16 +850,6 @@ export default function AiPanel({
         {disabled && <p className="mt-1 text-[11px] text-muted-foreground">{t("他の応答を生成しています。")}</p>}
         {differentProvider && <p className="mt-1 text-[11px] text-muted-foreground">{t("接続先が異なる会話です。続けるには新しい会話を作成してください。")}</p>}
         {anthropicBlocked && <p className="mt-1 text-[11px] text-muted-foreground">{t("Anthropic を有効化すると送信できます。")}</p>}
-        {contexts.length === 0 && !running && !disabled && !differentProvider && !anthropicBlocked && (
-          <p data-testid="ai-composer-empty-hint" className="mt-1 text-[11px] text-muted-foreground">
-            {t("送信対象がありません。")}
-            {contextsDismissed && onRestoreContexts && (
-              <button type="button" onClick={onRestoreContexts} className="ml-1 underline hover:text-foreground">
-                {t("現在の選択を送る")}
-              </button>
-            )}
-          </p>
-        )}
       </div>
       </>}
     </div>

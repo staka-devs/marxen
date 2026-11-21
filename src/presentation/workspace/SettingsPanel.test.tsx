@@ -67,7 +67,7 @@ describe("settings panel categories", () => {
     const view = renderPanel();
     expect(document.activeElement).toBe(screen.getByLabelText("設定を検索"));
     const first = screen.getByRole("button", { name: "設定を閉じる" });
-    const last = screen.getByRole("button", { name: "設定を適用して再起動する" });
+    const last = screen.getAllByRole("button", { name: "補足" }).at(-1)!;
     last.focus(); fireEvent.keyDown(last, { key: "Tab" });
     expect(document.activeElement).toBe(first);
     fireEvent.keyDown(first, { key: "Tab", shiftKey: true });

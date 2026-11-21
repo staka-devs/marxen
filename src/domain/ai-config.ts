@@ -46,7 +46,7 @@ export const MODE_LABELS: Record<PromptMode, string> = {
   ask: "相談",
   generate: "執筆",
   rewrite: "推敲",
-  workspace: "文書編集",
+  workspace: "エージェント",
 };
 
 /** Default endpoints per provider kind (ACP has none). */

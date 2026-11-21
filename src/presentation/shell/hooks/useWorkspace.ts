@@ -1,5 +1,5 @@
 import { BUNDLE_SUFFIX, bundleOf } from "../../../domain/bundle";
-import { localizedFailure, renderLocalizedText } from "../../../domain/localization";
+import { localizedFailure } from "../../../domain/localization";
 import type { LocalizedText } from "../../../contracts/localization";
 import { useI18n } from "../../i18n/I18nProvider";
 // Workspace lifecycle, search, events, and native views (presentation).
@@ -19,10 +19,7 @@ import type { PersistedTab, WorkspaceMetadata } from "../../../contracts/workspa
 import type { ExplorerTarget } from "../../../contracts/workbench";
 import type { SearchHitItem } from "../../../domain/search-hit";
 import { docFromOpen, type OpenDoc } from "../../../application/document/document-helpers";
-import {
-  isSupportedConfigName,
-} from "../../../domain/workspace-content";
-import { StaleResync, workspaceErrorText } from "../../../domain/document-errors";
+import { workspaceErrorText } from "../../../domain/document-errors";
 import { applyGridUpdates, createGridState, type NvimGridState } from "../../../domain/coordinates/grid";
 import type {
   DialogGateway,
@@ -33,6 +30,8 @@ import type {
 } from "../../../application/ports";
 import type { DocumentSession } from "./useDocumentSession";
 import { useWorkspaceSearch } from "./useWorkspaceSearch";
+import { useNeovimConfig } from "./useNeovimConfig";
+import { markdownPath } from "../../../domain/markdown-name";
 
 /** Captured rename source across documents, images, and folders with its tree context. */
 type RenameRequest =
@@ -66,6 +65,8 @@ export interface WorkspaceArgs {
   routeVimKeys: (id: string, keys: string) => Promise<void>;
   /** Called after a workspace opens so the shell can reset folder UI. */
   onWorkspaceOpened?: () => void;
+  /** Ask before appending `.md` to a new file name without it. */
+  confirmMarkdownExtension?: boolean;
 }
 
 /** Workspace lifecycle state and operations. */
@@ -182,7 +183,11 @@ export interface Workspace {
   /** Pick a folder natively and open it, staying read-only in browser. */
   pickFolderAndOpen: () => Promise<void>;
   /** Create a Markdown file from the dialog path and open it. */
-  createFile: () => Promise<void>;
+  createFile: (extension?: "append" | "keep") => Promise<void>;
+  /** A new file name awaiting the `.md` decision, when confirmation is on. */
+  markdownPrompt: { path: string; withExtension: string } | null;
+  /** Resolve the `.md` decision: append it, keep the typed name, or cancel. */
+  resolveMarkdownPrompt: (choice: "append" | "keep" | "cancel") => void;
   /** Rename the dialog target keeping document IDs and updating tabs. */
   renameFile: () => Promise<void>;
   /** Restore or discard a crash-recovery entry by ID. */
@@ -211,7 +216,7 @@ export interface Workspace {
  */
 export function useWorkspace(args: WorkspaceArgs): Workspace {
   const { t, message } = useI18n();
-  const { desktop, metadataStore, notify, session, workspaceGateway, eventSource, runtimeGateway, dialogGateway, showRaw, settingsOpen, routeVimKeys, onWorkspaceOpened } = args;
+  const { desktop, metadataStore, notify, session, workspaceGateway, eventSource, runtimeGateway, dialogGateway, showRaw, settingsOpen, routeVimKeys, onWorkspaceOpened, confirmMarkdownExtension = false } = args;
   const setNotice = notify;
   const {
     registry,
@@ -224,8 +229,6 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     activeId,
     active,
     mergeSnapshot,
-    sayStale,
-    refreshModeCursor,
     setExternalByDoc,
   } = session;
 
@@ -260,14 +263,9 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [nvimGrid, setNvimGrid] = useState<NvimGridState | null>(null);
   const [gridRev, setGridRev] = useState<number | null>(null);
-  const [configPath, setConfigPath] = useState("");
-  const [configError, setConfigError] = useState<LocalizedText | null>(null);
-  const [applyingConfig, setApplyingConfig] = useState(false);
-  const [currentConfig, setCurrentConfig] = useState<string | null>(null);
-  const [copyKeys, setCopyKeys] = useState<Record<string, string>>({
-    markdown: "<F6>", text: "<F7>", rich: "<F8>", html: "<F9>",
-  });
+  const config = useNeovimConfig({ session, notify, settingsOpen });
   const [newFileOpen, setNewFileOpen] = useState(false);
+  const [markdownPrompt, setMarkdownPrompt] = useState<{ path: string; withExtension: string } | null>(null);
   const [newFilePath, setNewFilePath] = useState("");
   const [renameDoc, setRenameDoc] = useState<string | null>(null);
   const [renamePath, setRenamePath] = useState("");
@@ -606,7 +604,7 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
   }, [registry, dialogGateway, openWorkspaceFolder, notify, canOperate]);
 
   /** Create a Markdown file from the dialog path and open it. */
-  const createFile = useCallback(async () => {
+  const createFile = useCallback(async (extension?: "append" | "keep") => {
     const target = creationTarget.current;
     if (!canOperate() || !target || !isTargetCurrent(target)) return;
     if (!registry) {
@@ -632,7 +630,14 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
       // A bundle is a `name.marxen` folder whose note is `index.md`, with databases enabled.
       const bundle = entryKind === "bundle" ? (path.endsWith(BUNDLE_SUFFIX) ? path : `${path}${BUNDLE_SUFFIX}`) : null;
       if (bundle) await workspaceGateway!.createFolder(bundle, scopeFor(target));
-      const notePath = bundle ? `${bundle}/index.md` : path;
+      // Every new note is Markdown: append .md unless the user chose to keep the typed name.
+      const withExtension = markdownPath(path);
+      if (!bundle && withExtension !== path && confirmMarkdownExtension && extension === undefined) {
+        setMarkdownPrompt({ path, withExtension });
+        return;
+      }
+      setMarkdownPrompt(null);
+      const notePath = bundle ? `${bundle}/index.md` : extension === "keep" ? path : withExtension;
       const title = (bundle ?? path).split("/").at(-1)!.replace(/\.(marxen|md|markdown)$/i, "");
       const open = await workspaceGateway!.createMarkdown(notePath, bundle ? `---\ndatabase: true\n---\n# ${title}\n` : "", scopeFor(target));
       if (epoch !== generation.current) return;
@@ -647,7 +652,13 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     } catch (cause) {
       setNotice(localizedFailure(cause, workspaceErrorText));
     } finally { busyRef.current = false; setBusy(false); }
-  }, [registry, workspaceGateway, newFilePath, loadEntries, setDocs, setTabs, setActiveId, notify, canOperate, isTargetCurrent, entryKind, targetFor]);
+  }, [registry, workspaceGateway, newFilePath, loadEntries, setDocs, setTabs, setActiveId, notify, canOperate, isTargetCurrent, entryKind, targetFor, confirmMarkdownExtension]);
+
+  /** Resolve the pending `.md` decision for a new file. */
+  const resolveMarkdownPrompt = useCallback((choice: "append" | "keep" | "cancel") => {
+    if (choice === "cancel") setMarkdownPrompt(null);
+    else void createFile(choice);
+  }, [createFile]);
 
   /** Pack the bundle at a tree target into a user-chosen `.marxenpack`. */
   const exportBundle = useCallback(async (target: ExplorerTarget) => {
@@ -945,53 +956,6 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
       .catch((cause: unknown) => setNotice(localizedFailure(cause, workspaceErrorText)));
   }, [desktop, workspaceGateway, activeRef, notify]);
 
-  // -- config -----------------------------------------------------------------
-
-  /** Apply a Neovim config restarting the actor with Undo reset. */
-  const applyConfig = useCallback(async (path?: string) => {
-    if (!registry) return;
-    const trimmed = (path ?? configPath).trim();
-    setConfigPath(trimmed);
-    if (trimmed !== "" && !isSupportedConfigName(trimmed)) {
-      setConfigError(message("対応する名前は vimrc / _vimrc / .vimrc / init.vim / init.lua です。"));
-      return;
-    }
-    const documents = Object.values(docsRef.current);
-    if (!documents.length) return;
-    setApplyingConfig(true);
-    try {
-      for (const current of documents) {
-      const id = current.documentId;
-      const result = await registry.configure({ ...(current.location ? { location: current.location } : {}), documentId: id, baseRevision: current.revision }, trimmed === "" ? null : trimmed);
-      setConfigError(result.errors.length > 0 ? result.errors.join("\n") : null);
-      setCurrentConfig(result.path);
-      setCopyKeys(result.copyKeys ?? { markdown: "<F6>", text: "<F7>", rich: "<F8>", html: "<F9>" });
-      const snapshot = await registry.fetchSnapshot(id);
-      mergeSnapshot(snapshot);
-      if (activeRef.current === id) await refreshModeCursor(id);
-      }
-      setNotice(message("設定を適用して再起動しました（Undo・モードは初期化）。"));
-    } catch (cause) {
-      if (cause instanceof StaleResync) sayStale(cause.snapshot);
-      else setNotice(localizedFailure(cause, workspaceErrorText));
-    } finally {
-      setApplyingConfig(false);
-    }
-  }, [registry, workspaceGateway, configPath, mergeSnapshot, refreshModeCursor, sayStale, docsRef, activeRef, notify]);
-
-  useEffect(() => {
-    if (!registry || !activeId || !docsRef.current[activeId]) return;
-    registry
-      .fetchConfig(activeId)
-      .then((config) => {
-        setCurrentConfig(config.path);
-        if (config.path?.startsWith("user:")) setConfigPath(config.path.slice(5));
-        setConfigError(config.errors.length > 0 ? config.errors.join("\n") : null);
-        setCopyKeys(config.copyKeys ?? { markdown: "<F6>", text: "<F7>", rich: "<F8>", html: "<F9>" });
-      })
-      .catch(() => undefined);
-  }, [settingsOpen, registry, activeId, docsRef]);
-
   return {
     roots, entriesByRoot, missingRoots, removingRoot, addWorkspaceFolder, pickFolderAndAdd, beginRemoveRoot, resolveRemoveRoot,
     busy: busy || layoutLoading.current, generation: generation.current, refreshing, entryKind, createdTarget, targetFor, isTargetCurrent, canOperate, beginCreate, exportBundle, importBundle, beginRename, refreshEntries,
@@ -1016,14 +980,11 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     runtime,
     nvimGrid,
     gridRev,
-    configPath,
-    setConfigPath,
-    configError: configError === null ? null : renderLocalizedText(configError, t),
-    applyingConfig,
-    currentConfig,
-    copyKeys,
+    ...config,
     newFileOpen,
     setNewFileOpen,
+    markdownPrompt,
+    resolveMarkdownPrompt,
     newFilePath,
     setNewFilePath,
     renameDoc,
@@ -1043,7 +1004,6 @@ export function useWorkspace(args: WorkspaceArgs): Workspace {
     refreshRuntime,
     handleRawGridKeys,
     handleRawGridRefresh,
-    applyConfig,
   };
 }
 
