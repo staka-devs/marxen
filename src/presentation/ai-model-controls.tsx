@@ -9,6 +9,7 @@ import type { AiViewPreferences } from "../contracts/ai-view-preferences";
 import { aiProviderId, defaultAiViewPreferences, isAiModelVisible, isAiProviderVisible } from "../domain/ai-view-preferences";
 import type { ApiConnectionSelection } from "./ai/ApiConnections";
 import { ProviderIcon } from "./ai/provider-icon";
+import { MODEL_LOGO_PATHS, type ModelVendor } from "./ai/model-logos";
 
 interface AiModelControlsProps {
   provider: AiProviderConfig;
@@ -96,7 +97,7 @@ export function AiModelControls({ provider, onProvider, options, loading, discov
     disabled={disabled}
     onOpen={() => { if (provider.kind === "acp" && !discovered && !loading) onRefresh(); }}
   >
-    {preferences.showProviderSelector && <div role="tablist" aria-label={t("チャットの接続先")} className="flex shrink-0 gap-0.5 overflow-x-auto [scrollbar-width:none] border-b border-border px-1">
+    {preferences.showProviderSelector && <div role="tablist" aria-label={t("チャットの接続先")} className="ai-agent-tabs flex shrink-0 gap-0.5 overflow-x-auto border-b border-border px-1">
       {providerChoices.map((choice) => <button key={choice.value} type="button" role="tab" aria-selected={choice.value === switcherValue} title={"description" in choice && typeof choice.description === "string" ? choice.description : choice.label}
         onClick={() => changeProvider(choice.value)}
         className={`flex shrink-0 items-center gap-1.5 border-b-2 px-2 py-1.5 text-xs ${choice.value === switcherValue ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
@@ -143,22 +144,33 @@ export function shortModelName(name: string): string {
   return name.split("/").at(-1)!.trim() || name;
 }
 
+const VENDOR_PATTERNS: Array<[ModelVendor, RegExp]> = [
+  ["anthropic", /claude|anthropic|opus|sonnet|haiku|fable/],
+  ["gemini", /gemini|gemma|google/],
+  ["openai", /gpt|openai|codex|\bo[1-9]\b/],
+  ["deepseek", /deepseek/],
+  ["qwen", /qwen|qwq|alibaba|tongyi/],
+  ["kimi", /kimi|moonshot/],
+  ["glm", /glm|zhipu/],
+  ["minimax", /minimax|abab/],
+  ["grok", /grok|xai/],
+  ["mistral", /mistral|codestral|devstral|magistral|ministral|pixtral/],
+  ["meta", /llama|meta/],
+  ["xiaomi", /mimo|xiaomi/],
+  ["nvidia", /nemotron|nvidia/],
+];
+
 /** Vendor behind a model ID or name, for its icon. */
-export function modelVendor(model: string): "openai" | "anthropic" | "gemini" | "other" {
+export function modelVendor(model: string): ModelVendor | "other" {
   const text = model.toLowerCase();
-  if (/claude|anthropic|opus|sonnet|haiku|fable/.test(text)) return "anthropic";
-  if (/gemini|google/.test(text)) return "gemini";
-  if (/gpt|openai|codex|\bo[1-9]\b/.test(text)) return "openai";
-  return "other";
+  return VENDOR_PATTERNS.find(([, pattern]) => pattern.test(text))?.[0] ?? "other";
 }
 
-/** Vendor mark for one model choice: OpenAI, Claude and Gemini get their own; others a generic mark. */
+/** Vendor mark for one model choice; unknown vendors get a generic mark. */
 function ModelIcon({ model }: { model: string }) {
   const vendor = modelVendor(model);
-  if (vendor === "openai") return <ProviderIcon provider="openai_responses" size={14} />;
-  if (vendor === "anthropic") return <ProviderIcon provider="anthropic" size={14} />;
-  if (vendor === "gemini") return <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" data-model-icon="gemini"><path d="M12 2c.6 5.3 4.7 9.4 10 10-5.3.6-9.4 4.7-10 10-.6-5.3-4.7-9.4-10-10 5.3-.6 9.4-4.7 10-10z" /></svg>;
-  return <Bot size={14} aria-hidden="true" data-model-icon="other" />;
+  if (vendor === "other") return <Bot size={14} aria-hidden="true" data-model-icon="other" />;
+  return <svg width={14} height={14} viewBox="0 0 40 40" fill="currentColor" aria-hidden="true" data-model-icon={vendor}><path d={MODEL_LOGO_PATHS[vendor]} /></svg>;
 }
 
 /** Inputs of the compact agent/model picker. */

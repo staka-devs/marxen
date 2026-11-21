@@ -185,7 +185,15 @@ it("shows the vendor of each model and only installed agents as tabs", () => {
   expect(modelVendor("gpt-6.1-sol 6.1 Sol")).toBe("openai");
   expect(modelVendor("opencode/claude-opus-5-5 Claude Opus 5.5")).toBe("anthropic");
   expect(modelVendor("opencode/gemini-4-argon Gemini 4 Argon")).toBe("gemini");
-  expect(modelVendor("opencode/kimi-k3 Kimi K3")).toBe("other");
+  expect(modelVendor("opencode/kimi-k3 Kimi K3")).toBe("kimi");
+  expect(modelVendor("opencode/deepseek-v4-pro DeepSeek V4 Pro")).toBe("deepseek");
+  expect(modelVendor("opencode/qwen3.6-plus Qwen3.6 Plus")).toBe("qwen");
+  expect(modelVendor("opencode/glm-5.3 GLM-5.3")).toBe("glm");
+  expect(modelVendor("opencode/minimax-m3 MiniMax-M3")).toBe("minimax");
+  expect(modelVendor("opencode/grok-4.7 Grok 4.7")).toBe("grok");
+  expect(modelVendor("opencode/mimo-v2.6-flash-free MiMo-V2.6-Flash Free")).toBe("xiaomi");
+  expect(modelVendor("opencode/nemotron-3.5-super Nemotron 3.5")).toBe("nvidia");
+  expect(modelVendor("opencode/big-pickle Big Pickle")).toBe("other");
   expect(shortModelName("Personal / OpenCode/Claude Fable 5.1")).toBe("Claude Fable 5.1");
   expect(shortModelName("6.1 Sol")).toBe("6.1 Sol");
   render(<AiModelControls provider={defaultProviderConfig("acp")} onProvider={vi.fn()} options={options} loading={false} discovered error={null} onRefresh={vi.fn()} installed={new Set(["opencode"])} />);
