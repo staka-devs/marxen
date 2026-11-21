@@ -9,7 +9,7 @@ import type { AiGateway } from "../application/ports";
 import { defaultAiViewPreferences } from "../domain/ai-view-preferences";
 import { buildProviderConfigFromConnection } from "../domain/ai-connections";
 import { chooseEffort, chooseModel, chooseProvider, openPicker, pickerTrigger } from "./ai/picker-test-helpers";
-import { modelVendor } from "./ai-model-controls";
+import { modelVendor, shortModelName } from "./ai-model-controls";
 import type { ApiConnection } from "../contracts/ai-contracts";
 afterEach(cleanup);
 const options: AcpConfigOption[] = [
@@ -186,6 +186,8 @@ it("shows the vendor of each model and only installed agents as tabs", () => {
   expect(modelVendor("opencode/claude-opus-5-5 Claude Opus 5.5")).toBe("anthropic");
   expect(modelVendor("opencode/gemini-4-argon Gemini 4 Argon")).toBe("gemini");
   expect(modelVendor("opencode/kimi-k3 Kimi K3")).toBe("other");
+  expect(shortModelName("Personal / OpenCode/Claude Fable 5.1")).toBe("Claude Fable 5.1");
+  expect(shortModelName("6.1 Sol")).toBe("6.1 Sol");
   render(<AiModelControls provider={defaultProviderConfig("acp")} onProvider={vi.fn()} options={options} loading={false} discovered error={null} onRefresh={vi.fn()} installed={new Set(["opencode"])} />);
   const panel = openPicker();
   expect(within(panel).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Codex", "OpenCode"]);

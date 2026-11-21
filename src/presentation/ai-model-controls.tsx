@@ -79,11 +79,12 @@ export function AiModelControls({ provider, onProvider, options, loading, discov
     else if (provider.anthropic) onProvider({ ...provider, anthropic: { ...provider.anthropic, model } });
   }
   const modelOption = options.find((option) => option.category === "model");
+  const [modelQuery, setModelQuery] = useState("");
   const effortOption = options.find((option) => option.category === "thought_level");
   /** The value currently selected for one advertised option. */
   const selectedValue = (option: AcpConfigOption) => provider.acp?.selections?.find((item) => item.id === option.id)?.value ?? option.currentValue;
   const modelName = provider.kind === "acp"
-    ? (modelOption ? modelOption.options.find((choice) => choice.value === selectedValue(modelOption))?.name ?? selectedValue(modelOption) : "")
+    ? (modelOption ? shortModelName(modelOption.options.find((choice) => choice.value === selectedValue(modelOption))?.name ?? selectedValue(modelOption)) : "")
     : provider.openai?.model ?? provider.anthropic?.model ?? "";
   const effortName = effortOption ? effortOption.options.find((choice) => choice.value === selectedValue(effortOption))?.name ?? selectedValue(effortOption) : "";
   const summary = modelName ? `${modelName}${effortName ? ` (${effortName})` : ""}` : switcherLabel;
@@ -95,7 +96,7 @@ export function AiModelControls({ provider, onProvider, options, loading, discov
     disabled={disabled}
     onOpen={() => { if (provider.kind === "acp" && !discovered && !loading) onRefresh(); }}
   >
-    {preferences.showProviderSelector && <div role="tablist" aria-label={t("チャットの接続先")} className="flex gap-0.5 overflow-x-auto border-b border-border px-1">
+    {preferences.showProviderSelector && <div role="tablist" aria-label={t("チャットの接続先")} className="flex shrink-0 gap-0.5 overflow-x-auto [scrollbar-width:none] border-b border-border px-1">
       {providerChoices.map((choice) => <button key={choice.value} type="button" role="tab" aria-selected={choice.value === switcherValue} title={"description" in choice && typeof choice.description === "string" ? choice.description : choice.label}
         onClick={() => changeProvider(choice.value)}
         className={`flex shrink-0 items-center gap-1.5 border-b-2 px-2 py-1.5 text-xs ${choice.value === switcherValue ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
@@ -106,14 +107,15 @@ export function AiModelControls({ provider, onProvider, options, loading, discov
       {provider.kind === "acp" ? <>
         {loading && <p role="status" className="px-2 py-2 text-xs text-muted-foreground">{t("接続中…")}</p>}
         {error && <p role="alert" className="px-2 py-2 text-xs text-red-600">{error}</p>}
+        {preferences.showModelSelector && modelOption && modelOption.options.length > 10 && <input type="search" aria-label={t("モデルを検索")} placeholder={t("モデルを検索")} value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} className="mb-1 w-full rounded-sm border border-border bg-card px-2 py-1.5 text-xs outline-none focus:border-primary" />}
         {preferences.showModelSelector && modelOption && <div role="listbox" aria-label={t("チャットのモデル")}>
-          {modelOption.options.filter((choice) => isAiModelVisible(preferences, selectedProvider, modelOption.id, choice.value, scopedConnectionId)).map((choice) => {
+          {modelOption.options.filter((choice) => isAiModelVisible(preferences, selectedProvider, modelOption.id, choice.value, scopedConnectionId) && `${choice.name} ${choice.value}`.toLocaleLowerCase().includes(modelQuery.trim().toLocaleLowerCase())).map((choice) => {
             const selected = choice.value === selectedValue(modelOption);
             return <button key={choice.value} type="button" role="option" aria-selected={selected} title={choice.value}
               onClick={() => changeChoice(modelOption.id, choice.value)}
               className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs ${selected ? "bg-muted" : "hover:bg-muted/70"}`}>
               <ModelIcon model={`${choice.value} ${choice.name}`} />
-              <span className="min-w-0 flex-1 truncate">{choice.name}</span>
+              <span className="min-w-0 flex-1 truncate">{shortModelName(choice.name)}</span>
               <Check size={13} className={selected ? "shrink-0 text-primary" : "invisible shrink-0"} aria-hidden="true" />
             </button>;
           })}
@@ -136,6 +138,11 @@ export function AiModelControls({ provider, onProvider, options, loading, discov
   </AgentPicker>;
 }
 
+/** Last segment of an advertised model name, dropping account and provider prefixes. */
+export function shortModelName(name: string): string {
+  return name.split("/").at(-1)!.trim() || name;
+}
+
 /** Vendor behind a model ID or name, for its icon. */
 export function modelVendor(model: string): "openai" | "anthropic" | "gemini" | "other" {
   const text = model.toLowerCase();
@@ -154,13 +161,27 @@ function ModelIcon({ model }: { model: string }) {
   return <Bot size={14} aria-hidden="true" data-model-icon="other" />;
 }
 
+/** Inputs of the compact agent/model picker. */
+interface AgentPickerProps {
+  label: string;
+  /** Provider name, exposed on the trigger for tooltips and tests. */
+  provider: string;
+  icon: ReactNode;
+  /** "model (effort)" or the provider name when no model is known. */
+  summary: string;
+  disabled: boolean;
+  /** Called just before the panel opens, to fetch models. */
+  onOpen: () => void;
+  children: ReactNode;
+}
+
 /**
  * One compact trigger (provider icon, then "model (effort)" when there is room)
  * opening a panel with provider tabs, models and effort.
  *
  * The label hides itself in narrow composers so the row never wraps.
  */
-function AgentPicker({ label, provider, icon, summary, disabled, onOpen, children }: { label: string; provider: string; icon: ReactNode; summary: string; disabled: boolean; /** Called just before the panel opens, to fetch models. */ onOpen: () => void; children: ReactNode }) {
+function AgentPicker({ label, provider, icon, summary, disabled, onOpen, children }: AgentPickerProps) {
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
