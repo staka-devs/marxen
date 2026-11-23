@@ -51,6 +51,26 @@ export function parseFrontmatter(text: string): Frontmatter | null {
   return null;
 }
 
+/** How a property value reads; drives its icon and in-place editor. */
+export type PropertyType = "text" | "number" | "date" | "checkbox" | "list";
+
+/** Classify a property by its value: YAML lists, booleans, ISO dates and numbers. */
+export function propertyType(property: FrontmatterProperty): PropertyType {
+  const value = property.value.trim();
+  if (!property.editable) return value.split("\n").every((line) => line.startsWith("-")) ? "list" : "text";
+  if (/^\[.*\]$/.test(value)) return "list";
+  if (/^(true|false)$/i.test(value)) return "checkbox";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return "date";
+  return value !== "" && Number.isFinite(Number(value)) ? "number" : "text";
+}
+
+/** Items of a list property, from `[a, b]` or `- a` lines, unquoted. */
+export function listItems(value: string): string[] {
+  const inline = /^\[(.*)\]$/.exec(value.trim());
+  const items = inline ? inline[1].split(",") : value.split("\n").map((line) => line.replace(/^-\s*/, ""));
+  return items.map((item) => unquote(item.trim())).filter((item) => item !== "");
+}
+
 /** Strip matching YAML quotes from a scalar. */
 function unquote(raw: string): string {
   const double = /^"(.*)"$/.exec(raw);

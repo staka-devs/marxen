@@ -145,6 +145,8 @@ export interface DocumentGateway {
   queryDatabase?(documentId: DocumentId, source: DatabaseSource): Promise<DatabaseTable>;
   /** Apply one database view edit and return the refreshed rows; desktop only. */
   editDatabase?(documentId: DocumentId, source: DatabaseSource, edit: DatabaseEdit): Promise<DatabaseTable>;
+  /** Convert the document's current text to PDF with pandoc; desktop only. */
+  exportPdf?(documentId: DocumentId, destination: string, program: string, args: string[]): Promise<void>;
   /** Fetch the Neovim config state. */
   fetchConfig(documentId: DocumentId): Promise<NvimConfig>;
 }
@@ -207,6 +209,8 @@ export interface DocumentTransport {
   queryDatabase?(documentId: DocumentId, source: DatabaseSource, location?: DocumentLocation): Promise<DatabaseTable>;
   /** Apply one database view edit for a document. */
   editDatabase?(documentId: DocumentId, source: DatabaseSource, edit: DatabaseEdit, location?: DocumentLocation): Promise<DatabaseTable>;
+  /** Convert a document's current text to PDF with pandoc. */
+  exportPdf?(documentId: DocumentId, destination: string, program: string, args: string[], location?: DocumentLocation): Promise<void>;
   /** Fetch the current Neovim config state for a document. */
   fetchConfig(documentId: DocumentId, location?: DocumentLocation): Promise<NvimConfig>;
 }
@@ -346,6 +350,8 @@ export interface DialogGateway {
   pickPack?(title: string): Promise<string | null>;
   /** Native save dialog for an exported `.marxenpack`; null when cancelled. */
   pickPackDestination?(title: string, defaultName: string): Promise<string | null>;
+  /** Native save dialog for an exported PDF; null when cancelled. */
+  pickPdfDestination?(title: string, defaultName: string): Promise<string | null>;
 }
 
 /** Native file-drop subscription. */

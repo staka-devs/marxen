@@ -28,7 +28,7 @@ interface Args {
 
 const DEFINITIONS: Array<[string, WorkbenchMenu, LabelKey, string?]> = [
   ["file-new", "file", "新規Markdownファイル"], ["folder-new", "file", "新規フォルダー"], ["bundle-new", "file", "新規バンドルノート"],
-  ["bundle-export", "file", "バンドルを書き出す"], ["bundle-import", "file", "バンドルを読み込む"],
+  ["bundle-export", "file", "バンドルを書き出す"], ["bundle-import", "file", "バンドルを読み込む"], ["file-export-pdf", "file", "PDF に書き出す"],
   ["folder-open", "file", "フォルダーを開く"], ["folder-path", "file", "パスを入力する"],
   ["folder-add", "file", "ワークスペースにフォルダーを追加"], ["file-save", "file", "保存", "Ctrl/Cmd+S"],
   ["file-rename", "file", "名前を変更"], ["file-reload", "file", "再読込"], ["file-close", "file", "閉じる"],
@@ -126,6 +126,7 @@ export function useWorkbenchCommands(args: Args) {
       }
     }
     if (["file-save", "file-reload", "palette-raw-refresh", "inline-chat", "find-file"].includes(id)) enabled = native && !!doc;
+    if (id === "file-export-pdf") enabled = native && !!doc && (doc.path === null || /.(md|markdown)$/i.test(doc.path));
     if (id === "palette-raw") enabled = !!doc && (!desktop || native);
     if (["view-live", "view-source", "view-read", "view-split", "nav-display", "nav-source"].includes(id)) enabled = !!doc && (id === "view-source" || id.startsWith("nav-") || doc.path === null || /\.(md|markdown)$/i.test(doc.path));
     if (id === "file-close") enabled = native && !!session.activeRef.current;

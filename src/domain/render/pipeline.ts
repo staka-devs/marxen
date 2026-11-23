@@ -29,7 +29,7 @@ import { alertKind, mdastText } from "./mdast";
 import { highlightCode } from "./shiki";
 import { CLOBBER_PREFIX, marxenSanitizeSchema } from "./sanitize-schema";
 import { parseDatabaseBlock } from "../database-block";
-import { maskFrontmatter, parseFrontmatter, type Frontmatter } from "../frontmatter";
+import { listItems, maskFrontmatter, parseFrontmatter, propertyType, type Frontmatter, type FrontmatterProperty, type PropertyType } from "../frontmatter";
 import { isSpecialLanguage, type RenderDiagnostic, type RenderResult, type SourceBlock } from "./types";
 import {
   validateGeoJson,
@@ -460,10 +460,24 @@ function getProcessor(t: Translator): ReturnType<typeof buildProcessor> {
   return processor;
 }
 
-/** Properties table for leading frontmatter; values stay text here and become inputs in live widgets. */
-function propertiesHtml(front: Frontmatter, endLine: number): string {
-  const rows = front.properties.map((property) => `<tr><th scope="row">${escapeHtml(property.key)}</th><td data-property="${escapeHtml(property.key)}"${property.editable ? " data-editable=\"true\"" : ""}>${escapeHtml(property.value)}</td></tr>`).join("");
-  return `<table class="marxen-properties" data-source-start-line="1" data-source-end-line="${endLine}"><tbody>${rows}</tbody></table>`;
+const PROPERTY_ICONS: Record<PropertyType, string> = { text: "Aa", number: "#", date: "◷", checkbox: "☑", list: "☰" };
+
+/** One property value: list chips, a check mark, or text; flat scalars become inputs in live widgets. */
+function propertyValueHtml(property: FrontmatterProperty, type: PropertyType): string {
+  if (type === "list") return listItems(property.value).map((item) => `<span class="marxen-property-chip">${escapeHtml(item)}</span>`).join("");
+  if (type === "checkbox") return property.value.trim().toLowerCase() === "true" ? "✓" : "—";
+  return escapeHtml(property.value);
+}
+
+/** Properties panel for leading frontmatter: a titled card with one typed row per key. */
+function propertiesHtml(front: Frontmatter, endLine: number, t: Translator): string {
+  const rows = front.properties.map((property) => {
+    const type = propertyType(property);
+    const editable = property.editable && type !== "list" ? " data-editable=\"true\"" : "";
+    return `<tr data-type="${type}"><th scope="row"><span class="marxen-property-icon" aria-hidden="true">${PROPERTY_ICONS[type]}</span>${escapeHtml(property.key)}</th><td data-property="${escapeHtml(property.key)}" data-value-from="${property.valueFrom}" data-stored="${escapeHtml(property.value)}"${editable}>${propertyValueHtml(property, type)}</td></tr>`;
+  }).join("");
+  const empty = front.properties.length === 0 ? `<p class="marxen-properties-empty">${escapeHtml(t("プロパティはありません"))}</p>` : "";
+  return `<section class="marxen-properties-panel" data-source-start-line="1" data-source-end-line="${endLine}"><div class="marxen-properties-title">${escapeHtml(t("プロパティ"))}</div><table class="marxen-properties"><tbody>${rows}</tbody></table>${empty}</section>`;
 }
 
 /** Render Markdown to sanitized local-only HTML with diagnostics and blocks. Never throws. */
@@ -472,7 +486,7 @@ export async function renderMarkdownDocument(source: string, t: Translator = jap
   try {
     const front = parseFrontmatter(source);
     const file = await getProcessor(t).process(maskFrontmatter(source));
-    const properties = front ? propertiesHtml(front, source.slice(0, front.end).split("\n").length - 1) : "";
+    const properties = front ? propertiesHtml(front, source.slice(0, front.end).split("\n").length - 1, t) : "";
     return { html: properties + String(file), diagnostics: readDiagnostics(file), blocks };
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);

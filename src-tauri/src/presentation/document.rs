@@ -28,6 +28,10 @@ impl ActorState {
         }
     }
 }
+/// Injected PDF converter (pandoc), owned by the composition root.
+pub struct PdfState {
+    pub converter: Arc<dyn crate::application::ports::PdfConverter>,
+}
 /// Injected SQLite adapter for database views, owned by the composition root.
 pub struct DatabaseState {
     pub tables: Arc<dyn crate::application::ports::TableStore>,
@@ -262,6 +266,31 @@ mod desktop {
         with_workspace(&state, &scope, |w| {
             w.export_bundle(&path, std::path::Path::new(&destination))
         })
+    }
+    #[tauri::command(async)]
+    /// Convert a document's current text to PDF with the configured pandoc command.
+    ///
+    /// The text is read under the registry lock; pandoc runs after it is released.
+    pub fn export_pdf(
+        state: tauri::State<'_, ActorState>,
+        pdf: tauri::State<'_, PdfState>,
+        location: DocumentLocation,
+        document_id: String,
+        destination: String,
+        program: String,
+        args: Vec<String>,
+    ) -> Result<(), WorkspaceError> {
+        let (text, folder) = with_document(&state, document_id.clone(), &location, |w| {
+            w.pdf_source(&document_id)
+        })?;
+        crate::application::workspace::export_pdf(
+            pdf.converter.as_ref(),
+            &text,
+            &folder,
+            std::path::Path::new(&destination),
+            &program,
+            &args,
+        )
     }
     #[tauri::command(async)]
     /// Unpack a user-chosen `.marxenpack` into a folder and return the new note path.

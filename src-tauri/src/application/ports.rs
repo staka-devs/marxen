@@ -294,3 +294,16 @@ pub trait TableStore: Send + Sync {
     /// Apply one row, cell or column change to the table.
     fn edit(&self, file: &Path, table: &str, edit: &DatabaseEdit) -> Result<(), WorkspaceError>;
 }
+
+/// External Markdown-to-PDF converter (pandoc), run outside every document lock.
+pub trait PdfConverter: Send + Sync {
+    /// Run `program args.. -o destination` in `folder`, feeding `markdown` on stdin.
+    fn convert(
+        &self,
+        program: &str,
+        args: &[String],
+        markdown: &str,
+        folder: &Path,
+        destination: &Path,
+    ) -> Result<(), WorkspaceError>;
+}

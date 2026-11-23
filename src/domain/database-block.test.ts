@@ -12,6 +12,12 @@ describe("parseDatabaseBlock", () => {
     expect(parseDatabaseBlock("sqlite: a.sqlite\ntable: タスク")).toMatchObject({ source: { table: "タスク" } });
   });
 
+  it("reads a board view grouped by a property", () => {
+    expect(parseDatabaseBlock("folder: .\nview: board")).toMatchObject({ ok: true, board: "status" });
+    expect(parseDatabaseBlock("sqlite: a.db\nview: Board\ngroup: 段階")).toMatchObject({ ok: true, board: "段階" });
+    expect(parseDatabaseBlock("folder: .\ngroup: x")).not.toHaveProperty("board", "x");
+  });
+
   it("rejects missing, doubled or non-database sources", () => {
     expect(parseDatabaseBlock("").ok).toBe(false);
     expect(parseDatabaseBlock("folder: a\nsqlite: b.db").ok).toBe(false);

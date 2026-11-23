@@ -231,6 +231,8 @@ export const workspaceApi = {
   setSearchPattern: (documentId: DocumentId, pattern: string, location?: DocumentLocation) => documentInvoke<void>("set_search_pattern", { documentId, pattern, location }),
   /** Read the rows of a document's database view. */
   queryDatabase: (documentId: DocumentId, source: DatabaseSource, location?: DocumentLocation) => documentInvoke<DatabaseTable>("database_query", { documentId, source, location }),
+  /** Convert a document's current text to PDF with pandoc. */
+  exportPdf: (documentId: DocumentId, destination: string, program: string, args: string[], location?: DocumentLocation) => documentInvoke<void>("export_pdf", { documentId, destination, program, args, location }),
   /** Apply one database view edit for a document. */
   editDatabase: (documentId: DocumentId, source: DatabaseSource, edit: DatabaseEdit, location?: DocumentLocation) => documentInvoke<DatabaseTable>("database_edit", { documentId, source, edit, location }),
   /** Report a GUI selection to the native cursor tracker. */
