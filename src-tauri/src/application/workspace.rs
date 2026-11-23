@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 mod bundle;
 mod database;
+mod pdf;
+pub use pdf::export_pdf;
 
 static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 

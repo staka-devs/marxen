@@ -16,7 +16,7 @@ import { japaneseTranslator } from "../../domain/localization";
 // lifecycles as the read preview; destroying a widget aborts its pass and
 // disposes its maps and GL resources.
 
-import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
+import { Decoration, EditorView, GutterMarker, WidgetType, lineNumberWidgetMarker, type BlockInfo, type DecorationSet } from "@codemirror/view";
 import { StateField, type Extension, type Range } from "@codemirror/state";
 import { computeLiveBlocks, extractLinkDefinitions, findTableCellRange, type LiveBlock } from "../../domain/render/blocks";
 import { renderMarkdownDocument } from "../../domain/render/pipeline";
@@ -27,6 +27,7 @@ import { inlineMarks } from "../../domain/render/inline-marks";
 import { lineMarkers, type LineMarker } from "../../domain/render/line-markers";
 import { setPropertyEdit } from "../../domain/frontmatter";
 import { hydrateDatabases, type DatabaseViewer } from "../database/hydrate-databases";
+import { blockHandles } from "./blockMenu";
 import type { ImageResolver } from "../../domain/image-sources";
 import type { TextEdit } from "../../contracts/contracts";
 
@@ -174,7 +175,7 @@ class LiveBlockWidget extends WidgetType {
     // Interactive content handles itself, but only when it lives inside this
     // widget: an unscoped closest() would climb past the widget and match the
     // editor root itself (contenteditable), swallowing every gesture.
-    const interactive = target?.closest?.("input,td,th,a,button,summary");
+    const interactive = target?.closest?.("input,td,th,a,button,summary,.marxen-database");
     return !!interactive && host.contains(interactive);
   }
 
@@ -237,7 +238,12 @@ class LiveBlockWidget extends WidgetType {
     body.querySelectorAll<HTMLElement>("table.marxen-properties td[data-editable]").forEach((cell) => {
       const input = document.createElement("input");
       input.className = "marxen-property-input";
-      input.value = cell.textContent ?? "";
+      const type = cell.parentElement?.dataset.type;
+      if (type === "checkbox") {
+        input.type = "checkbox";
+        input.checked = (cell.dataset.stored ?? "").trim().toLowerCase() === "true";
+      } else if (type === "date") input.type = "date";
+      if (type !== "checkbox") input.value = cell.dataset.stored ?? "";
       input.dataset.property = cell.dataset.property ?? "";
       input.setAttribute("aria-label", cell.dataset.property ?? "");
       for (const type of ["compositionstart", "compositionend", "paste"]) input.addEventListener(type, (event) => event.stopPropagation());
@@ -250,7 +256,6 @@ class LiveBlockWidget extends WidgetType {
           input.blur();
         }
       });
-      cell.dataset.stored = input.value;
       cell.replaceChildren(input);
     });
     abortHost(host);
@@ -314,7 +319,8 @@ class LiveBlockWidget extends WidgetType {
     const docText = view.state.doc.toString();
     const at = relocateBlock(docText, binding.text, binding.from);
     if (at < 0) return;
-    const edit = setPropertyEdit(binding.text, input.dataset.property ?? "", input.value, at);
+    const value = input.type === "checkbox" ? String(input.checked) : input.value;
+    const edit = setPropertyEdit(binding.text, input.dataset.property ?? "", value, at);
     if (edit) binding.getCallbacks().onGuiEdits?.([edit]);
   }
 
@@ -324,6 +330,15 @@ class LiveBlockWidget extends WidgetType {
     if (!binding) return;
     // Database views own their cells and buttons; they never map to Markdown source.
     if (target?.closest?.(".marxen-database")) return;
+    // Read-only properties (lists, nested YAML) open their raw value in Vim.
+    const property = target?.closest?.("table.marxen-properties td,table.marxen-properties th") as HTMLElement | null;
+    if (property && host.contains(property)) {
+      event.stopPropagation();
+      if (property.querySelector("input")) return;
+      const from = Number(property.closest("tr")?.querySelector("td")?.dataset.valueFrom ?? binding.from);
+      binding.getCallbacks().focusSource?.(from, from);
+      return;
+    }
     const cell = target?.closest?.("td,th") as HTMLTableCellElement | null;
     if (cell && host.contains(cell)) {
       event.stopPropagation();
@@ -380,6 +395,44 @@ class LiveBlockWidget extends WidgetType {
       event.stopPropagation();
     }
   }
+}
+
+/**
+ * Line numbers beside a rendered block, which replaces several source lines.
+ *
+ * Every number is listed when the block is tall enough for one number per
+ * line; otherwise the first and last numbers frame a bar, so no number ever
+ * overlaps the next line's.
+ */
+class BlockLinesMarker extends GutterMarker {
+  /** Pin the inclusive line range and whether all numbers fit. */ constructor(readonly first: number, readonly last: number, readonly all: boolean) {
+    super();
+  }
+
+  /** Same range and layout keep the DOM. */ eq(other: BlockLinesMarker): boolean {
+    return other.first === this.first && other.last === this.last && other.all === this.all;
+  }
+
+  /** Stack every number, or the first and last joined by a bar. */ toDOM(): Node {
+    const column = document.createElement("div");
+    column.className = "marxen-block-lines";
+    column.dataset.all = String(this.all);
+    const numbers = this.all ? Array.from({ length: this.last - this.first + 1 }, (_, index) => this.first + index) : [this.first, this.last];
+    for (const number of numbers) {
+      const label = document.createElement("span");
+      label.textContent = String(number);
+      column.append(label);
+    }
+    return column;
+  }
+}
+
+/** Gutter marker for a live widget covering `block`; null for other widgets. */
+function blockLines(view: EditorView, widget: WidgetType, block: BlockInfo): GutterMarker | null {
+  if (!(widget instanceof LiveBlockWidget)) return null;
+  const first = view.state.doc.lineAt(block.from).number;
+  const last = view.state.doc.lineAt(block.to).number;
+  return new BlockLinesMarker(first, last, block.height >= (last - first + 1) * view.defaultLineHeight);
 }
 
 /** Bullet, number or task box drawn over a list marker on a line without the cursor. */
@@ -445,7 +498,6 @@ function lineMarkerDecorations(decorations: Range<Decoration>[], text: string, b
 
 const HIDDEN = Decoration.replace({});
 const MARKER = Decoration.mark({ class: "marxen-live-marker" });
-
 /**
  * Style inline spans of the raw active block and hide their markers.
  *
@@ -486,7 +538,7 @@ function inlineDecorations(decorations: Range<Decoration>[], text: string, base:
           offset += line.length + 1;
         }
       }
-      if (block.kind !== "code" && block.kind !== "math" && block.kind !== "html") inlineDecorations(decorations, text, block.from, selFrom, selTo);
+      if (block.kind !== "code" && block.kind !== "math" && block.kind !== "html" && block.kind !== "frontmatter") inlineDecorations(decorations, text, block.from, selFrom, selTo);
       if (block.kind === "list" || block.kind === "blockquote" || block.kind.startsWith("alert:")) lineMarkerDecorations(decorations, text, block.from, selFrom, selTo, getCallbacks);
       continue;
     }
@@ -538,7 +590,7 @@ function inlineDecorations(decorations: Range<Decoration>[], text: string, base:
       // Interactive descendants manage themselves (checkboxes, cells, links):
       // scoped to this widget so the editor root (contenteditable) never
       // matches and swallows widget-chrome gestures.
-      const interactive = target?.closest?.("input,td,th,a,button,summary");
+      const interactive = target?.closest?.("input,td,th,a,button,summary,.marxen-database");
       if (interactive && host.contains(interactive)) return false;
       const from = Number(host.dataset.liveFrom ?? "-1");
       const to = Number(host.dataset.liveTo ?? "-1");
@@ -555,7 +607,7 @@ function inlineDecorations(decorations: Range<Decoration>[], text: string, base:
       return true;
     },
   });
-  return [field, activation];
+  return [field, activation, lineNumberWidgetMarker.of(blockLines), blockHandles(() => getCallbacks().translator ?? japaneseTranslator)];
 }
 
 export type { LiveBlock };

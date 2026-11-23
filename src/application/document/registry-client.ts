@@ -691,6 +691,12 @@ export class RegistryClient {
     return this.transport.queryDatabase(documentId, source, this.location(documentId));
   }
 
+  /** Convert a document to PDF through its owner root. */
+  async exportPdf(documentId: DocumentId, destination: string, program: string, args: string[]): Promise<void> {
+    if (!this.transport.exportPdf) throw new Error("PDF export needs the desktop app");
+    return this.transport.exportPdf(documentId, destination, program, args, this.location(documentId));
+  }
+
   /** Apply one database view edit through the document's owner root. */
   async editDatabase(documentId: DocumentId, source: DatabaseSource, edit: DatabaseEdit): Promise<DatabaseTable> {
     if (!this.transport.editDatabase) throw new Error("database views need the desktop app");

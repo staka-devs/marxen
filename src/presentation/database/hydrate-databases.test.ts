@@ -47,6 +47,30 @@ describe("hydrateDatabases", () => {
     expect(viewer.edit).toHaveBeenLastCalledWith({ kind: "folder", path: "tasks" }, { kind: "addRow" });
   });
 
+  it("draws a board grouped by the property and moves cards between columns", async () => {
+    const root = mount("folder: tasks\nview: board");
+    const viewer = { query: vi.fn().mockResolvedValue(table), edit: vi.fn().mockResolvedValue(table), openNote: vi.fn() };
+    await hydrateDatabases(root, viewer);
+    const lanes = [...root.querySelectorAll<HTMLElement>(".marxen-board-lane")];
+    expect(lanes.map((lane) => lane.dataset.value)).toEqual(["todo", ""]);
+    expect(lanes.map((lane) => lane.querySelectorAll(".marxen-board-card").length)).toEqual([1, 1]);
+
+    // jsdom has no DataTransfer: a minimal stand-in carries the row id like a real drag.
+    const data = new Map<string, string>();
+    const transfer = {
+      types: ["application/x-marxen-row"],
+      /** Store the dragged value. */
+      setData: (type: string, value: string) => data.set(type, value),
+      /** Read the dragged value back on drop. */
+      getData: (type: string) => data.get(type) ?? "",
+    };
+    /** Fire a drag event carrying the shared transfer. */
+    const fire = (target: Element, type: string) => target.dispatchEvent(Object.assign(new Event(type, { bubbles: true, cancelable: true }), { dataTransfer: transfer }));
+    fire(lanes[1].querySelector(".marxen-board-card")!, "dragstart");
+    fire(lanes[0], "drop");
+    expect(viewer.edit).toHaveBeenCalledWith({ kind: "folder", path: "tasks" }, { kind: "setCell", id: "tasks/b.md", column: "status", value: "todo" });
+  });
+
   it("keeps cell keys away from the surrounding editor", async () => {
     const root = mount("sqlite: a.db");
     const viewer = { query: vi.fn().mockResolvedValue({ ...table, rows: [{ id: "1", cells: { status: "x" }, path: null }] }), edit: vi.fn() };

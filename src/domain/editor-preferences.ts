@@ -34,6 +34,10 @@ export interface EditorPreferences {
   databases: boolean;
   /** Ask before appending `.md` to a new file name; off appends silently. */
   confirmMarkdownExtension: boolean;
+  /** pandoc executable for PDF export: a name on PATH or a full path. */
+  pandocPath: string;
+  /** Extra pandoc arguments, shell-quoted; Marxen adds `-o <file>` and feeds the note on stdin. */
+  pandocArgs: string;
 }
 
 /** First-run defaults: dark theme with readable Japanese typography. */
@@ -42,7 +46,8 @@ export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
   wordWrap: true, lineNumbers: true, highlightActiveLine: true,
   hardBreakOnEnter: false,
   notificationPosition: "bottom-right",
-  imageFolder: "images", imageName: "{name}", databases: false, confirmMarkdownExtension: false,
+  imageFolder: "images", imageName: "{name}", databases: true, confirmMarkdownExtension: false,
+  pandocPath: "pandoc", pandocArgs: "--pdf-engine=lualatex -V documentclass=ltjsarticle",
 };
 
 /**
@@ -60,7 +65,7 @@ export function normalizeEditorPreferences(value: unknown): EditorPreferences {
   /** Read a boolean field or return its default. */
   const bool = (key: string, defaultValue: boolean) => typeof raw[key] === "boolean" ? raw[key] as boolean : defaultValue;
   /** Read a bounded text field or return its default. */
-  const text = (key: string, defaultValue: string) => typeof raw[key] === "string" && raw[key].length <= 200 ? raw[key] as string : defaultValue;
+  const text = (key: string, defaultValue: string, max = 200) => typeof raw[key] === "string" && raw[key].length <= max ? raw[key] as string : defaultValue;
   return {
     theme: ["dark", "light", "contrast"].includes(raw.theme as string) ? raw.theme as ThemeId : fallback.theme,
     seedColor: isSeedColor(raw.seedColor) ? raw.seedColor.toLowerCase() : fallback.seedColor,
@@ -76,5 +81,7 @@ export function normalizeEditorPreferences(value: unknown): EditorPreferences {
     imageName: text("imageName", fallback.imageName).trim() || fallback.imageName,
     databases: bool("databases", fallback.databases),
     confirmMarkdownExtension: bool("confirmMarkdownExtension", fallback.confirmMarkdownExtension),
+    pandocPath: text("pandocPath", fallback.pandocPath, 1000).trim() || fallback.pandocPath,
+    pandocArgs: text("pandocArgs", fallback.pandocArgs, 2000),
   };
 }

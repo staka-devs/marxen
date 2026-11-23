@@ -92,6 +92,9 @@ pub fn run() {
         .manage(presentation::vim_settings::VimSettingsState::new(
             vim_settings_files(),
         ))
+        .manage(presentation::document::PdfState {
+            converter: Arc::new(infrastructure::pandoc::PandocConverter),
+        })
         .manage(presentation::document::DatabaseState {
             tables: Arc::new(infrastructure::sqlite_tables::SqliteTables),
         })
@@ -210,6 +213,7 @@ pub fn run() {
             presentation::document::database_query,
             presentation::document::database_edit,
             presentation::document::export_bundle,
+            presentation::document::export_pdf,
             presentation::document::import_bundle,
             presentation::document::fetch_grid,
             presentation::document::fetch_config,

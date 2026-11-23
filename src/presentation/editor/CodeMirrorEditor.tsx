@@ -9,6 +9,8 @@ import { createLivePreview, type LivePreviewCallbacks } from "./livePreview";
 import { aiDiff } from "./aiDiff";
 import { gitGutter } from "./gitGutter";
 import { searchMatches } from "./searchMatches";
+import { frontmatterLines } from "./frontmatterLines";
+import { slashMenu } from "./blockMenu";
 import { blockCursorWidth } from "./cursorWidth";
 import type { ImageResolver } from "../../domain/image-sources";
 import type { DatabaseViewer } from "../database/hydrate-databases";
@@ -225,6 +227,8 @@ const NO_RANGES: ReadonlyArray<{ from: number; to: number }> = [];
           rectangularSelection(),
           crosshairCursor(),
           blockCursorWidth,
+          frontmatterLines,
+          slashMenu(() => translatorRef.current),
           appearanceRef.current.of([]),
           gitGutterRef.current.of(gitGutter(gitBaseline)),
           searchRef.current.of(searchMatches(searchRanges)),

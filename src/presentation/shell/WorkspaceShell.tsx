@@ -79,6 +79,7 @@ import {
 import { offsetToLineCol, lineColToOffset } from "../../domain/coordinates/utf16";
 import type { DatabaseViewer } from "../database/hydrate-databases";
 import { databasesEnabled } from "../../domain/frontmatter";
+import { pdfFileName, splitArguments } from "../../domain/pdf-export";
 import { DEFAULT_EDITOR_PREFERENCES, normalizeEditorPreferences, type EditorPreferences } from "../../domain/editor-preferences";
 import { entryKind } from "../../domain/workspace-files";
 import { docFromOpen, fileLabel } from "../../application/document/document-helpers";
@@ -745,6 +746,22 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
   // Local-image resolvers live in useImageAttachments bound to the active
   // document; Neovim config application lives in useWorkspace.
 
+  /** Ask where to save, then convert the active note's current text with the configured pandoc command. */
+  async function exportPdf() {
+    if (!active || !documentGateway?.exportPdf) return;
+    if (!/^pandoc(.exe)?$/i.test(preferences.pandocPath.trim().split(/[\/]/).at(-1) ?? "")) {
+      setNotice(message("設定の pandoc のパスには pandoc を指定してください。"));
+      return;
+    }
+    const destination = await dialogGateway?.pickPdfDestination?.(t("PDF に書き出す"), pdfFileName(active.path));
+    if (!destination) return;
+    setNotice(message("PDF を書き出しています…"));
+    try {
+      await documentGateway.exportPdf(active.documentId, destination, preferences.pandocPath, splitArguments(preferences.pandocArgs));
+      setNotice(message("PDF を書き出しました（{{value0}}）。", { value0: destination }));
+    } catch (cause) { setNotice(localizedFailure(cause, workspaceErrorText)); }
+  }
+
   /** Shared guarded workbench command owner; state-only views stay in the shell. */
   const workbench = useWorkbenchCommands({ desktop, session, workspace, target: explorerTarget, notify: setNotice, openFile: openFileForEditing,
     uiActions: {
@@ -788,6 +805,8 @@ export function WorkspaceShell(props: WorkspaceShellProps = {}) {
       "inline-chat": staging.openInlineChat,
       /** Show implemented workbench shortcuts. */
       "help-keys": () => setHelpOpen(true),
+      /** Convert the active note to PDF with the configured pandoc command. */
+      "file-export-pdf": () => void exportPdf(),
     },
     /** Reflect existing state owners in checked menu choices. */
     checked: (id) => id.startsWith("view-") && ["live", "source", "read", "split"].includes(id.slice(5)) ? effectiveViewMode === id.slice(5)

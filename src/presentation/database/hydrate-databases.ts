@@ -51,6 +51,8 @@ interface View {
   viewer: DatabaseViewer;
   t: Translator;
   signal?: AbortSignal;
+  /** Property whose values become board columns; unset draws a table. */
+  board?: string;
 }
 
 /** Run an edit, then redraw; focus returns to the same row and column when they still exist. */
@@ -130,6 +132,7 @@ function draw(view: View, table: DatabaseTable): void {
   addColumn.addEventListener("click", () => columnForm(view, toolbar));
   toolbar.append(addRow, addColumn);
   container.append(toolbar);
+  if (view.board !== undefined) return drawBoard(view, table, view.board);
 
   const grid = node("table", "marxen-database-table");
   const head = grid.createTHead().insertRow();
@@ -168,6 +171,67 @@ function draw(view: View, table: DatabaseTable): void {
   if (table.truncated) container.append(node("p", "marxen-database-note-text", t("先頭 1000 行だけを表示しています。")));
 }
 
+/** Cards grouped into one column per value of `group`; dragging a card to a column sets that value. */
+function drawBoard(view: View, table: DatabaseTable, group: string): void {
+  const { container, source, t } = view;
+  const lanes = new Map<string, number[]>([["", []]]);
+  table.rows.forEach((row, index) => {
+    const value = row.cells[group] ?? "";
+    lanes.set(value, [...(lanes.get(value) ?? []), index]);
+  });
+  // The "no value" column comes last and only while it has cards.
+  const empty = lanes.get("")!;
+  lanes.delete("");
+  if (empty.length > 0) lanes.set("", empty);
+  const board = node("div", "marxen-board");
+  for (const [value, indexes] of lanes) {
+    const lane = node("section", "marxen-board-lane");
+    lane.dataset.value = value;
+    const title = node("header", "marxen-board-lane-title", value || t("未設定"));
+    title.append(node("span", "marxen-board-count", String(indexes.length)));
+    lane.append(title);
+    for (const index of indexes) lane.append(boardCard(view, table, index, group));
+    lane.addEventListener("dragover", (event) => {
+      if (!event.dataTransfer?.types.includes("application/x-marxen-row")) return;
+      event.preventDefault();
+      lane.classList.add("marxen-board-over");
+    });
+    lane.addEventListener("dragleave", () => lane.classList.remove("marxen-board-over"));
+    lane.addEventListener("drop", (event) => {
+      lane.classList.remove("marxen-board-over");
+      const id = event.dataTransfer?.getData("application/x-marxen-row");
+      const row = table.rows.find((item) => item.id === id);
+      if (!row) return;
+      event.preventDefault();
+      if ((row.cells[group] ?? "") !== value) void apply(view, { kind: "setCell", id: row.id, column: group, value });
+    });
+    board.append(lane);
+  }
+  container.append(board);
+  if (table.rows.length === 0) container.append(node("p", "marxen-database-note-text", source.kind === "folder" ? t("このフォルダーにノートがありません。") : t("行がありません。")));
+}
+
+/** One draggable card: the note (or first column) as title, then up to three other values. */
+function boardCard(view: View, table: DatabaseTable, index: number, group: string): HTMLElement {
+  const row = table.rows[index];
+  const card = node("article", "marxen-board-card");
+  card.draggable = true;
+  card.addEventListener("dragstart", (event) => {
+    event.dataTransfer?.setData("application/x-marxen-row", row.id);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  });
+  const others = table.columns.map((column) => column.name).filter((name) => name !== group && (row.cells[name] ?? "") !== "");
+  if (row.path) {
+    const open = node("button", "marxen-database-link", noteTitle(row.path));
+    open.type = "button";
+    const path = row.path;
+    open.addEventListener("click", () => view.viewer.openNote?.(path));
+    card.append(open);
+  } else card.append(node("strong", "", row.cells[others.shift() ?? ""] ?? ""));
+  for (const name of others.slice(0, 3)) card.append(node("div", "marxen-board-field", `${name}: ${row.cells[name]}`));
+  return card;
+}
+
 /**
  * Hydrate every database block under `root`.
  *
@@ -190,7 +254,7 @@ export async function hydrateDatabases(root: HTMLElement, viewer: DatabaseViewer
       container.remove();
       return;
     }
-    const view: View = { container, source: parsed.source, viewer, t, signal };
+    const view: View = { container, source: parsed.source, viewer, t, signal, board: parsed.board };
     container.replaceChildren(node("p", "marxen-database-note-text", t("読み込んでいます…")));
     try {
       const table = await viewer.query(parsed.source);

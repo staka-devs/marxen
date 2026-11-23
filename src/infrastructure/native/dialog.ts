@@ -51,6 +51,13 @@ export async function pickPackDestination(title: string, defaultName: string): P
   return (await save({ title, defaultPath: defaultName, filters: PACK_FILTER })) ?? null;
 }
 
+/** Choose where to save an exported PDF; null when cancelled or outside Tauri. */
+export async function pickPdfDestination(title: string, defaultName: string): Promise<string | null> {
+  if (!isDesktop()) return null;
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  return (await save({ title, defaultPath: defaultName, filters: [{ name: "PDF", extensions: ["pdf"] }] })) ?? null;
+}
+
 /** Dialog gateway adapter satisfying the application port with native pickers. */
 export const dialogGateway: DialogGateway = {
   /** Native folder picker; null when cancelled or unavailable. */
@@ -61,4 +68,6 @@ export const dialogGateway: DialogGateway = {
   pickPack,
   /** Native `.marxenpack` save dialog. */
   pickPackDestination,
+  /** Native PDF save dialog. */
+  pickPdfDestination,
 };
