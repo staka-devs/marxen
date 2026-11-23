@@ -1,7 +1,7 @@
 {
   "name": "marxen",
   "private": true,
-  "version": "0.3.2",
+  "version": "0.4.0",
   "type": "module",
   "overrides": {
     "@xmldom/xmldom": "0.9.12",
